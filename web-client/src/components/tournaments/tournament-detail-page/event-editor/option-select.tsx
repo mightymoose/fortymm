@@ -8,7 +8,13 @@ import {
 
 export interface OptionSelectProps {
   value: string
-  options: { value: string; label: string }[]
+  /** `readonly` so a frozen option table (`PRED_OPS_BY_TYPE`, which is
+   * `as const` because its values *are* the `PredicateOp` type) can be handed
+   * straight to it. A caller with a narrower value type keeps it: the array is
+   * covariant, so the callee reads `string` while the caller still holds its
+   * literals — which is what lets `PredicateRow` map this component's raw
+   * `string` back to a `PredicateOp`. */
+  options: readonly { value: string; label: string }[]
   onChange: (value: string) => void
   /** Accessible name for the trigger (there's rarely a visible label). */
   ariaLabel: string

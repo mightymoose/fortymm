@@ -43,10 +43,25 @@ const scoped = (container: Container) => ({
   queryAllButtons() {
     return container.queryAllByRole('button')
   },
-  /** The capacity fill bar. Rendered only for a capped event; an uncapped
-   * event (ADR-0935) has no denominator to fill against, so this is absent. */
+
+  /** The capacity caption under the fill bar: how many places are left, that the
+   * event is full, or that it has no limit at all (#783, ADR-0935). */
+  queryCapacityNote() {
+    return container.queryByTestId('capacity-remaining')
+  },
+
+  /** The capacity fill bar. Rendered only for a CAPPED event; an uncapped event
+   * (ADR-0935) has no denominator to fill against, so this is absent — which is the
+   * assertion, since a bar drawn at 0% or 100% would be a fabricated one. */
   queryCapacityBar() {
     return container.queryByTestId('capacity-bar')
+  },
+
+  /** The count as a screen reader hears it — the sentence behind the `12 / 64`
+   * numeral, which is hidden from the accessibility tree. Queried by text
+   * because that IS the assertion: `sr-only` is still in the a11y tree. */
+  queryEnteredSummary(summary: string) {
+    return container.queryByText(summary)
   },
 })
 

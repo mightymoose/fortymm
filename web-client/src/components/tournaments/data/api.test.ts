@@ -8,6 +8,7 @@ import {
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   apiToEntrant,
+  apiToEntryState,
   apiToEvent,
   apiToTournament,
   draftToCreateBody,
@@ -16,6 +17,37 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import type { Tournament, TournamentEvent } from './types'
+
+describe('apiToEntryState', () => {
+  // The tags cross the boundary UNCHANGED, and that is the contract: they are the
+  // entry refusal codes (ADR-0968), so the reason the page load gives and the
+  // reason a 409 gives read out of one copy table. Renaming them here would fork it.
+  it.each(['open', 'event_full'] as const)('carries %s across unchanged', (state) => {
+    expect(apiToEntryState({ state })).toEqual({ state })
+  })
+
+  it('camelCases the refusing rule and keeps the rating it judged you on', () => {
+    expect(
+      apiToEntryState({
+        state: 'rating_ineligible',
+        predicate_id: 'pr-2',
+        rating: 1650,
+      }),
+    ).toEqual({ state: 'rating_ineligible', predicateId: 'pr-2', rating: 1650 })
+  })
+
+  // The wire is untrusted: a `state` from a schema that is not ours must not reach
+  // a component whose `switch` would fall through it and render an unnameable card.
+  // It degrades to `open` — the server refuses the click with a coded 409 anyway,
+  // and that path already has words.
+  it('degrades a state it does not know to open, rather than passing it inward', () => {
+    const alien = { state: 'invitation_only' } as unknown as Parameters<
+      typeof apiToEntryState
+    >[0]
+
+    expect(apiToEntryState(alien)).toEqual({ state: 'open' })
+  })
+})
 
 describe('apiToEvent', () => {
   it('maps snake_case event fields to the prototype camelCase shape', () => {
@@ -48,13 +80,14 @@ describe('apiToEvent', () => {
             user_id: 'u-7',
             username: 'rita.kovac',
             seed: 3,
+            rating: 1450,
           }),
         ],
       }),
     )
 
     expect(event.entrants).toEqual([
-      { id: 'entry-9', userId: 'u-7', username: 'rita.kovac', seed: 3 },
+      { id: 'entry-9', userId: 'u-7', username: 'rita.kovac', seed: 3, rating: 1450 },
     ])
   })
 
@@ -122,8 +155,28 @@ describe('apiToEntrant', () => {
         user_id: 'u-1',
         username: 'player.1',
         seed: null,
+        rating: 1450,
       }),
-    ).toEqual({ id: 'entry-1', userId: 'u-1', username: 'player.1', seed: null })
+    ).toEqual({
+      id: 'entry-1',
+      userId: 'u-1',
+      username: 'player.1',
+      seed: null,
+      rating: 1450,
+    })
+  })
+
+  it("carries an UNRATED entrant's null rating through, rather than coalescing it", () => {
+    // The null IS the fact (ADR-0783 §3): this player holds no rating on the
+    // tournament's ladder, which is why they passed every rating rule to get in —
+    // and why the roster marks them. A mapper that defaulted it to 0, or to 1500,
+    // would erase the one thing the field is carried for, and the director would
+    // never see the opt-out.
+    const entrant = apiToEntrant(
+      buildTournamentEntrantRead({ username: 'sam.oduya', rating: null }),
+    )
+
+    expect(entrant.rating).toBeNull()
   })
 })
 
@@ -273,10 +326,16 @@ const event: TournamentEvent = {
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
   entered: 2,
+  // One rated, one UNRATED (`rating: null` — they hold no rating on the
+  // tournament's ladder, ADR-0783 §3). The round-trip below therefore proves the
+  // null survives the mapping, which is the whole reason the field is on the wire.
   entrants: [
-    { id: 'entry-1', userId: 'u-1', username: 'player.1', seed: 1 },
-    { id: 'entry-2', userId: 'u-2', username: 'player.2', seed: null },
+    { id: 'entry-1', userId: 'u-1', username: 'player.1', seed: 1, rating: 1720 },
+    { id: 'entry-2', userId: 'u-2', username: 'player.2', seed: null, rating: null },
   ],
+  // The server's judgement about the caller (ADR-0783) — 2 of 48 places taken and
+  // no rule against them, so: nothing in the way.
+  entryState: { state: 'open' },
   slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
   predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
   match: { rated: true, lengthGames: 3 },
@@ -337,15 +396,22 @@ describe('eventToCreateBody', () => {
           user_id: 'u-1',
           username: 'player.1',
           seed: 1,
+          rating: 1720,
         }),
         buildTournamentEntrantRead({
           id: 'entry-2',
           user_id: 'u-2',
           username: 'player.2',
           seed: null,
+          // Unrated on the wire, and still unrated on the far side of the mapping.
+          rating: null,
         }),
       ],
       entered: event.entered,
+      // Server-computed, and absent from the create body for the same reason the
+      // entrants are: it is the server's judgement about *the caller*, not a field
+      // the editor authors (ADR-0783).
+      entry_state: { state: 'open' },
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
     })

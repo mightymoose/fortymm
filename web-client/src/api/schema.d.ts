@@ -1091,9 +1091,18 @@ export interface paths {
          *     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
          *     are permitted, the tournament is simply in the wrong state.
          *
+         *     An event's **eligibility rules** are decided against your rating on the
+         *     tournament's league, and you must satisfy **every** one of them: failing a rule
+         *     (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
+         *     holds **no rating** on that league — nobody has a rating until they finish a rated
+         *     match — **passes every rule**, so a brand-new player is not shut out of the
+         *     beginners' event that exists for them.
+         *
          *     Entering an event you are already in is a `409`; withdrawing first frees you
-         *     to enter it again. Doubles and teams events are a `400`: an entry is one row
-         *     per player, with nowhere to record a partner or a team.
+         *     to enter it again. Entering an event that already holds its `max_players`
+         *     entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
+         *     events are a `400`: an entry is one row per player, with nowhere to record a
+         *     partner or a team.
          */
         post: operations["enter_event_v1_tournaments__tournament_id__events__event_id__entries_post"];
         delete?: never;
@@ -1426,6 +1435,79 @@ export interface components {
          * @enum {string}
          */
         DrawType: "single-elim" | "double-elim" | "round-robin" | "rr-then-ko" | "swiss";
+        /**
+         * EventEntryFull
+         * @description The event holds ``max_players`` active entrants already, so nobody may enter it
+         *     — the one arm of this union that says nothing about who is asking.
+         *
+         *     Transient: a withdrawal frees a slot (ADR-0016), which is why the entry route
+         *     refuses it with a 409 rather than a 403.
+         *
+         *     An **uncapped** event (``max_players`` is ``null``, ADR-0935) is never in this
+         *     state, however many players enter it: there is no limit for the field to reach.
+         *     ``event_is_full`` is the single place that says so, and both this read and the
+         *     entry route's 409 ask it.
+         */
+        EventEntryFull: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "event_full";
+        };
+        /**
+         * EventEntryOpen
+         * @description The event itself has nothing against you: it has room, and your rating on the
+         *     tournament's ladder satisfies every rule it has.
+         *
+         *     NOT "you can click Enter right now" — the registration *window* is a fact about
+         *     the **tournament** (its status, ADR-0017) and your own membership is a fact about
+         *     the **entrants list**, and both are already on this payload. See
+         *     ``TournamentEventRead.entry_state``.
+         */
+        EventEntryOpen: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "open";
+        };
+        /**
+         * EventEntryRatingIneligible
+         * @description Your rating on the tournament's ladder fails one of the event's rules — the
+         *     *first* one it fails (rules are ANDed, ADR-0783).
+         *
+         *     It carries exactly the two facts a client needs to say something honest, and
+         *     nothing else:
+         *
+         *     * ``predicate_id`` — WHICH rule refused you. It addresses a rule in this same
+         *       event's ``predicates``, which the client already has and already renders as
+         *       chips, so the page can point at the one that is in the way. Repeating the
+         *       rule's ``op``/``value`` here would be carrying a field *and its own
+         *       derivation* (api/CLAUDE.md), and the two copies could disagree.
+         *     * ``rating`` — the number you were judged on. The client cannot derive it: a
+         *       player's rating on the tournament's league is not otherwise on this page, and
+         *       "you are not eligible" without it is a fact the player cannot act on.
+         *
+         *     **No sentence.** The refusal is a state, not prose: the client owns the copy
+         *     (ADR-0968), and a raw API string must never reach the UI. The words that the
+         *     *entry route's* 409 falls back on are built from these same two facts by
+         *     ``app.tournament_eligibility``.
+         *
+         *     A player with **no rating** on the ladder is never in this state — they pass every
+         *     rule (ADR-0783 §3), so ``rating`` here is always a real number.
+         */
+        EventEntryRatingIneligible: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "rating_ineligible";
+            /** Predicate Id */
+            predicate_id: string;
+            /** Rating */
+            rating: number;
+        };
         /**
          * EventFormat
          * @enum {string}
@@ -2517,22 +2599,44 @@ export interface components {
         };
         /**
          * Predicate
-         * @description An eligibility rule. ``value`` is a number (most fields), an enum key
-         *     (gender), a boolean (club), or a ``[min, max]`` pair for the ``between``
-         *     operator.
+         * @description An eligibility rule. ``field`` names the one fact we actually hold about a
+         *     player — their rating on the tournament's league (ADR-0783) — so ``value`` is a
+         *     number, or a ``[min, max]`` pair for the ``between`` operator (either bound may
+         *     be `null`, for an open-ended range). Rules are **ANDed**: a player enters only
+         *     by satisfying every one of them, and `app.tournament_eligibility` is the single
+         *     place that decides that — for the entry guard and for the page that explains
+         *     itself, so the two cannot drift.
+         *
+         *     A rule whose `value` is `null` is one the organizer has not finished writing.
+         *     It is storable (an event may be saved mid-edit) and it **constrains nobody**:
+         *     there is no number to compare against, so it admits everyone rather than
+         *     silently barring the whole field on a half-typed rule.
+         *
+         *     `op` and `value` are closed domains, not open ones: an unknown operator, a
+         *     `between` given a single number, a `<` given a pair, and a `between` whose pair
+         *     is not exactly two bounds are all **422 at the boundary**. The evaluator is
+         *     therefore total over what it can be handed — a rule it could not decide cannot
+         *     be stored, which is the same reasoning that removed `age`/`gender`/`club` from
+         *     `field`: no such attribute exists on a player, so a rule over one could never be
+         *     evaluated, and an event that advertised it was lying to the players it claimed
+         *     to filter. Naming a removed field is a 422 on create *and* on patch. They return
+         *     with the ticket that gives a player a date of birth, a gender and a club.
          */
         Predicate: {
             /** Id */
             id: string;
             /**
              * Field
+             * @constant
+             */
+            field: "rating";
+            /**
+             * Op
              * @enum {string}
              */
-            field: "age" | "rating" | "gender" | "club";
-            /** Op */
-            op: string;
+            op: "<" | "<=" | ">" | ">=" | "=" | "!=" | "between";
             /** Value */
-            value: number | string | boolean | (number | null)[] | null;
+            value: number | (number | null)[] | null;
         };
         /**
          * RatingChange
@@ -2872,6 +2976,13 @@ export interface components {
          *     edge, via ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). Sending a
          *     ``status`` here is a 422 — ``extra="forbid"`` — rather than a tournament that
          *     is born ``live``.
+         *
+         *     ``league_id`` names the rating ladder the tournament's eligibility rules are
+         *     judged on (ADR-0783). It is optional here and NOT NULL in the database: an
+         *     omitted league resolves to the **default league**, so the caller only names one
+         *     when it means something other than the default. An id that names no league is a
+         *     404 — never a silent fall back to the default, which would run the tournament,
+         *     and judge its entrants, on a ladder nobody chose.
          */
         TournamentCreate: {
             /** Name */
@@ -2885,6 +2996,8 @@ export interface components {
             address: components["schemas"]["Address"];
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][];
+            /** League Id */
+            league_id?: string | null;
         };
         /** TournamentDetailRead */
         TournamentDetailRead: {
@@ -2905,6 +3018,11 @@ export interface components {
             address: components["schemas"]["Address"];
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
+            /**
+             * League Id
+             * Format: uuid
+             */
+            league_id: string;
             /**
              * Created By User Id
              * Format: uuid
@@ -2951,8 +3069,22 @@ export interface components {
             username: string;
             /** Seed */
             seed: number | null;
+            /** Rating */
+            rating: number | null;
         };
-        /** TournamentEventCreate */
+        /**
+         * TournamentEventCreate
+         * @description A new event. Its two numbers are bounded by what their columns can hold —
+         *     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
+         *     ``TournamentEventUpdate`` — so a value that would overflow ``Integer`` or
+         *     ``Numeric(8, 2)`` is a 422 here and never reaches the driver as a 500.
+         *
+         *     ``max_players`` is **optional**: omit it (or send ``null``) for an event with no
+         *     entrant cap (ADR-0935). Absent and null mean the same thing here — uncapped —
+         *     because there is nothing else an absent cap could mean on a create. The bound and
+         *     the nullability are orthogonal and both hold: a cap that is *present* is a whole
+         *     number from 1 to ``MAX_EVENT_PLAYERS``.
+         */
         TournamentEventCreate: {
             /** Name */
             name: string;
@@ -3007,6 +3139,8 @@ export interface components {
             updated_at: string;
             /** Entrants */
             entrants: components["schemas"]["TournamentEntrantRead"][];
+            /** Entry State */
+            entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
             /**
              * Entered
              * @description The registration count. Derived — there is no stored counter (ADR-0016).
@@ -3023,11 +3157,21 @@ export interface components {
          *     these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
          *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
          *     NULL, so an explicit ``null`` on any of *those* is rejected (422).
-         *     ``max_players`` is nullable: an explicit ``null`` clears the cap, making the
-         *     event uncapped (ADR-0935); when a value is supplied it must be positive
-         *     (``gt=0``). ``predicates``/``pools`` replace wholesale when present.
-         *     ``entered`` is not updatable — it is derived from the event's active entries,
-         *     not stored — so sending it is a 422 via ``extra="forbid"``.
+         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+         *     updatable — it is derived from the event's active entries, not stored — so
+         *     sending it is a 422 via ``extra="forbid"``.
+         *
+         *     ``max_players`` is the one nullable column here, so it is the one field where
+         *     ``null`` and *absent* differ: an explicit ``null`` **clears the cap**, making the
+         *     event uncapped (ADR-0935), while omitting the key leaves the cap alone. That is
+         *     why it is not in the ``_reject_explicit_null`` list below.
+         *
+         *     ``max_players`` and ``entry_fee`` otherwise carry the **same** bounds create does —
+         *     the ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers,
+         *     so a cap the client clears to ``null`` and a cap it sets to ``9999999999`` are
+         *     answered by the same rules on both verbs. A patch that could smuggle in a value
+         *     create refuses would defeat create's boundary entirely: the event would simply be
+         *     born small and then edited into the 500.
          */
         TournamentEventUpdate: {
             /** Name */
@@ -3064,6 +3208,11 @@ export interface components {
             address: components["schemas"]["Address"];
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
+            /**
+             * League Id
+             * Format: uuid
+             */
+            league_id: string;
             /**
              * Created By User Id
              * Format: uuid
@@ -3128,6 +3277,13 @@ export interface components {
          *     ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). A guard on that route
          *     that left a ``status`` field on this one would have guarded nothing, so
          *     sending ``status`` here is a 422 via ``extra="forbid"``.
+         *
+         *     ``league_id`` is updatable, but **only while the tournament is ``draft``**
+         *     (ADR-0783): once it is published, registration is open and eligibility is live,
+         *     so moving the ladder underneath would silently re-judge players who have
+         *     already entered. That is a state rule, not a shape rule, so it is a 409 from
+         *     the route rather than a 422 from here. Its column is NOT NULL, so an explicit
+         *     ``null`` is rejected.
          */
         TournamentUpdate: {
             /** Name */
@@ -3141,6 +3297,8 @@ export interface components {
             address?: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][] | null;
+            /** League Id */
+            league_id?: string | null;
         };
         /**
          * UnreadCountResponse

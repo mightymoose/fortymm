@@ -1,5 +1,6 @@
 import { Input } from '@/components/ui/input'
 
+import { ENTRY_FEE_MAX, PLAYERS_MAX } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
@@ -23,17 +24,23 @@ export interface BasicsSectionProps {
    * controls — a viewer gets a rendering of the data, never a disabled form
    * (ADR 0015). */
   canEdit: boolean
-  /** Inline errors for the name / player-limit / entry-fee fields, surfaced
-   * below the control in red. The editor owns the form and passes these down. */
+  /** Inline errors for the name / player-limit / entry-fee fields, surfaced below
+   * the control in red (`CLAUDE.md`, `## Forms`). The section does not *decide*
+   * these: the editor resolves the whole form on submit and hands each tab its
+   * share, so "may I save?" and "what does this field say in red?" are one answer,
+   * computed once — exactly as the rule rows already work. */
   errors?: BasicsFieldErrors
   onChange: (next: TournamentEvent) => void
 }
 
-/** A cleared numeric field is *unset* to a reader — an em-dash, not the literal
- * string "NaN" (what `ReadOnlyValue` would print) and not `0` (a real, different
- * answer: free to enter). The player limit reaches a reader as `null` when
- * uncapped (ADR-0935); the entry fee, still edited through `Number('')`, reaches
- * it as `NaN`. Both mean "unset". */
+/** The two numeric fields are **unset** in two different ways, and a reader is owed
+ * an em-dash for either — never the literal string "NaN" (what `ReadOnlyValue` would
+ * print for a cleared fee) and never `0` (a real, different answer: an event that is
+ * free to enter).
+ *
+ * The player limit reaches a reader as `null` when the event is uncapped (ADR-0935);
+ * the entry fee, whose blank box is a *missing* value rather than a state of the
+ * event, reaches it as `NaN`. Both mean "nothing here". */
 const numericValue = (n: number | null): number | null =>
   n === null || Number.isNaN(n) ? null : n
 
@@ -43,8 +50,8 @@ const numericValue = (n: number | null): number | null =>
  * editor's and neither can drift (ADR 0015).
  *
  * That single flag also drops the form's furniture (the required asterisks and
- * the "Hard cap…" hint): the rows still declare `required` and `hint`
- * unconditionally, and `Field` suppresses them for a viewer.
+ * the hints): the rows still declare `required` and `hint` unconditionally, and
+ * `Field` suppresses them for a viewer.
  *
  * The read-only `value` is what a *reader* needs, not what the control needs: an
  * option's label rather than the enum key it is stored under, and a formatted
@@ -71,6 +78,11 @@ export const BasicsSection = ({
         }
       />
 
+      {/* The name is the one field with nowhere else to be caught: blank and
+          256-characters-long are both a 422, and both used to be learned from the
+          server, in Pydantic's words, after the request had gone. The message is
+          `NewTournamentModal`'s, because it is the same field to the person typing
+          it (`data/event-validation`). */}
       <Field
         label="Event name"
         required
@@ -91,7 +103,11 @@ export const BasicsSection = ({
         )}
       </Field>
 
-      <div className="grid grid-cols-2 gap-4">
+      {/* **Stacked below `sm`, side by side above it** — the same breakpoint the sheet
+          itself switches on (`w-full sm:w-[820px]`), and the same rule the rule builder
+          learned one tab over: a grid column cannot be narrower than the widest thing
+          in it, so on a phone these rows do not get columns, they get lines. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label="Format"
           required
@@ -123,12 +139,28 @@ export const BasicsSection = ({
         </Field>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      {/* ⚠️ **Neither box may coerce a blank into a number** — and they blank to two
+          different things, because they *mean* two different things (ADR-0935).
+          `Number('')` is `0`, and that one coercion told two separate lies: a player
+          limit of zero (an event admitting nobody, which the server 422s) and an entry
+          fee of zero (a free event — a price the organizer never named). So a blank cap
+          is `null` (no cap: valid, and it saves) and a blank fee is `NaN` (missing: an
+          inline required error). Neither is ever `0`.
+
+          The `max` attributes are advisory and always were: an `<input type=number max>`
+          steers a spinner and stops nothing that is typed or pasted. The bound that BINDS
+          is the schema's (`PLAYERS_MAX` / `ENTRY_FEE_MAX`, `data/event-validation`) —
+          9999999999 sailed through this attribute and landed on an `Integer` column,
+          which is a **500**. They are set from the same constants, so the spinner and the
+          rule cannot say different numbers. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label="Player limit"
-          // A blank field is a real, valid state — an uncapped event — so it
-          // carries no required asterisk. The error, when present, replaces the
-          // helper text.
+          // No required asterisk: a blank field is a real, valid state — an event with
+          // no cap — and the hint says so out loud, so an organizer who wants one does
+          // not have to guess that emptying the box is allowed. The error, when there is
+          // one, takes the hint's place: the thing that is wrong outranks the thing that
+          // is merely worth knowing.
           error={!!errors.maxPlayers}
           hint={errors.maxPlayers ?? 'Blank = no cap. Waitlist opens past this.'}
           readOnly={readOnly}
@@ -139,11 +171,9 @@ export const BasicsSection = ({
               id={id}
               type="number"
               min={1}
-              max={512}
+              max={PLAYERS_MAX}
               aria-invalid={!!errors.maxPlayers}
-              // Hold empty as empty and submit `null` — never `Number('')`, which
-              // would coerce a blank cap to `0`/`NaN` (ADR-0935). `0` typed is a
-              // real, invalid cap the resolver rejects.
+              // Hold empty as empty and submit `null`.
               value={event.maxPlayers ?? ''}
               onChange={(e) =>
                 set({
@@ -167,15 +197,14 @@ export const BasicsSection = ({
               id={id}
               type="number"
               min={0}
+              max={ENTRY_FEE_MAX}
               aria-invalid={!!errors.entryFee}
-              // A blank fee is *missing*, not `0`: `NaN` marks it unset (a
-              // required error), while a typed `0` is a legitimate free event
-              // (ADR-0935).
+              // Blank is `NaN` — *missing* — while a typed `0` is a legitimate free
+              // event and saves.
               value={Number.isNaN(event.entryFee) ? '' : event.entryFee}
               onChange={(e) =>
                 set({
-                  entryFee:
-                    e.target.value === '' ? NaN : Number(e.target.value),
+                  entryFee: e.target.value === '' ? NaN : Number(e.target.value),
                 })
               }
             />
@@ -190,7 +219,17 @@ export const BasicsSection = ({
         <span className="h-px flex-1 bg-[color:var(--border-subtle)]" />
       </div>
 
-      <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-4">
+      {/* The row that was still off the screen after round three's responsive pass fixed
+          the rule row one tab over — the identical bug, in the identical shape, on the
+          tab the editor OPENS on (#783 QA, round four).
+
+          `1.4fr 1fr 1fr` looks fluid and is not: a grid item's `min-width` is `auto`, so
+          no column may be narrower than its content, and a date input plus two time
+          inputs have a min-content width of ~350px before the gaps. On a 375px phone the
+          End time therefore rendered at **x=339..467** — a hundred pixels past the edge
+          of the world, reachable only by a sideways scroll of the sheet that nothing
+          advertises. Three columns become three lines where there is room for one. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1.4fr_1fr_1fr]">
         {/* The editor's value is the raw `YYYY-MM-DD` an `<input type="date">`
             takes; a reader gets the same date in the words the event card uses
             ("Jun 13, 2026"), never the wire format. */}

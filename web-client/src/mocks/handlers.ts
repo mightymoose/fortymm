@@ -1653,10 +1653,13 @@ export const handlers = [
         if (result.status === 400) {
           return detail('Only singles events can be entered.', 400)
         }
-        // Both 409s — registration closed (ADR-0017) and already entered — carry
-        // the store's copy, which is the server's copy. The handler no longer
-        // knows which conflict it is; the store already said.
-        if (result.status === 409) return detail(result.detail, 409)
+        // Every entry refusal is a CODED 409 (ADR-0968):
+        // `{"detail": {"code": …, "message": …}}`. The handler doesn't know which
+        // refusal it is — the store already said — and the client switches on the
+        // code, never on the sentence.
+        if (result.status === 409) {
+          return HttpResponse.json({ detail: result.refusal }, { status: 409 })
+        }
         return detail('Event not found.', 404)
       }
       return HttpResponse.json(result.entrant, { status: 201 })

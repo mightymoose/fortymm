@@ -42,8 +42,8 @@ export const EventsTab = ({
         // actually get you (ADR 0015, rule 5).
         subtitle={
           canEdit
-            ? 'Singles, doubles, age- and rating-restricted brackets. Click any event to edit.'
-            : 'Singles, doubles, age- and rating-restricted brackets. Click any event for details.'
+            ? 'Singles, doubles, rating-restricted brackets. Click any event to edit.'
+            : 'Singles, doubles, rating-restricted brackets. Click any event for details.'
         }
         action={
           canEdit && (

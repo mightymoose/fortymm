@@ -51,10 +51,14 @@ class DrawType(enum.Enum):
 
 
 class Tournament(Base):
-    """A tournament owned by the user who created it. Standalone — not tied to a
-    league. Names are owner-scoped, not globally unique, so there's no unique
-    constraint on ``name``. ``address`` and ``table_catalogue`` are typed JSONB
-    value-objects decoded to Pydantic models at the API boundary."""
+    """A tournament owned by the user who created it, run on exactly one league —
+    the rating ladder its eligibility rules are judged on (ADR-0783). It was
+    "standalone, not tied to a league" until an event's rating predicate needed a
+    ladder to mean anything; ``league_id`` is NOT NULL, and an omitted one resolves
+    to the default league at create. Names are owner-scoped, not globally unique,
+    so there's no unique constraint on ``name``. ``address`` and
+    ``table_catalogue`` are typed JSONB value-objects decoded to Pydantic models at
+    the API boundary."""
 
     __tablename__ = "tournaments"
     __table_args__ = (
@@ -86,6 +90,14 @@ class Tournament(Base):
     address: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     table_catalogue: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # The ladder that judges this tournament's eligibility rules (ADR-0783).
+    # RESTRICT on delete, like ``Match.league_id``: the league a tournament is run
+    # on cannot be deleted out from under it.
+    league_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("leagues.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

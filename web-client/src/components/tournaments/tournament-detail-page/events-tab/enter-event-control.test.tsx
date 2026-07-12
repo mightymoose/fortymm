@@ -13,6 +13,8 @@ import { waitFor } from '@/test/utilities'
 import {
   buildEntrant,
   buildEvent,
+  buildFullEvent,
+  buildIneligibleEvent,
   buildTournament,
 } from '../../data/seed.factory'
 import {
@@ -171,6 +173,118 @@ describe('EnterEventControl', () => {
       await page.findSessionReady()
 
       expect(page.queryRegistrationNotice()).toBeNull()
+    })
+  })
+
+  describe('what the event itself refuses (#783)', () => {
+    // Issue #783 asked for a DISABLED Enter button. This is the test that says we
+    // did not build one: not "the button is disabled", but "there is no button" —
+    // ADR-0015 hides the mutating affordance and puts the reason in its place,
+    // because a greyed-out control is an unexplained dead end.
+    it('explains a FULL event and offers NO button at all — not a disabled one', async () => {
+      page.render({ event: buildFullEvent({ name: 'Championship Singles' }) })
+
+      const notice = await page.findFullNotice()
+      expect(notice).toHaveTextContent('Event full')
+      expect(notice).toHaveTextContent('Every place in this event has been taken.')
+      expect(page.queryEnterButton('Championship Singles')).toBeNull()
+      // …and nothing else button-shaped, enabled or otherwise.
+      expect(page.getButtons()).toHaveLength(0)
+    })
+
+    it('explains a RATING-INELIGIBLE event, naming the rule and the rating', async () => {
+      page.render({ event: buildIneligibleEvent({ name: 'U1500 Singles' }) })
+
+      const notice = await page.findIneligibleNotice()
+      expect(notice).toHaveTextContent('Not eligible')
+      // The rule the server pointed at, read back out of the event's own
+      // predicates — and the rating it judged, ROUNDED. The fixture's rating is
+      // the raw Glicko float the server sends (`UNROUNDED_RATING`,
+      // 1662.3108939062977), so this assertion discriminates: the card once
+      // printed thirteen decimal places here, and a round-number fixture could
+      // not see it.
+      expect(notice).toHaveTextContent('Rating is less than 1500. Your rating is 1662.')
+      expect(notice).not.toHaveTextContent('1662.3')
+      expect(page.queryEnterButton('U1500 Singles')).toBeNull()
+      expect(page.getButtons()).toHaveLength(0)
+    })
+
+    // ⚠️ THE TRAP, at the component. A player already inside a full event still has
+    // one act available to them, and it is the one that matters most: leaving. If
+    // capacity were judged before membership, every entrant in a popular event would
+    // find their Withdraw button replaced by "Event full" — locked in by the very
+    // success they signed up for.
+    it('still offers Withdraw to a player who is already entered in a FULL event', async () => {
+      const fullWithMe = buildFullEvent({
+        name: 'Championship Singles',
+        maxPlayers: 3,
+        entrants: [
+          buildEntrant({ id: 'entry-1', userId: 'u-1', username: 'player.1' }),
+          buildEntrant({ id: 'entry-2', userId: 'u-2', username: 'player.2' }),
+          buildEntrant({ id: 'entry-me', userId: 'u-me', username: SIGNED_IN_USERNAME }),
+        ],
+      })
+      // The event really is full — 3 of 3, as the server judged it.
+      expect(fullWithMe.entryState).toEqual({ state: 'event_full' })
+
+      page.render({ event: fullWithMe })
+
+      expect(
+        await page.findWithdrawButton('Championship Singles'),
+      ).toBeInTheDocument()
+      expect(page.queryFullNotice()).toBeNull()
+    })
+
+    // …and that Withdraw is not decoration: it addresses the player's own entry.
+    it('withdraws from a FULL event by the entry id', async () => {
+      let seenUrl = ''
+      mockEventWithdrawEndpoint(server, ({ request }) => {
+        seenUrl = request.url
+        return new HttpResponse(null, { status: 204 })
+      })
+      const fullWithMe = buildFullEvent({
+        id: 'ev-champ',
+        name: 'Championship Singles',
+        maxPlayers: 2,
+        entrants: [
+          buildEntrant({ id: 'entry-1', userId: 'u-1', username: 'player.1' }),
+          buildEntrant({ id: 'entry-me', userId: 'u-me', username: SIGNED_IN_USERNAME }),
+        ],
+      })
+      page.render({ tournament: buildTournament({ id: 't-1' }), event: fullWithMe })
+
+      await userEvent.click(await page.findWithdrawButton('Championship Singles'))
+
+      await waitFor(() =>
+        expect(seenUrl).toContain(
+          '/v1/tournaments/t-1/events/ev-champ/entries/entry-me',
+        ),
+      )
+    })
+
+    // The window is judged first: a full event on a `live` tournament is reported as
+    // the LOCKED window, because that is the fact that changes first (and the one
+    // that would change back).
+    it('reports the shut window, not the full event, on a live tournament', async () => {
+      page.render({
+        tournament: buildTournament({ status: 'live' }),
+        event: buildFullEvent({ name: 'Championship Singles' }),
+      })
+
+      expect(await page.findRegistrationNotice()).toHaveTextContent('Entries locked')
+      expect(page.queryFullNotice()).toBeNull()
+    })
+
+    it('says nothing at all about a full event to an unpermitted viewer', async () => {
+      page.render(
+        { event: buildFullEvent({ name: 'Championship Singles' }) },
+        { permissions: [PERM.TOURNAMENT_VIEW] },
+      )
+
+      await page.findSessionReady()
+
+      expect(page.queryFullNotice()).toBeNull()
+      expect(page.getButtons()).toHaveLength(0)
     })
   })
 

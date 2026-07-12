@@ -17,9 +17,11 @@ import { toast } from 'sonner'
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
+import { entryRefusalNotice } from './entry-refusal'
 import type { LifecycleEdge } from './lifecycle'
 import type {
   Entrant,
+  EventEntryState,
   Pool,
   Predicate,
   PredicateValue,
@@ -38,6 +40,7 @@ type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type ApiPool = components['schemas']['Pool']
 type ApiPredicate = components['schemas']['Predicate']
+type ApiEntryState = TournamentEventRead['entry_state']
 
 /** The API types a `between` predicate's value as a variable-length
  * `(number | null)[]`; the prototype narrows it to a `[min, max]` tuple. Coerce
@@ -53,16 +56,63 @@ function apiToPredicate(p: ApiPredicate): Predicate {
   return { id: p.id, field: p.field, op: p.op, value: apiToPredicateValue(p.value) }
 }
 
+/** Map the event's server-computed entry judgement (`entry_state`, ADR-0783) onto
+ * the domain union. The `state` tags are carried across **unchanged** — they are
+ * the entry refusal codes (ADR-0968), so the reason the page load gives and the
+ * reason a 409 gives share one copy table (`./entry-refusal`). Renaming them here
+ * would fork that table in two.
+ *
+ * The `default` arm is not dead code, however much the generated types say it is:
+ * the wire is untrusted, and a `state` from a schema that is not ours must not
+ * reach a component whose `switch` would fall through it. It degrades to `open` —
+ * the server is the authority on entry, and it refuses the click with a coded 409
+ * this client already has words for. */
+export function apiToEntryState(s: ApiEntryState): EventEntryState {
+  switch (s.state) {
+    case 'open':
+    case 'event_full':
+      return { state: s.state }
+    case 'rating_ineligible':
+      return {
+        state: s.state,
+        predicateId: s.predicate_id,
+        rating: s.rating,
+      }
+    default: {
+      // A state added to the API and not yet to this client is a COMPILE error
+      // here — and, at runtime, a degrade rather than an unrenderable card.
+      const exhaustive: never = s
+      void exhaustive
+      return { state: 'open' }
+    }
+  }
+}
+
 // ----- adapters: API (snake_case) <-> prototype (camelCase) ----------------
 
-/** Map an API entrant to the prototype's `Entrant`. */
+/** Map an API entrant to the prototype's `Entrant`.
+ *
+ * `rating` is carried across **unchanged, `null` included**: it is the entrant's
+ * rating on the tournament's ladder as the *server* resolved it (ADR-0783), and a
+ * `null` means unrated — not "missing", not "0", and emphatically not a value to
+ * coalesce. Defaulting it to a number here would erase the one fact this field
+ * exists to carry. */
 export function apiToEntrant(e: TournamentEntrantRead): Entrant {
-  return { id: e.id, userId: e.user_id, username: e.username, seed: e.seed }
+  return {
+    id: e.id,
+    userId: e.user_id,
+    username: e.username,
+    seed: e.seed,
+    rating: e.rating,
+  }
 }
 
 /** Map an API event payload to the prototype's `TournamentEvent`. `entered`
  * comes straight off the wire: the server derives it from the same active
- * entries it lists in `entrants`, so the two always agree. */
+ * entries it lists in `entrants`, so the two always agree. So does
+ * `entry_state` — whether this event has room for the caller, and whether their
+ * rating satisfies its rules, is the server's judgement and never the client's
+ * (ADR-0783). */
 export function apiToEvent(e: TournamentEventRead): TournamentEvent {
   return {
     id: e.id,
@@ -73,6 +123,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     entryFee: e.entry_fee,
     entered: e.entered,
     entrants: e.entrants.map(apiToEntrant),
+    entryState: apiToEntryState(e.entry_state),
     slot: e.slot,
     predicates: e.predicates.map(apiToPredicate),
     match: { rated: e.match_settings.rated, lengthGames: e.match_settings.length_games },
@@ -389,10 +440,15 @@ export function useDeleteTournament() {
   })
 }
 
-/** Create an event. No global `onError` toast: the event editor awaits this via
- * `mutateAsync` and surfaces a 4xx inline on the form (keeping the panel open),
- * so a global toast here would double up (#933, #934; same convention as
- * `useCreateTournament`). */
+/** Create an event.
+ *
+ * **No global `onError` toast**, by the same convention `useCreateTournament`
+ * follows (#933, #934): the `EventEditor` awaits this through `mutateAsync` and
+ * surfaces the failure *inside the sheet it keeps open* — which is the only place
+ * that can also say "your changes are still here". A toast on top of that would
+ * double up, and would be the wrong channel besides: it leaves after four seconds,
+ * and the thing it is reporting (unsaved work) does not. (`CLAUDE.md`, `## Forms`:
+ * "don't attach a global onError toast to a mutation a form surfaces inline".) */
 export function useCreateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -408,8 +464,9 @@ export function useCreateEvent(tournamentId: string) {
   })
 }
 
-/** Patch an event. Like `useCreateEvent`, no global `onError` toast — the editor
- * surfaces a 4xx inline and keeps the panel open (#933, #934). */
+/** Patch an event. Errors are the editor's to show — no global `onError` toast;
+ * it surfaces the failure inline and keeps the panel open (#933, #934). See
+ * `useCreateEvent`. */
 export function useUpdateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -465,60 +522,29 @@ export function useDeleteEvent(tournamentId: string) {
 // idempotent 204), so it looked fine — but that was luck, not design; it settles
 // into the same reconcile here on purpose.
 
-/** The exact sentence the entry endpoint answers a duplicate entry with (its
- * partial unique index on the *active* entries — `enter_event` in
- * `api/app/tournaments.py`). Matched byte-for-byte, on purpose: see below. */
-const ALREADY_ENTERED_DETAIL = 'You have already entered this event.'
-
-/** Which of `POST …/entries`' TWO 409s this is — or `null` when it is not a 409
- * at all (a 400, 403, 5xx, network-down: all genuine errors that still toast).
- *
- * The route raises two, and they mean opposite things to the player:
- *
- * - **already-entered** — the duplicate-entry index fired. Benign: it means the
- *   player IS entered, so the reconciled view is the answer, and shouting a red
- *   error over a card that now says "Withdraw" would be the lie.
- * - **registration-closed** — the registration window is shut (ADR-0017: entry
- *   requires `published`). The stale-tab case: the director started the tournament
- *   in another tab while this one still showed **Enter**. The player is NOT
- *   entered, and telling them they already are would be false.
- *
- * **`detail` is the only discriminator the API gives us.** Both are a FastAPI
- * `HTTPException(status_code=409, detail=<str>)`, which serialises to a bare
- * `{"detail": "<sentence>"}` — no `code`, no structured body (unlike the score-write
- * and negotiation 409s, which carry objects; see `conflictDetail` /
- * `isNegotiationConflict` in `@/api/client`). So we match the already-entered
- * sentence exactly and treat **every other 409 as a closed window**. That direction
- * is the safe one: if the server ever rewords either sentence, an unrecognised 409
- * is reported as a refusal in the server's own words — never as a false "you are
- * already in", which is the bug this replaced. (A machine-readable `code` on the
- * entry 409s would let this stop reading copy; until then, this is the seam.) */
-type EntryConflict = 'already-entered' | 'registration-closed'
-
-function entryConflict(error: unknown): EntryConflict | null {
-  if (!(error instanceof ApiError) || error.status !== 409) return null
-  return error.detail === ALREADY_ENTERED_DETAIL
-    ? 'already-entered'
-    : 'registration-closed'
-}
-
 /** Enter the *signed-in* player into an event. There is no request body — the
  * caller is the entrant (self-registration; a director entering someone else is
  * a separate, later endpoint). Resolves to the created `Entrant`, whose `id` is
  * the entry id a later withdrawal is addressed to.
  *
- * A non-singles event is a 400 and surfaces as an error toast. The two 409s
- * (`entryConflict` above) are told apart, because they are opposite news:
+ * **Every refusal is a 409 carrying a machine-readable `code`** (ADR-0968), and
+ * `entryRefusalNotice` (`./entry-refusal`) turns the code into the client's own
+ * copy — the two we know today being opposite news:
  *
- * - a **duplicate** entry is *benign* — the tournament is re-read (as on every
- *   settle) and the player gets a quiet, informational "you were already entered"
- *   note over the now-truthful card, not an error;
- * - a **closed window** is a genuine refusal — the player is not entered and, from
- *   this page, cannot be. It says so, in the server's words ("This tournament is
- *   already under way…"), while the same reconcile swaps the Enter button they
- *   clicked for the locked notice that is now true.
+ * - a **duplicate** entry (`already_entered`) is *benign* — the tournament is
+ *   re-read (as on every settle) and the player gets a quiet, informational "you
+ *   were already entered" note over the now-truthful card, not an error;
+ * - a **closed window** (`registration_closed`) is a genuine refusal — the player
+ *   is not entered and, from this page, cannot be. The error says so, while the
+ *   same reconcile swaps the Enter button they clicked for the locked notice that
+ *   is now true.
  *
- * A caller that wants to handle either 409 itself can still await `mutateAsync` and
+ * Everything else — a 400, a 403, a 5xx, a network failure, and a 409 whose code
+ * this client has no copy for — takes the ordinary error toast, which carries the
+ * server's own message. That fallback is the honest degrade, and it replaces the
+ * old fall-through that read every unrecognised 409 as a closed window.
+ *
+ * A caller that wants to handle a refusal itself can still await `mutateAsync` and
  * inspect the `ApiError`. */
 export function useEnterEvent(tournamentId: string) {
   const qc = useQueryClient()
@@ -541,26 +567,15 @@ export function useEnterEvent(tournamentId: string) {
     // Reconcile on BOTH paths — see the note above.
     onSettled: () => invalidateTournament(qc, tournamentId),
     onError: (error) => {
-      switch (entryConflict(error)) {
-        case 'already-entered':
-          toast.info('You were already entered in this event', {
-            description: "We've refreshed it with the latest entries.",
-          })
-          return
-        case 'registration-closed':
-          // The window shut under a stale tab. Our title (the fact: entries are
-          // closed), the server's sentence for the reason — it is the one thing
-          // that knows *which* closed status this is, and those sentences are
-          // written for the player to read (`_registration_closed_detail`).
-          toast.error('Entries are closed for this event', {
-            description:
-              (error instanceof ApiError ? error.detail : null) ??
-              "This tournament's registration window is shut. We've refreshed it with the latest status.",
-          })
-          return
-        case null:
-          toastError(error)
+      const notice = entryRefusalNotice(error)
+      // Not a refusal we have words for: the server's message is the fallback
+      // (ADR-0968), which `notifyError` puts in the toast's description.
+      if (notice === null) {
+        toastError(error)
+        return
       }
+      const ring = notice.tone === 'info' ? toast.info : toast.error
+      ring(notice.title, { description: notice.description })
     },
   })
 }

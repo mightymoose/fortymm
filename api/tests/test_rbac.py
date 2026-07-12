@@ -9,7 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import app
-from app.models import Permission, Role, RolePermission, Tournament, User, UserRole
+from app.models import (
+    League,
+    Permission,
+    Role,
+    RolePermission,
+    Tournament,
+    User,
+    UserRole,
+)
 from app.rbac import _require_rbac
 from app.roles import DEFAULT_ROLE_NAME, converge_default_role
 from app.sessions import get_current_user
@@ -642,7 +650,7 @@ async def test_delete_user_refuses_self(api_client: AsyncClient, admin_user: Use
 
 
 async def test_delete_user_with_activity_returns_409(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     """A user referenced by an ON DELETE RESTRICT FK (e.g. a tournament they
     created) can't be hard-deleted — the route must turn the IntegrityError
@@ -652,6 +660,9 @@ async def test_delete_user_with_activity_returns_409(
         Tournament(
             name="Doomed Open",
             address={},
+            # NOT NULL since ADR-0783: a tournament names the ladder it is judged
+            # on. Which one is immaterial here, so it is the default.
+            league_id=default_league.id,
             created_by_user_id=uuid.UUID(user["id"]),
         )
     )

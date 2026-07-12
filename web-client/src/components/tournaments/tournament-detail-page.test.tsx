@@ -1,6 +1,7 @@
 import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 
+import { ApiError } from '@/api/client'
 import { mockTournamentTransitionEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
@@ -135,17 +136,116 @@ describe('TournamentDetailPage', () => {
     })
 
     await userEvent.click(tournamentDetailPagePage.getNewEventButton())
-    // A new event starts with a blank (required) name — give it one so the form
-    // validates and the create actually fires.
+    // A new event starts unnamed (`emptyEvent`), and an unnamed event is a 422 —
+    // which the form now refuses to send. So naming it is part of creating it.
     await userEvent.type(
       tournamentDetailPagePage.getEditorNameInput(),
-      'Consolation Bracket',
+      'Twilight Singles',
     )
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
     await waitFor(() => expect(onCreateEvent).toHaveBeenCalledTimes(1))
     expect(onCreateEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Consolation Bracket' }),
+      expect.objectContaining({ name: 'Twilight Singles' }),
     )
+    // A successful create closes the editor — and it is the ONLY thing that does.
+    await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
+  })
+
+  /**
+   * **The uncapped event, end to end** — the path neither branch of this merge had.
+   *
+   * `emptyEvent` seeds a cap of 32, so the organizer of an unlimited event has to
+   * *clear* the box; the old editor read `Number('')` as `0` and sent an event of zero
+   * players, which the server refused (`gt=0`) with a 422 the sheet swallowed. So the
+   * two halves of the assertion are the two halves of the bug: `null` goes on the wire
+   * (not `0`, not `NaN`), and the create is accepted rather than refused.
+   *
+   * `toHaveBeenCalledWith(objectContaining({maxPlayers: null}))` is the load-bearing
+   * line: `expect.objectContaining({maxPlayers: 0})` would also pass a test that merely
+   * checked "the create fired".
+   */
+  it('creates an event with NO player cap when the limit is left blank (ADR-0935)', async () => {
+    const onCreateEvent = vi.fn().mockResolvedValue(undefined)
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Club Night',
+    )
+    await userEvent.clear(tournamentDetailPagePage.getEditorPlayerLimitInput())
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
+    await waitFor(() => expect(onCreateEvent).toHaveBeenCalledTimes(1))
+    expect(onCreateEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Club Night', maxPlayers: null }),
+    )
+    // Not a refusal: no banner, and the sheet closed because the save went through.
+    expect(tournamentDetailPagePage.queryEditorFailure()).toBeNull()
+    await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
+  })
+
+  it('refuses to create an UNNAMED event, and sends nothing (#783 QA)', async () => {
+    // The blank name used to go to the server, come back a 422, and be reported —
+    // in Pydantic's words ("String should have at least 1 character").
+    const onCreateEvent = vi.fn()
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
+    expect(onCreateEvent).not.toHaveBeenCalled()
+    expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
+    expect(tournamentDetailPagePage.queryEditorFailure()).toBeNull()
+  })
+
+  // The page's half of the data-loss bug: it used to fire the mutation and close
+  // the editor in the same breath, so a 422 landed on a sheet that was already gone
+  // and took every field the organizer had typed with it. The write is awaited now,
+  // and only a RESOLVED one closes anything.
+  it('keeps the event editor open when the create is REFUSED', async () => {
+    // FastAPI's real 422 body — a `detail` ARRAY of Pydantic errors, whose `msg` is
+    // machine prose the UI must never repeat (DEFINITION_OF_COMPLETE).
+    const onCreateEvent = vi.fn().mockRejectedValue(
+      new ApiError(422, 'String should have at most 255 characters', 'create event', {
+        detail: [
+          {
+            type: 'string_too_long',
+            loc: ['body', 'name'],
+            msg: 'String should have at most 255 characters',
+          },
+        ],
+      }),
+    )
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Twilight Singles',
+    )
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
+    await waitFor(() =>
+      expect(tournamentDetailPagePage.queryEditorFailure()).toBeInTheDocument(),
+    )
+    // Our copy, naming the field the server blamed — not the server's own sentence.
+    expect(tournamentDetailPagePage.queryEditorFailure()).toHaveTextContent(
+      'The Event name was rejected',
+    )
+    expect(tournamentDetailPagePage.queryEditorFailure()).not.toHaveTextContent(
+      'String should have at most',
+    )
+    expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
   })
 
   // `published`, not `draft`: a non-creator can no longer be looking at a draft at

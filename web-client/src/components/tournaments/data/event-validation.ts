@@ -1,0 +1,177 @@
+// What makes an event *saveable* — the field rules the editor's form is resolved
+// against (#783 QA, round two; ADR-0935).
+//
+// The rule builder got a client-side guard and the name did not, so the two halves
+// of the same form behaved differently: an empty rule was refused **in the form**,
+// while an empty NAME went to the server, came back a 422, and was reported in a
+// banner — in Pydantic's words. Same organizer, same click, two different stories,
+// and only one of them told them where to look.
+//
+// So the schema mirrors the server's constraints for every field the server can
+// refuse (`TournamentEventCreate` / `TournamentEventUpdate`,
+// `api/app/schemas/tournament.py`) — which is the house rule for a form
+// (web-client `CLAUDE.md`, `## Forms`), and the sibling `NewTournamentModal` already
+// does exactly this for the *tournament's* name, down to the copy:
+//
+//   | field         | server                                | here                        |
+//   | ------------- | ------------------------------------- | --------------------------- |
+//   | `name`        | `min_length=1, max_length=255`        | required, ≤ 255             |
+//   | `max_players` | `EventMaxPlayers | None`, `gt=0`,     | **optional** — blank is no  |
+//   |               | `le=512`, `default=None`              | cap; when present, 1 … 512  |
+//   | `entry_fee`   | `EventEntryFee`: `ge=0`, `le=999…99`, | required; 0 … 999,999.99,   |
+//   |               | whole cents                           | in whole cents              |
+//   | `predicates`  | (permissive — see below)              | `predicate-validation.ts`   |
+//
+// ⚠️ **BLANK IS NOT ZERO — AND THE TWO NUMBER FIELDS DISAGREE ABOUT WHICH IS WHICH**
+// (ADR-0935). Both boxes used to be read through `Number(e.target.value)`, and
+// **`Number('')` is `0`** — so clearing either one *authored a zero*, silently. For
+// the player limit that is an event of nobody, which the server refuses (`gt=0`)
+// with a 422 the form never caught; for the fee it is a free event, which is a real
+// and legitimate answer the organizer never gave. One coercion, two different lies.
+//
+// The resolution is per field, and it is a difference in the DOMAIN, not in the
+// input handling:
+//
+// - **A blank player limit is `null`, and `null` is a real state**: the event has no
+//   cap. It is not an error, and it must never be coerced to `0` — a cap of zero is
+//   nonsense (it admits nobody), and the DB's `CHECK (max_players > 0)` refuses it.
+//   So the schema is `.nullable()`, and the `> 0` rule applies only to a cap that is
+//   actually *there*.
+// - **A blank entry fee is missing**, and missing is an error: a fee is required, and
+//   `0` is a distinct, legitimate value (a free event). A blank box reaches this
+//   schema as `NaN` — never as `0` — and `NaN` is what the "required" message hangs
+//   on.
+//
+// ⚠️ **The column is a constraint too, and it is the one nobody mirrors** (#783 QA,
+// round three). A player limit of `9999999999` satisfies `gt=0` — and then the INSERT
+// hits an `Integer` column, PostgreSQL refuses the out-of-range value, and the API
+// answers **500**. The organizer typed a number into a box and got a server crash.
+// The same hole sits under the sibling field: `entry_fee` is `Numeric(8, 2)`, so a fee
+// of 9,999,999 overflows it — and a fee of `45.005` is *silently rounded* to `45.01`,
+// a price the organizer never typed. Both bounds are mirrored below, from the same
+// numbers the server now states (`MAX_EVENT_PLAYERS` / `MAX_ENTRY_FEE`).
+//
+// `format`, `draw_type` and `match_settings.length_games` come off closed pickers,
+// so a value the server would refuse cannot be authored. `slot` is three plain
+// `str`s server-side (`Slot`): the API refuses nothing there, so neither does this —
+// mirroring a constraint that does not exist would be inventing one.
+//
+// The *rules* keep their own module (`predicate-validation.ts`): they are the one
+// part of the draft the server is deliberately MORE permissive about (it accepts a
+// half-written rule; the client must not). `../tournament-detail-page/event-form.ts`
+// composes all of it into the ONE `eventSchema` the editor's `zodResolver` runs — so
+// a field is validated in exactly one place, whichever tab it lives on.
+
+import { z } from 'zod'
+
+/** `tournament_events.name` is `VARCHAR(255)`, `NOT NULL` — the same column
+ * constraint `NewTournamentModal` mirrors for the tournament's own name, and the
+ * same copy, because it is the same field to the person typing it. */
+export const NAME_MAX = 255
+
+/** The server's `EventMaxPlayers = Field(gt=0, …)`, and the DB's
+ * `CHECK (max_players > 0)`. A tighter client-side floor would be a rule the API does
+ * not have, and a save it refused would be a refusal nothing on the server would ever
+ * have made. */
+export const PLAYERS_MIN = 1
+
+/** The ceiling on an event's player limit — **the number the form has always shown**
+ * (`<Input type="number" max={512}>` on the Basics tab), and the number the server now
+ * states as `MAX_EVENT_PLAYERS`. An `<input max>` is a hint to a spinner and to nothing
+ * else: it does not stop a typed or pasted value, and `9999999999` went straight through
+ * it to the server, which 500'd on the `Integer` column.
+ *
+ * 512 is a bound with a reason: it is a 512-player draw — nine rounds of single
+ * elimination, more entrants than the largest table-tennis open in the country, and
+ * comfortably inside the column. It is not the column's own limit (2,147,483,647),
+ * because a number that only a database could love is not a *limit* — it is the absence
+ * of one. Both layers name the same number on purpose. */
+export const PLAYERS_MAX = 512
+
+/** The ceiling on an entry fee: `entry_fee` is `Numeric(8, 2)` — six digits before the
+ * point, two after — so this is the largest fee the column can hold, and one cent more
+ * is the same 500 the player limit was (the server's `MAX_ENTRY_FEE`). */
+export const ENTRY_FEE_MAX = 999_999.99
+
+/** A fee is a price, and a price is in whole cents. The column is `Numeric(8, 2)`, and
+ * Postgres does **not** refuse a third decimal — it silently *rounds* it, so `45.005` is
+ * stored, read back and charged as `45.01`: a number the organizer never typed, with
+ * nothing anywhere reporting the change. The server answers that with a 422
+ * (`_fits_the_fee_column`); the form says it under the field, which is where they can
+ * fix it. */
+export const FEE_DECIMALS = 2
+
+/** The event's name: present, and short enough for the column. */
+export const nameSchema = z
+  .string()
+  .trim()
+  .min(1, { error: 'Name is required.' })
+  .max(NAME_MAX, { error: `Name must be ${NAME_MAX} characters or fewer.` })
+
+/**
+ * The event's player limit — **nullable, because `null` means "no cap"** (ADR-0935).
+ *
+ * `.nullable()` is the whole design: a blank box is not an error and not a zero, it is
+ * an *uncapped event*. Every other rule here applies only to a cap that is really
+ * there, and the floor's message says the alternative out loud ("…or blank for no cap")
+ * — because the organizer who typed `0` is one keystroke away from the answer they
+ * actually wanted, and a bare "must be at least 1" would send them hunting for a number
+ * instead.
+ */
+export const maxPlayersSchema = z
+  .number()
+  .int({ error: 'The player limit must be a whole number.' })
+  .min(PLAYERS_MIN, {
+    error: `The player limit must be at least ${PLAYERS_MIN}, or blank for no cap.`,
+  })
+  // Phrased like the name's ceiling ("Name must be 255 characters or fewer."), because
+  // it is the same kind of news: a bound, stated, in the words of the thing bounded.
+  .max(PLAYERS_MAX, { error: `The player limit must be ${PLAYERS_MAX} or fewer.` })
+  .nullable()
+
+/**
+ * The event's entry fee — **required**, and `0` is a real answer (a free event).
+ *
+ * The empty box arrives as `NaN`, never as `0`: `BasicsSection` maps `''` to `NaN`
+ * precisely so that "they left it blank" and "they typed zero" stay two different facts
+ * all the way to here. `NaN` is therefore what the *required* message hangs on, and it
+ * is asked FIRST — every comparison below silently passes it (`NaN < 0` is `false`, and
+ * so is `NaN > MAX`), and leaning on `z.number()` to reject it does not work reliably
+ * either: the same `z.number()` accepts `NaN` under the ESM build the app runs and
+ * rejects it under the CJS one (measured, Zod 4.4.3). A validator whose verdict depends
+ * on the module system is not a validator, so the check is explicit.
+ */
+export const entryFeeSchema = z
+  .union([z.nan(), z.number()])
+  .superRefine((value, ctx) => {
+    if (Number.isNaN(value)) {
+      ctx.addIssue({ code: 'custom', message: 'Entry fee is required.' })
+      return
+    }
+    if (value < 0) {
+      ctx.addIssue({ code: 'custom', message: 'The entry fee cannot be negative.' })
+      return
+    }
+    if (value > ENTRY_FEE_MAX) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `The entry fee must be ${ENTRY_FEE_MAX.toLocaleString('en-US')} or less.`,
+      })
+      return
+    }
+    // Read through the number's own shortest round-trip repr, exactly as the server does
+    // (`Decimal(str(value))`), so what is judged is the number the organizer wrote:
+    // `45.10` is two places, not the binary tail of 10.1.
+    const decimals = String(value).split('.')[1]?.length ?? 0
+    if (decimals > FEE_DECIMALS) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `An entry fee is in whole cents — at most ${FEE_DECIMALS} decimal places.`,
+      })
+    }
+  })
+
+/** The editor's four tabs, of which two can hold something invalid. A sum type rather
+ * than a `string`, so "which tab do I open?" is answered from a closed set the editor's
+ * `TabsContent` values are checked against. */
+export type EventSection = 'basics' | 'eligibility'

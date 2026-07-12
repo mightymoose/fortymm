@@ -589,9 +589,18 @@ internal protocol APIProtocol: Sendable {
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
     /// are permitted, the tournament is simply in the wrong state.
     ///
+    /// An event's **eligibility rules** are decided against your rating on the
+    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
+    /// holds **no rating** on that league — nobody has a rating until they finish a rated
+    /// match — **passes every rule**, so a brand-new player is not shut out of the
+    /// beginners' event that exists for them.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
-    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
-    /// per player, with nowhere to record a partner or a team.
+    /// to enter it again. Entering an event that already holds its `max_players`
+    /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
+    /// events are a `400`: an entry is one row per player, with nowhere to record a
+    /// partner or a team.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
@@ -1647,9 +1656,18 @@ extension APIProtocol {
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
     /// are permitted, the tournament is simply in the wrong state.
     ///
+    /// An event's **eligibility rules** are decided against your rating on the
+    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
+    /// holds **no rating** on that league — nobody has a rating until they finish a rated
+    /// match — **passes every rule**, so a brand-new player is not shut out of the
+    /// beginners' event that exists for them.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
-    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
-    /// per player, with nowhere to record a partner or a team.
+    /// to enter it again. Entering an event that already holds its `max_players`
+    /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
+    /// events are a `400`: an entry is one row per player, with nowhere to record a
+    /// partner or a team.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
@@ -2497,6 +2515,119 @@ internal enum Components {
             case roundRobin = "round-robin"
             case rrThenKo = "rr-then-ko"
             case swiss = "swiss"
+        }
+        /// The event holds ``max_players`` active entrants already, so nobody may enter it
+        /// — the one arm of this union that says nothing about who is asking.
+        ///
+        /// Transient: a withdrawal frees a slot (ADR-0016), which is why the entry route
+        /// refuses it with a 409 rather than a 403.
+        ///
+        /// An **uncapped** event (``max_players`` is ``null``, ADR-0935) is never in this
+        /// state, however many players enter it: there is no limit for the field to reach.
+        /// ``event_is_full`` is the single place that says so, and both this read and the
+        /// entry route's 409 ask it.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventEntryFull`.
+        internal struct EventEntryFull: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventEntryFull/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case eventFull = "event_full"
+            }
+            /// - Remark: Generated from `#/components/schemas/EventEntryFull/state`.
+            internal var state: Components.Schemas.EventEntryFull.StatePayload?
+            /// Creates a new `EventEntryFull`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            internal init(state: Components.Schemas.EventEntryFull.StatePayload? = nil) {
+                self.state = state
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+            }
+        }
+        /// The event itself has nothing against you: it has room, and your rating on the
+        /// tournament's ladder satisfies every rule it has.
+        ///
+        /// NOT "you can click Enter right now" — the registration *window* is a fact about
+        /// the **tournament** (its status, ADR-0017) and your own membership is a fact about
+        /// the **entrants list**, and both are already on this payload. See
+        /// ``TournamentEventRead.entry_state``.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventEntryOpen`.
+        internal struct EventEntryOpen: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventEntryOpen/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case open = "open"
+            }
+            /// - Remark: Generated from `#/components/schemas/EventEntryOpen/state`.
+            internal var state: Components.Schemas.EventEntryOpen.StatePayload?
+            /// Creates a new `EventEntryOpen`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            internal init(state: Components.Schemas.EventEntryOpen.StatePayload? = nil) {
+                self.state = state
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+            }
+        }
+        /// Your rating on the tournament's ladder fails one of the event's rules — the
+        /// *first* one it fails (rules are ANDed, ADR-0783).
+        ///
+        /// It carries exactly the two facts a client needs to say something honest, and
+        /// nothing else:
+        ///
+        /// * ``predicate_id`` — WHICH rule refused you. It addresses a rule in this same
+        ///   event's ``predicates``, which the client already has and already renders as
+        ///   chips, so the page can point at the one that is in the way. Repeating the
+        ///   rule's ``op``/``value`` here would be carrying a field *and its own
+        ///   derivation* (api/CLAUDE.md), and the two copies could disagree.
+        /// * ``rating`` — the number you were judged on. The client cannot derive it: a
+        ///   player's rating on the tournament's league is not otherwise on this page, and
+        ///   "you are not eligible" without it is a fact the player cannot act on.
+        ///
+        /// **No sentence.** The refusal is a state, not prose: the client owns the copy
+        /// (ADR-0968), and a raw API string must never reach the UI. The words that the
+        /// *entry route's* 409 falls back on are built from these same two facts by
+        /// ``app.tournament_eligibility``.
+        ///
+        /// A player with **no rating** on the ladder is never in this state — they pass every
+        /// rule (ADR-0783 §3), so ``rating`` here is always a real number.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventEntryRatingIneligible`.
+        internal struct EventEntryRatingIneligible: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventEntryRatingIneligible/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ratingIneligible = "rating_ineligible"
+            }
+            /// - Remark: Generated from `#/components/schemas/EventEntryRatingIneligible/state`.
+            internal var state: Components.Schemas.EventEntryRatingIneligible.StatePayload?
+            /// - Remark: Generated from `#/components/schemas/EventEntryRatingIneligible/predicate_id`.
+            internal var predicateId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/EventEntryRatingIneligible/rating`.
+            internal var rating: Swift.Double
+            /// Creates a new `EventEntryRatingIneligible`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            ///   - predicateId:
+            ///   - rating:
+            internal init(
+                state: Components.Schemas.EventEntryRatingIneligible.StatePayload? = nil,
+                predicateId: Swift.String,
+                rating: Swift.Double
+            ) {
+                self.state = state
+                self.predicateId = predicateId
+                self.rating = rating
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+                case predicateId = "predicate_id"
+                case rating
+            }
         }
         /// - Remark: Generated from `#/components/schemas/EventFormat`.
         internal enum EventFormat: String, Codable, Hashable, Sendable, CaseIterable {
@@ -5319,9 +5450,28 @@ internal enum Components {
                 ])
             }
         }
-        /// An eligibility rule. ``value`` is a number (most fields), an enum key
-        /// (gender), a boolean (club), or a ``[min, max]`` pair for the ``between``
-        /// operator.
+        /// An eligibility rule. ``field`` names the one fact we actually hold about a
+        /// player — their rating on the tournament's league (ADR-0783) — so ``value`` is a
+        /// number, or a ``[min, max]`` pair for the ``between`` operator (either bound may
+        /// be `null`, for an open-ended range). Rules are **ANDed**: a player enters only
+        /// by satisfying every one of them, and `app.tournament_eligibility` is the single
+        /// place that decides that — for the entry guard and for the page that explains
+        /// itself, so the two cannot drift.
+        ///
+        /// A rule whose `value` is `null` is one the organizer has not finished writing.
+        /// It is storable (an event may be saved mid-edit) and it **constrains nobody**:
+        /// there is no number to compare against, so it admits everyone rather than
+        /// silently barring the whole field on a half-typed rule.
+        ///
+        /// `op` and `value` are closed domains, not open ones: an unknown operator, a
+        /// `between` given a single number, a `<` given a pair, and a `between` whose pair
+        /// is not exactly two bounds are all **422 at the boundary**. The evaluator is
+        /// therefore total over what it can be handed — a rule it could not decide cannot
+        /// be stored, which is the same reasoning that removed `age`/`gender`/`club` from
+        /// `field`: no such attribute exists on a player, so a rule over one could never be
+        /// evaluated, and an event that advertised it was lying to the players it claimed
+        /// to filter. Naming a removed field is a 422 on create *and* on patch. They return
+        /// with the ticket that gives a player a date of birth, a gender and a club.
         ///
         /// - Remark: Generated from `#/components/schemas/Predicate`.
         internal struct Predicate: Codable, Hashable, Sendable {
@@ -5329,42 +5479,39 @@ internal enum Components {
             internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/Predicate/field`.
             internal enum FieldPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case age = "age"
                 case rating = "rating"
-                case gender = "gender"
-                case club = "club"
             }
             /// - Remark: Generated from `#/components/schemas/Predicate/field`.
             internal var field: Components.Schemas.Predicate.FieldPayload
             /// - Remark: Generated from `#/components/schemas/Predicate/op`.
-            internal var op: Swift.String
+            internal enum OpPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case _lt_ = "<"
+                case _lt__equals_ = "<="
+                case _gt_ = ">"
+                case _gt__equals_ = ">="
+                case _equals_ = "="
+                case _excl__equals_ = "!="
+                case between = "between"
+            }
+            /// - Remark: Generated from `#/components/schemas/Predicate/op`.
+            internal var op: Components.Schemas.Predicate.OpPayload
             /// - Remark: Generated from `#/components/schemas/Predicate/value`.
             internal struct ValuePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/Predicate/value/value1`.
                 internal var value1: Swift.Int?
                 /// - Remark: Generated from `#/components/schemas/Predicate/value/value2`.
-                internal var value2: Swift.String?
-                /// - Remark: Generated from `#/components/schemas/Predicate/value/value3`.
-                internal var value3: Swift.Bool?
-                /// - Remark: Generated from `#/components/schemas/Predicate/value/value4`.
-                internal var value4: [Swift.Int?]?
+                internal var value2: [Swift.Int?]?
                 /// Creates a new `ValuePayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
                 ///   - value2:
-                ///   - value3:
-                ///   - value4:
                 internal init(
                     value1: Swift.Int? = nil,
-                    value2: Swift.String? = nil,
-                    value3: Swift.Bool? = nil,
-                    value4: [Swift.Int?]? = nil
+                    value2: [Swift.Int?]? = nil
                 ) {
                     self.value1 = value1
                     self.value2 = value2
-                    self.value3 = value3
-                    self.value4 = value4
                 }
                 internal init(from decoder: any Swift.Decoder) throws {
                     var errors: [any Swift.Error] = []
@@ -5378,22 +5525,10 @@ internal enum Components {
                     } catch {
                         errors.append(error)
                     }
-                    do {
-                        self.value3 = try decoder.decodeFromSingleValueContainer()
-                    } catch {
-                        errors.append(error)
-                    }
-                    do {
-                        self.value4 = try decoder.decodeFromSingleValueContainer()
-                    } catch {
-                        errors.append(error)
-                    }
                     try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
                         [
                             self.value1,
-                            self.value2,
-                            self.value3,
-                            self.value4
+                            self.value2
                         ],
                         type: Self.self,
                         codingPath: decoder.codingPath,
@@ -5403,9 +5538,7 @@ internal enum Components {
                 internal func encode(to encoder: any Swift.Encoder) throws {
                     try encoder.encodeFirstNonNilValueToSingleValueContainer([
                         self.value1,
-                        self.value2,
-                        self.value3,
-                        self.value4
+                        self.value2
                     ])
                 }
             }
@@ -5421,7 +5554,7 @@ internal enum Components {
             internal init(
                 id: Swift.String,
                 field: Components.Schemas.Predicate.FieldPayload,
-                op: Swift.String,
+                op: Components.Schemas.Predicate.OpPayload,
                 value: Components.Schemas.Predicate.ValuePayload? = nil
             ) {
                 self.id = id
@@ -5446,7 +5579,7 @@ internal enum Components {
                     forKey: .field
                 )
                 self.op = try container.decode(
-                    Swift.String.self,
+                    Components.Schemas.Predicate.OpPayload.self,
                     forKey: .op
                 )
                 self.value = try container.decodeIfPresent(
@@ -6273,6 +6406,13 @@ internal enum Components {
         /// ``status`` here is a 422 — ``extra="forbid"`` — rather than a tournament that
         /// is born ``live``.
         ///
+        /// ``league_id`` names the rating ladder the tournament's eligibility rules are
+        /// judged on (ADR-0783). It is optional here and NOT NULL in the database: an
+        /// omitted league resolves to the **default league**, so the caller only names one
+        /// when it means something other than the default. An id that names no league is a
+        /// 404 — never a silent fall back to the default, which would run the tournament,
+        /// and judge its entrants, on a ladder nobody chose.
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentCreate`.
         internal struct TournamentCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/name`.
@@ -6287,6 +6427,8 @@ internal enum Components {
             internal var address: Components.Schemas.Address
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]?
+            /// - Remark: Generated from `#/components/schemas/TournamentCreate/league_id`.
+            internal var leagueId: Swift.String?
             /// Creates a new `TournamentCreate`.
             ///
             /// - Parameters:
@@ -6296,13 +6438,15 @@ internal enum Components {
             ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
+            ///   - leagueId:
             internal init(
                 name: Swift.String,
                 description: Swift.String? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.Address,
-                tableCatalogue: [Components.Schemas.TournamentTable]? = nil
+                tableCatalogue: [Components.Schemas.TournamentTable]? = nil,
+                leagueId: Swift.String? = nil
             ) {
                 self.name = name
                 self.description = description
@@ -6310,6 +6454,7 @@ internal enum Components {
                 self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
+                self.leagueId = leagueId
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
@@ -6318,6 +6463,7 @@ internal enum Components {
                 case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
+                case leagueId = "league_id"
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -6345,13 +6491,18 @@ internal enum Components {
                     [Components.Schemas.TournamentTable].self,
                     forKey: .tableCatalogue
                 )
+                self.leagueId = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .leagueId
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
                     "start_date",
                     "end_date",
                     "address",
-                    "table_catalogue"
+                    "table_catalogue",
+                    "league_id"
                 ])
             }
         }
@@ -6373,6 +6524,8 @@ internal enum Components {
             internal var address: Components.Schemas.Address
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/league_id`.
+            internal var leagueId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/created_by_user_id`.
             internal var createdByUserId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/created_by_username`.
@@ -6396,6 +6549,7 @@ internal enum Components {
             ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
+            ///   - leagueId:
             ///   - createdByUserId:
             ///   - createdByUsername:
             ///   - canEdit:
@@ -6411,6 +6565,7 @@ internal enum Components {
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.Address,
                 tableCatalogue: [Components.Schemas.TournamentTable],
+                leagueId: Swift.String,
                 createdByUserId: Swift.String,
                 createdByUsername: Swift.String,
                 canEdit: Swift.Bool,
@@ -6426,6 +6581,7 @@ internal enum Components {
                 self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
+                self.leagueId = leagueId
                 self.createdByUserId = createdByUserId
                 self.createdByUsername = createdByUsername
                 self.canEdit = canEdit
@@ -6442,6 +6598,7 @@ internal enum Components {
                 case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
+                case leagueId = "league_id"
                 case createdByUserId = "created_by_user_id"
                 case createdByUsername = "created_by_username"
                 case canEdit = "can_edit"
@@ -6467,6 +6624,8 @@ internal enum Components {
             internal var username: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/seed`.
             internal var seed: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/rating`.
+            internal var rating: Swift.Double?
             /// Creates a new `TournamentEntrantRead`.
             ///
             /// - Parameters:
@@ -6474,24 +6633,39 @@ internal enum Components {
             ///   - userId:
             ///   - username:
             ///   - seed:
+            ///   - rating:
             internal init(
                 id: Swift.String,
                 userId: Swift.String,
                 username: Swift.String,
-                seed: Swift.Int? = nil
+                seed: Swift.Int? = nil,
+                rating: Swift.Double? = nil
             ) {
                 self.id = id
                 self.userId = userId
                 self.username = username
                 self.seed = seed
+                self.rating = rating
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case userId = "user_id"
                 case username
                 case seed
+                case rating
             }
         }
+        /// A new event. Its two numbers are bounded by what their columns can hold —
+        /// ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
+        /// ``TournamentEventUpdate`` — so a value that would overflow ``Integer`` or
+        /// ``Numeric(8, 2)`` is a 422 here and never reaches the driver as a 500.
+        ///
+        /// ``max_players`` is **optional**: omit it (or send ``null``) for an event with no
+        /// entrant cap (ADR-0935). Absent and null mean the same thing here — uncapped —
+        /// because there is nothing else an absent cap could mean on a create. The bound and
+        /// the nullability are orthogonal and both hold: a cap that is *present* is a whole
+        /// number from 1 to ``MAX_EVENT_PLAYERS``.
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentEventCreate`.
         internal struct TournamentEventCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/name`.
@@ -6637,6 +6811,51 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entrants`.
             internal var entrants: [Components.Schemas.TournamentEntrantRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state`.
+            internal enum EntryStatePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryFull`.
+                case eventFull(Components.Schemas.EventEntryFull)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryOpen`.
+                case open(Components.Schemas.EventEntryOpen)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryRatingIneligible`.
+                case ratingIneligible(Components.Schemas.EventEntryRatingIneligible)
+                internal enum CodingKeys: String, CodingKey {
+                    case state
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .state
+                    )
+                    switch discriminator {
+                    case "event_full":
+                        self = .eventFull(try .init(from: decoder))
+                    case "open":
+                        self = .open(try .init(from: decoder))
+                    case "rating_ineligible":
+                        self = .ratingIneligible(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.state,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .eventFull(value):
+                        try value.encode(to: encoder)
+                    case let .open(value):
+                        try value.encode(to: encoder)
+                    case let .ratingIneligible(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state`.
+            internal var entryState: Components.Schemas.TournamentEventRead.EntryStatePayload
             /// The registration count. Derived — there is no stored counter (ADR-0016).
             ///
             /// It is ``len(entrants)`` rather than a field of its own precisely so the
@@ -6662,6 +6881,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - entrants:
+            ///   - entryState:
             ///   - entered: The registration count. Derived — there is no stored counter (ADR-0016).
             internal init(
                 id: Swift.String,
@@ -6678,6 +6898,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
+                entryState: Components.Schemas.TournamentEventRead.EntryStatePayload,
                 entered: Swift.Int
             ) {
                 self.id = id
@@ -6694,6 +6915,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.entrants = entrants
+                self.entryState = entryState
                 self.entered = entered
             }
             internal enum CodingKeys: String, CodingKey {
@@ -6711,6 +6933,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case entrants
+                case entryState = "entry_state"
                 case entered
             }
         }
@@ -6718,11 +6941,21 @@ internal enum Components {
         /// these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
         /// ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
         /// NULL, so an explicit ``null`` on any of *those* is rejected (422).
-        /// ``max_players`` is nullable: an explicit ``null`` clears the cap, making the
-        /// event uncapped (ADR-0935); when a value is supplied it must be positive
-        /// (``gt=0``). ``predicates``/``pools`` replace wholesale when present.
-        /// ``entered`` is not updatable — it is derived from the event's active entries,
-        /// not stored — so sending it is a 422 via ``extra="forbid"``.
+        /// ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+        /// updatable — it is derived from the event's active entries, not stored — so
+        /// sending it is a 422 via ``extra="forbid"``.
+        ///
+        /// ``max_players`` is the one nullable column here, so it is the one field where
+        /// ``null`` and *absent* differ: an explicit ``null`` **clears the cap**, making the
+        /// event uncapped (ADR-0935), while omitting the key leaves the cap alone. That is
+        /// why it is not in the ``_reject_explicit_null`` list below.
+        ///
+        /// ``max_players`` and ``entry_fee`` otherwise carry the **same** bounds create does —
+        /// the ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers,
+        /// so a cap the client clears to ``null`` and a cap it sets to ``9999999999`` are
+        /// answered by the same rules on both verbs. A patch that could smuggle in a value
+        /// create refuses would defeat create's boundary entirely: the event would simply be
+        /// born small and then edited into the 500.
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate`.
         internal struct TournamentEventUpdate: Codable, Hashable, Sendable {
@@ -6929,6 +7162,8 @@ internal enum Components {
             internal var address: Components.Schemas.Address
             /// - Remark: Generated from `#/components/schemas/TournamentRead/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/league_id`.
+            internal var leagueId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentRead/created_by_user_id`.
             internal var createdByUserId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentRead/created_by_username`.
@@ -6950,6 +7185,7 @@ internal enum Components {
             ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
+            ///   - leagueId:
             ///   - createdByUserId:
             ///   - createdByUsername:
             ///   - canEdit:
@@ -6964,6 +7200,7 @@ internal enum Components {
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.Address,
                 tableCatalogue: [Components.Schemas.TournamentTable],
+                leagueId: Swift.String,
                 createdByUserId: Swift.String,
                 createdByUsername: Swift.String,
                 canEdit: Swift.Bool,
@@ -6978,6 +7215,7 @@ internal enum Components {
                 self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
+                self.leagueId = leagueId
                 self.createdByUserId = createdByUserId
                 self.createdByUsername = createdByUsername
                 self.canEdit = canEdit
@@ -6993,6 +7231,7 @@ internal enum Components {
                 case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
+                case leagueId = "league_id"
                 case createdByUserId = "created_by_user_id"
                 case createdByUsername = "created_by_username"
                 case canEdit = "can_edit"
@@ -7104,6 +7343,13 @@ internal enum Components {
         /// that left a ``status`` field on this one would have guarded nothing, so
         /// sending ``status`` here is a 422 via ``extra="forbid"``.
         ///
+        /// ``league_id`` is updatable, but **only while the tournament is ``draft``**
+        /// (ADR-0783): once it is published, registration is open and eligibility is live,
+        /// so moving the ladder underneath would silently re-judge players who have
+        /// already entered. That is a state rule, not a shape rule, so it is a 409 from
+        /// the route rather than a 422 from here. Its column is NOT NULL, so an explicit
+        /// ``null`` is rejected.
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentUpdate`.
         internal struct TournamentUpdate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/name`.
@@ -7136,6 +7382,8 @@ internal enum Components {
             internal var address: Components.Schemas.TournamentUpdate.AddressPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]?
+            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/league_id`.
+            internal var leagueId: Swift.String?
             /// Creates a new `TournamentUpdate`.
             ///
             /// - Parameters:
@@ -7145,13 +7393,15 @@ internal enum Components {
             ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
+            ///   - leagueId:
             internal init(
                 name: Swift.String? = nil,
                 description: Swift.String? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentUpdate.AddressPayload? = nil,
-                tableCatalogue: [Components.Schemas.TournamentTable]? = nil
+                tableCatalogue: [Components.Schemas.TournamentTable]? = nil,
+                leagueId: Swift.String? = nil
             ) {
                 self.name = name
                 self.description = description
@@ -7159,6 +7409,7 @@ internal enum Components {
                 self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
+                self.leagueId = leagueId
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
@@ -7167,6 +7418,7 @@ internal enum Components {
                 case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
+                case leagueId = "league_id"
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -7194,13 +7446,18 @@ internal enum Components {
                     [Components.Schemas.TournamentTable].self,
                     forKey: .tableCatalogue
                 )
+                self.leagueId = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .leagueId
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
                     "start_date",
                     "end_date",
                     "address",
-                    "table_catalogue"
+                    "table_catalogue",
+                    "league_id"
                 ])
             }
         }
@@ -18720,9 +18977,18 @@ internal enum Operations {
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
     /// are permitted, the tournament is simply in the wrong state.
     ///
+    /// An event's **eligibility rules** are decided against your rating on the
+    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
+    /// holds **no rating** on that league — nobody has a rating until they finish a rated
+    /// match — **passes every rule**, so a brand-new player is not shut out of the
+    /// beginners' event that exists for them.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
-    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
-    /// per player, with nowhere to record a partner or a team.
+    /// to enter it again. Entering an event that already holds its `max_players`
+    /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
+    /// events are a `400`: an entry is one row per player, with nowhere to record a
+    /// partner or a team.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.

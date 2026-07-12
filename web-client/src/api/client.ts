@@ -151,6 +151,74 @@ export function isSessionEndedError(error: unknown): boolean {
   return hasSessionEndedCode(detail)
 }
 
+/** One entry of FastAPI's 422 body: `{"detail": [{"loc": ["body", "name"],
+ * "msg": "String should have at most 255 characters"}, …]}`. */
+interface PydanticError {
+  loc: unknown[]
+  msg: string
+}
+
+/**
+ * The Pydantic errors carried by a FastAPI **request-validation** body, or `null`
+ * when the body is not that shape (a plain-string `detail`, a coded object, no
+ * body at all).
+ *
+ * The distinction is the point, and it is a distinction about the *shape*, not the
+ * status: this array is the only error body whose `msg` is written by **Pydantic**
+ * rather than by us. "String should have at most 255 characters" is machinery — it
+ * names a type constraint, in the wire's vocabulary, and it must never be shown to
+ * a user (`DEFINITION_OF_COMPLETE.md`: *"Raw API detail strings never reach the
+ * UI"*; ADR-0968: the client owns its copy). What it *does* carry that no client
+ * can guess is `loc` — **which field** the server refused — so this is the reader
+ * for that, and `extractDetail` below stays the reader for the message.
+ *
+ * Callers therefore get to ask two separate questions of the same body: "did the
+ * server send me machine prose?" (this) and "did the server send me a sentence we
+ * wrote?" (`extractDetail`, whose string/`.message` arms are our own copy).
+ */
+function pydanticErrors(value: unknown): PydanticError[] | null {
+  if (!value || typeof value !== 'object') return null
+  const detail = (value as { detail?: unknown }).detail
+  if (!Array.isArray(detail) || detail.length === 0) return null
+  const errors = detail.filter(
+    (entry): entry is PydanticError =>
+      !!entry &&
+      typeof entry === 'object' &&
+      'msg' in entry &&
+      typeof (entry as { msg: unknown }).msg === 'string',
+  )
+  return errors.length > 0 ? errors : null
+}
+
+/**
+ * The FIELDS a request-validation body blames — `loc: ["body", "max_players"]`
+ * yields `"max_players"` — or `null` when the error is not a Pydantic validation
+ * body at all.
+ *
+ * `null` vs. `[]` is load-bearing: `null` means *"this refusal is not Pydantic's;
+ * its `detail` is a sentence somebody wrote"*, while an empty array means *"it is
+ * Pydantic's, and it named no field we can point at"*. A UI needs both — the first
+ * decides whether the server's words are safe to show at all, the second whether it
+ * can name the offending field in words of its own.
+ *
+ * Only the first `loc` segment after the `"body"` prefix is kept: `["body", "slot",
+ * "start"]` is a complaint about the **Time slot** as far as a form is concerned,
+ * and the leaf is the wire's business.
+ */
+export function validationFields(error: unknown): string[] | null {
+  const body = error instanceof ApiError ? error.body : error
+  const errors = pydanticErrors(body)
+  if (!errors) return null
+
+  const fields: string[] = []
+  for (const { loc } of errors) {
+    const path = loc.filter((part): part is string => typeof part === 'string')
+    const field = path[0] === 'body' ? path[1] : path[0]
+    if (field !== undefined && !fields.includes(field)) fields.push(field)
+  }
+  return fields
+}
+
 export function extractDetail(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null
   const detail = (value as { detail?: unknown }).detail
@@ -161,15 +229,13 @@ export function extractDetail(value: unknown): string | null {
     const message = (detail as { message?: unknown }).message
     if (typeof message === 'string') return message
   }
-  if (Array.isArray(detail) && detail.length > 0) {
-    const first = detail[0]
-    if (first && typeof first === 'object' && 'msg' in first) {
-      // Pydantic v2 prefixes messages from a custom validator's `ValueError`
-      // with a literal "Value error, " — internal machinery, not user copy.
-      // Strip it so the rule message (e.g. the table-tennis score rules) reads
-      // cleanly inline (#151). FastAPI uses the same prefix for every 422.
-      return String((first as { msg: unknown }).msg).replace(/^Value error, /, '')
-    }
+  const errors = pydanticErrors(value)
+  if (errors) {
+    // Pydantic v2 prefixes messages from a custom validator's `ValueError`
+    // with a literal "Value error, " — internal machinery, not user copy.
+    // Strip it so the rule message (e.g. the table-tennis score rules) reads
+    // cleanly inline (#151). FastAPI uses the same prefix for every 422.
+    return errors[0].msg.replace(/^Value error, /, '')
   }
   return null
 }

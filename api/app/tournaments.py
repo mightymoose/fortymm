@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.leagues import resolve_league
 from app.models import (
     EventFormat,
     Tournament,
@@ -18,6 +19,10 @@ from app.models import (
 )
 from app.rbac import require_permission
 from app.schemas.tournament import (
+    EventEntryFull,
+    EventEntryOpen,
+    EventEntryRatingIneligible,
+    EventEntryState,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -29,7 +34,19 @@ from app.schemas.tournament import (
     TournamentUpdate,
 )
 from app.sessions import get_current_user
-from app.tournament_queries import active_entrants_by_event
+from app.tournament_eligibility import (
+    Eligible,
+    RatingIneligible,
+    evaluate_rating_eligibility,
+    event_is_full,
+)
+from app.tournament_entry_refusals import EntryRefusal, entry_refused
+from app.tournament_queries import (
+    active_entrants_by_event,
+    active_entry_count,
+    entrant_rating,
+    entrant_ratings_by_league,
+)
 
 # Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
 # entering an event as a player on ``tournament.enter`` (all three granted to the
@@ -102,6 +119,7 @@ def _tournament_fields(
         "end_date": t.end_date,
         "address": t.address,
         "table_catalogue": t.table_catalogue,
+        "league_id": t.league_id,
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,
         "can_edit": t.created_by_user_id == current_user_id,
@@ -123,10 +141,77 @@ def _serialize(
     )
 
 
+def _entry_state(
+    e: TournamentEvent,
+    *,
+    entered: int,
+    rating: float | None,
+) -> EventEntryState:
+    """Whether THIS caller may enter THIS event — the read-path twin of the guards
+    the entry route raises 409s from, computed from facts already in hand.
+
+    No database access, and that is the point: the ``entered`` count is the length of
+    the entrants list the read has already batched (ADR-0016 — the count is derived
+    from the rows, so it cannot disagree with the list beside it), and ``rating`` is
+    the caller's rating on the **tournament's** league, resolved ONCE per tournament
+    (``entrant_ratings_by_league``) because every event of a tournament is judged on
+    the same ladder. Reaching for either from in here would be a query per event: an
+    N+1 that grows with the very field the page is describing, and the statement-count
+    tripwires in ``tests/test_tournaments.py`` fail if one appears.
+
+    **The decision is not made here.** ``evaluate_rating_eligibility`` and
+    ``event_is_full`` make it — the same two functions the ``POST …/entries`` guards
+    call — so the page that explains why Enter is not offered and the route that
+    refuses the entry cannot come to two different answers (ADR-0783). This is only
+    the translation into the wire's sum type.
+
+    That sharing is what keeps an **uncapped** event (``max_players IS NULL``,
+    ADR-0935) out of the ``event_full`` arm: ``event_is_full`` answers ``False`` for a
+    null cap however many entrants there are, so this function cannot report as full an
+    event the entry route would happily admit the reader to. Had the capacity question
+    been re-asked here — with a ``>=`` over a nullable column — it would have been a
+    ``TypeError`` on the detail page of the first uncapped event, or (worse, had it
+    been written defensively as ``max_players or 0``) a permanently, silently full one.
+
+    **The ORDER mirrors the entry route's**, and it has to: eligibility first, then
+    capacity. An ineligible player looking at a full event is told about their
+    *rating*, which is exactly what ``POST …/entries`` would tell them
+    (``test_the_rating_refusal_outranks_the_event_full_refusal``) — and it is the more
+    useful of the two facts, because it is the one that does not change when somebody
+    withdraws. Flip these two lines and the page starts promising a player a slot that
+    frees up, for an event that would refuse them anyway.
+
+    What is deliberately NOT decided here: the registration window (a fact about the
+    tournament — its status, ADR-0017), whether the caller is already entered (a fact
+    on the entrants list), whether they hold ``tournament.enter``, and whether the
+    event is doubles. All four are already on the page or in the session, and
+    restating them would be carrying a field and its own derivation. ``open`` means
+    "the event admits you", not "click here".
+
+    ``match`` with ``assert_never``, not ``isinstance``: a third eligibility outcome
+    added tomorrow is a type error here until somebody says what the page should show
+    for it, rather than falling through to ``open`` — a read must not fail in the
+    reassuring direction any more than a guard may fail in the permissive one.
+    """
+    decision = evaluate_rating_eligibility(rating=rating, predicates=e.predicates)
+    match decision:
+        case RatingIneligible():
+            return EventEntryRatingIneligible(
+                predicate_id=decision.predicate_id, rating=decision.rating
+            )
+        case Eligible():
+            if event_is_full(entered=entered, max_players=e.max_players):
+                return EventEntryFull()
+            return EventEntryOpen()
+        case _:
+            assert_never(decision)
+
+
 def _serialize_event(
     e: TournamentEvent,
     *,
     entrants: list[TournamentEntrantRead],
+    rating: float | None,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
     # needs the entrant's username, and only the *active* entries), so the fields
@@ -134,6 +219,10 @@ def _serialize_event(
     # which would also fire a lazy load. The event's ``entered`` count is not
     # listed at all: it is a computed field over ``entrants`` (ADR-0016), so
     # there is nothing here that could disagree with the list.
+    #
+    # ``entry_state`` is the caller's, and it is computed from the entrants already
+    # loaded plus the caller's ``rating`` on this tournament's league — passed in,
+    # never fetched here, so no serializer can turn into an N+1.
     return TournamentEventRead.model_validate(
         {
             "id": e.id,
@@ -150,6 +239,7 @@ def _serialize_event(
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
+            "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
         }
     )
 
@@ -161,9 +251,15 @@ def _serialize_detail(
     current_user_id: uuid.UUID,
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
+    rating: float | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
+    #
+    # ONE ``rating`` for all of them — the caller's, on ``t.league_id``. A tournament
+    # names the single ladder its eligibility is judged on (ADR-0783), so every event
+    # under it is judged on the same number, and fetching it per event would be a
+    # query per event for an answer that cannot vary.
     return TournamentDetailRead.model_validate(
         {
             **_tournament_fields(
@@ -172,7 +268,8 @@ def _serialize_detail(
                 current_user_id=current_user_id,
             ),
             "events": [
-                _serialize_event(e, entrants=entrants_by_event[e.id]) for e in events
+                _serialize_event(e, entrants=entrants_by_event[e.id], rating=rating)
+                for e in events
             ],
         }
     )
@@ -212,24 +309,30 @@ async def _get_tournament_for_update_or_404(
     """The same 404, with the row locked for the rest of the transaction.
 
     Every route that *judges a tournament's status and then writes* loads it
-    through here — the transition, entering an event, withdrawing an active entry
-    — because without the lock the judgment and the write happen in two different
+    through here — the transition, entering an event, withdrawing an active entry,
+    and the PATCH (whose league guard reads the status, ADR-0783) — because without
+    the lock the judgment and the write happen in two different
     instants. Postgres runs READ COMMITTED, so an unlocked ``SELECT`` answers from
     the snapshot of that statement alone: a player's entry can pass the
     ``published`` check, the owner's go-live can commit, and the ``INSERT`` can
     then land *behind* it. Both requests succeed and the field is no longer the
     one the tournament went live with — precisely the invariant going live exists
     to establish, and the one the draw (#785) is cut from. The mirror of it lets a
-    player withdraw out from under a tournament that has just gone live, and it
-    lets two concurrent identical transitions both read ``published``, both find a
-    legal edge, and both answer 201 — turning the 409 ADR-0017 promises for a
+    player withdraw out from under a tournament that has just gone live; it lets a
+    league change pass the ``draft`` check and then land behind a publish, moving
+    the ladder under a field that has already started filling; and it lets two
+    concurrent identical transitions both read ``published``, both find a legal
+    edge, and both answer 201 — turning the 409 ADR-0017 promises for a
     re-asserted status into a silent no-op.
 
     ``FOR UPDATE`` closes the window: the status read here cannot change under the
     caller until its transaction ends, and a second writer blocks and then re-reads
-    the *committed* status rather than the one it saw first. All three mutating
+    the *committed* status rather than the one it saw first. All four mutating
     routes take this lock, on the TOURNAMENT row, before any other — one lock, one
-    order, so they queue behind each other and no pair of them can deadlock.
+    order, so they queue behind each other and no pair of them can deadlock. (The
+    PATCH takes it unconditionally, though it only *judges* the status when the
+    payload carries a ``league_id``: one loader per route is simpler than a
+    branch, and a name-only edit that queues behind a publish is harmless.)
 
     The read routes deliberately take no lock: they select through ``_visible_to``
     and never come through here, because a reader has nothing to serialize against
@@ -237,9 +340,12 @@ async def _get_tournament_for_update_or_404(
 
     Unscoped by ownership, and legitimately so — entering and withdrawing are
     *player* actions on somebody else's tournament, so there is no owner to check.
-    The routes that do own their row load through ``_get_owned_tournament_or_404``
-    instead; ``create_tournament_transition`` needs both, so it takes this lock and
-    then calls ``_require_owner`` itself.
+    The owner-only writes that do NOT judge a status load through
+    ``_get_owned_tournament_or_404`` instead, which welds the 403 to the load but
+    takes no lock. The two routes that need *both* — the transition and the PATCH —
+    take this lock and then call ``_require_owner`` themselves, because a loader
+    that locked and owner-checked would be a third loader saying what these two
+    lines already say.
     """
     tournament = (
         await db.execute(
@@ -295,6 +401,39 @@ def _require_owner(t: Tournament, current_user: User) -> None:
             status_code=403,
             detail="You can only modify tournaments you created.",
         )
+
+
+def _enforce_league_editable(t: Tournament) -> None:
+    """Raise the 409 unless the tournament's league may still be moved.
+
+    A tournament's league is the ladder its events' rating rules are judged on
+    (ADR-0783), and it is settled the moment the tournament is published: from
+    then on registration is open and eligibility is *live*, so moving the ladder
+    underneath would silently re-judge — and could retroactively disqualify —
+    players who have already entered against the old one. ``draft`` is the only
+    status in which nobody can have entered yet, so it is the only one in which
+    the ladder is still free to move. Same guarded-edge reasoning as the lifecycle
+    itself (ADR-0017): what a tournament will accept depends on where it is.
+
+    Presence, not difference: sending the league the tournament already has, once
+    it is published, is refused too. That mirrors the transition route, where
+    re-asserting the status you already hold is a *conflict* rather than an
+    idempotent no-op — the only caller that sends a settled field is a stale one,
+    and answering 200 would tell it the field is still editable when it is not.
+
+    409, not 403 (as on the transitions route): the caller is the owner and the
+    field is theirs to edit — it is the tournament that is past the point where
+    the edit means anything. "Not you" would be a lie; the truth is "not now".
+    """
+    if t.status is TournamentStatus.draft:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"This tournament is {t.status.value}; its league can only be changed "
+            "while it is a draft."
+        ),
+    )
 
 
 # The statuses in which a tournament has been ANNOUNCED to the world. Publishing
@@ -357,18 +496,20 @@ async def list_tournaments(
 ) -> list[TournamentDetailRead]:
     # The list page's cards render event-derived stats (event count, total
     # entries, table count), so the list returns the full aggregate — events and
-    # their entrants included — rather than a thinner summary. THREE queries, no
+    # their entrants included — rather than a thinner summary. FOUR queries, no
     # N+1, whatever the number of tournaments or events: the tournaments+usernames
     # join, then all their events, then all those events' active entrants in one
-    # batch. A per-event entry count would be the N+1 this shape exists to avoid,
-    # and a statement-count tripwire in tests/test_tournaments.py fails if one
-    # comes back.
+    # batch, then the caller's rating on every distinct league those tournaments run
+    # on (which every event's ``entry_state`` is judged against, ADR-0783). A
+    # per-event entry count or a per-tournament rating would be the N+1 this shape
+    # exists to avoid, and a statement-count tripwire in tests/test_tournaments.py
+    # fails if one comes back.
     #
     # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
     # so it never enters the result set — and, because the filter is a WHERE clause
-    # on the first of the three queries, the events and entrants queries are keyed
+    # on the first of the four queries, the events and entrants queries are keyed
     # off the surviving ids and cannot leak a hidden tournament's contents either.
-    # A predicate costs no extra statement, so the tripwire above still reads 3.
+    # A predicate costs no extra statement, so the tripwire above still reads 4.
     rows = (
         await db.execute(
             select(Tournament, User.username)
@@ -397,6 +538,12 @@ async def list_tournaments(
         for event in events:
             events_by_tournament[event.tournament_id].append(event)
     entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
+    # ONE batch for the caller's ratings, keyed by league — deduplicated, because
+    # every tournament on the default league shares the one number, and because the
+    # ladders a page happens to list is not a reason to ask the same question twice.
+    ratings = await entrant_ratings_by_league(
+        db, list({tournament.league_id for tournament, _ in rows}), current_user.id
+    )
     return [
         _serialize_detail(
             tournament,
@@ -404,6 +551,7 @@ async def list_tournaments(
             current_user_id=current_user.id,
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
+            rating=ratings[tournament.league_id],
         )
         for tournament, username in rows
     ]
@@ -427,6 +575,21 @@ async def create_tournament(
     # here either. A tournament is born ``draft`` from the column's server
     # default — one source for the starting status, rather than a schema default
     # that a request could override — and the ``refresh`` below reads it back.
+    #
+    # The league is the one field the caller may leave out and still get: the
+    # column is NOT NULL (a tournament must name the ladder its eligibility is
+    # judged on, ADR-0783), and an omitted ``league_id`` resolves to the default
+    # league — the league a surface falls back to when the caller names none.
+    #
+    # The STRICT resolver, the same one the PATCH uses (and matches.py before it):
+    # an omitted league is the default, but an id that names NO league is a 404.
+    # NOT the degrading ``resolve_league_or_default`` — a tournament's league is a
+    # persisted fact that decides who may enter, not a view-preference lens on a
+    # resource that exists anyway (see the note in app/leagues.py). Degrading here
+    # would answer 201 to a director who mistyped an id, hand them a tournament
+    # quietly running on the DEFAULT ladder, and judge their entrants on a ladder
+    # nobody chose — exactly the silent lie ADR-0783 exists to remove.
+    league = await resolve_league(db, payload.league_id)
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
@@ -434,6 +597,7 @@ async def create_tournament(
         end_date=payload.end_date,
         address=payload.address.model_dump(),
         table_catalogue=[t.model_dump() for t in payload.table_catalogue],
+        league_id=league.id,
         created_by_user_id=current_user.id,
     )
     db.add(tournament)
@@ -487,12 +651,19 @@ async def get_tournament(
         .all()
     )
     entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
+    # A FOURTH and last query: the caller's rating on the tournament's league, read
+    # ONCE for the whole page. It is what every event's ``entry_state`` is judged
+    # against (ADR-0783), and a tournament has exactly one ladder — so a rating read
+    # inside the per-event loop would issue a query per event to learn the same
+    # number, on the page whose whole job is to describe a field of events.
+    rating = await entrant_rating(db, tournament.league_id, current_user.id)
     return _serialize_detail(
         tournament,
         created_by_username=username,
         current_user_id=current_user.id,
         events=events,
         entrants_by_event=entrants_by_event,
+        rating=rating,
     )
 
 
@@ -503,13 +674,43 @@ async def update_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
-    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
+    # The locked loader plus an explicit ``_require_owner`` — the same pair
+    # ``create_tournament_transition`` takes, and for the same reason — rather than
+    # ``_get_owned_tournament_or_404``, which does not lock. This route now *judges
+    # the status and then writes*: the league guard below reads ``status``, and an
+    # unlocked read answers from its own statement's snapshot (READ COMMITTED). A
+    # league change could pass the ``draft`` check, the owner's publish could
+    # commit, and the UPDATE could then land behind it — moving the ladder under a
+    # tournament whose registration is already open, which is the one thing the
+    # guard exists to prevent. Same lock, on the same row, taken first, as the
+    # transition and entry routes: one lock in one order, so no pair of them can
+    # deadlock.
+    #
+    # Load first (404 if missing), THEN check ownership (403). The ordering is
+    # intentional, and is the one the owner-scoped loader bakes in: a permitted
+    # non-creator learns the tournament exists.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+    fields = payload.model_dump(exclude_unset=True)
+    # The league is settled once the tournament leaves ``draft`` (ADR-0783), so it
+    # comes out of the generic loop: it is the one field with a *state* rule, and
+    # it is refused (409) before anything is written. The refusal is judged before
+    # the league is looked up, so a caller who cannot change it learns nothing
+    # about whether the league they named exists.
+    if "league_id" in fields:
+        _enforce_league_editable(tournament)
+        # The STRICT resolver, exactly as on create: the id is a deliberate choice
+        # by the owner, not a view preference, so an id that names no league is a
+        # 404 rather than a silent swap to the default (see app/leagues.py). It also
+        # keeps the NOT NULL FK from turning a bad id into a 500.
+        league = await resolve_league(db, fields.pop("league_id"))
+        tournament.league_id = league.id
     # model_dump(exclude_unset=True) already recursively serializes the nested
     # value-objects (address/table_catalogue) to plain dicts/lists, so a single
     # setattr loop covers the JSONB columns and the scalar fields alike. Absent
     # fields stay untouched; the schema validator already rejected an explicit
     # null on the NOT NULL columns.
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    for key, value in fields.items():
         setattr(tournament, key, value)
     await db.commit()
     await db.refresh(tournament)
@@ -645,7 +846,14 @@ async def create_event(
     await db.refresh(event)
     # A just-created event has no entries, so its entrants are empty and its
     # derived ``entered`` count is 0 — no query needed to learn that.
-    return _serialize_event(event, entrants=[])
+    #
+    # Its ``entry_state`` is still the CALLER's, computed exactly as it is on the
+    # read paths (the director who just created the event is a player too, and the
+    # rules they wrote judge them like anyone else). One rating query, on the
+    # tournament's league: answering with a state the endpoint had guessed rather
+    # than computed is how the read and the guard come apart.
+    rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    return _serialize_event(event, entrants=[], rating=rating)
 
 
 @router.patch(
@@ -659,9 +867,12 @@ async def update_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    # Loaded for the guard alone — the event, not the tournament, is what this
-    # route edits, so the owner-scoped load is here to 404/403 and nothing else.
-    await _get_owned_tournament_or_404(db, tournament_id, current_user)
+    # The owner-scoped load is the guard (404 then 403) — the event, not the
+    # tournament, is the row this route edits. But the tournament is kept, not
+    # discarded: its ``league_id`` is the ladder the event's refreshed ``entry_state``
+    # is judged on (ADR-0783), and it is already loaded, so re-fetching it would be a
+    # second query for a row we are holding.
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     # As in update_tournament: model_dump(exclude_unset=True) serializes the
     # nested value-objects (slot/match_settings/predicates/pools) to plain
@@ -674,7 +885,11 @@ async def update_event(
     # than answering with an empty list (and a ``entered`` of 0) that would be a
     # lie for any event people have entered.
     entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
-    return _serialize_event(event, entrants=entrants)
+    # And its ``entry_state`` is recomputed from the event as it now stands: an owner
+    # who has just tightened a rule or lowered ``max_players`` is answered with what
+    # the event says NOW, not with what it said before their edit.
+    rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    return _serialize_event(event, entrants=entrants, rating=rating)
 
 
 @router.delete(
@@ -808,6 +1023,17 @@ def _enforce_registration_open(t: Tournament) -> None:
     permissive direction. Finding the words for the refusal is a separate job, and
     ``_registration_refusal_detail`` is total, so there is no status it can be handed
     that leaves it with nothing to say.
+
+    This is the **withdraw** route's enforcer, and its refusal is still bare prose.
+    The enter route has its own — ``_enforce_entry_registration_open`` — which says
+    the same thing with a machine-readable ``code``. The split is deliberate:
+    ADR-0968 scopes the coded refusals to the *entry* endpoint (the one whose client
+    was telling refusals apart by byte-comparing English), and leaves #968 open
+    against everything else here, withdraw included. Do not re-merge the two to tidy
+    them up — that silently changes the withdraw route's response body. Convert
+    withdraw *on purpose*, with its client, or not at all. What the two share is the
+    part that must not fork: the ``_registration_open`` decision and the
+    ``_registration_refusal_detail`` sentences.
     """
     if _registration_open(t):
         return
@@ -815,6 +1041,128 @@ def _enforce_registration_open(t: Tournament) -> None:
         status_code=409,
         detail=_registration_refusal_detail(t.status),
     )
+
+
+def _enforce_entry_registration_open(t: Tournament) -> None:
+    """The enter route's half of the same guard: refuse unless the window is open,
+    with the ``registration_closed`` code the client switches on (ADR-0968).
+
+    Same decision (``_registration_open``) and the same words
+    (``_registration_refusal_detail``) as the withdraw route's enforcer — only the
+    envelope differs, because only the entry endpoint's refusals are coded so far.
+    So the two routes cannot come to disagree about *whether* registration is open,
+    which is the property worth protecting; that they describe the refusal
+    differently is a client-contract fact, not a second opinion.
+
+    One code for all three closed statuses. The status is *why*, and the client does
+    not branch on which one — it branches on "the window is shut", and the
+    per-status sentence rides along as the message, which is the only place the
+    difference is worth anything: a fallback for a client that does not know the
+    code, and prose for a human. (A ``published`` tournament closed for some *other*
+    reason lands here too, with the generic sentence — the code is honest about that
+    where the sentence could not be.)
+    """
+    if _registration_open(t):
+        return
+    raise entry_refused(
+        EntryRefusal.registration_closed,
+        _registration_refusal_detail(t.status),
+    )
+
+
+async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> None:
+    """Raise the ``event_full`` 409 once the event holds ``max_players`` entrants.
+
+    **This function is only correct when it is called with the tournament's row lock
+    already held** (ADR-0783, §4). Capacity is a count on ``tournament_entries``
+    compared against a column on ``tournament_events`` — which is not something a
+    database constraint can express, so unlike the duplicate-entry guard (a *partial
+    unique index*, enforced by Postgres itself, which is why that one can safely be a
+    caught ``IntegrityError`` after the fact) there is nothing underneath us. The lock
+    is the entire mechanism. Counted outside it, two entrants racing for the final
+    slot each read ``max_players - 1``, each pass this gate, and each insert: an
+    overfull event, from two requests that were both answered 201.
+
+    Inside the lock the count-then-insert is serialised, because every entry to every
+    event of a tournament takes that same lock, on that same row, first — so the
+    loser blocks, and its count re-reads the row the winner *committed*.
+
+    Active entries only (ADR-0016): a withdrawn entry is not an entrant and its slot
+    is genuinely free again.
+
+    *What* full means — ``>=``, not ``==``, so an event whose ``max_players`` was
+    lowered under an already-larger field is full; and an event with **no cap at all**
+    is never full — is ``event_is_full``, shared with the detail read's
+    ``entry_state``: the page that reports an event as full and the guard that refuses
+    entry to it must not be able to disagree about the word. What this function owns is
+    the *count* (fresh, under the lock) and the refusal.
+
+    An **uncapped** event (``max_players IS NULL``, ADR-0935) leaves by the first line,
+    before the count: there is no limit for a count to be compared against, so the
+    ``COUNT(*)`` would be a query whose answer could not change the outcome, and the
+    ``event_full`` refusal below is unreachable for such an event — as it must be. The
+    early return is the same rule ``event_is_full`` states for the read path, taken
+    early enough to skip the query; it is not a second opinion about what full means,
+    and the assertion that the two agree is a test, not a comment
+    (``test_an_uncapped_event_never_refuses_with_event_full``).
+    """
+    max_players = event.max_players
+    if max_players is None:
+        return
+    entered = await active_entry_count(db, event.id)
+    if not event_is_full(entered=entered, max_players=max_players):
+        return
+    raise entry_refused(
+        EntryRefusal.event_full,
+        f"This event is full — it has reached its limit of {max_players} players.",
+    )
+
+
+async def _enforce_rating_eligible(
+    db: AsyncSession,
+    tournament: Tournament,
+    event: TournamentEvent,
+    user: User,
+) -> float | None:
+    """Raise the ``rating_ineligible`` 409 unless the player satisfies the event's
+    rating rules (ADR-0783) — and hand back the rating it judged them on, ``None`` if
+    they hold none.
+
+    Returning it is not a convenience: the entry this route goes on to create is
+    answered as a ``TournamentEntrantRead``, which carries the entrant's rating on this
+    tournament's ladder. Re-reading it after the INSERT would be a second query for a
+    number already in hand, and — worse — a number that could differ from the one the
+    guard actually decided against, so the created entrant could come back rated
+    differently from the rating that admitted it.
+
+    The *decision* is not made here — it is made in ``app.tournament_eligibility``,
+    which the detail read (6a) calls too, so the guard that refuses an entry and the
+    page that explains why the Enter control is missing cannot come to two different
+    answers. This is only the translation: rating in, 409 out.
+
+    The rating is read on the **tournament's** league — the ladder the tournament
+    named when it was created — so "rated against what?" has one answer that is
+    recorded rather than assumed.
+
+    **A player with no rating there passes every rule and is not refused** (ADR-0783
+    §3, and the evaluator's own docstring). That is the beginners'-event case, and it
+    is why the entrants list marks unrated entrants for the director rather than this
+    guard refusing them.
+
+    ``match``, not ``if isinstance(...)``: a third eligibility outcome added tomorrow
+    (a capacity-shaped one, a "your entry is pending" one) is a type error here until
+    it is answered, rather than silently falling through and *admitting* the player —
+    a guard must never fail in the permissive direction.
+    """
+    rating = await entrant_rating(db, tournament.league_id, user.id)
+    decision = evaluate_rating_eligibility(rating=rating, predicates=event.predicates)
+    match decision:
+        case Eligible():
+            return rating
+        case RatingIneligible():
+            raise entry_refused(EntryRefusal.rating_ineligible, decision.message)
+        case _:
+            assert_never(decision)
 
 
 @router.post(
@@ -841,9 +1189,18 @@ async def enter_event(
     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
     are permitted, the tournament is simply in the wrong state.
 
+    An event's **eligibility rules** are decided against your rating on the
+    tournament's league, and you must satisfy **every** one of them: failing a rule
+    (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
+    holds **no rating** on that league — nobody has a rating until they finish a rated
+    match — **passes every rule**, so a brand-new player is not shut out of the
+    beginners' event that exists for them.
+
     Entering an event you are already in is a `409`; withdrawing first frees you
-    to enter it again. Doubles and teams events are a `400`: an entry is one row
-    per player, with nowhere to record a partner or a team.
+    to enter it again. Entering an event that already holds its `max_players`
+    entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
+    events are a `400`: an entry is one row per player, with nowhere to record a
+    partner or a team.
     """
     # Load first, then decide — the same 404-before-anything-else ordering the
     # owner-only routes use. This route has no ownership check to run afterwards:
@@ -887,7 +1244,33 @@ async def enter_event(
     # Refusing HERE, before the INSERT (rather than inserting and rolling back), is
     # what makes "no row is written" a property of the code and not of a transaction
     # that happened to abort.
-    _enforce_registration_open(tournament)
+    _enforce_entry_registration_open(tournament)
+
+    # Eligibility BEFORE capacity, for the same reason the doubles 400 precedes the
+    # status 409: answer with the fact that will not change first. "The event is full"
+    # invites the player back when somebody withdraws — but a player whose rating fails
+    # the event's rules would only be refused again on that retry, this time with the
+    # refusal they should have been given now. A rating does move, so it is still a 409
+    # and not a 403; it just does not move because somebody else withdrew.
+    #
+    # It reads the player's rating (a plain SELECT, no lock of its own), and it must
+    # stay ABOVE the capacity count: nothing may come between that count and the
+    # INSERT (see below). The rating it judged against comes back out, because the
+    # entrant this route answers with carries it — the number that admitted you and the
+    # number reported beside your name are the same number, read once.
+    rating = await _enforce_rating_eligible(db, tournament, event, current_user)
+
+    # Capacity, counted UNDER THE LOCK taken above (ADR-0783, §4) — the count and the
+    # INSERT below are one serialised unit, which is the only reason two entrants
+    # racing for the final slot cannot both be admitted. Nothing between this line
+    # and the commit may take a lock of its own, and nothing may move this count
+    # above ``_get_tournament_for_update_or_404``.
+    #
+    # After the status 409, before the INSERT: whether the event has room is a
+    # question about *this* event, and it is only worth asking once registration is
+    # known to be open at all — a full event of a draft tournament is refused for the
+    # window, which is the fact that governs every event of that tournament.
+    await _enforce_event_has_room(db, event)
 
     entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
     db.add(entry)
@@ -902,8 +1285,9 @@ async def enter_event(
         # the index is partial, a player whose only prior entry is *withdrawn*
         # does not land here — they enter again, cleanly.
         await db.rollback()
-        raise HTTPException(
-            status_code=409, detail="You have already entered this event."
+        raise entry_refused(
+            EntryRefusal.already_entered,
+            "You have already entered this event.",
         ) from None
 
     return TournamentEntrantRead(
@@ -911,6 +1295,10 @@ async def enter_event(
         user_id=current_user.id,
         username=current_user.username,
         seed=entry.seed,
+        # The rating the eligibility guard above already read on this tournament's
+        # ladder — not a fresh one. The entrant that comes back from the POST is the
+        # same shape, judged by the same number, as the one the detail read lists.
+        rating=rating,
     )
 
 
@@ -954,8 +1342,8 @@ async def withdraw_from_event(
     # means "this entry is real, but it isn't yours".
     #
     # The tournament comes back locked, and first — the same lock, in the same
-    # order, as the enter and transition routes take (which is what keeps the three
-    # of them free of any deadlock cycle). Without it, a withdrawal could pass the
+    # order, as the enter, transition and PATCH routes take (which is what keeps the
+    # four of them free of any deadlock cycle). Without it, a withdrawal could pass the
     # ``published`` gate and commit *after* the tournament went live, pulling a
     # player out of the very field the draw is cut from.
     tournament = await _get_tournament_for_update_or_404(db, tournament_id)

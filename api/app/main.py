@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import os
 import secrets
 import time
@@ -8,6 +9,8 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as redis_asyncio
 from fastapi import FastAPI, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -89,6 +92,42 @@ async def db_pool_timeout_handler(
         status_code=503,
         content={"detail": "The server is briefly overloaded. Please retry."},
         headers={"Retry-After": str(POOL_TIMEOUT_RETRY_AFTER_SECONDS)},
+    )
+
+
+def _json_safe_float(value: float) -> float | str:
+    """``inf``/``-inf``/``nan`` as their names; every other float unchanged."""
+    return value if math.isfinite(value) else repr(value)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(
+    _: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """FastAPI's own 422 handler, with the one thing it cannot render fixed: a
+    **non-finite number** in the input it echoes back.
+
+    JSON has no ``Infinity`` or ``NaN`` literal, but Python's ``json.loads`` — which
+    Starlette parses request bodies with — reads both tokens anyway. So a hand-written
+    body (curl, a native client, anything that is not a browser's ``JSON.stringify``)
+    can put ``inf`` into a numeric field. The schema refuses it, correctly... and then
+    the *refusal itself* dies: a validation error carries the offending ``input`` back
+    to the caller, and ``JSONResponse`` serializes with ``json.dumps(allow_nan=False)``,
+    which raises on ``inf``. The 422 became a **500** — the boundary was right and the
+    apology was the crash.
+
+    That is every route's 422, not just the one this was found on (#783 QA), so the fix
+    is here rather than in a schema: the non-finite float is rendered as its name, and
+    the caller gets the refusal it earned. The body is otherwise byte-for-byte what
+    FastAPI would have sent.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": jsonable_encoder(
+                exc.errors(), custom_encoder={float: _json_safe_float}
+            )
+        },
     )
 
 

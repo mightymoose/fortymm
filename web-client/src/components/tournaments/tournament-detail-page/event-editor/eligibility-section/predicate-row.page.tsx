@@ -14,6 +14,28 @@ const scoped = (container: Container) => ({
   queryValueInput() {
     return container.queryByLabelText('Value')
   },
+  /** The `between` operator's two value controls — it is the one rule whose
+   * value is a `[min, max]` tuple rather than a scalar, so it has two inputs
+   * where every other operator has the single `Value` one. */
+  getLowerBoundInput() {
+    return container.getByLabelText('Lower bound')
+  },
+  getUpperBoundInput() {
+    return container.getByLabelText('Upper bound')
+  },
+  /** The validation messages under this row's value control(s) — what the editor
+   * says in red about a rule it will not send (`predicateIssues`). Plural because
+   * a `between` has two bounds and can be wrong at both. */
+  getErrors() {
+    return container.queryAllByTestId('predicate-error')
+  },
+  /** The messages as text, for asserting *what* the row says, not just that it
+   * says something. */
+  getErrorMessages(): (string | null)[] {
+    return container
+      .queryAllByTestId('predicate-error')
+      .map((node: HTMLElement) => node.textContent)
+  },
   getRemoveButton() {
     return container.getByRole('button', { name: 'Remove rule' })
   },

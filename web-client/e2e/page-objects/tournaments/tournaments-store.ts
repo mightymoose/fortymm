@@ -6,6 +6,7 @@ import {
   buildTournamentDetailRead,
   buildTournamentEventRead,
   buildTournamentEntrantRead,
+  entryStateFor,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 
@@ -83,12 +84,67 @@ export const EVENT = {
    * Opt-in (`crowded: true`), so the default seed's counts stay the ones the
    * other specs narrate. */
   CROWDED: 'Veterans Singles',
+  /** Singles, FULL of strangers (`gated: true`) — the event that explains itself
+   * instead of offering an Enter that could only 409 (#783). */
+  FULL: 'Masters Singles',
+  /** Singles, full **including me** (`gated: true` + `enteredIn`) — the trap: an
+   * entrant in a full event must still be able to WITHDRAW. */
+  FULL_WITH_ME: 'Legends Singles',
+  /** Singles whose one rating rule refuses me (`gated: true`) — the other event
+   * that explains itself rather than offering a doomed button (#783). */
+  INELIGIBLE: 'U1200 Singles',
+  /** Singles in which **every** entrant is unrated (`unrated: true`) — a brand-new
+   * club's first beginners' event, where nobody has finished a rated match yet. The
+   * degenerate roster: every chip marked, and the list must still render (ADR-0783
+   * §3). */
+  ALL_UNRATED: 'Beginners Singles',
 } as const
 
 /** How many people are already in the crowded event before I enter it. Comfortably
  * past the card's 8-chip cut-off, so my own entry — appended LAST, the server lists
  * entrants oldest-entry-first — is truncated away unless the roster pins it (#781). */
 const CROWD_SIZE = 12
+
+/** The cap on the two full events. Small on purpose: "full" is `entrants.length >=
+ * max_players`, and a four-seat event reaches it with a roster a human can still
+ * read in a failure screenshot. */
+const SMALL_CAP = 4
+
+/** The rule the `INELIGIBLE` event is gated on, and the rating the server judged me
+ * on. The client reads the rule back out of the event's own `predicates` by id, so
+ * the two must be the same object — a refusal pointing at a rule the event does not
+ * carry is a payload the server cannot send. */
+const U1200_RULE = { id: 'pr-u1200', field: 'rating', op: '<', value: 1200 } as const
+
+/** The rating the server judged me on — a **raw Glicko float**, because that is what
+ * the server actually puts on the wire (`entry_state.rating`), thirteen decimals and
+ * all. The card must print it as `1662`, like every other rating surface in the app.
+ *
+ * It was `1650` here, and that round number is precisely why the bug shipped: with
+ * it, the rounded and unrounded renderings are the same string, so no assertion
+ * anywhere — vitest or browser — could tell them apart. */
+const MY_RATING = 1662.3108939062977
+
+/** Rounded, as the UI prints it. The specs assert against THIS. */
+export const MY_RATING_ROUNDED = 1662
+
+/** `tournament_events.name` is `VARCHAR(255)` server-side, and a longer one is a
+ * **422** — the other refusal QA watched the editor swallow (the sheet closed, the
+ * event was never created, and the organizer's typing went with it). Mirrored here
+ * so a browser spec can watch that 422 arrive and see the editor hold its ground. */
+const EVENT_NAME_MAX = 255
+
+/** The rule on the all-unrated event (`unrated: true`). The same cap as `U1200_RULE`
+ * — but its entrants hold no rating at all, so every one of them *passed* it, while
+ * it refuses me at 1650. That is the ADR-0783 §3 bargain in a single card, and it is
+ * why the mark on those three chips is the only thing standing between the director
+ * and an invisible loophole. */
+const BEGINNERS_RULE = {
+  id: 'pr-beg',
+  field: 'rating',
+  op: '<',
+  value: 1200,
+} as const
 
 /**
  * ⚠️ The join key. The session payload carries a username and **no user id**, so
@@ -101,20 +157,37 @@ const CROWD_SIZE = 12
 export const ME = { username: 'rita.kovac', userId: 'u-me' } as const
 
 /** Entrants that are *not* me — so the journey event starts with a real count to
- * increment, and the roster has something to show before I join it. */
+ * increment, and the roster has something to show before I join it.
+ *
+ * **`player.2` is UNRATED** (`rating: null` — they hold no rating on the
+ * tournament's ladder, ADR-0783 §3), which makes the default seed's roster a
+ * *mixed* one. That is deliberate: the mark is the mitigation for a rating cap
+ * being opt-out, and a mark that only ever appeared under an opt-in flag would be
+ * scanned by no spec that did not go looking for it — including the axe pass over
+ * the ordinary events tab. */
 const OTHERS: TournamentEntrantRead[] = [
   buildTournamentEntrantRead({ id: 'entry-1', user_id: 'u-1', username: 'player.1' }),
-  buildTournamentEntrantRead({ id: 'entry-2', user_id: 'u-2', username: 'player.2' }),
+  buildTournamentEntrantRead({
+    id: 'entry-2',
+    user_id: 'u-2',
+    username: 'player.2',
+    rating: null,
+  }),
 ]
 
 /** A crowd of strangers, `player.1` … `player.N`, in entry order — the roster a
- * late entrant lands behind. */
-function crowd(size: number): TournamentEntrantRead[] {
+ * late entrant lands behind. Rated, unless `overrides` say otherwise (which is how
+ * the all-unrated event is built). */
+function crowd(
+  size: number,
+  overrides: Partial<TournamentEntrantRead> = {},
+): TournamentEntrantRead[] {
   return Array.from({ length: size }, (_, i) =>
     buildTournamentEntrantRead({
       id: `entry-crowd-${i + 1}`,
       user_id: `u-crowd-${i + 1}`,
       username: `player.${i + 1}`,
+      ...overrides,
     }),
   )
 }
@@ -168,8 +241,78 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
             }),
           ]
         : []),
+      ...(options.unrated ?? false
+        ? [
+            buildTournamentEventRead({
+              id: 'ev-beginners',
+              name: EVENT.ALL_UNRATED,
+              format: 'singles',
+              max_players: 32,
+              // Every one of them holds no rating on the tournament's ladder — so
+              // every one of them PASSED this event's `rating < 1200` rule, which is
+              // exactly the opt-out ADR-0783 accepts and this roster exists to
+              // expose. Meanwhile the same rule refuses *me*, at a rating of 1650:
+              // the whole decision, on one card. Three players the rules could not
+              // judge are in; the one player they could judge is out.
+              entrants: crowd(3, { rating: null }),
+              predicates: [{ ...BEGINNERS_RULE }],
+              entry_state: {
+                state: 'rating_ineligible',
+                predicate_id: BEGINNERS_RULE.id,
+                rating: MY_RATING,
+              },
+              pools: [],
+            }),
+          ]
+        : []),
+      ...(options.gated ?? false ? gatedEvents() : []),
     ],
   })
+}
+
+/** The two events the *event itself* refuses the caller from (#783) — full, and
+ * rating-ineligible. Opt-in (`gated: true`) for the same reason `crowded` is: their
+ * entrants would move the tournament-level Entries total the journey spec narrates.
+ *
+ * `entry_state` on the full pair is **derived** by the factory from the entrants
+ * (and re-derived on every read — see `read`), so entering or withdrawing really
+ * does flip it; the ineligible one is stated, because no mock payload carries a
+ * rating ladder to judge it from. */
+function gatedEvents(): TournamentEventRead[] {
+  return [
+    buildTournamentEventRead({
+      id: 'ev-masters',
+      name: EVENT.FULL,
+      format: 'singles',
+      max_players: SMALL_CAP,
+      entrants: crowd(SMALL_CAP),
+      pools: [],
+    }),
+    buildTournamentEventRead({
+      id: 'ev-legends',
+      name: EVENT.FULL_WITH_ME,
+      format: 'singles',
+      max_players: SMALL_CAP,
+      // One seat short of full — the spec fills it with ME (`enteredIn`), which is
+      // the only honest way to reach "an entrant inside a FULL event".
+      entrants: crowd(SMALL_CAP - 1),
+      pools: [],
+    }),
+    buildTournamentEventRead({
+      id: 'ev-u1200',
+      name: EVENT.INELIGIBLE,
+      format: 'singles',
+      max_players: 24,
+      entrants: crowd(2),
+      predicates: [{ ...U1200_RULE }],
+      entry_state: {
+        state: 'rating_ineligible',
+        predicate_id: U1200_RULE.id,
+        rating: MY_RATING,
+      },
+      pools: [],
+    }),
+  ]
 }
 
 export interface TournamentsStoreOptions {
@@ -179,6 +322,15 @@ export interface TournamentsStoreOptions {
   /** Add `EVENT.CROWDED` — a singles event already holding more entrants than a
    * card can list, so entering it puts me past the truncation cut-off. */
   crowded?: boolean
+  /** Add the three events the *event itself* gates (#783): `EVENT.FULL`,
+   * `EVENT.FULL_WITH_ME` and `EVENT.INELIGIBLE`. Opt-in, so their entrants stay out
+   * of the counts the journey spec narrates. */
+  gated?: boolean
+  /** Add `EVENT.ALL_UNRATED` — a capped event whose entrants are *every one* of
+   * them unrated (ADR-0783 §3). Opt-in for the same reason `crowded` is: its
+   * entrants would move the tournament-level Entries total. (The *mixed* roster
+   * needs no flag — `player.2` of the default seed is unrated.) */
+  unrated?: boolean
   /** The status the tournament is in when the page loads. Defaults to
    * `published` — the one status whose registration window is OPEN, and the one
    * every enter/withdraw spec is written against (ADR-0017). */
@@ -234,6 +386,10 @@ export class TournamentsStore {
   private detail: TournamentDetailRead
   private entryCounter = 0
   private gate: Promise<void> | null = null
+  private refusingWrites = false
+  private refusingTournamentCreate = false
+  private faultingWrites = false
+  private faultingTournamentCreate = false
 
   /** Every intercepted request, for tallies like "exactly one POST landed". */
   readonly requests: RecordedRequest[] = []
@@ -268,9 +424,22 @@ export class TournamentsStore {
   /** The event as the *server* would report it: the `entered` count derived from
    * the live entrants, never stored (ADR-0016). A stub that carried its own
    * counter could drift from its own roster and hide exactly the bug the derived
-   * count exists to prevent. */
+   * count exists to prevent.
+   *
+   * `entry_state`'s **capacity** arm is re-derived here for exactly the same reason
+   * (ADR-0783 §4): entering the last free place must make the event report itself
+   * `event_full` on the very next read, and withdrawing must free it again. A tag
+   * frozen at seed time would let a stub keep saying `open` while its roster was at
+   * `max_players` — precisely the state the card is supposed to explain.
+   *
+   * A **stated** `rating_ineligible` survives untouched: it is a fact about the
+   * caller's rating, not about the roster, and nothing on the wire can derive it. */
   private read(event: TournamentEventRead): TournamentEventRead {
-    return { ...event, entered: event.entrants.length }
+    const entry_state =
+      event.entry_state.state === 'rating_ineligible'
+        ? event.entry_state
+        : entryStateFor(event)
+    return { ...event, entered: event.entrants.length, entry_state }
   }
 
   private readDetail(): TournamentDetailRead {
@@ -321,6 +490,10 @@ export class TournamentsStore {
       id: `entry-me-${this.entryCounter}`,
       user_id: ME.userId,
       username: ME.username,
+      // I am RATED — the same 1650 the ineligible event judged me on. So my own
+      // chip is never the unrated one, and a spec asserting "the unrated mark is on
+      // player.2" cannot pass by landing on me instead.
+      rating: MY_RATING,
     })
     this.mutateEvent(eventId, (e) => ({ ...e, entrants: [...e.entrants, entrant] }))
     return entrant
@@ -328,6 +501,80 @@ export class TournamentsStore {
 
   countOf(method: string): number {
     return this.requests.filter((r) => r.method === method).length
+  }
+
+  /**
+   * Refuse every event write with FastAPI's **422** until the returned callback is
+   * invoked — the *unknown* refusal, which is the only kind left worth testing.
+   *
+   * The editor now mirrors every constraint the server actually has on an event
+   * (`data/event-validation`), so no draft a spec can author through the UI reaches
+   * the wire and comes back 422 — an over-long name is refused in the form now, which
+   * is the whole point of #783's second QA pass and which took away this suite's only
+   * way of *provoking* a server refusal. That must not quietly delete the assertion
+   * underneath it: client validation only ever prevents the refusals we already know
+   * about, and the editor's contract is that **the next unknown one does not eat
+   * somebody's work** — and does not read Pydantic's prose out to them.
+   *
+   * So the refusal is forced rather than provoked, and it answers in FastAPI's own
+   * body shape (a `detail` ARRAY of `{loc, msg}`): whatever the server's next
+   * constraint turns out to be, that is the shape it will arrive in.
+   */
+  refuseEventWrites(): () => void {
+    this.refusingWrites = true
+    return () => {
+      this.refusingWrites = false
+    }
+  }
+
+  /**
+   * The same forced 422, for `POST /v1/tournaments` — the "New tournament" dialog's
+   * one write, and for the same reason: the dialog mirrors every constraint the
+   * server has on what it sends (a name is `VARCHAR(255)` and `NOT NULL`), so the
+   * only 422 left to test is the *unknown* one, and it cannot be provoked through
+   * the form. It is the residual case the dialog exists to survive — and the case it
+   * used to answer by printing Pydantic's sentence onto the name field.
+   */
+  refuseTournamentCreate(): () => void {
+    this.refusingTournamentCreate = true
+    return () => {
+      this.refusingTournamentCreate = false
+    }
+  }
+
+  /**
+   * Answer every event write with a **500** — a fault of the SERVER's, not a refusal of
+   * the request (#783 QA, round three).
+   *
+   * It is a separate switch from `refuseEventWrites` (the 422) because they are separate
+   * *states*, and the editor got them wrong by treating them as one: a 5xx used to be
+   * classified `unreachable` and read out as "the server couldn't be reached — check
+   * your connection", which is false twice over (the server was reached; their
+   * connection is fine) and sends an organizer to go and restart their router over our
+   * crash. `DEFINITION_OF_COMPLETE.md` lists 5xx and network-down as distinct designed
+   * states, so the suite has to be able to produce each of them.
+   *
+   * The body is FastAPI's real one for an unhandled exception — a plain `detail` string,
+   * which is machinery, and which must therefore appear nowhere on screen either.
+   */
+  faultEventWrites(): () => void {
+    this.faultingWrites = true
+    return () => {
+      this.faultingWrites = false
+    }
+  }
+
+  /**
+   * The same 500, for `POST /v1/tournaments` — the failure QA injected and got **nothing
+   * at all** back from: no inline error, no toast, no alert. The dialog's 5xx branch was
+   * never wired to the classifier, so the Create button went back to idle and the app
+   * silently did not create a tournament.
+   */
+  faultTournamentCreate(): () => void {
+    this.faultingTournamentCreate = true
+    return () => {
+      this.faultingTournamentCreate = false
+    }
   }
 
   /**
@@ -390,6 +637,11 @@ export class TournamentsStore {
       return json(route, 200, this.readDetail())
     }
 
+    // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
+    if (method === 'POST' && path === '/v1/tournaments') {
+      return this.createTournament(route, request.postDataJSON())
+    }
+
     if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/transitions`) {
       return this.transition(route, request.postDataJSON())
     }
@@ -397,6 +649,18 @@ export class TournamentsStore {
     const enter = path.match(/^\/v1\/tournaments\/([^/]+)\/events\/([^/]+)\/entries$/)
     if (method === 'POST' && enter) {
       return this.enter(route, enter[2])
+    }
+
+    // The event editor's two writes. They were unmocked until #783's QA pass, which
+    // is not a coincidence: nothing in this suite had ever *saved* an event, so
+    // nothing had ever watched the editor receive an answer — and the answer it was
+    // getting (a 422) was being thrown away along with the organizer's work.
+    if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/events`) {
+      return this.createEvent(route, request.postDataJSON())
+    }
+    const updateEvent = path.match(/^\/v1\/tournaments\/([^/]+)\/events\/([^/]+)$/)
+    if (method === 'PATCH' && updateEvent) {
+      return this.updateEvent(route, updateEvent[2], request.postDataJSON())
     }
 
     const withdraw = path.match(
@@ -458,7 +722,15 @@ export class TournamentsStore {
    * the entrant. Mirrors the API's refusals so the spec cannot pass against a
    * stub more permissive than the server (400 non-singles, 409 window shut, 409
    * duplicate) — in the API's order: the permanent refusal first, then the
-   * "not now" ones. */
+   * "not now" ones.
+   *
+   * ⚠️ **Every refusal is a CODED 409** (ADR-0968):
+   * `{"detail": {"code": …, "message": …}}`. The client switches on the `code` and
+   * owns the copy it shows; the `message` is what it falls back on for a code it
+   * does not know. This suite runs with **MSW off** and nothing type-checks these
+   * stub bodies — a stub still answering the pre-ADR `{"detail": "<sentence>"}`
+   * would take the client's unknown-refusal path and the spec would fail on the
+   * toast, which is the only place the mismatch could show. */
   private async enter(route: Route, eventId: string) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
@@ -466,15 +738,124 @@ export class TournamentsStore {
       return json(route, 400, { detail: 'only singles events can be entered' })
     }
     const closed = this.registrationClosed()
-    if (closed) return json(route, 409, { detail: closed })
+    if (closed) {
+      return json(route, 409, {
+        detail: { code: 'registration_closed', message: closed },
+      })
+    }
     if (event.entrants.some((e) => e.user_id === ME.userId)) {
       // The server's partial unique index, in miniature: at most one *active*
-      // entry per player per event. The API's wording, verbatim — a stale tab
-      // gets told this, so the copy is part of the contract under test.
-      return json(route, 409, { detail: 'You have already entered this event.' })
+      // entry per player per event. Asked BEFORE the event's own refusals below, so
+      // an entrant in a full event is told "you are already in" — never "it's full".
+      return json(route, 409, {
+        detail: {
+          code: 'already_entered',
+          message: 'You have already entered this event.',
+        },
+      })
+    }
+    // The event's own refusals (#783), in the server's precedence — eligibility,
+    // then capacity. The UI is supposed to render these as copy and offer no button
+    // at all, so a spec should never reach them; they are here because a stub that
+    // 201'd a full event would be more permissive than the server, and a regression
+    // that kept offering Enter would then look perfect.
+    const state = this.read(event).entry_state
+    if (state.state === 'rating_ineligible') {
+      return json(route, 409, {
+        detail: {
+          code: 'rating_ineligible',
+          message: 'Your rating does not meet this event’s eligibility rules.',
+        },
+      })
+    }
+    if (state.state === 'event_full') {
+      return json(route, 409, {
+        detail: { code: 'event_full', message: 'This event is full.' },
+      })
     }
 
     return json(route, 201, this.addEntry(eventId))
+  }
+
+  /**
+   * `POST /v1/tournaments` — the "New tournament" dialog's write. Refused with the
+   * same FastAPI 422 (a `detail` ARRAY, `loc: ["body", "name"]`) while
+   * `refuseTournamentCreate()` is in force; otherwise a 201 whose id is the one the
+   * store serves a detail page for, so the dialog's success navigation lands
+   * somewhere real.
+   */
+  private async createTournament(route: Route, body: unknown) {
+    if (this.faultingTournamentCreate) return serverFault(route)
+    if (this.refusingTournamentCreate) return this.unprocessableName(route)
+
+    const fields = body as { name?: string }
+    this.detail = { ...this.detail, name: fields.name ?? this.detail.name }
+    return json(route, 201, this.readDetail())
+  }
+
+  /**
+   * `POST …/events` — create an event, and **refuse an over-long name with a 422**,
+   * as the server does (`VARCHAR(255)`), in FastAPI's own body shape: a `detail`
+   * ARRAY of `{msg}` objects, which `extractDetail` (`src/api/client.ts`) is what
+   * turns into the sentence the editor shows. A stub that answered `{detail: "…"}`
+   * would be testing the client against a server it will never meet.
+   *
+   * Everything else is a 201. Notably a rule with a **null value** is one of them:
+   * the API deliberately still accepts a half-written rule (it constrains nobody),
+   * which is exactly why the guard against `Rating < ?` has to live in the client.
+   * A stub that 422'd it would let a spec pass against a server stricter than the
+   * real one — and would prove nothing about the form.
+   */
+  private async createEvent(route: Route, body: unknown) {
+    if (this.faultingWrites) return serverFault(route)
+    if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
+
+    // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
+    // server owns — `entered` is derived, and a new event has no entrants.
+    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    const created = buildTournamentEventRead({
+      ...fields,
+      id: `ev-created-${this.detail.events.length + 1}`,
+      entrants: [],
+    })
+    this.detail = { ...this.detail, events: [...this.detail.events, created] }
+    return json(route, 201, this.read(created))
+  }
+
+  /** `PATCH …/events/{event_id}` — edit an event, with the same 422. */
+  private async updateEvent(route: Route, eventId: string, body: unknown) {
+    const event = this.detail.events.find((e) => e.id === eventId)
+    if (!event) return json(route, 404, { detail: 'event not found' })
+    if (this.faultingWrites) return serverFault(route)
+    if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
+
+    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    // `entrants` and `entered` are the server's, not the editor's — the write body
+    // does not carry them, and echoing the client's view back would clobber
+    // registrations it never saw.
+    this.mutateEvent(eventId, (e) => ({ ...e, ...fields, entrants: e.entrants }))
+    return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
+  }
+
+  /** FastAPI's 422, verbatim: `detail` is an ARRAY of pydantic errors. A stub
+   * answering `{detail: "…"}` here would be testing the client against a server it
+   * will never meet — and would hide the very thing round two was about, because a
+   * plain-string detail is *our* copy and may legitimately be shown, while this `msg`
+   * is **Pydantic's** and may not. The client reads the `loc` (which field) and words
+   * the rest itself (`data/save-failure`); this `msg` must appear NOWHERE on screen.
+   *
+   * Shared by the event writes and `POST /v1/tournaments`, because it is the same
+   * refusal: both names are `VARCHAR(255)`, and FastAPI words them identically. */
+  private unprocessableName(route: Route) {
+    return json(route, 422, {
+      detail: [
+        {
+          type: 'string_too_long',
+          loc: ['body', 'name'],
+          msg: `String should have at most ${EVENT_NAME_MAX} characters`,
+        },
+      ],
+    })
   }
 
   /** `DELETE …/entries/{entry_id}` — withdrawal. The server soft-deletes; from
@@ -506,9 +887,12 @@ export class TournamentsStore {
     return noContent(route)
   }
 
-  /** The refusal a *state change* to an entry earns right now, or `null` while
-   * the window is open. Only `published` is open — the status IS the state of the
-   * registration window (ADR-0017). */
+  /** The server's SENTENCE for why a *state change* to an entry is refused right
+   * now, or `null` while the window is open. Only `published` is open — the status
+   * IS the state of the registration window (ADR-0017).
+   *
+   * Entering wraps this in the `registration_closed` CODE (ADR-0968); withdrawing
+   * still sends it bare, because the withdraw route's 409 is still prose. */
   private registrationClosed(): string | null {
     const status = this.detail.status
     return status === 'published' ? null : REGISTRATION_CLOSED_DETAIL[status]
@@ -523,6 +907,23 @@ export class TournamentsStore {
       events: this.detail.events.map((e) => (e.id === eventId ? fn(e) : e)),
     }
   }
+}
+
+/** The one server-side constraint on an event write this suite mirrors: the name
+ * column's length. Everything else the editor can author, the API accepts — a rule
+ * with no value included, which is exactly why the client has to refuse it. */
+function nameTooLong(body: unknown): boolean {
+  const name = (body as { name?: unknown } | null)?.name
+  return typeof name === 'string' && name.length > EVENT_NAME_MAX
+}
+
+/** FastAPI's 500 for an unhandled exception, verbatim: a plain-string `detail`. Which
+ * is the trap — a plain-string `detail` is normally *our* copy and may be shown, so a
+ * classifier reading the body instead of the STATUS would print "Internal Server Error"
+ * to an organizer. It must appear nowhere on screen; what the user is told is the
+ * client's own sentence, and it is not about their connection. */
+function serverFault(route: Route) {
+  return json(route, 500, { detail: 'Internal Server Error' })
 }
 
 function json(route: Route, status: number, body: unknown) {

@@ -7,8 +7,16 @@
 
 import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 
-import { myEntrant } from './helpers'
-import type { Tournament, TournamentEvent, TournamentStatus } from './types'
+import { formatRating } from '@/lib/rating'
+
+import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
+import { myEntrant, predicateSentence } from './helpers'
+import type {
+  EventEntryState,
+  Tournament,
+  TournamentEvent,
+  TournamentStatus,
+} from './types'
 
 /**
  * What an edge MEANS, visually — not how it looks. Going live is the one edge
@@ -142,8 +150,8 @@ export const REGISTRATION_WINDOW: Record<TournamentStatus, RegistrationWindow> =
 
 /**
  * Everything the event card's entry control can be, as one discriminated union —
- * four cases, one per thing the card can *render*, and the ORDER they are decided
- * in is the whole rule:
+ * one case per thing the card can *render*, and the ORDER they are decided in is
+ * the whole rule:
  *
  * 1. `hidden` — the request could only ever fail *for this caller*: they lack
  *    `tournament.enter` (403), or the event is doubles/teams (400). No act of the
@@ -159,22 +167,70 @@ export const REGISTRATION_WINDOW: Record<TournamentStatus, RegistrationWindow> =
  *    but one: the difference between a door not yet unlocked and a door shut again
  *    is carried by the `lead` + `reason` copy (`REGISTRATION_WINDOW` above), which
  *    is the only thing that differed about them.
- * 3. `enter` / `withdraw` — the window is open and the only question left is
- *    whether the player is already in.
+ * 3. `withdraw` — the player is already in. It is decided BEFORE the event's own
+ *    refusals, and that is not a detail: **an entrant in a FULL event must still be
+ *    able to leave it.** Judging capacity first would trap every entrant in the
+ *    very event they are in — and would do it silently, since a full event is the
+ *    normal end state of a popular one. (It is also what the server does: the
+ *    capacity count is over *other* people's entries; yours is already counted.)
+ * 4. `full` / `ineligible` — the window is open, the player is not in, and the
+ *    **event itself** refuses them: it has no room (`event_full`), or their rating
+ *    fails one of its rules (`rating_ineligible`). Both render as designed states,
+ *    with the same lead+reason voice as `closed` and — again — **never a disabled
+ *    Enter button** (ADR-0015: hide the mutating affordance and explain; a dead
+ *    button is an unexplained dead end).
+ * 5. `enter` — nothing is in the way.
  *
- * The window is judged BEFORE membership, which is what makes the entered player
- * on a `live` tournament come out `closed` rather than `withdraw`: they are still
- * an entrant (their chip is still on the roster — the field is fixed, that is what
- * going live *means*), they simply cannot take themselves out of it. A Withdraw
- * button there would be a 409 with a nice icon.
+ * Cases 4 and 5 are simply what `event.entry_state` says (`EventEntryState`,
+ * `./types`). They are **not re-derived** from `entered` / `maxPlayers` / the raw
+ * `predicates` JSON: eligibility is computed in exactly one place, server-side
+ * (ADR-0783), and a second rule engine in a second language would drift from it.
+ * That includes the server's own precedence — an ineligible player looking at a
+ * full event is told they are ineligible — which arrives already decided, in the
+ * one tag.
  */
 export type EntryControlState =
   | { kind: 'hidden' }
   | { kind: 'closed'; lead: string; reason: string }
+  | { kind: 'full'; lead: string; reason: string }
+  | { kind: 'ineligible'; lead: string; reason: string }
   | { kind: 'enter' }
   /** The player's OWN entry id — an entry is withdrawn by its id, and this is the
    * only place that join (on username, via `myEntrant`) is made. */
   | { kind: 'withdraw'; entryId: string }
+
+/** Why a rating-ineligible player is refused, **in this event's own words**: the
+ * rule that refused them, read back through `predicateSentence` — the same
+ * formatter the read-only event panel uses (ADR-0015 rule 4: "rows that are
+ * sentences render as sentences") — followed by the rating they were judged on.
+ *
+ * "Rating is less than 1500. Your rating is 1662." Both halves are needed: the
+ * rule alone does not say why *you* failed it, and the rating alone does not say
+ * what it failed.
+ *
+ * The rating is printed through **`formatRating`** (`@/lib/rating`) — the app's
+ * one rating formatter — and not by dropping the raw number into the template.
+ * What the server sends is a Glicko float: interpolating it printed *"Your rating
+ * is 1662.3108939062977."* on a page where every other surface said `1662`,
+ * because a fixture of `1650` makes `${1650}` and `${Math.round(1650)}` the same
+ * string and the round number hid the bug. `formatRating` renders `null` as an
+ * em-dash; `rating` is a `number` in this arm of the union, so that cannot arise
+ * from a well-formed payload — but a malformed one degrades to "Your rating is
+ * —." rather than crashing the card.
+ *
+ * `predicate_id` addresses a rule in the event's own `predicates`, so the payload
+ * does not re-send the rule (a field and its own derivation could disagree). If
+ * the id resolves to nothing — a rule edited out from under a stale page — the
+ * generic copy from the refusal table is the honest degrade, never a half-built
+ * sentence. */
+function ineligibleReason(
+  event: TournamentEvent,
+  state: Extract<EventEntryState, { state: 'rating_ineligible' }>,
+): string {
+  const rule = event.predicates.find((p) => p.id === state.predicateId)
+  if (!rule) return ENTRY_REFUSAL_NOTICE.rating_ineligible.description
+  return `${predicateSentence(rule)}. Your rating is ${formatRating(state.rating)}.`
+}
 
 export function entryControlState({
   status,
@@ -203,7 +259,42 @@ export function entryControlState({
     return { kind: 'closed', lead, reason }
   }
 
-  // 3. Open: the only question left is whether they are already in.
+  // 3. Already in? Then the only act left is leaving — and it stays available even
+  //    when the event is FULL (a full event is exactly the one you'd want out of)
+  //    or when its rules no longer admit you. Membership therefore outranks the
+  //    event's refusals below; the reverse order would lock every entrant in.
   const entry = myEntrant(event, username)
-  return entry ? { kind: 'withdraw', entryId: entry.id } : { kind: 'enter' }
+  if (entry) return { kind: 'withdraw', entryId: entry.id }
+
+  // 4. What the EVENT says about this caller entering it — the server's judgement,
+  //    rendered, never recomputed (ADR-0783). The copy is the refusal table's
+  //    (`./entry-refusal`), which is the same table the 409 on `POST …/entries`
+  //    reads: one refusal, one set of words, whichever way we learned it.
+  const notice = ENTRY_REFUSAL_NOTICE
+  const entryState = event.entryState
+  switch (entryState.state) {
+    case 'open':
+      return { kind: 'enter' }
+    case 'event_full':
+      return {
+        kind: 'full',
+        lead: notice.event_full.title,
+        reason: notice.event_full.description,
+      }
+    case 'rating_ineligible':
+      return {
+        kind: 'ineligible',
+        lead: notice.rating_ineligible.title,
+        reason: ineligibleReason(event, entryState),
+      }
+    default: {
+      // A state the API grew and this client has not: a TYPE error here. At
+      // runtime it cannot happen — `apiToEntryState` (`./api`) already degraded
+      // any unknown tag to `open` at the wire boundary — but the compiler is what
+      // makes the next refusal (#784) impossible to forget.
+      const exhaustive: never = entryState
+      void exhaustive
+      return { kind: 'enter' }
+    }
+  }
 }

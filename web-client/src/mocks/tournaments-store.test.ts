@@ -24,7 +24,9 @@ type TournamentStatus = components['schemas']['TournamentStatus']
 const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
 const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, no events
 const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
-const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players
+const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players, cap 64
+const FULL_SINGLES = 'ev-champ-singles' // seeded 16 of 16 — no room (#783)
+const INELIGIBLE_SINGLES = 'ev-u1200' // rating < 1200; the dev user is 1650 (#783)
 const DOUBLES = 'ev-mixed-doubles'
 
 /** What each closed status must SAY — the distinctive phrase of the server's
@@ -45,16 +47,23 @@ const CLOSED_PHRASE: Record<Exclude<TournamentStatus, 'published'>, string> = {
 const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
 const CLOSED_STATUSES = ['draft', 'live', 'archived'] as const
 
+/** The sentence a 409 carries, from either shape: entering answers with a CODED
+ * refusal (`{code, message}` — ADR-0968), withdrawing still answers with prose,
+ * because the ADR converted the entry endpoint and left the withdraw route alone. */
+function refusalMessage(result: EnterResult | WithdrawResult): string {
+  if (result.ok || result.status !== 409) {
+    throw new Error(`expected a 409, got ${JSON.stringify(result)}`)
+  }
+  return 'refusal' in result ? result.refusal.message : result.detail
+}
+
 /** Assert a refusal is the registration-window 409, and that it says WHY in the
  * words the server uses for that status. */
 function expectRegistrationClosed(
   result: EnterResult | WithdrawResult,
   status: Exclude<TournamentStatus, 'published'>,
 ) {
-  if (result.ok || result.status !== 409) {
-    throw new Error(`expected a 409, got ${JSON.stringify(result)}`)
-  }
-  expect(result.detail).toContain(CLOSED_PHRASE[status])
+  expect(refusalMessage(result)).toContain(CLOSED_PHRASE[status])
 }
 
 function event(eventId: string) {
@@ -134,6 +143,125 @@ describe('the seeded read shape', () => {
     expect(event(EMPTY_SINGLES).entrants).toEqual([])
     expect(event(EMPTY_SINGLES).entered).toBe(0)
   })
+
+  // `entry_state` (ADR-0783) is derived on read for the same reason `entered` is:
+  // a tag stored at seed time could say `open` while the roster stood at
+  // `max_players`, and the card — which renders exactly what this says — would go
+  // on offering an Enter the server can only 409.
+  it('derives the capacity arm of entry_state from the entrants', () => {
+    expect(event(FULL_SINGLES).entrants).toHaveLength(16)
+    expect(event(FULL_SINGLES).entry_state).toEqual({ state: 'event_full' })
+    expect(event(FULLISH_SINGLES).entry_state).toEqual({ state: 'open' })
+  })
+
+  // Rating-ineligibility is NOT derivable from an event — it is a judgement about a
+  // player's rating on the tournament's ladder — so the seed states it, and the read
+  // names the rule that refused (a predicate on this same event) plus the rating.
+  it('states rating-ineligibility, pointing at a rule the event actually carries', () => {
+    const ineligible = event(INELIGIBLE_SINGLES)
+
+    expect(ineligible.entry_state).toEqual({
+      state: 'rating_ineligible',
+      predicate_id: 'pr-u1200',
+      rating: 1650,
+    })
+    expect(ineligible.predicates.map((p) => p.id)).toContain('pr-u1200')
+  })
+})
+
+// #783: the two refusals the EVENT itself makes. A mock that 201'd them would be
+// more permissive than the server, and a UI that kept offering Enter on a full
+// event would look perfect in `npm run dev`.
+describe('enterEvent, against the event itself', () => {
+  it('409s a FULL event with the event_full code, and adds no entrant', () => {
+    expect(enterEvent(TOURNAMENT, FULL_SINGLES)).toEqual({
+      ok: false,
+      status: 409,
+      refusal: { code: 'event_full', message: 'This event is full.' },
+    })
+    expect(event(FULL_SINGLES).entered).toBe(16)
+  })
+
+  it('409s a rating-INELIGIBLE event with the rating_ineligible code', () => {
+    const result = enterEvent(TOURNAMENT, INELIGIBLE_SINGLES)
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      refusal: { code: 'rating_ineligible' },
+    })
+  })
+
+  // Eligibility BEFORE capacity, the server's precedence (ADR-0783): telling an
+  // ineligible player an event is full invites them back for a place that will
+  // never be theirs.
+  it('entering the last free place makes the very next read say event_full', () => {
+    const nearlyFull = createEvent(TOURNAMENT, {
+      name: 'Two-seater',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 1,
+      entry_fee: 0,
+      slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
+      match_settings: { rated: true, length_games: 3 },
+    })
+    if (!nearlyFull.ok) throw new Error('setup failed: no event')
+    expect(nearlyFull.event.entry_state).toEqual({ state: 'open' })
+
+    expect(enterEvent(TOURNAMENT, nearlyFull.event.id).ok).toBe(true)
+
+    expect(event(nearlyFull.event.id).entry_state).toEqual({ state: 'event_full' })
+  })
+
+  // The duplicate guard is asked FIRST, so a player already inside a full event is
+  // told "you are already in" — never "it is full", which is true and useless, and
+  // which the UI would render as a notice where their Withdraw button belongs.
+  it('tells a player already in a full event that they are already in', () => {
+    const filling = createEvent(TOURNAMENT, {
+      name: 'One-seater',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 1,
+      entry_fee: 0,
+      slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
+      match_settings: { rated: true, length_games: 3 },
+    })
+    if (!filling.ok) throw new Error('setup failed: no event')
+    enterEvent(TOURNAMENT, filling.event.id)
+
+    expect(enterEvent(TOURNAMENT, filling.event.id)).toMatchObject({
+      refusal: { code: 'already_entered' },
+    })
+  })
+
+  // …and they can still LEAVE it. The trap #783 sets: capacity must never outrank
+  // membership, or a full event locks in everybody already inside it.
+  it('lets a player WITHDRAW from an event that is full', () => {
+    const entered = enterEvent(TOURNAMENT, INELIGIBLE_SINGLES)
+    // (Not through the front door — that is refused. The director's seed is how a
+    // player ends up inside an event that would now refuse them.)
+    expect(entered.ok).toBe(false)
+
+    const full = createEvent(TOURNAMENT, {
+      name: 'One-seater',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 1,
+      entry_fee: 0,
+      slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
+      match_settings: { rated: true, length_games: 3 },
+    })
+    if (!full.ok) throw new Error('setup failed: no event')
+    const mine = enterEvent(TOURNAMENT, full.event.id)
+    if (!mine.ok) throw new Error('setup failed: not entered')
+    expect(event(full.event.id).entry_state).toEqual({ state: 'event_full' })
+
+    expect(withdrawEntry(TOURNAMENT, full.event.id, mine.entrant.id)).toEqual({
+      ok: true,
+    })
+    // …and the place it freed is open again.
+    expect(event(full.event.id).entry_state).toEqual({ state: 'open' })
+  })
 })
 
 describe('enterEvent', () => {
@@ -157,10 +285,15 @@ describe('enterEvent', () => {
   it('409s a second active entry rather than adding a second row', () => {
     enterEvent(TOURNAMENT, EMPTY_SINGLES)
 
+    // The CODE is the contract the client reads (ADR-0968); the message rides
+    // along for a client that does not know the code.
     expect(enterEvent(TOURNAMENT, EMPTY_SINGLES)).toEqual({
       ok: false,
       status: 409,
-      detail: 'You have already entered this event.',
+      refusal: {
+        code: 'already_entered',
+        message: 'You have already entered this event.',
+      },
     })
     expect(event(EMPTY_SINGLES).entered).toBe(1)
   })
@@ -202,7 +335,17 @@ describe('enterEvent, against the registration window', () => {
     (status) => {
       const { tournamentId, singlesId } = tournamentIn(status)
 
-      expectRegistrationClosed(enterEvent(tournamentId, singlesId), status)
+      const result = enterEvent(tournamentId, singlesId)
+
+      // One code for all three closed statuses — what the client switches on is
+      // *why* it was refused, not *how it was worded* (ADR-0968) — and the words
+      // still differ, because "not yet" and "too late" are different news to a
+      // client that has to fall back on them.
+      expect(result).toMatchObject({
+        status: 409,
+        refusal: { code: 'registration_closed' },
+      })
+      expectRegistrationClosed(result, status)
       const after = eventIn(tournamentId, singlesId)
       expect(after.entrants).toEqual([])
       expect(after.entered).toBe(0)

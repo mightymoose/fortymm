@@ -7,6 +7,49 @@ const scoped = (container: Container) => ({
   getSectionTab(label: string) {
     return container.getByRole('tab', { name: label })
   },
+  /** The sheet itself — present exactly while the editor is open. The claim
+   * "a refused save does not close the editor" is a claim about this node. */
+  querySheet() {
+    return container.queryByRole('dialog')
+  },
+  /** The event's name control (Basics), so a test can prove the organizer's typing
+   * SURVIVED a refused save rather than merely that the sheet is still there. */
+  getNameInput() {
+    return container.getByLabelText(/Event name/)
+  },
+  getPlayerLimitInput() {
+    return container.getByLabelText(/Player limit/)
+  },
+  /** A red message under a Basics field (the `Field` row's error `hint`) — the
+   * counterpart of `getRuleErrors()` on the other tab. Queried by the text the
+   * organizer reads. */
+  queryFieldError(message: string) {
+    return container.queryByText(message)
+  },
+  /** The editor's report of a refused save — the `Alert` that keeps the failure
+   * next to the unsaved work, instead of a toast that leaves in four seconds. */
+  queryFailure() {
+    return container.queryByTestId('event-editor-error')
+  },
+  /** The red messages under the rule rows (`predicate-error`), scoped to the whole
+   * editor — the Eligibility tab is where a refused-in-the-form save lands. */
+  getRuleErrors() {
+    return container.queryAllByTestId('predicate-error')
+  },
+  getRuleErrorMessages(): (string | null)[] {
+    return container
+      .queryAllByTestId('predicate-error')
+      .map((node: HTMLElement) => node.textContent)
+  },
+  getOperatorSelect() {
+    return container.getByRole('combobox', { name: 'Operator' })
+  },
+  getValueInput() {
+    return container.getByLabelText('Value')
+  },
+  getAddRuleButton() {
+    return container.getByRole('button', { name: /Add (a )?rule/ })
+  },
   /** The header overline above the event's name: "New event" / "Edit event" for
    * the creator, plain "Event" for a viewer. Read by test-id rather than by text
    * — "Event" is a substring of both editor labels *and* of the event names in
@@ -17,16 +60,12 @@ const scoped = (container: Container) => ({
   getSaveButton() {
     return container.getByRole('button', { name: /Create event|Save changes/ })
   },
-  getNameInput() {
-    return container.getByLabelText(/Event name/)
-  },
-  getPlayerLimitInput() {
-    return container.getByLabelText(/Player limit/)
-  },
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
-  /** An inline validation/server error rendered below a Basics field. */
+  /** An inline validation/server error rendered below a Basics field — the same
+   * node `queryFieldError` returns, taking a `RegExp` for the cases that only want
+   * to pin a phrase. */
   queryError(message: string | RegExp) {
     return container.queryByText(message)
   },

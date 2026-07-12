@@ -46,9 +46,26 @@ export const tournamentDetailPagePage = {
   getEditorSaveButton() {
     return screen.getByRole('button', { name: /Create event|Save changes/ })
   },
-  /** The event editor's name field (portalled to the body). */
+  /** The editor's name field (the sheet portals to the body). A NEW event starts
+   * blank (`emptyEvent`), and a blank name is refused in the form — so a page-level
+   * test that wants to reach the *server* has to fill this in first, exactly as an
+   * organizer does. */
   getEditorNameInput() {
     return screen.getByLabelText(/Event name/)
+  },
+  /** The editor's player-limit field. Blanking it is how a page-level test authors
+   * an **uncapped** event (ADR-0935) — the save then carries `maxPlayers: null`. */
+  getEditorPlayerLimitInput() {
+    return screen.getByLabelText(/Player limit/)
+  },
+  /** The event editor sheet — present exactly while it is open. A refused save
+   * must leave it here, holding the organizer's work. */
+  queryEditor() {
+    return screen.queryByRole('dialog')
+  },
+  /** The editor's report of a refused save. */
+  queryEditorFailure() {
+    return screen.queryByTestId('event-editor-error')
   },
 
   within(container: Container = screen) {

@@ -21,6 +21,19 @@ import { expect, type Page } from '@playwright/test'
  * pass gets deleted. Conformance rules only. */
 const WCAG_A_AA = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
 
+export interface AxeOptions {
+  /**
+   * Selectors to leave out of the scan — for a **pre-existing** violation in shared
+   * markup that the state under test merely happens to render, and that the change
+   * under test neither caused nor can honestly fix (a design-system token, say).
+   *
+   * Use it sparingly and *name the defect at the call site*. The alternative is
+   * worse in both directions: deleting the scan loses the coverage of everything
+   * else on the page, and folding an unrelated fix into an unrelated PR hides it.
+   */
+  exclude?: string[]
+}
+
 /**
  * Assert the page has no WCAG A/AA violations.
  *
@@ -28,8 +41,12 @@ const WCAG_A_AA = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
  * bare "expected [] to equal [...]" from a shared helper tells you nothing about
  * which of a spec's six states broke.
  */
-export async function expectAxeClean(page: Page, context: string) {
-  await expectAxeCleanExcept(page, context, [])
+export async function expectAxeClean(
+  page: Page,
+  context: string,
+  options: AxeOptions = {},
+) {
+  await expectAxeCleanExcept(page, context, [], options)
 }
 
 /**
@@ -41,6 +58,10 @@ export async function expectAxeClean(page: Page, context: string) {
  * — including a *new* node of an already-listed rule. Delete an entry when the
  * bug is fixed. Never add one to turn a red run green: a violation your change
  * introduced is a bug in your change.
+ *
+ * Distinct from `AxeOptions.exclude`, which removes a *subtree* from the scan
+ * altogether: this one keeps scanning the node and merely tolerates the named
+ * rule on it, so any *other* rule failing there still fails the run.
  */
 export interface KnownAxeViolation {
   /** The axe rule id, e.g. `color-contrast`. */
@@ -64,10 +85,13 @@ export async function expectAxeCleanExcept(
   page: Page,
   context: string,
   known: KnownAxeViolation[],
+  options: AxeOptions = {},
 ) {
-  const { violations } = await new AxeBuilder({ page })
-    .withTags(WCAG_A_AA)
-    .analyze()
+  let builder = new AxeBuilder({ page }).withTags(WCAG_A_AA)
+  for (const selector of options.exclude ?? []) {
+    builder = builder.exclude(selector)
+  }
+  const { violations } = await builder.analyze()
 
   const exempt = new Set(known.map((k) => `${k.rule} @ ${k.node}`))
 

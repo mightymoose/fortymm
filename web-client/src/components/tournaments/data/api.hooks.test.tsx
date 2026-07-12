@@ -5,6 +5,7 @@ import {
   waitFor as waitForRaw,
 } from '@testing-library/react'
 import { HttpResponse } from 'msw'
+import type { StrictResponse } from 'msw'
 import { toast } from 'sonner'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -24,6 +25,7 @@ import {
   buildTournamentEntrantRead,
   buildTournamentEventRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import type { CodedErrorBody } from '@/mocks/endpoints/error-body'
 import { server } from '@/mocks/server'
 import { resetTournamentsStore } from '@/mocks/tournaments-store'
 import { ApiError } from '@/api/client'
@@ -421,6 +423,17 @@ describe('the lifecycle, against the stateful mock store', () => {
   })
 })
 
+/** A refused entry, in the shape the route really answers with (ADR-0968): a 409
+ * whose `detail` is `{code, message}`. The **code** is what the client reads, so
+ * the `message` defaults to prose no test asserts on — a stub that mattered only
+ * for its sentence would be re-creating the byte-matching this chore deleted. */
+function refused(
+  code: string,
+  message = 'the server said something',
+): StrictResponse<CodedErrorBody> {
+  return HttpResponse.json({ detail: { code, message } }, { status: 409 })
+}
+
 describe('useEnterEvent', () => {
   it('posts to the event entries route with NO body — the caller is the entrant', async () => {
     let seen: { url: string; body: string } | null = null
@@ -445,6 +458,9 @@ describe('useEnterEvent', () => {
       userId: 'u-me',
       username: 'rita.kovac',
       seed: null,
+      // The rating the server resolved on the tournament's ladder (ADR-0783) — the
+      // factory's rated default; `null` here would mean the entrant is unrated.
+      rating: 1450,
     })
     expect(seen!.url).toContain('/v1/tournaments/t-1/events/ev-1/entries')
     expect(seen!.body).toBe('')
@@ -470,12 +486,7 @@ describe('useEnterEvent', () => {
   // Invalidating only `onSuccess` left the card frozen on the pre-click render it
   // had just been proven wrong about.
   it('invalidates on FAILURE too, so a 409 reconciles the view instead of freezing it', async () => {
-    mockEventEnterEndpoint(server, () =>
-      HttpResponse.json(
-        { detail: 'You have already entered this event.' },
-        { status: 409 },
-      ),
-    )
+    mockEventEnterEndpoint(server, () => refused('already_entered'))
     const { invalidateSpy, wrapper } = setupClient()
 
     const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
@@ -488,12 +499,7 @@ describe('useEnterEvent', () => {
   })
 
   it('treats a duplicate-entry 409 as benign: an informational note, not a red error', async () => {
-    mockEventEnterEndpoint(server, () =>
-      HttpResponse.json(
-        { detail: 'You have already entered this event.' },
-        { status: 409 },
-      ),
-    )
+    mockEventEnterEndpoint(server, () => refused('already_entered'))
     const { wrapper } = setupClient()
 
     const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
@@ -501,9 +507,9 @@ describe('useEnterEvent', () => {
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    // "You have already entered" is not a failure the player caused or can fix —
-    // they ARE entered, and the reconciled card now says so. An error toast on top
-    // of a screen that reads "Withdraw" would contradict it.
+    // `already_entered` is not a failure the player caused or can fix — they ARE
+    // entered, and the reconciled card now says so. An error toast on top of a
+    // screen that reads "Withdraw" would contradict it.
     expect(toast.info).toHaveBeenCalledWith(
       'You were already entered in this event',
       expect.objectContaining({
@@ -514,34 +520,40 @@ describe('useEnterEvent', () => {
   })
 
   // The OTHER 409 (ADR-0017), and the reason a bare `status === 409` check is not
-  // enough any more: `POST …/entries` refuses a CLOSED REGISTRATION WINDOW with a
-  // 409 too. The stale tab is the director's fault, not the player's — they had
-  // the page open, the director started the tournament from another tab, and the
-  // Enter button they are looking at is now a button the server refuses.
+  // enough: `POST …/entries` refuses a CLOSED REGISTRATION WINDOW with a 409 too.
+  // The stale tab is the director's fault, not the player's — they had the page
+  // open, the director started the tournament from another tab, and the Enter
+  // button they are looking at is now a button the server refuses.
   //
   // Telling them "You were already entered in this event" there is FALSE: they are
-  // not entered, they cannot enter, and the card is about to say so. That is the
-  // bug these three rows pin — they all took the benign path before.
+  // not entered, they cannot enter, and the card is about to say so.
+  //
+  // **The three rows are three different MESSAGES behind the SAME code** — the
+  // server says something different about a `draft` tournament than about an
+  // `archived` one, and the third row is prose it has never actually sent. All
+  // three must produce the same client copy: that is what "the client switches on
+  // the code and owns its copy" means, and it is the property the old
+  // byte-for-byte `error.detail === 'You have already entered this event.'` did
+  // not have. Reword the server, and nothing here moves (ADR-0968).
   it.each([
     {
       status: 'live',
-      detail: 'This tournament is already under way, so its entries are locked.',
-    },
-    {
-      status: 'archived',
-      detail: 'This tournament has ended, so its events can no longer be entered.',
+      message: 'This tournament is already under way, so its entries are locked.',
     },
     {
       status: 'draft',
-      detail:
+      message:
         'This tournament has not been published yet, so its events are not open for entry.',
     },
+    {
+      status: 'reworded overnight',
+      message: 'Nope! Registration shut. 🙅 (a sentence nobody planned for)',
+    },
   ])(
-    'reports a closed-window 409 ($status) as the refusal it is — never as "already entered"',
-    async ({ detail }) => {
-      // The server's own words (`_registration_closed_detail`, `api/app/tournaments.py`).
+    'reads a closed-window 409 off its CODE, whatever the server says ($status)',
+    async ({ message }) => {
       mockEventEnterEndpoint(server, () =>
-        HttpResponse.json({ detail }, { status: 409 }),
+        refused('registration_closed', message),
       )
       const { wrapper } = setupClient()
 
@@ -550,19 +562,102 @@ describe('useEnterEvent', () => {
 
       await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-      // Our title (entries are closed — the fact), the server's sentence for the
-      // reason: it is the only side that knows WHICH closed status this is, and
-      // "not yet" and "too late" are different things to be told.
+      // The client's copy, both lines of it — identical for all three rows, and
+      // the server's sentence appears in NONE of them ("Raw API detail strings
+      // never reach the UI", DEFINITION_OF_COMPLETE.md).
       expect(toast.error).toHaveBeenCalledWith(
         'Entries are closed for this event',
-        expect.objectContaining({ description: detail }),
+        expect.objectContaining({
+          description:
+            "This tournament's registration window is shut. We've refreshed it with the latest status.",
+        }),
       )
-      // THE assertion. The benign note is for the duplicate-entry 409 alone; firing
-      // it here would tell a player who is NOT entered that they are — over a card
+      // THE assertion. The benign note is for `already_entered` alone; firing it
+      // here would tell a player who is NOT entered that they are — over a card
       // that (once the settle-reconcile lands) shows the lock.
       expect(toast.info).not.toHaveBeenCalled()
     },
   )
+
+  // #783's two refusals, now that this client HAS copy for them: the code decides,
+  // and the words are ours — the server's `message` never reaches the toast.
+  it.each([
+    {
+      code: 'event_full',
+      message: 'This event is full.',
+      title: 'Event full',
+      description: 'Every place in this event has been taken.',
+    },
+    {
+      code: 'rating_ineligible',
+      message: 'Your rating does not meet this event’s eligibility rules.',
+      title: 'Not eligible',
+      description: "Your rating doesn't meet this event's eligibility rules.",
+    },
+  ])('words the $code refusal itself, not out of the server\'s message', async ({
+    code,
+    message,
+    title,
+    description,
+  }) => {
+    mockEventEnterEndpoint(server, () =>
+      HttpResponse.json({ detail: { code, message } }, { status: 409 }),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect(toast.error).toHaveBeenCalledWith(
+      title,
+      expect.objectContaining({ description }),
+    )
+    // The bug ADR-0968 was written against: the old `entryConflict` fell through to
+    // "registration closed" for ANY 409 it did not recognise, so a player refused
+    // from a FULL event on a PUBLISHED tournament was told the window was shut — a
+    // headline contradicting the sentence printed under it.
+    expect(toast.error).not.toHaveBeenCalledWith(
+      'Entries are closed for this event',
+      expect.anything(),
+    )
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  // The honest degrade for a code that is NOT in the table — #784's refusals, an
+  // older server, a code we have not shipped copy for yet: no invented headline,
+  // and the server's own words rather than one of ours that would be a lie.
+  it('degrades to the server\'s words for a code it does not know — it does NOT guess "closed"', async () => {
+    mockEventEnterEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: {
+            code: 'invitation_only',
+            message: 'This event is invitation-only.',
+          },
+        },
+        { status: 409 },
+      ),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't enter the event",
+      expect.objectContaining({ description: 'This event is invitation-only.' }),
+    )
+    // None of the four copies this client owns is a truthful thing to say here.
+    expect(toast.error).not.toHaveBeenCalledWith(
+      'Entries are closed for this event',
+      expect.anything(),
+    )
+    expect(toast.info).not.toHaveBeenCalled()
+  })
 
   it('still surfaces a GENUINE failure (a 400, a 5xx) as an error toast', async () => {
     // The benign-409 carve-out must not become a swallow-everything: a doubles
@@ -625,13 +720,8 @@ describe('entering from a STALE view (the two-tab race)', () => {
 
   it('re-reads the tournament on the 409 — the count, the roster and the control all catch up', async () => {
     mockDetailStaleThenTrue()
-    mockEventEnterEndpoint(server, () =>
-      // The server is right and the screen is wrong: this player is already in.
-      HttpResponse.json(
-        { detail: 'You have already entered this event.' },
-        { status: 409 },
-      ),
-    )
+    // The server is right and the screen is wrong: this player is already in.
+    mockEventEnterEndpoint(server, () => refused('already_entered'))
     const { wrapper } = setupClient()
 
     const { result } = renderHookRaw(

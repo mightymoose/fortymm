@@ -4,7 +4,7 @@
 // double-booking detection.
 
 import { labelFor, PRED_FIELDS, PRED_OPS_BY_TYPE } from './options'
-import type { PredicateFieldSchema } from './options'
+import type { PredicateOp } from './options'
 import type {
   Address,
   Entrant,
@@ -30,6 +30,30 @@ export function myEntrant(
 ): Entrant | undefined {
   if (!username) return undefined
   return event.entrants.find((e) => e.username === username)
+}
+
+/**
+ * Does this entrant hold **no rating on the tournament's ladder** — i.e. are they
+ * an *unrated entrant* (CONTEXT.md, ADR-0783 §3)?
+ *
+ * One definition, so the roster, and anything that comes after it, cannot fork two
+ * ideas of what unrated means. The rule is exactly "the server sent no rating":
+ *
+ * - It is **not** a rating of zero, and not a low rating. An unrated player holds
+ *   no rating *at all* — they have never finished a rated match on that ladder —
+ *   which is why they are not "unranked" or "provisional" either.
+ * - It is **not** the client's own arithmetic on a nullable column. A brand-new
+ *   player is seeded 1500 at sign-up and is *still* unrated; `is_rated_member()`
+ *   (`api/app/ratings/rated.py`) is the single definition, and this `null` is its
+ *   answer, already computed. Re-deriving it here — from the event's `predicates`,
+ *   from a rating of 1500, from anything — is the trap ADR-0783 flags in bold, and
+ *   it inverts the decision it is trying to implement.
+ *
+ * It matters because an unrated player **passes every rating rule**, so a rating
+ * cap is opt-out; marking them is the mitigation the ADR accepts that cost under.
+ */
+export function isUnrated(entrant: Entrant): boolean {
+  return entrant.rating === null
 }
 
 /** U+2014. "Unset renders as an em-dash" is a single contract (ADR 0015, rule
@@ -144,66 +168,55 @@ export function effectiveDateRange(t: Tournament): {
   return { start: dates[0], end: dates[dates.length - 1] }
 }
 
-/** An enum predicate's value, as the option label the editor's own picker shows
- * ("Female"), never the key it is stored under ("F"). Shared by both predicate
- * formatters below — the one lookup they genuinely have in common. */
-const enumValueLabel = (schema: PredicateFieldSchema, p: Predicate): string =>
-  // An unfinished enum rule (`value: null`) is unset, so it reads as the em-dash
-  // both voices use — never `String(null)`, which rendered the literal "null" on
-  // the event card.
-  p.value == null
-    ? EM_DASH
-    : labelFor(schema.options ?? [], String(p.value), String(p.value))
-
-/** A **compact** summary of one eligibility predicate, e.g. `Age < 18` — the
+/** A **compact** summary of one eligibility predicate, e.g. `Rating < 1500` — the
  * chip form, sized for an event card's badge row.
  *
  * Deliberately *not* the same output as `predicateSentence` below: a chip wants
- * `USATT rating in [1200–2400]`, a panel wants the prose the rule already reads
- * as. Two voices, one vocabulary — both compose their labels out of `options.ts`
- * (`labelFor`) and both render an unset value as the same em-dash. */
+ * `Rating in [1200–2400]`, a panel wants the prose the rule already reads as. Two
+ * voices, one vocabulary — both compose their labels out of `options.ts`
+ * (`labelFor`, `PRED_FIELDS`) and both render an unset value as the same em-dash.
+ *
+ * The vocabulary is one numeric field (ADR-0783), so there is one formatting
+ * branch. A field key the vocabulary does not know — a payload from a future or a
+ * past schema — is the em-dash, not a crash. */
+/** The chip's symbol for each operator that renders as `field SYM value` —
+ * i.e. every operator except `between`, which takes two bounds and a shape of
+ * its own. Keyed by `Exclude<PredicateOp, 'between'>` rather than by `string`,
+ * so it is **total**: an operator added to `PRED_OPS_BY_TYPE` is a compile error
+ * here until it is given a symbol, instead of silently formatting as nothing. */
+const OP_SYMBOLS: Record<Exclude<PredicateOp, 'between'>, string> = {
+  '<': '<',
+  '<=': '≤',
+  '>': '>',
+  '>=': '≥',
+  '=': '=',
+  '!=': '≠',
+}
+
 export function formatPredicate(p: Predicate): string {
   const f = PRED_FIELDS[p.field]
   if (!f) return EM_DASH
-  if (f.type === 'number') {
-    const v = p.value
-    const ops: Record<string, string> = {
-      '<': '<',
-      '<=': '≤',
-      '>': '>',
-      '>=': '≥',
-      '=': '=',
-      '!=': '≠',
-    }
-    if (p.op === 'between' && Array.isArray(v)) {
-      return `${f.label} in [${v[0] ?? '?'}–${v[1] ?? '?'}]`
-    }
-    if (ops[p.op]) return `${f.label} ${ops[p.op]} ${v ?? '?'}`
+  const v = p.value
+  if (p.op === 'between') {
+    if (!Array.isArray(v)) return EM_DASH
+    return `${f.label} in [${v[0] ?? '?'}–${v[1] ?? '?'}]`
   }
-  if (f.type === 'enum') {
-    return `${f.label} ${p.op === 'is' ? '=' : '≠'} ${enumValueLabel(f, p)}`
-  }
-  if (f.type === 'bool') {
-    return p.op === 'true' ? `Must be ${f.label}` : `Must not be ${f.label}`
-  }
-  return EM_DASH
+  // Typed `string | undefined` deliberately: the *type* says the lookup is
+  // total, but a stale payload (an operator from a schema that is not ours) is
+  // a runtime possibility, and it reads as the em-dash — never "Rating
+  // undefined 1500".
+  const symbol: string | undefined = OP_SYMBOLS[p.op]
+  if (symbol === undefined) return EM_DASH
+  return `${f.label} ${symbol} ${v ?? '?'}`
 }
-
-/** The bool field's value, as prose. It reads as the tail of its operator
- * ("must be" + "a club member"), which is why the editor's value cell shows it
- * verbatim rather than as a control — and why `predicateSentence` can borrow it
- * instead of inventing copy. */
-export const BOOL_PREDICATE_VALUE = 'a club member'
 
 const num = (n: number | null | undefined): string =>
   n === null || n === undefined ? EM_DASH : String(n)
 
 /** The value half of the sentence, in the same words the editor's value control
- * shows. */
-function valueText(schema: PredicateFieldSchema, p: Predicate): string {
-  if (schema.type === 'enum') {
-    return p.value == null ? EM_DASH : enumValueLabel(schema, p)
-  }
+ * shows: one number, or the two bounds of a `between`. An unfilled value is the
+ * em-dash, never the string "null". */
+function valueText(p: Predicate): string {
   if (p.op === 'between') {
     const [lo, hi] = Array.isArray(p.value) ? p.value : [null, null]
     return `${num(lo)} and ${num(hi)}`
@@ -213,13 +226,9 @@ function valueText(schema: PredicateFieldSchema, p: Predicate): string {
 
 /** The rule as one **sentence**: `[field] [operator] [value]` was always a
  * sentence chopped into a grid, so read-only it is simply put back together —
- * "USATT rating is between 1200 and 1500" (ADR 0015, rule 4). Every word comes
- * from the labels the editor's own three controls display, so there is no second
+ * "Rating is between 1200 and 1500" (ADR 0015, rule 4). Every word comes from the
+ * labels the editor's own three controls display, so there is no second
  * vocabulary to keep in step.
- *
- * The bool field is the exception: it is the *object* of its operator, so the
- * literal three-cell join would read "Club member must be a club member". It
- * keeps the operator and the prose value only — "Must be a club member".
  *
  * Lives here, beside `formatPredicate`, so that adding a predicate field or
  * operator is a one-file change rather than a hunt through a component. */
@@ -228,10 +237,7 @@ export function predicateSentence(p: Predicate): string {
   if (!schema) return EM_DASH
 
   const op = labelFor(PRED_OPS_BY_TYPE[schema.type], p.op, p.op)
-  if (schema.type === 'bool') {
-    return `${op.charAt(0).toUpperCase()}${op.slice(1)} ${BOOL_PREDICATE_VALUE}`
-  }
-  return `${schema.label} ${op} ${valueText(schema, p)}`
+  return `${schema.label} ${op} ${valueText(p)}`
 }
 
 export interface PoolConflict {
@@ -305,6 +311,10 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
     entrants: [],
+    // Nothing about an unsaved event refuses anybody: it has room (nobody is in
+    // it) and no rules yet. The server will send the real judgement the moment the
+    // event exists — this is a placeholder for a payload that has not happened.
+    entryState: { state: 'open' },
     slot: { date: defaultDate, start: '09:00', end: '13:00' },
     predicates: [],
     match: { rated: true, lengthGames: 5 },

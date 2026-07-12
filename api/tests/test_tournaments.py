@@ -11,8 +11,10 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 """
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -23,22 +25,33 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.leagues import seed_user_league_rating
 from app.models import (
+    League,
+    LeagueVisibility,
+    RatingStrategy,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentStatus,
     User,
+    UserLeagueRating,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.schemas.tournament import TournamentTransitionCreate
+from app.schemas.tournament import (
+    EventEntryFull,
+    EventEntryRatingIneligible,
+    TournamentTransitionCreate,
+)
+from app.tournament_entry_refusals import EntryRefusal
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
     _get_owned_tournament_or_404,
     _get_tournament_for_update_or_404,
     create_tournament_transition,
+    get_tournament,
     list_tournaments,
 )
 from tests._helpers import (
@@ -46,6 +59,7 @@ from tests._helpers import (
     grant_permissions,
     make_client,
     make_user,
+    rate_player,
     start_session,
 )
 
@@ -391,6 +405,245 @@ async def test_create_event_round_trips_jsonb(
     ]
 
 
+async def test_create_event_persists_the_rating_predicate(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """``rating`` is the one fact we hold about a player (ADR-0783), so a rating
+    rule is authorable — and it lands in the JSONB column, not just in the echo."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+    )
+    assert response.status_code == 201, response.text
+
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.id == uuid.UUID(response.json()["id"])
+            )
+        )
+    ).scalar_one()
+    assert row.predicates == [
+        {"id": "pr-1", "field": "rating", "op": "<", "value": 1500}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("age", 18), ("gender", "female"), ("club", True)],
+)
+async def test_create_event_with_an_unevaluatable_predicate_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    field: str,
+    value: object,
+) -> None:
+    """A rule naming a player attribute we do not hold is refused at the boundary.
+
+    ``age``/``gender``/``club`` are not columns anywhere — there is no date of
+    birth, no gender and no club on a player — so a rule over one could never be
+    evaluated. Before #783 the API stored it happily and the event page told
+    players "Players must satisfy every rule to enter", which was a lie. The field
+    is off the ``Literal`` now, so ``extra="forbid"`` + the enum check answer 422
+    (ADR-0783) and *no event row is written*.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            predicates=[{"id": "pr-x", "field": field, "op": "<", "value": value}]
+        ),
+    )
+
+    assert response.status_code == 422, response.text
+    # A 422 that had already written the event would be a 422 in name only.
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("age", 18), ("gender", "female"), ("club", True)],
+)
+async def test_patch_event_with_an_unevaluatable_predicate_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    field: str,
+    value: object,
+) -> None:
+    """The patch path refuses the removed fields too.
+
+    Create is only half the boundary: an event born with an honest rating rule and
+    then *patched* into an age rule would be exactly the state #783 exists to make
+    unrepresentable. The event's stored predicates are re-read to prove the rule
+    never landed, rather than trusting the status code.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "predicates": [{"id": "pr-x", "field": field, "op": "<", "value": value}]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    # Still the rating rule it was created with: the age/gender/club rule is not in
+    # the column under any id.
+    assert row.predicates == [
+        {"id": "pr-1", "field": "rating", "op": "<", "value": 1500}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("op", "value", "why"),
+    [
+        ("~=", 1500, "an operator that does not exist"),
+        ("<>", 1500, "an operator from another language"),
+        ("between", 1500, "`between` given a single number instead of a pair"),
+        ("<", [1200, 1500], "a comparison given a [min, max] pair"),
+        ("between", [1200], "a `between` pair with one bound"),
+        ("between", [1000, 1200, 1500], "a `between` pair with three"),
+        ("<", "1500", "a rating rule compared against a string"),
+        ("<", True, "a rating rule compared against a boolean"),
+    ],
+)
+async def test_create_event_with_an_undecidable_rule_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    op: str,
+    value: object,
+    why: str,
+) -> None:
+    """A rule the evaluator could not decide is refused at the **boundary**, not
+    handled at evaluation time (ADR-0783).
+
+    ``op`` is a closed ``Literal`` of the seven operators and ``value`` is a number or
+    a two-bound pair, tied to the operator that takes it. So an unknown operator, a
+    ``between`` handed a single number, a comparison handed a pair, and a pair that is
+    not exactly two long are all 422s — and the evaluator is a **total** function of
+    what can actually reach it, rather than a function with a "what does ``~=`` mean?"
+    branch in it that has to guess. Guessing has exactly two outcomes, and both are
+    wrong: silently admitting a player the rule meant to bar, or silently barring one
+    it meant to admit.
+
+    The ``str``/``bool`` cases are the vestige of the removed fields (a gender was a
+    string, a club a bare boolean). A rating is a number; nothing else is a rating.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            predicates=[{"id": "pr-x", "field": "rating", "op": op, "value": value}]
+        ),
+    )
+
+    assert response.status_code == 422, f"{why}: {response.text}"
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0, why
+
+
+async def test_a_rule_the_organizer_has_not_finished_writing_is_storable(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A rule with **no value yet** is not an undecidable rule — it is an unfinished
+    one, and an event must be saveable mid-edit.
+
+    It is stored as-is and constrains nobody at evaluation time (see
+    ``tests/test_tournament_eligibility.py``): refusing to *store* it would break the
+    editor, and refusing every *player* on the strength of it would silently close an
+    event whose director was interrupted.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            predicates=[
+                {"id": "pr-x", "field": "rating", "op": "<", "value": None},
+                {
+                    "id": "pr-y",
+                    "field": "rating",
+                    "op": "between",
+                    "value": [1200, None],
+                },
+            ]
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.id == uuid.UUID(response.json()["id"])
+            )
+        )
+    ).scalar_one()
+    assert row.predicates == [
+        {"id": "pr-x", "field": "rating", "op": "<", "value": None},
+        {"id": "pr-y", "field": "rating", "op": "between", "value": [1200, None]},
+    ]
+
+
+async def test_patch_event_with_an_undecidable_rule_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The patch path closes the same domain: an event born with an honest rating rule
+    cannot be *patched* into one carrying an operator nobody can evaluate."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "predicates": [{"id": "pr-x", "field": "rating", "op": "~=", "value": 1500}]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert row.predicates == [
+        {"id": "pr-1", "field": "rating", "op": "<", "value": 1500}
+    ]
+
+
+# ----- the player cap: a number, or none at all (ADR-0935) -------------------
+
+
 async def test_create_event_with_null_max_players_is_uncapped(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -441,7 +694,7 @@ async def test_event_negative_entry_fee_violates_db_check(
     """The ``entry_fee >= 0`` CHECK is the load-bearing guard: even bypassing the
     Pydantic schema and writing straight through the ORM, a negative fee is
     refused by the database (ADR-0935)."""
-    client, user = authed_client
+    client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
     event = TournamentEvent(
@@ -497,7 +750,7 @@ async def test_patch_event_by_creator_updates_jsonb(
             "table_ids": ["t3"],
         }
     ]
-    new_predicates = [{"id": "pr-9", "field": "age", "op": "<", "value": 18}]
+    new_predicates = [{"id": "pr-9", "field": "rating", "op": ">=", "value": 1800}]
     response = await client.patch(
         f"/v1/tournaments/{created['id']}/events/{event['id']}",
         json={
@@ -585,6 +838,243 @@ async def test_patch_event_rejects_server_managed_entered(
         json={"entered": 99},
     )
     assert response.status_code == 422
+
+
+# ----- the column is a constraint too (#783 QA, round three) ----------------
+#
+# An event's two numbers are bounded by their COLUMNS whether the schema says so or
+# not, and for a while only the columns said so: ``max_players`` was ``int, gt=0``
+# over an ``Integer``, ``entry_fee`` was ``float, ge=0`` over a ``Numeric(8, 2)``.
+# QA typed ``9999999999`` into the player limit; it satisfied every rule Pydantic
+# stated, sailed through the boundary, and blew up in the driver — Postgres refused
+# the out-of-range value and the API answered **500**. A 500 on ordinary user input
+# is a server fault we were choosing to have.
+#
+# Every case below is therefore asserted twice: the status code, *and* the row. A 422
+# is only a boundary if nothing was written; a 500 is not one at all.
+
+PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD = [
+    pytest.param(9_999_999_999, id="the-number-qa-typed"),
+    pytest.param(2**31, id="one-past-the-Integer-column"),
+    pytest.param(513, id="one-past-the-agreed-512"),
+]
+
+FEES_THE_COLUMN_CANNOT_HOLD = [
+    pytest.param(9_999_999, id="a-seventh-digit-past-Numeric-8-2s-precision"),
+    pytest.param(1_000_000, id="one-dollar-past-the-largest-storable-fee"),
+    # Under a million, and still unstorable: it rounds *up* to 1000000.00, which
+    # overflows the precision. This is the case that makes the bound `le=999_999.99`
+    # (the largest storable fee, exactly) rather than a `< 1_000_000` that looks
+    # equivalent and would have let this one through to the driver.
+    pytest.param(999_999.999, id="a-fee-under-a-million-that-rounds-UP-into-overflow"),
+    # Storable, and stored WRONG: Postgres does not refuse a third decimal, it rounds
+    # it away. Measured against the old schema: 201, and the column held 45.01 — a
+    # cent the organizer never typed, on a price.
+    pytest.param(45.005, id="a-third-decimal-place-the-column-would-silently-round"),
+]
+
+
+@pytest.mark.parametrize("max_players", PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD)
+async def test_create_event_with_an_unstorable_player_limit_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    max_players: int,
+) -> None:
+    """A player limit the ``Integer`` column cannot hold is refused at the boundary.
+
+    ``9999999999`` is the number that produced the 500. It is a 422 now, and 512 is
+    the ceiling — the same number the web client's form enforces, so the two layers
+    refuse the same events for the same reason rather than one crashing on what the
+    other allowed.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=max_players),
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.parametrize("max_players", PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD)
+async def test_patch_event_with_an_unstorable_player_limit_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    max_players: int,
+) -> None:
+    """The patch path holds the same bound — otherwise it *is* the hole.
+
+    An event born with a sane limit and then edited to ``9999999999`` reaches exactly
+    the same DataError from exactly the same user input; a bound that only create
+    keeps is a bound the API does not have. The stored limit is re-read rather than
+    the status code trusted: a handler that wrote the value and only then failed
+    would answer 422 and still be broken.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"max_players": max_players},
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert row.max_players == 64
+
+
+@pytest.mark.parametrize("entry_fee", FEES_THE_COLUMN_CANNOT_HOLD)
+async def test_create_event_with_an_unstorable_entry_fee_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """A fee the ``Numeric(8, 2)`` column cannot hold is refused at the boundary.
+
+    Two ways it cannot hold one, and both are here: **magnitude** (a seventh digit
+    overflows the precision — the 500) and **scale** (a third decimal place, which
+    Postgres does not refuse but silently *rounds away*). The rounding is refused too:
+    a price is exact, and a boundary that quietly stores a number the organizer did
+    not type is the same fault speaking softly. The two meet at ``999_999.999``, which
+    is under a million *and* rounds up through the precision — which is why the bound
+    is the largest storable fee itself, not a round number just above it.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=entry_fee),
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.parametrize("entry_fee", FEES_THE_COLUMN_CANNOT_HOLD)
+async def test_patch_event_with_an_unstorable_entry_fee_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """The fee's bounds are the *same* bounds on the patch path — one alias, two
+    schemas — so an event cannot be edited into a fee it could not have been created
+    with. The stored fee is still the one it was created with."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"entry_fee": entry_fee},
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert Decimal(str(row.entry_fee)) == Decimal("45.00")
+
+
+@pytest.mark.parametrize(
+    "entry_fee",
+    [
+        pytest.param(float("inf"), id="Infinity"),
+        pytest.param(float("-inf"), id="-Infinity"),
+        pytest.param(float("nan"), id="NaN"),
+    ],
+)
+async def test_create_event_with_a_non_finite_entry_fee_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """``Infinity`` is not a fee — and it is on the wire whether JSON admits it or not.
+
+    Python's ``json.loads``, which Starlette parses the request body with, reads the
+    bare tokens ``Infinity`` and ``NaN`` even though the JSON grammar has no such
+    literals. A browser cannot author them (``JSON.stringify`` emits ``null``), and
+    neither can httpx — which is why the body here is **hand-written**, exactly as curl
+    or a native client could write it. An infinite fee passes ``ge=0``, so without
+    ``allow_inf_nan=False`` it reaches a column that cannot hold it.
+
+    This case also found the 422 handler's own bug: the refusal echoes the offending
+    ``input`` back, and ``inf`` cannot be serialized by ``json.dumps(allow_nan=False)``
+    — so the 422 was itself dying as a 500 (see ``validation_error_handler``,
+    ``app/main.py``). Both halves are proved here: a refusal that cannot be *delivered*
+    is not a refusal.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        content=json.dumps(_event_payload(entry_fee=entry_fee)).encode(),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_create_event_at_the_very_edge_of_what_the_columns_hold_is_stored(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The bounds are inclusive, and the values they admit really do land.
+
+    The 422s above prove nothing on their own — a schema of ``le=0`` would pass every
+    one of them and refuse every real event. So the extremes the columns *can* hold —
+    a 512-player draw and a fee of 999,999.99 — are created and read back out of the
+    database, which is the half of the boundary that says it is a bound and not a
+    wall.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=512, entry_fee=999_999.99),
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["max_players"] == 512
+    assert body["entry_fee"] == 999_999.99
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(body["id"]))
+        )
+    ).scalar_one()
+    assert row.max_players == 512
+    assert Decimal(str(row.entry_fee)) == Decimal("999999.99")
 
 
 async def test_delete_event_by_creator_returns_204(
@@ -780,9 +1270,11 @@ async def test_patch_event_answers_with_its_existing_entrants(
 
 
 # The pin, measured (print the statements below to re-measure): the tournaments +
-# usernames join, the events, and ONE batched load of every event's active
-# entrants. Three, whatever the number of events.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 3
+# usernames join, the events, ONE batched load of every event's active entrants, and
+# ONE batched load of the caller's rating on every league those tournaments run on
+# (which each event's ``entry_state`` is judged against, ADR-0783). Four, whatever the
+# number of tournaments and events.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 4
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -797,10 +1289,15 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
     ``count(*)`` per event is an N+1 (ADR-0015, ADR-0016).
 
     The two ``event_count`` cases are what makes this discriminating: a per-event
-    loop emits one statement per event, so it would measure 4 at one event and 7 at
+    loop emits one statement per event, so it would measure 5 at one event and 8 at
     four — failing the pin at four even if it slipped past at one. Each event
     carries a different number of entrants, so a batched loader that silently
     dropped the grouping would show up as wrong data, not just a low count.
+
+    It pins the caller's RATING lookup too, which is the newest way to reintroduce the
+    N+1 this test exists to prevent: every event's ``entry_state`` is judged against
+    the caller's rating on the tournament's ladder (ADR-0783), and a rating fetched
+    inside the per-event loop reads the same number once per event.
 
     Counting is scoped to the handler rather than the HTTP request on purpose: an
     endpoint-level count would also sweep up session / auth statements that have
@@ -1493,3 +1990,939 @@ async def test_two_identical_transitions_racing_leave_exactly_one_winner(
             )
         ).scalar_one()
         assert final.status is TournamentStatus.published
+
+
+# ----- the league a tournament is judged on (ADR-0783) ----------------------
+#
+# A tournament's ``league_id`` is the rating ladder its events' eligibility rules
+# are decided on. It is NOT NULL, it is resolved at create (an omitted league is
+# the default one), and it is settled the moment the tournament leaves ``draft``.
+
+
+@pytest_asyncio.fixture
+async def other_league(
+    db_session: AsyncSession, rating_strategies: dict[str, RatingStrategy]
+) -> League:
+    """A second league, deliberately NOT the default one.
+
+    The whole point of ``league_id`` is that a tournament can name a ladder other
+    than the fallback — a test with only the default league in the database could
+    not tell "carries the league the caller named" apart from "carries the default,
+    always", because the two ids would be the same id.
+    """
+    league = League(
+        name="Bay Area Ladder",
+        description="A second ladder. Not the default.",
+        visibility=LeagueVisibility.public,
+        is_default=False,
+        rating_strategy_id=rating_strategies["glicko2"].id,
+    )
+    db_session.add(league)
+    await db_session.commit()
+    return league
+
+
+async def _persisted_league_id(db_session: AsyncSession, tournament_id: str) -> str:
+    """The league id on the ROW, not in a response body — so a handler that
+    answered with the league it *meant* to write, without writing it, is caught."""
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    return str(row.league_id)
+
+
+async def test_create_without_a_league_runs_on_the_default_league(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+):
+    """``league_id`` is optional on the way in and NOT NULL in the database: a
+    caller who names no ladder gets the **default** one (CONTEXT.md, "Default
+    league") — resolved through the STRICT ``resolve_league``, which falls back
+    to the default only when no league is *named*. It deliberately is not the
+    degrading ``resolve_league_or_default``: that one answers an id naming no
+    league with the default ladder, which would judge entrants on a ladder the
+    director never chose. The non-default ``other_league`` is seeded here
+    precisely so "the default" cannot be satisfied by "the only one".
+    """
+    client, _ = authed_client
+    payload = _create_payload()
+    assert "league_id" not in payload
+
+    response = await client.post("/v1/tournaments", json=payload)
+
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["league_id"] == str(default_league.id)
+    assert created["league_id"] != str(other_league.id)
+    assert await _persisted_league_id(db_session, created["id"]) == str(
+        default_league.id
+    )
+
+
+async def test_create_naming_a_league_runs_on_that_league(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+):
+    """A caller who names a ladder gets *that* ladder — not the default one it
+    would have fallen back to."""
+    client, _ = authed_client
+
+    response = await client.post(
+        "/v1/tournaments", json=_create_payload(league_id=str(other_league.id))
+    )
+
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["league_id"] == str(other_league.id)
+    assert created["league_id"] != str(default_league.id)
+    assert await _persisted_league_id(db_session, created["id"]) == str(other_league.id)
+
+
+async def test_create_naming_a_league_that_does_not_exist_is_404_and_creates_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A ``league_id`` that names no league is refused — loudly.
+
+    The league a tournament runs on is a persisted fact that decides who may enter,
+    not a view preference, so create reads it through the STRICT resolver (the same
+    one the PATCH and ``matches.py`` use). Degrading to the default here — which the
+    other resolver in ``app/leagues.py`` would do, and which it exists to do for the
+    *profile* surfaces — would answer 201 to a director who mistyped an id, hand
+    them a tournament quietly running on a ladder they never chose, and judge their
+    entrants on it with nothing anywhere saying so. That is the silent lie ADR-0783
+    exists to remove, so it is a 404.
+
+    And a 404 that had already written the row would be a 404 in name only: the
+    absence of the tournament is asserted, not assumed.
+    """
+    client, _ = authed_client
+
+    response = await client.post(
+        "/v1/tournaments", json=_create_payload(league_id=str(uuid.uuid4()))
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "League not found."
+    count = (
+        await db_session.execute(select(func.count()).select_from(Tournament))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_patch_moves_the_league_while_the_tournament_is_a_draft(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+):
+    """Nobody can have entered a draft, so nothing is re-judged by moving its
+    ladder: the edit is allowed, answers with the new league, and persists."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    assert created["league_id"] == str(default_league.id)
+    assert created["status"] == "draft"
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"league_id": str(other_league.id)},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["league_id"] == str(other_league.id)
+    assert await _persisted_league_id(db_session, created["id"]) == str(other_league.id)
+    # The edit moved the ladder and nothing else — in particular it did not move
+    # the tournament along its lifecycle.
+    assert response.json()["status"] == "draft"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [TournamentStatus.published, TournamentStatus.live, TournamentStatus.archived],
+    ids=lambda s: s.value,
+)
+async def test_patch_league_once_published_is_refused_and_changes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+    status: TournamentStatus,
+):
+    """Once a tournament is out of ``draft``, its ladder is settled (ADR-0783).
+
+    Publishing opens registration and makes eligibility live, so swapping the
+    league underneath would silently re-judge — and could retroactively disqualify
+    — players who already entered against the old one. So the PATCH is a 409 in
+    ``published`` and in the two statuses beyond it, and the row still carries the
+    league it was published with: a guard that refused *after* writing would pass a
+    status-code-only assertion.
+
+    409, not 403: the owner is permitted, the tournament is simply past the point
+    where the edit means anything.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], status)
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"league_id": str(other_league.id)},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "draft" in response.json()["detail"]
+    assert await _persisted_league_id(db_session, created["id"]) == str(
+        default_league.id
+    )
+
+
+async def test_patch_league_once_published_is_refused_even_with_the_same_league(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """Re-sending the league a published tournament already has is a 409 too.
+
+    The guard is on the *field being sent*, not on the value differing — the same
+    shape as the transition route, where re-asserting the status you already hold
+    is a conflict rather than an idempotent no-op (ADR-0017). The only caller that
+    sends a settled field is a stale one, and a 200 would tell it the field is
+    still editable when it is not.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"league_id": str(default_league.id)},
+    )
+
+    assert response.status_code == 409, response.text
+
+
+async def test_patch_other_fields_still_work_once_published(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """The guard is on the league, not on editing a published tournament at all —
+    the name (and everything else) is still the owner's to change."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"name": "Bay Area Major"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "Bay Area Major"
+
+
+async def test_patch_league_that_names_no_league_is_404(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """An id that names no league is a 404, not a silent fall back to the default.
+
+    On the way in the league is a *choice the owner made*, not a view preference,
+    so this reads through the STRICT resolver (``app/leagues.py``): substituting
+    the default would run the tournament on a ladder nobody asked for. It also
+    keeps a bogus id from reaching the NOT NULL FK as a 500.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"league_id": str(uuid.uuid4())},
+    )
+
+    assert response.status_code == 404, response.text
+    assert await _persisted_league_id(db_session, created["id"]) == str(
+        default_league.id
+    )
+
+
+async def test_patch_explicit_null_league_returns_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """``league_id`` backs a NOT NULL column, so "clear it" is not a thing a
+    tournament can be asked to do — omitted and cleared are different."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"league_id": None}
+    )
+
+    assert response.status_code == 422, response.text
+
+
+# ----- entry_state: may THIS caller enter THIS event? (ADR-0783) --------------
+#
+# The detail page used to offer an Enter button on a full event, and on an event whose
+# rules the player fails — both guaranteed 409s — because the page knew nothing about
+# capacity or eligibility. Each event now carries the CALLER's ``entry_state``, decided
+# by the same two functions the ``POST …/entries`` guards call
+# (``app.tournament_eligibility``), so the page that explains the missing button and
+# the route that refuses the entry cannot disagree.
+#
+# The states are asserted as WHOLE DICTS, not by picking ``["state"]`` out of them:
+# ADR-0968 says the server sends a state and the client owns the copy, so an English
+# sentence smuggled into this payload is a failure — and only an exact comparison
+# catches an extra key nobody asked for.
+
+CAP_UNDER_1500 = {"id": "pr-cap", "field": "rating", "op": "<", "value": 1500}
+FLOOR_OVER_1600 = {"id": "pr-floor", "field": "rating", "op": ">=", "value": 1600}
+
+OPEN: dict[str, Any] = {"state": "open"}
+EVENT_FULL: dict[str, Any] = {"state": "event_full"}
+
+
+def _ineligible(predicate_id: str, rating: float) -> dict[str, Any]:
+    """The refusal as the wire carries it: WHICH rule refused you, and the rating it
+    judged. Nothing else — no sentence for the client to render (ADR-0968), and no
+    copy of the rule's ``op``/``value``, which the client already holds on the event's
+    ``predicates`` and renders as chips. ``predicate_id`` is what points at the chip."""
+    return {
+        "state": "rating_ineligible",
+        "predicate_id": predicate_id,
+        "rating": rating,
+    }
+
+
+async def _tournament_with_events(
+    client: AsyncClient, *events: dict[str, Any], **tournament: Any
+) -> tuple[str, list[dict[str, Any]]]:
+    """A tournament (on the default league unless ``tournament`` says otherwise) and
+    its events, created through the real routes, in order."""
+    created = (
+        await client.post("/v1/tournaments", json=_create_payload(**tournament))
+    ).json()
+    made = [
+        (
+            await client.post(f"/v1/tournaments/{created['id']}/events", json=payload)
+        ).json()
+        for payload in events
+    ]
+    return created["id"], made
+
+
+async def _events_of(client: AsyncClient, tournament_id: str) -> list[dict[str, Any]]:
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    events: list[dict[str, Any]] = response.json()["events"]
+    return events
+
+
+async def test_entry_state_is_open_for_a_player_who_satisfies_the_events_rules(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """1400 against an "Under 1500" event with room in it: the event admits them."""
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1400.0)
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert event["entry_state"] == OPEN
+
+
+async def test_entry_state_names_the_rule_that_refused_and_the_rating_it_judged(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """1650 against an "Under 1500" event: ``rating_ineligible``, carrying the id of
+    the rule in the way and the number it was judged on — and NOTHING else.
+
+    Those two facts are the minimum a client needs to say something honest ("this
+    event is for players rated under 1500; you are 1650") without the server writing
+    the sentence for it (ADR-0968): the rule itself is already on the event's
+    ``predicates``, addressed by ``predicate_id``, and the rating is the one fact the
+    page could not otherwise know.
+    """
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert event["entry_state"] == _ineligible("pr-cap", 1650.0)
+    # And the rule that id points at is really on the event the client already has —
+    # which is why the state does not repeat its operator and its number.
+    assert [p["id"] for p in event["predicates"]] == ["pr-cap"]
+
+
+async def test_one_caller_reads_open_on_one_event_and_ineligible_on_another(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """THE test: one player, one tournament, one response — and two different states.
+
+    A 1650 player is too strong for the "Under 1500" event and exactly strong enough
+    for the "1600 and over" one. If ``entry_state`` were a property of the *event*
+    rather than of the (caller, event) pair — a global "is anybody eligible?" flag —
+    both events would read the same thing here, and only this shape catches that.
+    """
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, _ = await _tournament_with_events(
+        client,
+        _event_payload(name="Under 1500", predicates=[CAP_UNDER_1500]),
+        _event_payload(name="Championship", predicates=[FLOOR_OVER_1600]),
+    )
+
+    under_1500, championship = await _events_of(client, tournament_id)
+
+    assert under_1500["entry_state"] == _ineligible("pr-cap", 1650.0)
+    assert championship["entry_state"] == OPEN
+
+
+async def test_a_full_event_reads_event_full_to_every_eligible_caller(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Capacity is a fact about the EVENT, not about who is asking: once it holds its
+    ``max_players`` entrants, every caller it would otherwise admit is told it is full
+    — the creator, and a second player who has never touched it.
+
+    The second event is the control, and it is the one that keeps this honest about
+    ADR-0016: it has a cap of one and one *withdrawn* entry, and a withdrawn entry is
+    not an entrant. Count the withdrawn row and this event reads full too — sealing an
+    event that has room.
+
+    The tournament is **published** before the stranger reads it. That is not incidental
+    to the assertion, it is a precondition of it: a draft is owner-only (#967), so a
+    non-owner's read of one is a 404 and this test would fail for a reason that has
+    nothing to do with capacity. Publishing is also the honest setup — an event nobody
+    outside the organizer can see is not an event anybody is racing to enter.
+    """
+    client, _ = authed_client
+    tournament_id, (filled, freed) = await _tournament_with_events(
+        client,
+        _event_payload(name="Filled", max_players=1, predicates=[]),
+        _event_payload(name="Freed up", max_players=1, predicates=[]),
+    )
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    await _enter(db_session, filled["id"], await make_user(db_session, "took-the-slot"))
+    await _enter(
+        db_session,
+        freed["id"],
+        await make_user(db_session, "gave-the-slot-back"),
+        status=TournamentEntryStatus.withdrawn,
+    )
+
+    stranger = make_client()
+    try:
+        other = await start_session(stranger, db_session)
+        await _grant_tournament_perms(db_session, other, (TOURNAMENT_VIEW,))
+        for reader in (client, stranger):
+            filled_read, freed_read = await _events_of(reader, tournament_id)
+            assert filled_read["entry_state"] == EVENT_FULL, reader
+            assert freed_read["entry_state"] == OPEN, reader
+    finally:
+        await stranger.aclose()
+
+
+async def test_a_full_event_a_caller_could_never_enter_reads_rating_ineligible(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A full event whose rules the caller also fails reads ``rating_ineligible``, not
+    ``event_full`` — the same precedence ``POST …/entries`` answers with
+    (``test_the_rating_refusal_outranks_the_event_full_refusal``).
+
+    The read and the guard must tell the player the same thing, and the rating is the
+    more useful of the two facts: "full" invites them back when somebody withdraws, and
+    the event would refuse them all over again.
+    """
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _event_payload(max_players=1, predicates=[CAP_UNDER_1500])
+    )
+    await _enter(db_session, event["id"], await make_user(db_session, "last-slot"))
+
+    (read_event,) = await _events_of(client, tournament_id)
+
+    assert read_event["entry_state"] == _ineligible("pr-cap", 1650.0)
+
+
+async def test_an_uncapped_events_entry_state_is_never_event_full(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An event with **no cap** (``max_players`` is ``null``, ADR-0935) reads ``open``
+    however many players are in it — it can never read ``event_full``.
+
+    The capped event beside it is the control, and it is what makes the assertion mean
+    something: both events are read out of the SAME response, so a page that reported
+    ``open`` for everything would fail on the capped one, and a page that read a null
+    cap as ``0`` (or crashed on it) would fail on the uncapped one. Only a serializer
+    that actually asks ``event_is_full`` — the same function ``POST …/entries`` asks,
+    which is why the read and the guard cannot drift — answers both correctly.
+
+    ``entered`` is asserted too: the uncapped event is genuinely full of people. It is
+    ``open`` *because it has no limit*, not because the read forgot to count.
+    """
+    client, _ = authed_client
+    tournament_id, (uncapped, capped) = await _tournament_with_events(
+        client,
+        _event_payload(name="All comers", max_players=None, predicates=[]),
+        _event_payload(name="Capped", max_players=1, predicates=[]),
+    )
+    for index in range(3):
+        await _enter(
+            db_session, uncapped["id"], await make_user(db_session, f"crowd-{index}")
+        )
+    await _enter(db_session, capped["id"], await make_user(db_session, "took-the-slot"))
+
+    uncapped_read, capped_read = await _events_of(client, tournament_id)
+
+    assert uncapped_read["max_players"] is None
+    assert uncapped_read["entered"] == 3
+    assert uncapped_read["entry_state"] == OPEN
+    assert capped_read["entry_state"] == EVENT_FULL
+
+
+async def test_an_uncapped_event_still_refuses_a_caller_its_rules_bar(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Uncapped is not "open to everyone" — it is "open to everyone the RULES admit".
+
+    Capacity and eligibility are two independent questions, and dropping the cap answers
+    only the first. A 1650 player still fails an "Under 1500" event that happens to have
+    no player limit, and the state still names the rule that refused them. An
+    implementation that took a null cap as a licence to short-circuit to ``open`` — a
+    tempting one line — would pass every other uncapped test in this file and quietly
+    offer an Enter button the entry route answers with a 409.
+    """
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(max_players=None, predicates=[CAP_UNDER_1500])
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert event["max_players"] is None
+    assert event["entry_state"] == _ineligible("pr-cap", 1650.0)
+
+
+async def test_an_unrated_caller_reads_open_on_a_capped_event(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """**An unrated player is told the "Under 1500" event admits them** (ADR-0783 §3),
+    and this is the read-side twin of the entry route's ``201``: the page must not hide
+    the Enter button from the very beginner the beginners' event exists for.
+
+    No ``rate_player`` call — but this is not a player with no rating ROW: minting their
+    session joined them to the default league, which seeded a ``user_league_ratings``
+    row at **1500** and an ``initial`` rating-history event before they had played
+    anything. A read that keyed eligibility off ``rating_value`` would compare that
+    seeded 1500 against ``rating < 1500``, and every beginner on the platform would see
+    a "you are not eligible" notice on the beginners' event.
+    """
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert event["entry_state"] == OPEN
+
+
+async def test_entry_state_is_judged_on_the_tournaments_league_not_any_other(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+) -> None:
+    """The rating that decides an event's ``entry_state`` is the caller's rating on the
+    **tournament's** ladder (ADR-0783) — the one it named — and on no other.
+
+    A 1650 rating on the *default* league says nothing about a tournament run on the
+    Bay Area ladder, where the same player is unrated: they read ``open``. Rate them on
+    the ladder the tournament actually runs on and the same event refuses them. A read
+    that grabbed "the player's rating" from wherever it could find one would answer
+    ``rating_ineligible`` in both halves, and pass a test that only had the second.
+    """
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, _ = await _tournament_with_events(
+        client,
+        _event_payload(predicates=[CAP_UNDER_1500]),
+        league_id=str(other_league.id),
+    )
+
+    (before,) = await _events_of(client, tournament_id)
+    assert before["entry_state"] == OPEN
+
+    await rate_player(db_session, user, other_league, 1650.0)
+
+    (after,) = await _events_of(client, tournament_id)
+    assert after["entry_state"] == _ineligible("pr-cap", 1650.0)
+
+
+async def test_the_list_endpoint_reports_the_same_entry_state_as_the_detail(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The list returns the same aggregate the detail does, so it carries the same
+    per-caller states — read through the batched rating loader rather than the
+    single-league one. Two readers of one decision, and they agree."""
+    client, user = authed_client
+    await rate_player(db_session, user, default_league, 1650.0)
+    tournament_id, _ = await _tournament_with_events(
+        client,
+        _event_payload(name="Under 1500", predicates=[CAP_UNDER_1500]),
+        _event_payload(name="Championship", predicates=[FLOOR_OVER_1600]),
+    )
+
+    rows = (await client.get("/v1/tournaments")).json()
+    listed = next(r for r in rows if r["id"] == tournament_id)
+
+    assert [e["entry_state"] for e in listed["events"]] == [
+        _ineligible("pr-cap", 1650.0),
+        OPEN,
+    ]
+    assert [e["entry_state"] for e in listed["events"]] == [
+        e["entry_state"] for e in await _events_of(client, tournament_id)
+    ]
+
+
+def test_the_entry_state_names_are_the_entry_refusal_codes() -> None:
+    """The vocabulary the page reads and the vocabulary a refused ``POST`` answers with
+    are ONE vocabulary (ADR-0968): a client holds one copy table for "why you cannot
+    enter this event", whether it learned the reason from the read or from a 409.
+
+    Renaming either side breaks this, which is the point — they are the same fact.
+    """
+    assert EventEntryFull().state == EntryRefusal.event_full.value
+    assert (
+        EventEntryRatingIneligible(predicate_id="pr-cap", rating=1650.0).state
+        == EntryRefusal.rating_ineligible.value
+    )
+
+
+# ---------------------------------------------------------------------------
+# The entrant's rating on the tournament's ladder — the unrated marker (ADR-0783 §3)
+#
+# An unrated player passes every rating rule, which makes a rating cap OPT-OUT: stay
+# unrated, stay eligible for every capped event, forever. The agreed mitigation is not
+# a guess at their strength — it is VISIBILITY. The director is the only person who can
+# act on it (they can withdraw a ringer), and they can only act on what they can see, so
+# each entrant carries the rating the event's rules would have judged them on, and
+# ``null`` when we hold none.
+#
+# The trap these tests exist for: **"unrated" is not "rating_value IS NULL"**. Joining a
+# league seeds a 1500 row, so a naive null check reports a confident 1500 for the very
+# beginner — and the very sandbagger — the marker is for, and passes a shallow test
+# while lying on the real thing.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_only(db_session: AsyncSession, user: User, league: League) -> None:
+    """Put ``user`` on ``league`` through the very function production joins them with
+    (``seed_user_league_rating``) — the 1500 prior and an ``initial`` history row, and
+    nothing else.
+
+    This is the brand-new, session-minted player, reproduced. They HAVE a
+    ``rating_value``, and it is 1500. They are nonetheless **Unrated**: nothing real has
+    moved that number (``app.ratings.rated.is_rated_member``). It is the exact opposite
+    of ``rate_player``, which is what a rating actually looks like — and the difference
+    between the two is the whole of this section.
+    """
+    strategy = (
+        await db_session.execute(
+            select(RatingStrategy).where(RatingStrategy.id == league.rating_strategy_id)
+        )
+    ).scalar_one()
+    seed_user_league_rating(db_session, league.id, user.id, strategy)
+    await db_session.commit()
+
+
+async def _rating_value_on_the_row(
+    db_session: AsyncSession, user: User, league: League
+) -> float | None:
+    """What the COLUMN holds — read straight from the database, so a test that claims
+    "seeded at 1500 yet reported unrated" is really testing that, and not a missing
+    row."""
+    return (
+        await db_session.execute(
+            select(UserLeagueRating.rating_value).where(
+                UserLeagueRating.user_id == user.id,
+                UserLeagueRating.league_id == league.id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _entrants_of(client: AsyncClient, tournament_id: str) -> dict[str, Any]:
+    """The single event's entrants, keyed by username."""
+    (event,) = await _events_of(client, tournament_id)
+    entrants: list[dict[str, Any]] = event["entrants"]
+    return {e["username"]: e for e in entrants}
+
+
+async def test_an_entrant_carries_their_rating_on_the_tournaments_ladder(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A rated entrant reports their number; an entrant with no rating at all reports
+    ``null``. The two side by side are the whole feature: the director reads the list
+    and sees who entered the capped event without a rating."""
+    client, _ = authed_client
+    ringer = await make_user(db_session, "ringer")
+    await rate_player(db_session, ringer, default_league, 1875.0)
+    stranger = await make_user(db_session, "stranger")  # never joined a league at all
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+    await _enter(db_session, event["id"], ringer)
+    await _enter(db_session, event["id"], stranger)
+
+    entrants = await _entrants_of(client, tournament_id)
+
+    assert entrants["ringer"]["rating"] == 1875.0
+    assert entrants["stranger"]["rating"] is None
+
+
+async def test_a_brand_new_player_entrant_is_unrated_not_their_seeded_1500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """**THE trap.** A brand-new player — minted exactly as a session mints one, seeded
+    with a 1500 ``rating_value`` and an ``initial`` history row — is reported
+    ``rating: null``, not ``1500``.
+
+    Key the marker off ``rating_value IS NULL`` and this is the test that fails and
+    every other one still passes: the beginner (and the sandbagger beside them) shows a
+    confident 1500 they have never played for, the director sees a full ladder with no
+    holes in it, and the one mitigation ADR-0783 traded for the opt-out silently reports
+    the opposite of the truth.
+
+    The seeded row is asserted on the way in, so this cannot go green by accident on a
+    player who simply has no row.
+    """
+    client, _ = authed_client
+    beginner = await make_user(db_session, "beginner")
+    await _seed_only(db_session, beginner, default_league)
+    # The premise, proven: the column really does hold 1500 for them.
+    seeded = await _rating_value_on_the_row(db_session, beginner, default_league)
+    assert seeded == 1500.0, "the join seeds a 1500 prior; that is the trap"
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+    await _enter(db_session, event["id"], beginner)
+
+    entrants = await _entrants_of(client, tournament_id)
+
+    assert entrants["beginner"]["rating"] is None, (
+        "a seeded 1500 is a prior, not a rating — the entrant is Unrated"
+    )
+    # And they are LISTED. An unrated entrant that the outer join dropped would be
+    # invisible to the director *and* uncounted (ADR-0016), quietly freeing a slot.
+    assert set(entrants) == {"beginner"}
+
+
+async def test_an_entrants_rating_is_read_on_the_tournaments_league_not_another(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    other_league: League,
+) -> None:
+    """The number beside an entrant's name is their rating on the ladder the tournament
+    named (ADR-0783 §2) — the same ladder the event's rules judged them on. A rating
+    earned somewhere else is not a rating here, and reporting one would tell the
+    director a player is rated when the cap they slipped past could not see it."""
+    client, _ = authed_client
+    local = await make_user(db_session, "local-ladder")
+    await rate_player(db_session, local, other_league, 1720.0)
+    elsewhere = await make_user(db_session, "other-ladder")
+    await rate_player(db_session, elsewhere, default_league, 1990.0)
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _event_payload(), league_id=str(other_league.id)
+    )
+    await _enter(db_session, event["id"], local)
+    await _enter(db_session, event["id"], elsewhere)
+
+    entrants = await _entrants_of(client, tournament_id)
+
+    assert entrants["local-ladder"]["rating"] == 1720.0
+    # Rated 1990 — but on the DEFAULT league, which is not the ladder this tournament
+    # runs on. Here they are Unrated, and the director must see that.
+    assert entrants["other-ladder"]["rating"] is None
+
+
+async def test_the_list_and_the_detail_agree_about_an_entrants_rating(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Both reads go through the one batched loader, so the tournaments list cannot
+    print a rating the detail page disagrees with."""
+    client, _ = authed_client
+    ringer = await make_user(db_session, "listed-ringer")
+    await rate_player(db_session, ringer, default_league, 1650.0)
+    unrated = await make_user(db_session, "listed-unrated")
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    await _enter(db_session, event["id"], ringer)
+    await _enter(db_session, event["id"], unrated)
+
+    rows = (await client.get("/v1/tournaments")).json()
+    listed = next(r for r in rows if r["id"] == tournament_id)
+    (listed_event,) = listed["events"]
+
+    assert [(e["username"], e["rating"]) for e in listed_event["entrants"]] == [
+        ("listed-ringer", 1650.0),
+        ("listed-unrated", None),
+    ]
+    (detail_event,) = await _events_of(client, tournament_id)
+    assert listed_event["entrants"] == detail_event["entrants"]
+
+
+# The pin, measured: the tournament + username join, its events, ONE batched load of
+# those events' active entrants (their ratings on the tournament's ladder ride along on
+# that same statement — see ``active_entrants_by_event``), and ONE read of the caller's
+# rating on the tournament's league. Four, whatever the number of events, and whatever
+# the number of entrants in them.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 4
+
+
+@pytest.mark.parametrize("event_count", [1, 4])
+async def test_detail_statement_count_does_not_grow_with_events(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event_count: int,
+) -> None:
+    """Every event on the page now carries an ``entry_state`` judged against the
+    caller's rating — and a tournament has exactly ONE ladder (ADR-0783), so that
+    rating is read once for the whole page, not once per event.
+
+    This is the trap the feature invites: resolving the rating (or counting capacity)
+    inside the per-event loop is invisible in every assertion about the *response*, and
+    turns a 12-event tournament's detail page into a dozen extra round-trips. A
+    per-event rating would measure 5 statements at one event and 8 at four, so the
+    four-event case fails the pin even if the one-event case slipped past.
+
+    Counted on a fresh session against the handler, exactly as the list endpoint's twin
+    does — see ``counted_statements``.
+    """
+    client, user = authed_client
+    user_id = user.id  # read outside the counted block
+    tournament_id, events = await _tournament_with_events(
+        client,
+        *(
+            _event_payload(name=f"Event {n}", predicates=[CAP_UNDER_1500])
+            for n in range(event_count)
+        ),
+    )
+    for n, event in enumerate(events):
+        await _enter(db_session, event["id"], await make_user(db_session, f"e-{n}"))
+
+    async with counted_statements(engine) as (session, statements):
+        detail = await get_tournament(
+            tournament_id=uuid.UUID(tournament_id),
+            db=session,
+            current_user=User(id=user_id),
+        )
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_TOURNAMENT_DETAIL_STATEMENTS, statements
+    # And the block it counted really did the work: every event came back, with its
+    # entrant and a state decided for the caller.
+    assert len(detail.events) == event_count
+    assert all(e.entered == 1 for e in detail.events)
+    assert all(e.entry_state.state == "open" for e in detail.events)
+
+
+@pytest.mark.parametrize("entrant_count", [1, 4])
+async def test_detail_statement_count_does_not_grow_with_entrants(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    default_league: League,
+    entrant_count: int,
+) -> None:
+    """Every entrant now carries a rating of their OWN — not the caller's — so the read
+    asks a question per *person on the page*, and the obvious way to answer it is a
+    query per entrant. That is the N+1 this pin exists to catch.
+
+    What this pin catches that the per-EVENT pins cannot is narrower than it looks,
+    and worth stating exactly. A *plain* per-entrant N+1 would fire the per-event pins
+    too — they assert an exact statement count, so any extra statement reds them. The
+    shape only this pin can see is an N+1 **conditioned on being rated**: a query fired
+    just for the entrants who have a rating. Every entrant in the per-event fixtures is
+    unrated, so a rated-only query costs them nothing and they stay green while the
+    real page pays a query per rated player. Hence the deliberate half-rated /
+    half-unrated split below — a fixture that cannot hold a rated entrant cannot
+    express the bug.
+
+    The ratings ride along on the entrants' own batched statement
+    (``active_entrants_by_event``), so the count is the same four — with the entrants
+    spread across TWO events, so a loader that batched per event rather than across all
+    of them is caught too.
+
+    Half the entrants are rated and half are not, because the outer join is where a
+    naive implementation would reach for a second query "just for the missing ones".
+    """
+    client, user = authed_client
+    user_id = user.id  # read outside the counted block
+    tournament_id, events = await _tournament_with_events(
+        client,
+        _event_payload(name="Event A"),
+        _event_payload(name="Event B"),
+    )
+    for event in events:
+        for n in range(entrant_count):
+            entrant = await make_user(db_session, f"{event['name']}-entrant-{n}")
+            if n % 2 == 0:
+                await rate_player(db_session, entrant, default_league, 1500.0 + n)
+            await _enter(db_session, event["id"], entrant)
+
+    async with counted_statements(engine) as (session, statements):
+        detail = await get_tournament(
+            tournament_id=uuid.UUID(tournament_id),
+            db=session,
+            current_user=User(id=user_id),
+        )
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_TOURNAMENT_DETAIL_STATEMENTS, statements
+    # The counted block really did the work: every entrant came back, and the ratings
+    # are the ones the batch loaded — not a page of uniform ``None``s that a broken
+    # join would also produce.
+    assert [e.entered for e in detail.events] == [entrant_count, entrant_count]
+    entrants = [entrant for e in detail.events for entrant in e.entrants]
+    assert [e.rating is not None for e in entrants] == [
+        n % 2 == 0 for _ in detail.events for n in range(entrant_count)
+    ]

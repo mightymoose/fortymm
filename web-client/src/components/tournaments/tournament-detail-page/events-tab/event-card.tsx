@@ -5,6 +5,12 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
+import {
+  capacityFillPercent,
+  capacityLabel,
+  enteredSummary,
+  eventCapacity,
+} from '../../data/capacity'
 import { fmtDateShort, fmtTimeWindow, formatPredicate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { TournamentEvent } from '../../data/types'
@@ -31,9 +37,9 @@ export interface EventCardProps {
 }
 
 /** A row card for one event on the tournament's Events tab: title with rated /
- * best-of badges, eligibility chips, the time slot, pool/table counts, an
- * entries fill bar, and the roster of entrants those numbers count. The whole
- * card opens the editor.
+ * best-of badges, eligibility chips, the time slot, pool/table counts, the
+ * entries the event holds against its cap (with how many places that leaves), and
+ * the roster of entrants those numbers count. The whole card opens the editor.
  *
  * Clicking the card is a stretched button overlaid on the (non-interactive)
  * card body — the same idiom as `TournamentCard` — rather than a `<button>`
@@ -46,14 +52,20 @@ export const EventCard = ({
   onOpen,
   action,
 }: EventCardProps) => {
-  // An uncapped event (`maxPlayers === null`, ADR-0935) has no denominator, no
-  // capacity fill bar, and can never be full — however many have entered.
-  const uncapped = ev.maxPlayers === null
-  const fillPct =
-    ev.maxPlayers === null
-      ? 0
-      : Math.min(100, Math.round((ev.entered / ev.maxPlayers) * 100))
-  const isFull = ev.maxPlayers !== null && ev.entered >= ev.maxPlayers
+  // What the EVENT has left — read off the numbers, never off `entryState`.
+  // `entryState` is the server's judgement about *this caller* (an ineligible one
+  // reads `rating_ineligible` on an event that is also full, ADR-0783), so it can
+  // neither count the free places nor be relied on to admit a full event is full.
+  // The capacity line is a fact about the event; the entry control beside it is the
+  // fact about the caller. See `../../data/capacity`.
+  //
+  // An **uncapped** event (`maxPlayers === null`, ADR-0935) is its own arm of that
+  // reading, not a big number: it has no denominator, so it gets no fill bar — and it
+  // can never be full, however many have entered.
+  const capacity = eventCapacity(ev)
+  const fillPct = capacityFillPercent(ev)
+  const isFull = capacity.state === 'full'
+  const uncapped = capacity.state === 'uncapped'
   // Falling back to the stored key, not to `null`: a card must never blank out a
   // row, so an unknown key shows *something* (cf. the read-only `Field`s, which
   // pass `null` and let the em-dash say "unset").
@@ -126,7 +138,11 @@ export const EventCard = ({
             <div className="text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
               Entries
             </div>
-            <div className="mt-1 flex items-baseline gap-1">
+            {/* The count, as a numeral — and, for a screen reader, as the sentence
+                the numeral is shorthand for: "12 / 64" announced literally is
+                punctuation, not a fact about entries. One or the other reaches any
+                given reader, never both. */}
+            <div className="mt-1 flex items-baseline gap-1" aria-hidden="true">
               <span
                 className={cn(
                   'font-mono text-[20px] font-bold tabular-nums',
@@ -139,11 +155,15 @@ export const EventCard = ({
                 {uncapped ? 'entered' : `/ ${ev.maxPlayers}`}
               </span>
             </div>
-            {/* No fill bar for an uncapped event — there is no denominator to
-                fill against (ADR-0935). */}
-            {!uncapped && (
+            <span className="sr-only">{enteredSummary(ev)}</span>
+            {/* No fill bar for an uncapped event — there is no denominator to fill
+                against (ADR-0935), so `capacityFillPercent` returns `null` and there
+                is no width to draw. A `0%` rail would look like an empty event and a
+                `100%` one like a full one; it is neither. */}
+            {fillPct !== null && (
               <div
                 data-testid="capacity-bar"
+                aria-hidden="true"
                 className="mt-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--bg-panel)]"
               >
                 <div
@@ -155,6 +175,24 @@ export const EventCard = ({
                 />
               </div>
             )}
+            {/* What the numeral leaves the reader to work out: how many places are
+                left — or, once there are none, that there are none, or that there was
+                never a limit at all. A full event reads FULL; it never counts down to
+                "0 places left", and an over-full one (a cap lowered under a field that
+                has already formed) never counts *past* it into a negative. An uncapped
+                one says so, rather than leaving the one blank line on a wall of cards
+                that all state a fact. */}
+            <p
+              data-testid="capacity-remaining"
+              className={cn(
+                'mt-1.5 text-[12px] leading-snug',
+                isFull
+                  ? 'font-medium text-[color:var(--warn)]'
+                  : 'text-[color:var(--fg-3)]',
+              )}
+            >
+              {capacityLabel(capacity)}
+            </p>
           </div>
 
           <div className="flex items-center gap-2">

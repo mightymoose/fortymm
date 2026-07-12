@@ -88,6 +88,80 @@ describe('BasicsSection', () => {
     expect(basicsSectionPage.queryPlayerLimitHint()).toBeInTheDocument()
   })
 
+  /**
+   * The section does not decide what is wrong — the editor's one resolver does
+   * (`eventSchema`) and hands each tab its share. What the section owes is that a
+   * message it is given lands **under the control it is about**, in red, with the
+   * control marked invalid (`CLAUDE.md`, `## Forms`). Nothing here is a toast, and
+   * nothing here is a banner.
+   */
+  describe('the fields the server can refuse (#783 QA)', () => {
+    it('marks the name invalid and prints its message', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ name: '' }),
+        errors: { name: 'Name is required.' },
+      })
+      expect(basicsSectionPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(basicsSectionPage.queryFieldError('Name is required.')).toBeInTheDocument()
+    })
+
+    it('replaces the player-limit HINT with its error, rather than stacking both', () => {
+      // A cap of `0` — the one the organizer *typed*, not the blank one, which is a
+      // valid uncapped event and carries no error at all (ADR-0935).
+      basicsSectionPage.render({
+        event: buildEvent({ maxPlayers: 0 }),
+        errors: {
+          maxPlayers: 'The player limit must be at least 1, or blank for no cap.',
+        },
+      })
+      expect(basicsSectionPage.getPlayerLimitInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError(
+          'The player limit must be at least 1, or blank for no cap.',
+        ),
+      ).toBeInTheDocument()
+      // The thing that is wrong outranks the thing that is merely worth knowing.
+      expect(basicsSectionPage.queryPlayerLimitHint()).not.toBeInTheDocument()
+    })
+
+    it('marks the entry fee invalid and prints its message', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ entryFee: -5 }),
+        errors: { entryFee: 'The entry fee cannot be negative.' },
+      })
+      expect(basicsSectionPage.getEntryFeeInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError('The entry fee cannot be negative.'),
+      ).toBeInTheDocument()
+    })
+
+    /** ⚠️ The blank cap is **not** an error, so the section must not dress it as one:
+     * the box is empty (never "0", never "NaN"), the control is not marked invalid,
+     * and the hint that tells the organizer this is allowed is still there. */
+    it('shows an uncapped event as an EMPTY, valid player limit — no zero, no red', () => {
+      basicsSectionPage.render({ event: buildEvent({ maxPlayers: null }) })
+
+      expect(basicsSectionPage.getPlayerLimitInput()).toHaveValue(null)
+      expect(basicsSectionPage.getPlayerLimitInput()).toHaveAttribute(
+        'aria-invalid',
+        'false',
+      )
+      expect(basicsSectionPage.queryPlayerLimitHint()).toBeInTheDocument()
+    })
+
+    it('marks nothing invalid when it is given no issues', () => {
+      basicsSectionPage.render({ event: buildEvent({ name: '' }) })
+      expect(basicsSectionPage.getNameInput()).toHaveAttribute('aria-invalid', 'false')
+      expect(basicsSectionPage.queryPlayerLimitHint()).toBeInTheDocument()
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015): a viewer gets a rendering of the data, never a
     // disabled editor. It fails loudly the moment someone adds an ungated

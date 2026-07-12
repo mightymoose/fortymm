@@ -20,12 +20,53 @@ describe('PredicateRow', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ value: 1800 }))
   })
 
-  it('renders no numeric value input for a boolean field', () => {
-    predicateRowPage.render({
-      predicate: buildPredicate({ field: 'club', op: 'true', value: true }),
+  // `between` is the one operator whose value is not a scalar — it is a
+  // `[min, max]` tuple behind two controls — and it survived the vocabulary
+  // narrowing (ADR-0783) that took the enum and bool fields away. So it gets the
+  // editor-side proof those branches used to crowd out: both bounds render, and
+  // editing one keeps the other.
+  describe('a between rule', () => {
+    const betweenRule = () =>
+      buildPredicate({ field: 'rating', op: 'between', value: [1200, 1500] })
+
+    it('renders two bounds instead of a single value input', () => {
+      predicateRowPage.render({ predicate: betweenRule() })
+
+      expect(predicateRowPage.getLowerBoundInput()).toHaveValue(1200)
+      expect(predicateRowPage.getUpperBoundInput()).toHaveValue(1500)
+      expect(predicateRowPage.queryValueInput()).toBeNull()
     })
-    expect(predicateRowPage.queryValueInput()).toBeNull()
-    expect(predicateRowPage.getRow()).toHaveTextContent('a club member')
+
+    it('writes each bound into its half of the tuple', () => {
+      const onChange = vi.fn()
+      predicateRowPage.render({ predicate: betweenRule(), onChange })
+
+      fireEvent.change(predicateRowPage.getLowerBoundInput(), {
+        target: { value: '1300' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ value: [1300, 1500] }),
+      )
+
+      fireEvent.change(predicateRowPage.getUpperBoundInput(), {
+        target: { value: '1600' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ value: [1200, 1600] }),
+      )
+    })
+
+    it('reads an emptied bound as null, not NaN', () => {
+      const onChange = vi.fn()
+      predicateRowPage.render({ predicate: betweenRule(), onChange })
+
+      fireEvent.change(predicateRowPage.getUpperBoundInput(), {
+        target: { value: '' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ value: [1200, null] }),
+      )
+    })
   })
 
   it('removes the rule', async () => {
@@ -33,6 +74,81 @@ describe('PredicateRow', () => {
     predicateRowPage.render({ onRemove })
     await userEvent.click(predicateRowPage.getRemoveButton())
     expect(onRemove).toHaveBeenCalledTimes(1)
+  })
+
+  // The editor validates the whole draft and hands each row its share (`issues`).
+  // The row's job is to put that message under the control it belongs to, in red,
+  // and mark that control invalid — the house convention for a field error, and the
+  // only placement that stays legible in a list of rules several rows long.
+  describe('the validation messages', () => {
+    it('says nothing at all when the rule is fine', () => {
+      predicateRowPage.render({ predicate: buildPredicate({ value: 1500 }) })
+      expect(predicateRowPage.getErrors()).toHaveLength(0)
+      expect(predicateRowPage.getValueInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('marks the value control invalid and names the problem beneath it', () => {
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: '<', value: null }),
+        issues: { value: 'Enter a rating.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual(['Enter a rating.'])
+      expect(predicateRowPage.getValueInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('marks the offending BOUND of a between, not both', () => {
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: 'between', value: [1600, 1200] }),
+        issues: { upper: 'The upper bound must be at least the lower bound.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual([
+        'The upper bound must be at least the lower bound.',
+      ])
+      expect(predicateRowPage.getUpperBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(predicateRowPage.getLowerBoundInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('says one thing once when BOTH bounds are empty', () => {
+      // Both boxes are blank and the complaint about each is the same sentence.
+      // Printing it twice is noise, so the row dedupes — while still marking both
+      // controls invalid, because both are.
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: 'between', value: [null, null] }),
+        issues: { lower: 'Enter a rating.', upper: 'Enter a rating.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual(['Enter a rating.'])
+      expect(predicateRowPage.getLowerBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(predicateRowPage.getUpperBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    // A rating is a rating: the controls carry the range too, so the browser's own
+    // spinner cannot walk one to 999999999 (which saved, before #783's QA pass).
+    it('bounds the value control to a real rating range', () => {
+      predicateRowPage.render({ predicate: buildPredicate({ value: 1500 }) })
+      expect(predicateRowPage.getValueInput()).toHaveAttribute('min', '0')
+      expect(predicateRowPage.getValueInput()).toHaveAttribute('max', '3000')
+    })
   })
 
   describe('for a non-owner (read-only)', () => {
@@ -61,8 +177,12 @@ describe('PredicateRow', () => {
         canEdit: false,
       })
       expect(predicateRowPage.getRow()).toHaveTextContent(
-        'USATT rating is less than 1500',
+        'Rating is less than 1500',
       )
+      // The number we hold is a Glicko-2 league rating, not a USATT one
+      // (ADR-0783). Gating entry on the one while naming the other is exactly
+      // the lie the ADR exists to remove.
+      expect(predicateRowPage.getRow()).not.toHaveTextContent('USATT')
     })
 
     // The two-element value array — the likeliest to render wrong.
@@ -76,39 +196,7 @@ describe('PredicateRow', () => {
         canEdit: false,
       })
       expect(predicateRowPage.getRow()).toHaveTextContent(
-        'USATT rating is between 1200 and 1500',
-      )
-    })
-
-    it('reads an enum rule with the option label, not the stored key', () => {
-      predicateRowPage.render({
-        predicate: buildPredicate({ field: 'gender', op: 'is', value: 'F' }),
-        canEdit: false,
-      })
-      expect(predicateRowPage.getRow()).toHaveTextContent('Gender is Female')
-      expect(predicateRowPage.getRow()).not.toHaveTextContent('F is')
-    })
-
-    // The bool row already renders prose ("a club member") in the editor; the
-    // field is the operator's own object, so the sentence is the operator plus
-    // that prose — never "Club member must be a club member".
-    it('reads a boolean rule as prose', () => {
-      predicateRowPage.render({
-        predicate: buildPredicate({ field: 'club', op: 'true', value: true }),
-        canEdit: false,
-      })
-      expect(predicateRowPage.getRow()).toHaveTextContent(
-        'Must be a club member',
-      )
-    })
-
-    it('reads a negated boolean rule as prose', () => {
-      predicateRowPage.render({
-        predicate: buildPredicate({ field: 'club', op: 'false', value: false }),
-        canEdit: false,
-      })
-      expect(predicateRowPage.getRow()).toHaveTextContent(
-        'Must not be a club member',
+        'Rating is between 1200 and 1500',
       )
     })
 
@@ -116,10 +204,10 @@ describe('PredicateRow', () => {
     // string "null" (the same contract `ReadOnlyValue` keeps).
     it('reads an unset value as an em-dash', () => {
       predicateRowPage.render({
-        predicate: buildPredicate({ field: 'age', op: '>=', value: null }),
+        predicate: buildPredicate({ field: 'rating', op: '>=', value: null }),
         canEdit: false,
       })
-      expect(predicateRowPage.getRow()).toHaveTextContent('Age is at least —')
+      expect(predicateRowPage.getRow()).toHaveTextContent('Rating is at least —')
       expect(predicateRowPage.getRow()).not.toHaveTextContent('null')
     })
   })

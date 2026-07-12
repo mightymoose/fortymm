@@ -39,6 +39,31 @@ const scoped = (container: Container) => ({
   findRegistrationNotice() {
     return container.findByTestId('registration-notice')
   },
+  /** The **full-event** copy (#783) — what an event at `max_players` shows where
+   * its Enter button would have been. Inert text, addressed by test id: there is
+   * deliberately no control here, not even a disabled one (ADR-0015). */
+  queryFullNotice() {
+    return container.queryByTestId('event-full-notice')
+  },
+  findFullNotice() {
+    return container.findByTestId('event-full-notice')
+  },
+  /** The **rating-ineligible** copy (#783): the rule that refused this player, and
+   * the rating it judged them on. */
+  queryIneligibleNotice() {
+    return container.queryByTestId('ineligible-notice')
+  },
+  findIneligibleNotice() {
+    return container.findByTestId('ineligible-notice')
+  },
+  /** EVERY button the control rendered. The sweep the "no disabled Enter" claim
+   * actually needs: `queryEnterButton` is keyed by accessible name, so it would
+   * miss a dead button that was renamed or unlabelled, and "no *enabled* Enter" is
+   * not the assertion — "**no button at all**" is (ADR-0015: hide the affordance,
+   * never disable it). */
+  getButtons() {
+    return container.queryAllByRole('button')
+  },
   /** Resolves once the session has landed (`SessionProbe`) — gate absence
    * assertions on this, or they pass vacuously while it is still in flight. */
   findSessionReady() {

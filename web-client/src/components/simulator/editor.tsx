@@ -632,7 +632,9 @@ export function Editor({
                 <tr>
                   <th style={{ width: 40 }}>#</th>
                   <th>Name</th>
-                  <th style={{ width: 120 }}>USATT rating</th>
+                  {/* A rating, not a USATT rating: the number we hold is a
+                      Glicko-2 league rating (ADR-0783). */}
+                  <th style={{ width: 120 }}>Rating</th>
                   <th>Events</th>
                   <th className="actions">&nbsp;</th>
                 </tr>

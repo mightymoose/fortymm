@@ -36,9 +36,12 @@ export interface TournamentDetailPageProps {
   onUpdate: (tournament: Tournament) => void
   /** Persist an edited table catalogue (add/remove from the Tables tab). */
   onChangeCatalogue: (catalogue: TournamentTable[]) => void
-  /** Persist a new/edited event. Returns a promise the editor awaits so it can
-   * close only on success and surface a rejection inline (#933, #934). */
+  /** Persist a new event. **The returned promise is load-bearing**: the `EventEditor`
+   * awaits it, closes itself only when it RESOLVES, and stays open over a rejection —
+   * so a refused create is reported instead of quietly binning everything the
+   * organizer typed (#933, #934). */
   onCreateEvent: (event: TournamentEvent) => Promise<void>
+  /** Persist an edited event — same contract as `onCreateEvent`. */
   onUpdateEvent: (event: TournamentEvent) => Promise<void>
   onDeleteEvent: (eventId: string) => void
   onBack: () => void
@@ -104,9 +107,14 @@ export const TournamentDetailPage = ({
     setEditorEvent(emptyEvent(tournament))
     setEditorOpen(true)
   }
-  // Return the mutation's promise and DON'T close here — the editor awaits this
-  // and closes itself only when it resolves, so a rejected save keeps the panel
-  // open with the typed values intact (#933, #934).
+  /** Persist the editor's draft — and **do not close anything here**.
+   *
+   * The promise is returned rather than swallowed, and the rejection is deliberately
+   * NOT caught: the `EventEditor` awaits this, closes itself on the success path
+   * alone, and catches the refusal — because it owns the sheet that must stay open
+   * and the work that must survive. Firing the mutation and closing regardless (what
+   * this used to do) is how a 422 became an event that was never created, reported
+   * nowhere (#933, #934). */
   const saveEvent = (ev: TournamentEvent) =>
     ev.id.startsWith('new')
       ? onCreateEvent({ ...ev, id: genId('ev') })

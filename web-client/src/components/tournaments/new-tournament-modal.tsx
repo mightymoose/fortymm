@@ -1,11 +1,10 @@
 import { useEffect } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
-import { toast } from 'sonner'
 import { z } from 'zod'
-import { Check } from 'lucide-react'
+import { Check, TriangleAlert } from 'lucide-react'
 
-import { ApiError } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,6 +17,12 @@ import {
 import { Input } from '@/components/ui/input'
 
 import { emptyTournament } from './data/helpers'
+import {
+  TOURNAMENT_SAVE_TARGET,
+  saveFailure,
+  saveFailureMessage,
+  type SaveFailure,
+} from './data/save-failure'
 import type { Tournament } from './data/types'
 import { Field } from './field'
 
@@ -61,8 +66,45 @@ const DEFAULT_VALUES: FormValues = {
   postal: '',
 }
 
+/**
+ * The wire's field names → the box in *this* form that holds them.
+ *
+ * Only `name` has one. The five address boxes travel nested under a single `address`
+ * (`loc: ["body", "address", "postal"]`, of which `validationFields` keeps `address`),
+ * so a complaint about one of them is not a complaint this form can pin to a box —
+ * it goes to the banner, which names the Venue address block in the dialog's own
+ * words. A true sentence about the right block beats a red message under the wrong
+ * box.
+ */
+const FORM_FIELD: Partial<Record<string, keyof FormValues>> = { name: 'name' }
+
+/** The first refused field this form actually shows, or `null` — for a refusal that
+ * named none of them (or named nothing at all), in which case the dialog says so in
+ * the banner rather than reddening a box the server never mentioned. */
+function refusedFormField(failure: SaveFailure): keyof FormValues | null {
+  if (failure.kind !== 'invalid') return null
+  for (const field of failure.fields) {
+    const formField = FORM_FIELD[field]
+    if (formField) return formField
+  }
+  return null
+}
+
 /** "New tournament" dialog — captures a name (required) and optional venue
- * address. Dates are derived from events, so they're set later. */
+ * address. Dates are derived from events, so they're set later.
+ *
+ * It mirrors every constraint the server actually has on what it sends (`name` is
+ * `VARCHAR(255)` and `NOT NULL`; the address is six unconstrained JSONB strings), so
+ * the refusals we already know about are caught here, with a message under the box.
+ * A 422 that gets through is therefore a rule the client did not know to mirror — and
+ * it is answered **in the client's own words** (`data/save-failure`, the same
+ * classifier and copy table the event editor uses), never by reading Pydantic's prose
+ * back to the organizer. The dialog stays open over their entry either way.
+ *
+ * And **every** way this can fail says something. Not just the 422: a 403, a 409, a
+ * 5xx, a dead network and an unclassifiable bug all land on the same banner, beside
+ * the entry they preserved. A failure the UI does not report is a click that did
+ * nothing. */
 export const NewTournamentModal = ({
   open,
   onOpenChange,
@@ -86,6 +128,9 @@ export const NewTournamentModal = ({
 
   const submit = form.handleSubmit(async (values) => {
     const base = emptyTournament()
+    // Last attempt's banner belongs to last attempt (a field's red clears itself:
+    // `mode: 'onChange'` re-validates the box as it is retyped).
+    form.clearErrors('root')
     try {
       await onCreate({
         ...base,
@@ -101,19 +146,35 @@ export const NewTournamentModal = ({
       })
       onOpenChange(false)
     } catch (err) {
-      // The name is the only constrained field, so a 4xx here is a name the
-      // server rejected — show it on the field. Anything else is unexpected;
-      // toast it and keep the dialog open so the entry isn't lost.
-      if (err instanceof ApiError && (err.status === 422 || err.status === 409)) {
-        form.setError('name', {
-          type: 'server',
-          message: err.detail ?? 'The server rejected this name.',
-        })
+      // Classify first, word second (`data/save-failure`, ADR-0968) — the SAME
+      // classifier and the same copy table the event editor uses. A 422's `detail` is
+      // Pydantic's own prose ("String should have at most 255 characters"): machine
+      // vocabulary, about a constraint rather than an action, and it must never reach
+      // this markup (`DEFINITION_OF_COMPLETE.md`: "Raw API detail strings never reach
+      // the UI"). What the wire alone knows — WHICH field it refused — is kept; the
+      // sentence is ours.
+      const failure = saveFailure(err)
+      const message = saveFailureMessage(failure, TOURNAMENT_SAVE_TARGET)
+      const field = refusedFormField(failure)
+      if (field) {
+        // The server blamed a box this form shows: the message goes under it, where
+        // the repo's Forms convention puts a field error.
+        form.setError(field, { type: 'server', message })
         return
       }
-      toast.error("Couldn't create the tournament", {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      // EVERY other failure — a nested-address 422, a 403, a 409, a **5xx**, an
+      // outage, a bug of ours — lands on the dialog's own banner. There is no arm
+      // left that can end in silence, and that is the point (#783 QA, round three).
+      //
+      // It used to end in one. The 5xx branch alone was a toast, and a toast is not
+      // guaranteed to be anything: it is a portal somewhere else on the page, it
+      // leaves after four seconds, and QA watched a real 500 produce **no inline
+      // error, no toast, no alert** — the Create button simply went back to idle and
+      // the app did nothing. "The user clicked and nothing happened" is never an
+      // acceptable end state, and the fix is not a better toast: it is to report the
+      // failure *where the unsaved work is*, which is the same contract the 422 has
+      // had since round two. One channel, every failure, beside the entry it kept.
+      form.setError('root', { type: 'server', message })
     }
   })
 
@@ -184,6 +245,25 @@ export const NewTournamentModal = ({
               </Field>
             </div>
           </div>
+
+          {/* The refusal the form cannot pin to one box. An `Alert`, not a toast:
+              what it reports is that the dialog in front of you still holds
+              unsaved work, and a toast is a portal that leaves in four seconds.
+              Every word of it is ours (`saveFailureMessage`). */}
+          {errors.root && (
+            <Alert
+              variant="destructive"
+              data-testid="new-tournament-error"
+              className="mt-4"
+            >
+              <TriangleAlert size={16} />
+              <AlertTitle>Couldn't create this tournament</AlertTitle>
+              <AlertDescription>
+                {errors.root.message} Nothing was saved — your entry is still
+                here.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <DialogFooter className="mt-6">
             <Button

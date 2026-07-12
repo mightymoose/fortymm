@@ -82,6 +82,19 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
+        # The rating ladder a tournament's eligibility is judged on (ADR-0783).
+        # NOT NULL: every tournament names its league, so no read of an entry
+        # decision has to ask "rated against *what*?". Resolved at create — an
+        # omitted league becomes the default one — so the caller never has to
+        # supply it. RESTRICT, like ``matches.league_id``: a league that judges a
+        # tournament cannot be deleted out from under it. Added here in place per
+        # the pre-deploy convention, not as a chained ALTER.
+        sa.Column(
+            "league_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("leagues.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
         sa.Column(
             "created_by_user_id",
             postgresql.UUID(as_uuid=True),
