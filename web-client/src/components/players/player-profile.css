@@ -1,6 +1,8 @@
-/* Player-profile surface — Bebas hero + dense match list (no tabs).
+/* Player-profile surface — a hero card over a column of cards (no tabs).
  * Mirrors the broadcast/arena tonal scheme used elsewhere
- * (match-list-page, dashboard) so it sits naturally inside the AppShell. */
+ * (match-list-page, dashboard) so it sits naturally inside the AppShell.
+ * The hero's name used to be set in the Bebas display face; it is the UI face
+ * now, and nothing in the hero uses `--font-display` any more. */
 
 .player-profile {
   /* The radius/shadow scale is declared per *surface* in this codebase — the

@@ -1,7 +1,7 @@
 /* Full match-history surface (`/players/$userId/matches`). It wears the same
  * `.player-profile` root class as the profile — which is what supplies the
- * table, chip and pagination-footer styles — and swaps the profile's tall
- * Bebas hero for this compact header. */
+ * table, chip and pagination-footer styles — and swaps the profile's hero card
+ * for this compact header. */
 
 /* The fixed-height pane. This page — a long table under a pinned pagination
  * footer — is the surface that actually wants it, so it now asks for it by name
