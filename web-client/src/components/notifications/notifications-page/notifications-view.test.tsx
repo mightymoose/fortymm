@@ -73,7 +73,10 @@ describe('NotificationsView', () => {
 
   it('shows the empty state when a filter matches nothing', () => {
     notificationsViewPage.render({ filter: 'match_reminder' })
-    expect(notificationsViewPage.queryHeadline()).toBeInTheDocument()
+    // Identified by its action, not by "All caught up." — that headline belongs
+    // to the empty inbox, and a filtered-out list is not caught up.
+    expect(notificationsViewPage.queryShowAll()).toBeInTheDocument()
+    expect(notificationsViewPage.queryHeadline()).not.toBeInTheDocument()
   })
 
   it('falls back to a generic label for a filter the taxonomy does not name', () => {

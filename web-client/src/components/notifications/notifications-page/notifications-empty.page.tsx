@@ -15,27 +15,35 @@ export const EMPTY_STATE_LINK_TARGETS = [
   '/notifications/settings',
 ]
 
-/** The headline both empty states share. Declared once: every harness that
- * needs it — router-mounted or not, this component's or the view's — reads it
- * from here rather than re-typing the copy. */
-const HEADLINE = 'All caught up.'
+/** The inbox-empty headline. A filter that matches nothing deliberately does
+ * NOT say this — it names the filter instead — so this string identifies the
+ * inbox-empty state specifically, not "some empty state". */
+const INBOX_EMPTY_HEADLINE = 'All caught up.'
+
+/** The filter-empty headline, which names the filter that matched nothing. */
+const filterEmptyHeadline = (filterLabel: string) =>
+  `Nothing under ${filterLabel}.`
 
 const scoped = (container: Container) => ({
-  /** The headline under a router — async, since the router resolves its initial
-   * match after first paint, so nothing is in the DOM yet. */
+  /** The inbox-empty headline under a router — async, since the router resolves
+   * its initial match after first paint, so nothing is in the DOM yet. */
   findHeadline() {
-    return container.findByText(HEADLINE)
+    return container.findByText(INBOX_EMPTY_HEADLINE)
   },
-  /** The headline in a plain (router-free) render — see the view's page object,
-   * whose link-free states mount without one. */
+  /** The inbox-empty headline in a plain (router-free) render. */
   queryHeadline() {
-    return container.queryByText(HEADLINE)
+    return container.queryByText(INBOX_EMPTY_HEADLINE)
   },
   queryGoPlayCopy() {
     return container.queryByText('Nothing here. Go play.')
   },
   queryFilterCopy(filterLabel: string) {
-    return container.queryByText(`Nothing under ${filterLabel}.`)
+    return container.queryByText(filterEmptyHeadline(filterLabel))
+  },
+  /** The filter-empty headline under a router — the async twin of
+   * `queryFilterCopy`, for harnesses that mount one. */
+  findFilterCopy(filterLabel: string) {
+    return container.findByText(filterEmptyHeadline(filterLabel))
   },
   queryLogMatchLink() {
     return container.queryByRole('link', { name: 'Log a match' })

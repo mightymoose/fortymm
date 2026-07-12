@@ -20,8 +20,12 @@ export interface NotificationsEmptyProps {
   state: NotificationsEmptyState
 }
 
-/** The notifications list's empty state: the same reassurance either way, but a
- * next action that fits which empty it is. */
+/** The notifications list's empty state: a headline that tells the truth about
+ * which empty it is, and a next action that fits it.
+ *
+ * Only an empty *inbox* is "All caught up." A filter that matches nothing must
+ * not borrow that reassurance — the user's notifications are still sitting
+ * there, one pill away, and QA rightly read the pair as contradicting itself. */
 export function NotificationsEmpty({ state }: NotificationsEmptyProps) {
   return (
     <div className="px-5 py-14 text-center">
@@ -29,12 +33,14 @@ export function NotificationsEmpty({ state }: NotificationsEmptyProps) {
         <Inbox size={26} />
       </span>
       <p className="text-base font-semibold text-[color:var(--fg-2)]">
-        All caught up.
+        {state.kind === 'inbox-empty'
+          ? 'All caught up.'
+          : `Nothing under ${state.filterLabel}.`}
       </p>
       <p className="mt-1 text-[13px] text-[color:var(--fg-3)]">
         {state.kind === 'inbox-empty'
           ? 'Nothing here. Go play.'
-          : `Nothing under ${state.filterLabel}.`}
+          : 'Your other notifications are still in the inbox.'}
       </p>
       <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
         {state.kind === 'inbox-empty' ? (
