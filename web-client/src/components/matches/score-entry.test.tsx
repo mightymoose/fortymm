@@ -996,14 +996,50 @@ describe('ScoreEntry — create', () => {
       screen.getByRole('button', { name: /save & post/i }),
     ).toBeInTheDocument()
 
-    // The keyboard hint says "to save", not "for next / save game".
+    // The keyboard hint says "to save", not "to continue or save".
     const hint = container.querySelector('.hint')
     expect(hint?.textContent).toMatch(/to save/)
-    expect(hint?.textContent).not.toMatch(/next \/ save game/)
+    expect(hint?.textContent).not.toMatch(/continue/)
 
     // No SCORELINE strip: a best-of-1 has nothing to switch between.
     expect(screen.queryByText('SCORELINE')).not.toBeInTheDocument()
     expect(container.querySelector('.sl-label')).toBeNull()
+  })
+
+  it('does not name the digit keys in the keyboard hint (#896)', async () => {
+    // Games are to 11, so a "Type 0–9" hint reads as a cap on the score rather
+    // than a description of the keys.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'in_progress',
+            status_label: 'Live',
+            best_of: 5,
+            games_to_win: 3,
+            affects_rating: true,
+            sides: participantSides({ meWins: 0, oppWins: 0 }),
+            games: [],
+            current_game: { game_number: 1 },
+            can_score: true,
+            can_finalize: false,
+          }),
+        ),
+      ),
+    )
+
+    const { container } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 1,
+    })
+
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+
+    const hint = container.querySelector('.hint')
+    expect(hint?.textContent).toMatch(/number keys/i)
+    expect(hint?.textContent).not.toMatch(/\b0\b|\b9\b/)
   })
 })
 
