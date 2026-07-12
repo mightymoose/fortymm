@@ -996,14 +996,32 @@ describe('ScoreEntry — create', () => {
       screen.getByRole('button', { name: /save & post/i }),
     ).toBeInTheDocument()
 
-    // The keyboard hint says "to save", not "for next / save game".
     const hint = container.querySelector('.hint')
     expect(hint?.textContent).toMatch(/to save/)
-    expect(hint?.textContent).not.toMatch(/next \/ save game/)
 
     // No SCORELINE strip: a best-of-1 has nothing to switch between.
     expect(screen.queryByText('SCORELINE')).not.toBeInTheDocument()
     expect(container.querySelector('.sl-label')).toBeNull()
+  })
+
+  it('does not name the digit keys in the keyboard hint (#896)', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    const { container } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 3,
+    })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    const hint = container.querySelector('.hint')
+    expect(hint?.textContent).toMatch(/number keys/)
+    expect(hint?.textContent).toMatch(/to save/)
+    // No digit may appear: naming any range implies a cap on a score that goes to 11.
+    expect(hint?.textContent).not.toMatch(/\d/)
   })
 })
 
