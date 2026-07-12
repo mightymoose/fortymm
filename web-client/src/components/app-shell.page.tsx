@@ -47,6 +47,19 @@ const scoped = (container: Container) => {
     )
 
   return {
+    /** The `<aside>` itself — the drawer on mobile, the sidebar on desktop. */
+    getSidebar() {
+      return sidebar()
+    },
+    /**
+     * The topbar hamburger. Its `aria-controls` must resolve to the sidebar's
+     * `id`; whether the *closed* drawer is actually out of the tab order is a
+     * question about layout, so it's pinned in `e2e/app-shell.spec.ts` — jsdom
+     * cannot see the CSS that hides it.
+     */
+    getMenuButton() {
+      return container.getByRole('button', { name: 'Open navigation' })
+    },
     /**
      * Any nav link in the sidebar by its label — top-level ("Matches") or
      * sub-nav ("Preferences"); the labels are unique across both levels.
@@ -85,6 +98,26 @@ const scoped = (container: Container) => {
     getActiveSubNavLabels() {
       return labels('.app-shell__sub-nav-link.is-active')
     },
+    /**
+     * Labels of every sidebar link — both levels — announced to assistive tech
+     * as the current page. This is the *semantic* layer, not the visual one, and
+     * the two deliberately disagree: on `/notifications/settings` the parent is
+     * lit but says nothing, so this returns `['Preferences']` while
+     * `getParentActiveNavLabels()` returns `['Notifications']`. ARIA has exactly
+     * one current page, so this list should never hold more than one label
+     * (#930).
+     */
+    getCurrentPageNavLabels() {
+      return labels('a[aria-current="page"]')
+    },
+    /** Every value of `aria-current` in the sidebar — `aria-current="true"` on a
+     * section ancestor would be just as wrong as a second `"page"`, and only a
+     * value-blind sweep can see it. */
+    getAriaCurrentValues() {
+      return Array.from(
+        sidebar().querySelectorAll<HTMLAnchorElement>('a[aria-current]'),
+      ).map((el) => `${labelOf(el)}=${el.getAttribute('aria-current')}`)
+    },
   }
 }
 
@@ -95,13 +128,17 @@ const scoped = (container: Container) => {
  * router and the session query both resolve asynchronously, so tests start with
  * `await appShellPage.findNavLink(...)`.
  *
- * Active state is asserted through the BEM classes, not `aria-current`: a
- * TanStack `<Link>` stamps `aria-current="page"` (plus `data-status="active"`)
- * on *every* link whose `to` is a prefix of the location — its default
- * `activeOptions.exact` is `false` — so the parent items and the Inbox child
- * all carry it regardless of what the shell decides. The `is-active` /
- * `is-parent-active` classes are the shell's own contract (they drive the CSS
- * and the e2e locators), so they're what these accessors read.
+ * The shell has **two** notions of "current", and they are read separately:
+ *
+ * - **Visual** — the `is-active` / `is-parent-active` BEM classes the shell
+ *   computes itself (`getActiveNavLabels`, `getParentActiveNavLabels`,
+ *   `getActiveSubNavLabels`). A section parent is lit across its whole subtree.
+ * - **Semantic** — `aria-current="page"` (`getCurrentPageNavLabels`,
+ *   `getAriaCurrentValues`). Only the leaf; a parent announces nothing.
+ *
+ * They must be asserted together. The classes drive the CSS and no CSS reads
+ * `aria-current`, so a change that quietly dimmed the parent would still satisfy
+ * an `aria-current`-only test, and vice versa (#930).
  */
 export const appShellPage = {
   render(pathname: string, overrides: Partial<AppShellProps> = {}) {

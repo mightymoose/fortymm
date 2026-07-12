@@ -22,7 +22,12 @@ export function MatchDetails({ matchId }: { matchId: string }) {
   // immediately and each piece suspends independently — no page-level fetch.
   return (
     <div className="match-details">
-      <main className="md-page md-page--y">
+      {/* A plain <div>, not a <main>: the app shell (`app-shell__content`)
+          already is the page's `main` landmark, and this wrapper nested a
+          second one inside it — landmark navigation announced two "main"s on
+          every match-detail page, at every viewport (#888). The layout hangs
+          off the `md-page` classes, not the tag, so the render is unchanged. */}
+      <div className="md-page md-page--y">
         <div className="md-header">
           <Breadcrumb matchId={matchId} />
           <div className="md-header__right">
@@ -48,7 +53,7 @@ export function MatchDetails({ matchId }: { matchId: string }) {
             <HeadToHead matchId={matchId} />
           </aside>
         </div>
-      </main>
+      </div>
     </div>
   )
 }

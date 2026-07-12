@@ -5,9 +5,9 @@ import { appShellPage } from './app-shell.page'
  * (prefix match, guarded by a trailing slash); sub-nav children stay on strict
  * equality so only one child lights at a time.
  *
- * Assertions read the `is-active` / `is-parent-active` classes — see the page
- * object for why `aria-current` (which TanStack's `<Link>` stamps on every
- * prefix match of its own accord) can't stand in for them.
+ * Two layers, asserted separately: the `is-active` / `is-parent-active` classes
+ * are what the eye sees, `aria-current="page"` is what a screen reader hears —
+ * and they deliberately disagree on a sub-route (#930). See the page object.
  */
 describe('AppShell sidebar', () => {
   it('lights Players on a player detail route beneath it', async () => {
@@ -104,6 +104,120 @@ describe('AppShell sidebar', () => {
     )
     expect(appShellPage.getParentActiveNavLabels()).toEqual(['Administration'])
     expect(appShellPage.getActiveNavLabels()).toEqual([])
+  })
+
+  // #887. The hamburger has always declared `aria-controls="app-shell-sidebar"`,
+  // but nothing in the tree carried that id, so the reference dangled. The rest
+  // of that fix (a closed drawer being out of the tab order and the a11y tree)
+  // is CSS, and so is unprovable here — jsdom has no layout. See
+  // `e2e/app-shell.spec.ts` for the assertion that actually pins the behaviour.
+  it('points the hamburger aria-controls at a sidebar that exists', async () => {
+    appShellPage.render('/dashboard')
+    await appShellPage.findNavLink('Dashboard')
+
+    const target = appShellPage.getMenuButton().getAttribute('aria-controls')
+    expect(target).toBeTruthy()
+    expect(document.getElementById(target!)).toBe(appShellPage.getSidebar())
+  })
+
+  /**
+   * #930. On `/notifications/settings` the sidebar announced three current
+   * pages at once — Notifications, Inbox *and* Preferences (measured in a
+   * browser: `["Notifications=page", "Inbox=page", "Preferences=page"]`), because
+   * TanStack's `<Link>` marks every prefix match active by default. The visuals
+   * were right the whole time; only the accessibility layer lied, telling a
+   * screen-reader user they were in the inbox.
+   *
+   * Every test here asserts BOTH layers. Counting `aria-current` alone would go
+   * green on a "fix" that also dimmed the parent highlight — which is the one
+   * thing that must not change.
+   */
+  describe('announces exactly one current page (#930)', () => {
+    it('announces only the leaf on the notification settings route, while the parent stays lit', async () => {
+      appShellPage.render('/notifications/settings')
+      await appShellPage.findNavLink('Preferences')
+
+      // Was ['Notifications=page', 'Inbox=page', 'Preferences=page'].
+      // Read by value, not just by count: `aria-current="true"` on the section
+      // ancestor would be wrong too — an ancestor announces *nothing*.
+      expect(appShellPage.getAriaCurrentValues()).toEqual(['Preferences=page'])
+      expect(appShellPage.getCurrentPageNavLabels()).toEqual(['Preferences'])
+      expect(appShellPage.getNavLink('Inbox')).not.toHaveAttribute(
+        'aria-current',
+      )
+      expect(appShellPage.getNavLink('Notifications')).not.toHaveAttribute(
+        'aria-current',
+      )
+
+      // …and the other half of the bargain: the section is still visibly lit.
+      expect(appShellPage.getNavLink('Notifications')).toHaveClass(
+        'is-parent-active',
+      )
+      expect(appShellPage.getParentActiveNavLabels()).toEqual(['Notifications'])
+      expect(appShellPage.getActiveSubNavLabels()).toEqual(['Preferences'])
+    })
+
+    it('announces Inbox — and only Inbox — on the notifications index, while the parent stays lit', async () => {
+      appShellPage.render('/notifications')
+      await appShellPage.findNavLink('Inbox')
+
+      // The mirror case: here Inbox *is* the leaf. The parent shares the
+      // pathname exactly, so this is the one place a prefix match and an exact
+      // match could still both fire — they must not.
+      expect(appShellPage.getAriaCurrentValues()).toEqual(['Inbox=page'])
+      expect(appShellPage.getNavLink('Notifications')).not.toHaveAttribute(
+        'aria-current',
+      )
+
+      expect(appShellPage.getNavLink('Notifications')).toHaveClass(
+        'is-parent-active',
+      )
+      expect(appShellPage.getActiveSubNavLabels()).toEqual(['Inbox'])
+    })
+
+    it('announces only the leaf in the admin section, while Administration stays lit', async () => {
+      appShellPage.render('/admin/roles')
+      await appShellPage.findNavLink('Roles')
+
+      expect(appShellPage.getAriaCurrentValues()).toEqual(['Roles=page'])
+      expect(appShellPage.getNavLink('Overview')).not.toHaveAttribute(
+        'aria-current',
+      )
+      expect(appShellPage.getNavLink('Administration')).toHaveClass(
+        'is-parent-active',
+      )
+    })
+
+    it('announces a childless top-level item on its own route', async () => {
+      appShellPage.render('/matches')
+      await appShellPage.findNavLink('Matches')
+
+      expect(appShellPage.getAriaCurrentValues()).toEqual(['Matches=page'])
+      expect(appShellPage.getActiveNavLabels()).toEqual(['Matches'])
+    })
+
+    it('keeps announcing the item when the URL carries search params', async () => {
+      // `exact` alone would compare search params *fully* as well, so a link
+      // with no search of its own (every link in this sidebar) would stop
+      // matching `/matches?page=2` — trading three wrong answers for none.
+      // Hence `includeSearch: false`.
+      appShellPage.render('/matches?page=2')
+      await appShellPage.findNavLink('Matches')
+
+      expect(appShellPage.getAriaCurrentValues()).toEqual(['Matches=page'])
+      expect(appShellPage.getActiveNavLabels()).toEqual(['Matches'])
+    })
+
+    it('announces nothing on a detail route no nav item points at, but keeps the section lit', async () => {
+      appShellPage.render('/players/u_7')
+      await appShellPage.findNavLink('Players')
+
+      // Deliberate: you are not *on* the players page, so no link is the
+      // current page. Silence is correct; "Players" claiming to be the page you
+      // are reading is not. The highlight still tells your eye where you are.
+      expect(appShellPage.getAriaCurrentValues()).toEqual([])
+      expect(appShellPage.getActiveNavLabels()).toEqual(['Players'])
+    })
   })
 
   it('still tints the parent on a route deeper than any listed child', async () => {
