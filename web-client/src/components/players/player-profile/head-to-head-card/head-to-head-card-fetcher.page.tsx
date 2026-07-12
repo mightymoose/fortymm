@@ -19,6 +19,7 @@ import {
 import {
   headToHeadCardDisplayPage,
   NEW_MATCH_ROUTE,
+  PLAYER_PROFILE_ROUTE,
 } from './head-to-head-card-fetcher/head-to-head-card-display.page'
 
 const DEFAULT_PLAYER_ID = 'p-1'
@@ -97,7 +98,9 @@ export const headToHeadCardFetcherPage = {
           <HeadToHeadCardFetcher {...props} />
         </Suspense>
       </ErrorBoundary>,
-      { linkTargets: [NEW_MATCH_ROUTE] },
+      // The Start-a-match CTA, and — since chore 2b — every frequent-opponent
+      // name, which is now a link to that opponent's profile.
+      { linkTargets: [NEW_MATCH_ROUTE, PLAYER_PROFILE_ROUTE] },
     )
   },
 

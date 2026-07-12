@@ -15,6 +15,7 @@ import {
 } from './recent-matches-fetcher'
 import {
   MATCH_HISTORY_ROUTE,
+  PROFILE_ROUTE,
   recentMatchesDisplayPage,
 } from './recent-matches-fetcher/recent-matches-display.page'
 
@@ -76,7 +77,7 @@ export const recentMatchesFetcherPage = {
           <RecentMatchesFetcher {...props} />
         </Suspense>
       </ErrorBoundary>,
-      { linkTargets: [MATCH_HISTORY_ROUTE] },
+      { linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE] },
     )
   },
 

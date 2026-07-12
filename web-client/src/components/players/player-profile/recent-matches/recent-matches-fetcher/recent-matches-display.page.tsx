@@ -12,6 +12,14 @@ import { recentMatchRowPage } from './recent-matches-display/recent-match-row.pa
  * the harness so the typed `<Link>` resolves. */
 export const MATCH_HISTORY_ROUTE = '/players/$userId/matches'
 
+/** The route every row's opponent name opens — that player's profile. Any
+ * harness mounting this card has to register it too, or the row's `<Link>`
+ * throws. (Declared here rather than re-exported from the row's page object:
+ * `react-refresh/only-export-components` cannot tell a re-exported binding from
+ * a component, and each page object in this tree names its own targets — see
+ * `leagues-card-display.page.tsx`.) */
+export const PROFILE_ROUTE = '/players/$userId'
+
 const scoped = (container: Container) => ({
   /** The card itself, named by its "Recent matches" heading. */
   getCard() {
@@ -86,7 +94,9 @@ export const recentMatchesDisplayPage = {
   render(overrides: Partial<RecentMatchesDisplayProps> = {}) {
     const props = buildRecentMatchesDisplayProps(overrides)
     renderWithRoutes(<RecentMatchesDisplay {...props} />, {
-      linkTargets: [MATCH_HISTORY_ROUTE],
+      // Two targets: the footer opens the full history, and every row's opponent
+      // name opens that opponent's profile.
+      linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE],
     })
   },
 

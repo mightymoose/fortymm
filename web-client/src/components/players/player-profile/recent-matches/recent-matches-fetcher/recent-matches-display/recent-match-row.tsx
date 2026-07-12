@@ -1,10 +1,48 @@
+import { Link } from '@tanstack/react-router'
+
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { cn } from '@/lib/utils'
 
-import { NO_VALUE, type RecentMatchRowView } from '../recent-matches-query'
+import {
+  NO_VALUE,
+  type RecentMatchOpponentView,
+  type RecentMatchRowView,
+} from '../recent-matches-query'
 
 export interface RecentMatchRowProps {
   row: RecentMatchRowView
+}
+
+/**
+ * The Opponent cell: a **link to that player's profile** — the card named its
+ * opponents in plain text, which left the page's most obvious next step
+ * unreachable.
+ *
+ * A **solo** match has nobody on the other side, so there is nothing to link to
+ * and it stays plain text ("No opponent", in the ghost tone). That is not a
+ * defensive null-check bolted onto a link: the opponent view is a sum type, and
+ * only its `player` variant carries an id, so the link cannot be built for the
+ * variant that has none. A naive `to="/players/$userId"` fed a nullable id sends
+ * the reader to `/players/null`.
+ */
+const OpponentCell = ({ opponent }: { opponent: RecentMatchOpponentView }) => {
+  if (opponent.kind === 'solo') {
+    return (
+      <span className="player-name recent-matches__opponent--solo">
+        {opponent.name}
+      </span>
+    )
+  }
+
+  return (
+    <Link
+      to="/players/$userId"
+      params={{ userId: opponent.id }}
+      className="player-name recent-matches__opponent-link"
+    >
+      {opponent.name}
+    </Link>
+  )
 }
 
 /**
@@ -21,6 +59,9 @@ export interface RecentMatchRowProps {
  * The Δ cell prints an em dash for any row that moved no rating — undecided *or*
  * unrated. Never "+0".
  *
+ * The opponent's name is a link to their profile (`OpponentCell` above) — except
+ * on a solo match, which has no player on the other side.
+ *
  * Pure view-in, DOM-out: every label was derived in `selectRecentMatches`.
  */
 export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
@@ -36,20 +77,14 @@ export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
           )}
         />
         {/* Decorative: the name is right there in the cell, so the avatar
-            shouldn't announce it a second time (#99). */}
+            shouldn't announce it a second time (#99). A solo match gets the
+            dashed placeholder circle rather than initials for a nobody. */}
         <UserAvatar
-          name={row.isSolo ? null : row.opponent}
+          name={row.opponent.kind === 'player' ? row.opponent.name : null}
           size={26}
           decorative
         />
-        <span
-          className={cn(
-            'player-name',
-            row.isSolo && 'recent-matches__opponent--solo',
-          )}
-        >
-          {row.opponent}
-        </span>
+        <OpponentCell opponent={row.opponent} />
       </div>
     </td>
     <td>

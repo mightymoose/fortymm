@@ -4,8 +4,10 @@ import {
 } from './recent-matches-display.factory'
 import {
   buildLiveRecentMatchRowView,
+  buildRecentMatchOpponentView,
   buildRecentMatchRowView,
   buildRecentMatchStatusView,
+  buildSoloRecentMatchRowView,
 } from './recent-matches-display/recent-match-row.factory'
 import { recentMatchesDisplayPage } from './recent-matches-display.page'
 
@@ -13,10 +15,13 @@ import { recentMatchesDisplayPage } from './recent-matches-display.page'
  * all-inclusive: a live match, an awaiting one, a solo one and a voided one sit
  * alongside the decided ones. */
 const sixMixedRows = () => [
-  buildLiveRecentMatchRowView({ id: 'm-live', opponent: 'kai.zhou' }),
+  buildLiveRecentMatchRowView({
+    id: 'm-live',
+    opponent: buildRecentMatchOpponentView({ id: 'p-8', name: 'kai.zhou' }),
+  }),
   buildRecentMatchRowView({
     id: 'm-awaiting',
-    opponent: 'lin.wu',
+    opponent: buildRecentMatchOpponentView({ id: 'p-11', name: 'lin.wu' }),
     status: buildRecentMatchStatusView({
       tone: 'awaiting',
       label: 'Awaiting acceptance',
@@ -24,20 +29,23 @@ const sixMixedRows = () => [
     score: { kind: 'text', text: 'Awaiting' },
     delta: null,
   }),
-  buildRecentMatchRowView({ id: 'm-win', opponent: 'ada.lovelace' }),
+  buildRecentMatchRowView({
+    id: 'm-win',
+    opponent: buildRecentMatchOpponentView({ id: 'p-9', name: 'ada.lovelace' }),
+  }),
   buildRecentMatchRowView({
     id: 'm-voided',
-    opponent: 'joe.bell',
+    opponent: buildRecentMatchOpponentView({ id: 'p-12', name: 'joe.bell' }),
     status: buildRecentMatchStatusView({ tone: 'voided', label: 'Voided' }),
     score: { kind: 'text', text: '—' },
     delta: null,
   }),
+  buildSoloRecentMatchRowView({ id: 'm-solo' }),
   buildRecentMatchRowView({
-    id: 'm-solo',
-    opponent: 'No opponent',
-    isSolo: true,
+    id: 'm-unrated',
+    opponent: buildRecentMatchOpponentView({ id: 'p-13', name: 'nia.k' }),
+    delta: null,
   }),
-  buildRecentMatchRowView({ id: 'm-unrated', opponent: 'nia.k', delta: null }),
 ]
 
 describe('RecentMatchesDisplay', () => {
@@ -112,6 +120,37 @@ describe('RecentMatchesDisplay', () => {
     expect(
       recentMatchesDisplayPage.getDeltaCell('ada.lovelace'),
     ).toHaveTextContent('+12')
+  })
+
+  it('links every named opponent to their profile — and the solo row to nowhere', async () => {
+    // The card's rows are the page's most obvious next step: the people you have
+    // been playing. They were plain text. Every *named* one is now a link — and
+    // the solo row, which names nobody, is deliberately not: its opponent id is
+    // null on the wire, and a link built from it would read `/players/null`.
+    recentMatchesDisplayPage.render({
+      recent: buildRecentMatchesView({ rows: sixMixedRows() }),
+    })
+
+    await recentMatchesDisplayPage.findCard()
+
+    expect(recentMatchesDisplayPage.getOpponentHref('kai.zhou')).toBe(
+      '/players/p-8',
+    )
+    expect(recentMatchesDisplayPage.getOpponentHref('ada.lovelace')).toBe(
+      '/players/p-9',
+    )
+    // A voided match still happened, against a real person: the row is not a
+    // link because of its *result*, it is a link because it has an opponent.
+    expect(recentMatchesDisplayPage.getOpponentHref('joe.bell')).toBe(
+      '/players/p-12',
+    )
+
+    expect(
+      recentMatchesDisplayPage.queryOpponentLink('No opponent'),
+    ).toBeNull()
+    expect(
+      recentMatchesDisplayPage.getRow('No opponent').querySelectorAll('a'),
+    ).toHaveLength(0)
   })
 
   it('links to the full history, naming the all-inclusive total', async () => {

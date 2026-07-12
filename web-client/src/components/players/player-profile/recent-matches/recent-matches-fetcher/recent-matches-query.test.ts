@@ -199,11 +199,51 @@ describe('recentMatchesQuery', () => {
     expect(row.delta).toBeNull()
   })
 
+  it('carries the opponent’s id, so the row can link to their profile', async () => {
+    // The id was on the wire all along — the projection dropped it, and that is
+    // the whole reason every opponent's name on this card was a dead end.
+    const row = await selectRow(
+      buildPlayerMatchRow({
+        opponent: { id: 'p-42', username: 'grace.hopper' },
+      }),
+    )
+
+    expect(row.opponent).toEqual({
+      kind: 'player',
+      id: 'p-42',
+      name: 'grace.hopper',
+    })
+  })
+
   it('renders the solo sentinel as "No opponent" rather than dropping the match', async () => {
     const row = await selectRow(buildSoloMatchRow())
 
-    expect(row.opponent).toBe('No opponent')
-    expect(row.isSolo).toBe(true)
+    expect(row.opponent).toEqual({ kind: 'solo', name: 'No opponent' })
+  })
+
+  it('gives the solo sentinel NO id — there is nobody to link to', async () => {
+    // The null-id case, stated as a type-level fact rather than a rendering one:
+    // `id` exists only on the `player` variant, so nothing downstream can build
+    // `/players/null` out of a solo row — the link is unbuildable, not merely
+    // unbuilt. (The wire nulls `id` and `username` together for the player-less
+    // sentinel side of a solo match, ADR-0008.)
+    const row = await selectRow(buildSoloMatchRow())
+
+    expect(row.opponent.kind).toBe('solo')
+    expect(row.opponent).not.toHaveProperty('id')
+  })
+
+  it('will not link an opponent the payload named but did not identify', async () => {
+    // `PlayerMatchOpponent` nulls its two fields independently on the wire, so a
+    // username without an id is *typable* even though the API never sends it. It
+    // is the one shape that could still produce `/players/undefined`, so the
+    // projection demands BOTH halves before it calls someone a linkable player:
+    // drop the id check and this row would carry `id: undefined` into a <Link>.
+    const row = await selectRow(
+      buildPlayerMatchRow({ opponent: { id: null, username: 'ada.lovelace' } }),
+    )
+
+    expect(row.opponent.kind).toBe('solo')
   })
 
   it('is empty, and offers nothing to view, for a player with no matches', async () => {

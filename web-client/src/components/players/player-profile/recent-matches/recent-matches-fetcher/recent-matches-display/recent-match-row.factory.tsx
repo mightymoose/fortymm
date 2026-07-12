@@ -1,10 +1,26 @@
-import type {
-  RecentMatchDeltaView,
-  RecentMatchGameView,
-  RecentMatchRowView,
-  RecentMatchStatusView,
+import {
+  NO_OPPONENT,
+  type RecentMatchDeltaView,
+  type RecentMatchGameView,
+  type RecentMatchOpponentView,
+  type RecentMatchRowView,
+  type RecentMatchStatusView,
 } from '../recent-matches-query'
 import type { RecentMatchRowProps } from './recent-match-row'
+
+/** A real opponent: a player with an id, so the row links to their profile. */
+export function buildRecentMatchOpponentView(
+  overrides: Partial<Extract<RecentMatchOpponentView, { kind: 'player' }>> = {},
+): RecentMatchOpponentView {
+  return { kind: 'player', id: 'p-9', name: 'ada.lovelace', ...overrides }
+}
+
+/** The **solo** opponent — the player-less sentinel side (ADR-0008). It carries
+ * no id, because there is no player behind it: the row must print "No opponent"
+ * as plain text rather than link to `/players/null`. */
+export function buildSoloOpponentView(): RecentMatchOpponentView {
+  return { kind: 'solo', name: NO_OPPONENT }
+}
 
 export function buildRecentMatchGameView(
   overrides: Partial<RecentMatchGameView> = {},
@@ -37,8 +53,7 @@ export function buildRecentMatchRowView(
 ): RecentMatchRowView {
   return {
     id: 'm-1',
-    opponent: 'ada.lovelace',
-    isSolo: false,
+    opponent: buildRecentMatchOpponentView(),
     status: buildRecentMatchStatusView(),
     score: {
       kind: 'games',
@@ -64,6 +79,20 @@ export function buildLiveRecentMatchRowView(
     status: buildRecentMatchStatusView({ tone: 'live', label: 'Live' }),
     score: { kind: 'text', text: 'Live' },
     delta: null,
+    ...overrides,
+  })
+}
+
+/**
+ * A **solo** match: nobody on the other side, so the row reads "No opponent" and
+ * has nothing to link to. The row is kept in the list, not dropped (ADR-0008).
+ */
+export function buildSoloRecentMatchRowView(
+  overrides: Partial<RecentMatchRowView> = {},
+): RecentMatchRowView {
+  return buildRecentMatchRowView({
+    id: 'm-solo',
+    opponent: buildSoloOpponentView(),
     ...overrides,
   })
 }

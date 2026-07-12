@@ -2,16 +2,21 @@ import {
   buildLiveRecentMatchRowView,
   buildRecentMatchDeltaView,
   buildRecentMatchGameView,
+  buildRecentMatchOpponentView,
   buildRecentMatchRowView,
   buildRecentMatchStatusView,
+  buildSoloRecentMatchRowView,
 } from './recent-match-row.factory'
 import { recentMatchRowPage } from './recent-match-row.page'
 
 const OPPONENT = 'ada.lovelace'
+const NO_OPPONENT = 'No opponent'
 
 describe('RecentMatchRow', () => {
   it('renders a decided win as a green dot, its game chips and a signed delta', async () => {
     recentMatchRowPage.render({ row: buildRecentMatchRowView() })
+
+    await recentMatchRowPage.findRow(OPPONENT)
 
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveAccessibleName(
       'Won',
@@ -38,6 +43,8 @@ describe('RecentMatchRow', () => {
       }),
     })
 
+    await recentMatchRowPage.findRow(OPPONENT)
+
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveClass(
       'recent-matches__dot--lost',
     )
@@ -52,6 +59,8 @@ describe('RecentMatchRow', () => {
     // nothing does.
     recentMatchRowPage.render({ row: buildLiveRecentMatchRowView() })
 
+    await recentMatchRowPage.findRow(OPPONENT)
+
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveAccessibleName(
       'Live',
     )
@@ -63,6 +72,8 @@ describe('RecentMatchRow', () => {
 
   it('prints an em dash — never "+0" — when no rating moved', async () => {
     recentMatchRowPage.render({ row: buildRecentMatchRowView({ delta: null }) })
+
+    await recentMatchRowPage.findRow(OPPONENT)
 
     const delta = recentMatchRowPage.getDeltaCell(OPPONENT)
     expect(delta).toHaveTextContent('—')
@@ -85,6 +96,8 @@ describe('RecentMatchRow', () => {
       }),
     })
 
+    await recentMatchRowPage.findRow(OPPONENT)
+
     const chips = recentMatchRowPage
       .getScoreCell(OPPONENT)
       .querySelectorAll('.player-profile__game')
@@ -93,13 +106,54 @@ describe('RecentMatchRow', () => {
     expect(chips[1]).toHaveClass('player-profile__game--lost')
   })
 
-  it('keeps a solo match in the list, as "No opponent"', async () => {
-    // ADR-0008: the player-less sentinel side is rendered, not dropped.
+  it("links the opponent's name to that opponent's profile", async () => {
+    // The card named its opponents in plain text — the most obvious next step on
+    // the page, and there was nothing to click. The id was on the wire the whole
+    // time; the row now spends it.
     recentMatchRowPage.render({
-      row: buildRecentMatchRowView({ opponent: 'No opponent', isSolo: true }),
+      row: buildRecentMatchRowView({
+        opponent: buildRecentMatchOpponentView({
+          id: 'p-42',
+          name: 'grace.hopper',
+        }),
+      }),
     })
 
-    expect(recentMatchRowPage.getRow('No opponent')).toBeInTheDocument()
-    expect(recentMatchRowPage.getStatusDot('No opponent')).toBeInTheDocument()
+    await recentMatchRowPage.findRow('grace.hopper')
+
+    expect(recentMatchRowPage.getOpponentLink('grace.hopper')).toBeVisible()
+    expect(recentMatchRowPage.getOpponentHref('grace.hopper')).toBe(
+      '/players/p-42',
+    )
+  })
+
+  it('keeps a solo match in the list, as "No opponent"', async () => {
+    // ADR-0008: the player-less sentinel side is rendered, not dropped.
+    recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
+
+    await recentMatchRowPage.findRow(NO_OPPONENT)
+
+    expect(recentMatchRowPage.getRow(NO_OPPONENT)).toBeInTheDocument()
+    expect(recentMatchRowPage.getStatusDot(NO_OPPONENT)).toBeInTheDocument()
+  })
+
+  it('does NOT link a solo match — there is nobody to link to', async () => {
+    // The null-id case, and the one a naive fix breaks: `id` is null exactly for
+    // the player-less sentinel side, so a link built from it would point at
+    // `/players/null` and land the reader on a not-found page. "No opponent" is
+    // an absence, not a player: it must be plain text.
+    recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
+
+    await recentMatchRowPage.findRow(NO_OPPONENT)
+
+    // Not "there's no link *with that name*" — there is no link in the cell at
+    // all, and nothing anywhere in the row pointing at a player.
+    expect(recentMatchRowPage.queryOpponentLink(NO_OPPONENT)).toBeNull()
+    expect(
+      recentMatchRowPage.getRow(NO_OPPONENT).querySelectorAll('a'),
+    ).toHaveLength(0)
+    expect(recentMatchRowPage.getRow(NO_OPPONENT).innerHTML).not.toContain(
+      '/players/',
+    )
   })
 })

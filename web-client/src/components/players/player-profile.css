@@ -1020,6 +1020,30 @@
   color: var(--fg-3);
 }
 
+/* The opponent's name, as a link to their profile. It reads as a name, not as a
+ * link — the underline arrives on hover, so a table of six of them isn't a wall
+ * of blue — but it is a real <a href>, so it is tabbable, and it announces and
+ * focuses as one. */
+.recent-matches__opponent-link {
+  color: var(--fg-1);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__opponent-link:hover {
+  color: var(--ball-500);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recent-matches__opponent-link:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* A solo match has nobody on the other side, so this one is NOT a link (the row
+ * has no id to link to). Ghost-toned, to say so. */
 .recent-matches__opponent--solo {
   color: var(--fg-3);
   font-style: italic;
@@ -1733,7 +1757,12 @@
 /* A name is user-supplied and can be far longer than the phone is wide. It
  * shrinks to the 120px floor — which still lines the bars up for the ordinary
  * short name — and ellipsises rather than pushing the profile sideways (the same
- * class of bug as the un-wrapped matches table above). */
+ * class of bug as the un-wrapped matches table above).
+ *
+ * It is an <a> to that opponent's profile, styled to read as a *name*: no
+ * standing underline, so three of them stacked aren't a wall of blue. The
+ * underline and the accent arrive on hover, and focus-visible gets a real ring —
+ * the link is tabbable and announces as one either way. */
 .head-to-head__opponent {
   grid-column: 1;
   grid-row: 1;
@@ -1744,6 +1773,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.head-to-head__opponent:hover {
+  color: var(--ball-500);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.head-to-head__opponent:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
 }
 
 /* The record said again, geometrically: how much of this rivalry the player has
