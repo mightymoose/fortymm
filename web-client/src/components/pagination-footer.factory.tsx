@@ -10,6 +10,7 @@ export function buildPaginationFooterProps(
     total: 26,
     pageSize: 25,
     totalPages: 2,
+    noun: 'matches',
     ...overrides,
   }
 }

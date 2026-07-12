@@ -41,7 +41,11 @@ export function MatchHistoryRow({ match }: MatchHistoryRowProps) {
       </td>
       <td>
         <div className="player">
-          <UserAvatar name={isSolo ? null : opponent} size={26} />
+          {/* `UserAvatar` already paints the sentinel placeholder for a null
+           * name, so the no-opponent case needs no branch of its own — it is
+           * the same call. (`username` is optional on the wire; `?? null`
+           * narrows it to the prop's `string | null`.) */}
+          <UserAvatar name={match.opponent.username ?? null} size={26} />
           <span
             className="player-name"
             style={

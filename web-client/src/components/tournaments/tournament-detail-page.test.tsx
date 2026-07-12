@@ -6,10 +6,59 @@ import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournam
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
-import { buildEvent, buildTournament } from './data/seed.factory'
+import { buildAddress, buildEvent, buildTournament } from './data/seed.factory'
 import { tournamentDetailPagePage } from './tournament-detail-page.page'
 
 describe('TournamentDetailPage', () => {
+  // Same doctrine as the card's: the separators are joins between the address
+  // parts that are present, so a partial address strands no punctuation and an
+  // empty one renders no meta item at all (#994, #972).
+  describe('the header venue line', () => {
+    it('joins the address parts that are present', () => {
+      tournamentDetailPagePage.render({ tournament: buildTournament() })
+
+      expect(tournamentDetailPagePage.queryVenueLine()).toHaveTextContent(
+        'Berkeley TT Club · Berkeley, CA',
+      )
+    })
+
+    it('drops the comma the missing region would have hung off', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: buildAddress({ region: '' }) }),
+      })
+
+      const line = tournamentDetailPagePage.queryVenueLine()
+      expect(line).toHaveTextContent('Berkeley TT Club · Berkeley')
+      expect(line?.textContent).not.toContain(',')
+    })
+
+    it('renders no venue meta item — pin included — when there is no address', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({ venue: '', city: '', region: '' }),
+        }),
+      })
+
+      // Absent, not blank: the item carries the pin and the punctuation, so a
+      // rendered-but-empty one would still read as the bug's bare "· ,". (The
+      // interpunct legitimately appears elsewhere on the page — the event card's
+      // own meta — so this asserts the item, not the character.)
+      expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
+    })
+  })
+
+  // A database identifier is not user-facing copy: the header used to print the
+  // tournament's raw UUID in a `#` chip (#972). It is gone, not relabelled.
+  it('never shows the tournament\'s raw id', () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ id: '8330f9f7-c64c-4f9d-910d-56b77bde88cb' }),
+    })
+
+    expect(document.body).not.toHaveTextContent(
+      '8330f9f7-c64c-4f9d-910d-56b77bde88cb',
+    )
+  })
+
   // The stat strip prints its own unit, so it owns the plural. Both sides are
   // asserted: a fix that simply hardcoded "day" would read "2 day" for a
   // weekend tournament, which is the same bug wearing the other shoe.

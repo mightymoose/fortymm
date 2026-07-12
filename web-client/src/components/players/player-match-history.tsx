@@ -1,22 +1,10 @@
 import { useEffect } from 'react'
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-} from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 
 import { usePlayerMatches, type PlayerDetail } from '@/api/players'
+import { PaginationFooter } from '@/components/pagination-footer'
 import { Button } from '@/components/ui/button'
-import {
-  Pagination,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-} from '@/components/ui/pagination'
 
 import { MatchHistoryRow } from './player-match-history/match-history-row'
 
@@ -223,6 +211,8 @@ function PlayerMatchesSection({
           setPage={onPageChange}
           total={total}
           pageSize={PAGE_SIZE}
+          totalPages={totalPages}
+          noun="matches"
         />
       )}
     </section>
@@ -306,122 +296,3 @@ function MatchesError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-type PageToken = number | 'ellipsis'
-
-function paginationRange(current: number, total: number): PageToken[] {
-  const delta = 1
-  const range: PageToken[] = []
-  const left = Math.max(2, current - delta)
-  const right = Math.min(total - 1, current + delta)
-  range.push(1)
-  if (left > 2) range.push('ellipsis')
-  for (let i = left; i <= right; i++) range.push(i)
-  if (right < total - 1) range.push('ellipsis')
-  if (total > 1) range.push(total)
-  return range
-}
-
-function PaginationFooter({
-  page,
-  setPage,
-  total,
-  pageSize,
-}: {
-  page: number
-  setPage: (n: number) => void
-  total: number
-  pageSize: number
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  // Clamp a stale/out-of-range `page` to a valid one so the range math can
-  // never render start > end — e.g. the frame before the parent's redirect
-  // effect snaps a deep-linked `?page=999` back to the last page (#637). The
-  // footer is self-protecting regardless of what the caller passes.
-  const safePage = Math.min(Math.max(1, page), totalPages)
-  const first = total === 0 ? 0 : (safePage - 1) * pageSize + 1
-  const last = Math.min(total, safePage * pageSize)
-  const tokens = paginationRange(safePage, totalPages)
-  const atFirst = safePage <= 1
-  const atLast = safePage >= totalPages
-
-  return (
-    <div className="footer">
-      <div className="footer-info">
-        Showing{' '}
-        <span className="mono">
-          {first}–{last}
-        </span>{' '}
-        of <span className="mono">{total}</span> matches
-      </div>
-      <div className="footer-spacer" />
-      <Pagination className="mx-0 w-auto justify-end">
-        <PaginationContent>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(1)}
-              aria-label="First page"
-            >
-              <ChevronsLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(safePage - 1)}
-              aria-label="Previous page"
-            >
-              <ChevronLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          {tokens.map((t, i) =>
-            t === 'ellipsis' ? (
-              <PaginationItem key={i}>
-                <PaginationEllipsis />
-              </PaginationItem>
-            ) : (
-              <PaginationItem key={i}>
-                <PaginationLink
-                  href="#"
-                  isActive={t === safePage}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    setPage(t)
-                  }}
-                >
-                  {t}
-                </PaginationLink>
-              </PaginationItem>
-            ),
-          )}
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(safePage + 1)}
-              aria-label="Next page"
-            >
-              <ChevronRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(totalPages)}
-              aria-label="Last page"
-            >
-              <ChevronsRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-    </div>
-  )
-}

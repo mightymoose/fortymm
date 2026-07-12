@@ -4,7 +4,7 @@ import { PaginationFooter, type PaginationFooterProps } from './pagination-foote
 import { buildPaginationFooterProps } from './pagination-footer.factory'
 
 const scoped = (container: Container) => ({
-  /** The "Showing {first}–{last} of {total} matches" range line. */
+  /** The "Showing {first}–{last} of {total} {noun}" range line. */
   getInfo() {
     return container.getByText(/showing/i)
   },

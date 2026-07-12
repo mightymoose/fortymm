@@ -3,12 +3,14 @@ import {
   effectiveDateRange,
   fmtDateRange,
   fmtTimeWindow,
+  fmtVenueLine,
   formatPredicate,
   predicateSentence,
   findPoolConflicts,
   myEntrant,
 } from './helpers'
 import {
+  buildAddress,
   buildEntrant,
   buildPool,
   buildTournament,
@@ -83,6 +85,57 @@ describe('fmtTimeWindow', () => {
   it('renders a wholly unset window as an em-dash', () => {
     expect(fmtTimeWindow('', '')).toBe('—')
     expect(fmtTimeWindow(null, undefined)).toBe('—')
+  })
+})
+
+// Every address part is optional, so every separator in this line is a JOIN
+// between two present values — never a literal in a template. The old template
+// form printed its punctuation regardless, so a venue-less tournament read as a
+// bare "· ," (#994). Each case below names the punctuation that must NOT appear.
+describe('fmtVenueLine', () => {
+  it('joins venue, city, and region when all three are present', () => {
+    expect(fmtVenueLine(buildAddress())).toBe('Berkeley TT Club · Berkeley, CA')
+  })
+
+  it('shows a lone venue with no trailing dot or comma', () => {
+    const line = fmtVenueLine(buildAddress({ city: '', region: '' }))
+
+    expect(line).toBe('Berkeley TT Club')
+    expect(line).not.toContain('·')
+    expect(line).not.toContain(',')
+  })
+
+  it('shows a lone city and region with no leading dot', () => {
+    const line = fmtVenueLine(buildAddress({ venue: '' }))
+
+    expect(line).toBe('Berkeley, CA')
+    expect(line).not.toContain('·')
+  })
+
+  it('shows a venue and city with no trailing comma when the region is blank', () => {
+    const line = fmtVenueLine(buildAddress({ region: '' }))
+
+    expect(line).toBe('Berkeley TT Club · Berkeley')
+    expect(line).not.toContain(',')
+  })
+
+  it('shows a lone region with no leading comma', () => {
+    expect(fmtVenueLine(buildAddress({ venue: '', city: '' }))).toBe('CA')
+  })
+
+  // The bug's headline case: nothing to punctuate, so nothing at all — the
+  // empty string is the caller's cue to render NO venue line (no icon, no row).
+  it('is empty when every part is blank, rather than a bare "· ,"', () => {
+    expect(fmtVenueLine(buildAddress({ venue: '', city: '', region: '' }))).toBe('')
+  })
+
+  // A trimmed-to-nothing value is a blank value: a stray space typed into the
+  // Venue field must not resurrect the separator it has nothing to separate.
+  it('treats whitespace-only parts as blank', () => {
+    expect(
+      fmtVenueLine(buildAddress({ venue: '  ', city: '\t', region: ' \n ' })),
+    ).toBe('')
+    expect(fmtVenueLine(buildAddress({ venue: ' ' }))).toBe('Berkeley, CA')
   })
 })
 

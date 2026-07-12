@@ -7,12 +7,12 @@ import {
   useMatchList,
 } from '@/api/matches'
 import { useSession } from '@/api/session'
+import { PaginationFooter } from '@/components/pagination-footer'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 
 import { ActionBar } from './match-list/action-bar'
 import { FilterRow } from './match-list/filter-row'
 import { MatchListTable } from './match-list/match-list-table'
-import { PaginationFooter } from './match-list/pagination-footer'
 import {
   STATUS_TABS,
   TAB_TO_API,
@@ -229,6 +229,7 @@ export const MatchList = () => {
         total={total}
         pageSize={PAGE_SIZE}
         totalPages={totalPages}
+        noun="matches"
       />
     </div>
   )

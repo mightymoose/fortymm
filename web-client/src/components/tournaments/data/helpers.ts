@@ -6,6 +6,7 @@
 import { labelFor, PRED_FIELDS, PRED_OPS_BY_TYPE } from './options'
 import type { PredicateFieldSchema } from './options'
 import type {
+  Address,
   Entrant,
   Predicate,
   Pool,
@@ -77,6 +78,30 @@ export function fmtTimeWindow(
   if (start) return start
   if (end) return end
   return EM_DASH
+}
+
+/** Join the values that are actually there, dropping the blank (and
+ * whitespace-only) ones — so a separator only ever appears BETWEEN two present
+ * values, and never has to stand in for a missing one. */
+const joinPresent = (parts: string[], sep: string): string =>
+  parts.map((p) => p.trim()).filter(Boolean).join(sep)
+
+/** A tournament's venue line — `Berkeley TT Club · Berkeley, CA` — built by
+ * filtering the address parts and joining the survivors, NOT by interpolating
+ * each part into a template with its separator baked in (#994, #972).
+ *
+ * Every address part is optional (`Address` types them as plain strings, blank
+ * = `''`), so the template form rendered its punctuation whether or not it had
+ * anything to punctuate: a venue-less tournament read as a bare `· ,` and a
+ * venue with no city as `BETAVENUE · ,`. Punctuation is not data.
+ *
+ * Returns `''` when nothing is present — a caller must render NO venue line at
+ * all in that case (no icon, no empty row), which is why this is not the
+ * em-dash that `ReadOnlyValue` and the formatters above use: those label a
+ * field whose row exists regardless; this one decides whether the row exists. */
+export function fmtVenueLine(address: Address): string {
+  const locality = joinPresent([address.city, address.region], ', ')
+  return joinPresent([address.venue, locality], ' · ')
 }
 
 /** A compact, human range: collapses same-day, same-month, and full spans. */

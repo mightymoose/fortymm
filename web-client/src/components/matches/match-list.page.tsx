@@ -13,13 +13,13 @@ import { render, screen, within, type Container } from '@/test/utilities'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import type { MatchListResponse } from '@/api/matches'
+import { paginationFooterPage } from '@/components/pagination-footer.page'
 
 import { MatchList } from './match-list'
 import { matchesSearchSchema } from './match-list/match-list-status'
 import { actionBarPage } from './match-list/action-bar.page'
 import { filterRowPage } from './match-list/filter-row.page'
 import { matchListTablePage } from './match-list/match-list-table.page'
-import { paginationFooterPage } from './match-list/pagination-footer.page'
 
 const scoped = (container: Container, root: HTMLElement) => ({
   // Compose each child's query surface so wiring tests can assert against the

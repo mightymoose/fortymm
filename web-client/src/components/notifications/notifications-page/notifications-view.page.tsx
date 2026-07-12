@@ -1,5 +1,10 @@
 import userEvent from '@testing-library/user-event'
+import { renderWithRoutes } from '@/test/router'
 import { render, screen, type Container } from '@/test/utilities'
+import {
+  EMPTY_STATE_LINK_TARGETS,
+  notificationsEmptyPage,
+} from './notifications-empty.page'
 import { NotificationsView, type NotificationsViewProps } from './notifications-view'
 import { buildNotificationsViewProps } from './notifications-view.factory'
 
@@ -17,15 +22,16 @@ const scoped = (container: Container) => ({
   queryUnreadBadge() {
     return container.queryByText(/\d+ unread/)
   },
-  queryEmptyState() {
-    return container.queryByText('All caught up.')
-  },
   queryTitle(title: string) {
     return container.queryByText(title)
   },
   rowByTitle(title: string) {
     return container.getByText(title).closest('button') as HTMLButtonElement
   },
+  /** The empty state's own surface (`findHeadline`, `queryLogMatchLink`,
+   * `queryShowAll`, …) — composed from its page object rather than re-derived,
+   * so the CTA names live in one place. */
+  ...notificationsEmptyPage.within(container),
 })
 
 export const notificationsViewPage = {
@@ -40,6 +46,24 @@ export const notificationsViewPage = {
     }
   },
 
+  /**
+   * `render`, but mounted under a memory router.
+   *
+   * Only the *inbox-empty* state (no notifications at all) renders typed
+   * `<Link>`s, and a `<Link>` needs a router registering its target — so this is
+   * the harness for a feed with no items. Every other state, the filter-empty
+   * one included, is link-free and uses the plain `render` above. The router
+   * resolves asynchronously: start with `await findEmptyState()`.
+   */
+  renderEmptyInbox(overrides: Partial<NotificationsViewProps> = {}) {
+    return renderWithRoutes(
+      <NotificationsView
+        {...buildNotificationsViewProps({ items: [], unreadCount: 0, ...overrides })}
+      />,
+      { linkTargets: EMPTY_STATE_LINK_TARGETS },
+    )
+  },
+
   within(container: Container = screen) {
     return scoped(container)
   },
@@ -49,6 +73,9 @@ export const notificationsViewPage = {
   },
   async clickMarkAllRead() {
     await userEvent.click(this.getMarkAllRead())
+  },
+  async clickShowAll() {
+    await userEvent.click(this.getShowAll())
   },
   async clickRow(title: string) {
     await userEvent.click(this.rowByTitle(title))

@@ -1,3 +1,4 @@
+import { notificationTaxonomy } from '@/test/factories'
 import { buildNotificationsItems } from './notifications-view.factory'
 import { notificationsViewPage } from './notifications-view.page'
 
@@ -72,7 +73,47 @@ describe('NotificationsView', () => {
 
   it('shows the empty state when a filter matches nothing', () => {
     notificationsViewPage.render({ filter: 'match_reminder' })
-    expect(notificationsViewPage.queryEmptyState()).toBeInTheDocument()
+    // Identified by its action, not by "All caught up." — that headline belongs
+    // to the empty inbox, and a filtered-out list is not caught up.
+    expect(notificationsViewPage.queryShowAll()).toBeInTheDocument()
+    expect(notificationsViewPage.queryHeadline()).not.toBeInTheDocument()
+  })
+
+  it('falls back to a generic label for a filter the taxonomy does not name', () => {
+    // The taxonomy is server-driven, so a filter can outlive the category that
+    // named it (a dropped type, a hand-edited URL). Name it generically rather
+    // than printing "Nothing under undefined."
+    notificationsViewPage.render({
+      filter: 'match_reminder',
+      categoryTypes: notificationTaxonomy().types.filter(
+        (type) => type.key !== 'match_reminder',
+      ),
+    })
+    expect(
+      notificationsViewPage.queryFilterCopy('this filter'),
+    ).toBeInTheDocument()
+  })
+
+  // What only the *view* knows is which empty it is looking at. The CTAs
+  // themselves are `NotificationsEmpty`'s contract, tested there.
+  it('reads a filter that matches nothing as filter-empty, and wires Show all (#901)', async () => {
+    const onFilterChange = vi.fn()
+    notificationsViewPage.render({ filter: 'match_reminder', onFilterChange })
+    // These notifications exist, they just aren't in this category: the way out
+    // is the filter, not a new match.
+    expect(notificationsViewPage.queryShowAll()).toBeInTheDocument()
+    expect(notificationsViewPage.queryGoPlayCopy()).not.toBeInTheDocument()
+
+    await notificationsViewPage.clickShowAll()
+    expect(onFilterChange).toHaveBeenCalledWith('all')
+  })
+
+  it('reads a feed with no items at all as inbox-empty (#901)', async () => {
+    notificationsViewPage.renderEmptyInbox()
+    await notificationsViewPage.findHeadline()
+
+    expect(notificationsViewPage.queryLogMatchLink()).toBeInTheDocument()
+    expect(notificationsViewPage.queryShowAll()).not.toBeInTheDocument()
   })
 
   it('reports the unread count', () => {
