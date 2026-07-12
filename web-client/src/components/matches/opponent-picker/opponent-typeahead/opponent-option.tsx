@@ -35,11 +35,18 @@ export interface OpponentOptionProps {
  * than the initials read twice (#99); the visible text degrades gracefully for
  * empty / emoji-only usernames (#101).
  *
- * `aria-selected` is always `false` — an option here is never *selected* (#894).
- * Picking one commits the opponent to the match-setup card above and closes the
- * listbox, so no row is ever both rendered and chosen; the only in-list state is
- * the `active` highlight, and publishing that as `aria-selected` told screen
- * readers an opponent had been chosen while the card still said "solo match".
+ * `aria-selected` is **absent**, not `false` — an option here is never *selected*
+ * (#894). Picking one commits the opponent to the match-setup card above and
+ * closes the listbox, so no row is ever both rendered and chosen; the only
+ * in-list state is the `active` highlight, and publishing that as
+ * `aria-selected` told screen readers an opponent had been chosen while the card
+ * still said "solo match".
+ *
+ * Omitted rather than set to `false` because ARIA 1.2 made `undefined` the
+ * default for `option` precisely so a listbox with no persistent selection need
+ * not annotate every row: an explicit `false` is *announced* ("not selected"),
+ * on all five results, every time you arrow through them. The highlight reaches
+ * assistive tech through the combobox's `aria-activedescendant` instead.
  */
 export const OpponentOption = ({
   id,
@@ -53,7 +60,7 @@ export const OpponentOption = ({
       type="button"
       id={id}
       role="option"
-      aria-selected={false}
+      aria-selected={undefined}
       aria-label={playerAccessibleName(player)}
       className={cn('nm-item', active && 'active')}
       onMouseMove={onHover}

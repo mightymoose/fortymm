@@ -97,7 +97,10 @@ export const OpponentPicker = ({
   }
 
   return (
-    <div className="nm-picker">
+    // Purely structural: the back control has to sit outside the boundary (see
+    // below), so the two need a common parent. No class — it carries no style,
+    // and a named one would imply it did.
+    <div>
       {showSearch && canReturnToRecent && (
         <div className="nm-search-head">
           <button

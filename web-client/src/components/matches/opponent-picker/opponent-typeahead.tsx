@@ -139,9 +139,19 @@ export const OpponentTypeahead = ({
         break
       case 'Enter': {
         e.preventDefault()
-        // Enter commits the highlighted option — with none highlighted it
-        // commits nobody, instead of quietly picking whoever is first (#894).
-        const picked = activeIdx === null ? undefined : results[activeIdx]
+        // Enter commits the highlighted option. With none highlighted it must
+        // not quietly pick whoever happens to be first (#894) — but neither
+        // should it do *nothing*: typing a name you already know and pressing
+        // Enter is the ordinary keyboard path, and swallowing that key is a
+        // dead end with no feedback. So when the search has narrowed to a
+        // single candidate there is nothing to disambiguate, and Enter takes
+        // it. Two or more, and the user has to say which.
+        const picked =
+          activeIdx !== null
+            ? results[activeIdx]
+            : results.length === 1
+              ? results[0]
+              : undefined
         if (picked) onPick(picked)
         break
       }

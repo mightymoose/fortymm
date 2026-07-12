@@ -30,14 +30,17 @@ describe('OpponentOption', () => {
 
     const option = opponentOptionPage.getOption(/grace\.hopper/)
     expect(option).toHaveClass('active')
-    expect(option).toHaveAttribute('aria-selected', 'false')
+    // Absent, not "false": an explicit false is *announced* ("not selected") on
+    // every row a screen-reader user arrows past. ARIA 1.2 defaults `option` to
+    // undefined for exactly this case — a listbox with no persistent selection.
+    expect(option).not.toHaveAttribute('aria-selected')
   })
 
   it('marks itself unselected and unhighlighted when inactive', () => {
     opponentOptionPage.render({ active: false })
 
     const option = opponentOptionPage.getOption(/ada\.lovelace/)
-    expect(option).toHaveAttribute('aria-selected', 'false')
+    expect(option).not.toHaveAttribute('aria-selected')
     expect(option).not.toHaveClass('active')
   })
 

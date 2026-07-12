@@ -168,9 +168,28 @@ describe('OpponentTypeahead', () => {
     await opponentTypeaheadPage.findOption(/ada\.lovelace/)
     await user.keyboard('{Enter}')
 
-    // Enter commits the *highlighted* option; with none, it commits nothing —
-    // it must not quietly pick whoever happens to be first.
+    // Enter commits the *highlighted* option; with none highlighted and several
+    // to choose between, it commits nothing — it must not quietly pick whoever
+    // happens to be first.
     expect(picked).toBeNull()
+  })
+
+  it('takes the only candidate on Enter — one result is not ambiguous (#894)', async () => {
+    const user = userEvent.setup()
+    let picked: string | null = null
+    opponentTypeaheadPage.mockSearch(() =>
+      HttpResponse.json([buildPlayer({ id: 'pl-1', username: 'ada.lovelace' })]),
+    )
+    opponentTypeaheadPage.render({ onPick: (p) => (picked = p.username) })
+
+    await user.type(opponentTypeaheadPage.getCombobox(), 'ada.lovelace')
+    await opponentTypeaheadPage.findOption(/ada\.lovelace/)
+    await user.keyboard('{Enter}')
+
+    // Typing a name you already know and pressing Enter is the ordinary
+    // keyboard path. Refusing to auto-highlight (#894) must not turn that into
+    // a dead key: with a single candidate there is nothing to disambiguate.
+    expect(picked).toBe('ada.lovelace')
   })
 
   it('hides the listbox on Escape without clearing the query, and reopens on ArrowDown (#97)', async () => {
