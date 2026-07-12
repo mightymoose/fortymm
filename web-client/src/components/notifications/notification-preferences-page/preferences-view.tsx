@@ -25,6 +25,31 @@ export interface PreferencesViewProps {
   ) => void
 }
 
+type ChannelState = NotificationPreferences['channels'][number]
+
+/** The channel is deliverable *in principle* but this user hasn't finished the
+ * prerequisite — no confirmed email, no registered push device. The server
+ * computes it and hands us the way out in `destination` / the setup nudge. */
+function isAwaitingSetup(channel: ChannelState) {
+  return channel.available && channel.setup_required
+}
+
+/** Can a notification actually reach the user on this channel right now? Both
+ * server flags have to say yes: `available` (we can deliver on it at all — SMS
+ * can't) *and* not `setup_required` (this user has somewhere for it to land).
+ *
+ * Everything the switches claim keys off this, not off `available` alone. An
+ * "on" switch beside "No devices yet" promises a delivery path that does not
+ * exist (#892), so a channel awaiting setup renders **off and disabled** —
+ * `enabled` is the user's stored intent, which we can't honour yet. The nudge
+ * under the card is the way out, and it's why a disabled control is the right
+ * shape here rather than the read-only view of ADR 0015: this isn't a
+ * permission gate, it's a prerequisite the user can clear themselves, and the
+ * nudge supplies the "why" a bare disabled control would withhold. */
+function isDeliverable(channel: ChannelState) {
+  return channel.available && !isAwaitingSetup(channel)
+}
+
 /** The notifications settings page: channel "sign-up" cards plus the
  * per-category × per-channel mute matrix. Pure — state + handlers come in. */
 export function PreferencesView({
@@ -38,6 +63,9 @@ export function PreferencesView({
   const channelByKey = new Map(channels.map((c) => [c.channel, c]))
   const channelLabel = new Map(taxonomy.channels.map((c) => [c.key, c.label]))
   const categoryLabel = new Map(taxonomy.types.map((t) => [t.key, t.label]))
+  const deliverable = new Map(
+    channels.map((c) => [c.channel, isDeliverable(c)] as const),
+  )
 
   return (
     <div className="mx-auto max-w-[840px] px-6 pt-9 pb-20">
@@ -59,11 +87,14 @@ export function PreferencesView({
         {channels.map((channel) => {
           const { Icon } = CHANNEL_VISUAL[channel.channel]
           const label = channelLabel.get(channel.channel) ?? channel.channel
-          const interactive = !channel.locked && channel.available
-          const nudge =
-            channel.available && channel.setup_required
-              ? channelSetupNudge(channel.channel, pendingEmail)
-              : undefined
+          const awaitingSetup = isAwaitingSetup(channel)
+          // A channel with nowhere to deliver reads as off, whatever the stored
+          // master says — and can't be switched on until setup is done.
+          const on = channel.enabled && !awaitingSetup
+          const interactive = !channel.locked && isDeliverable(channel)
+          const nudge = awaitingSetup
+            ? channelSetupNudge(channel.channel, pendingEmail)
+            : undefined
           // The server's email destination ("Add an email in settings") is
           // wrong once an address is on file but unconfirmed — reflect the
           // pending state instead.
@@ -76,7 +107,7 @@ export function PreferencesView({
               <div
                 className={cn(
                   'flex items-center gap-3 rounded-xl border bg-[color:var(--bg-card)] p-4 transition-opacity',
-                  channel.enabled
+                  on
                     ? 'border-[color:var(--border-default)]'
                     : 'border-[color:var(--border-subtle)] opacity-70',
                 )}
@@ -84,10 +115,10 @@ export function PreferencesView({
                 <span
                   className="flex size-9 shrink-0 items-center justify-center rounded-[10px]"
                   style={{
-                    background: channel.enabled
+                    background: on
                       ? 'rgba(255,122,26,0.12)'
                       : 'var(--bg-raised)',
-                    color: channel.enabled ? 'var(--ball-500)' : 'var(--fg-3)',
+                    color: on ? 'var(--ball-500)' : 'var(--fg-3)',
                   }}
                 >
                   <Icon size={20} />
@@ -101,7 +132,7 @@ export function PreferencesView({
                   </span>
                 </span>
                 <Switch
-                  checked={channel.enabled}
+                  checked={on}
                   disabled={!interactive}
                   onCheckedChange={(value) =>
                     onToggleChannel(channel.channel, value === true)
@@ -131,11 +162,12 @@ export function PreferencesView({
           {channels.map((channel) => {
             const { Icon } = CHANNEL_VISUAL[channel.channel]
             const label = channelLabel.get(channel.channel) ?? channel.channel
+            const on = channel.enabled && isDeliverable(channel)
             return (
               <div
                 key={channel.channel}
                 className="flex flex-col items-center gap-1.5 py-2.5"
-                style={{ opacity: channel.enabled ? 1 : 0.6 }}
+                style={{ opacity: on ? 1 : 0.6 }}
               >
                 <Icon size={17} className="text-[color:var(--fg-2)]" />
                 <span className="font-mono text-[10px] tracking-wide text-[color:var(--fg-3)] uppercase">
@@ -173,16 +205,22 @@ export function PreferencesView({
               </div>
               {row.cells.map((cell) => {
                 const master = channelByKey.get(cell.channel)
-                const masterOn = master?.enabled ?? false
-                const available = master?.available ?? false
-                const disabled = cell.locked || !available || !masterOn
+                // Same rule as the master switch above, one level down: a cell
+                // can only claim delivery its channel can actually make. With
+                // the channel awaiting setup, `canDeliver` is false, so the
+                // cell reads off and can't be flipped — including the cells
+                // locked on (match reminders), which is exactly the promise the
+                // channel can't keep yet.
+                const canDeliver = deliverable.get(cell.channel) ?? false
+                const masterOn = (master?.enabled ?? false) && canDeliver
+                const disabled = cell.locked || !canDeliver || !masterOn
                 return (
                   <div
                     key={cell.channel}
                     className="flex items-center justify-center py-3.5"
                   >
                     <Checkbox
-                      checked={cell.enabled}
+                      checked={cell.enabled && canDeliver}
                       disabled={disabled}
                       onCheckedChange={(value) =>
                         onToggleCell(row.category, cell.channel, value === true)
