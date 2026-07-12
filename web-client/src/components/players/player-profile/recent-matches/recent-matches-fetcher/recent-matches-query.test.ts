@@ -79,10 +79,10 @@ describe('recentMatchesQuery', () => {
     expect(view.viewAllLabel).toBe('View all 50 matches')
   })
 
-  it('says "match", singular, when there is only one', async () => {
+  it('drops the count and "all" for a lone match — "View all 1 match" reads wrong', async () => {
     const view = await selectFrom({ match_total: 1 })
 
-    expect(view.viewAllLabel).toBe('View all 1 match')
+    expect(view.viewAllLabel).toBe('View match')
   })
 
   it('carries the player id the history link needs', async () => {

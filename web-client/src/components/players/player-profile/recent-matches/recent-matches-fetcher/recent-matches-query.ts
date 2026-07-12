@@ -227,7 +227,9 @@ export const selectRecentMatches = (
     // and every state in them belongs on the card.
     rows: player.matches.items.map((row) => selectRow(row, timeZone)),
     total,
-    viewAllLabel: `View all ${total} ${total === 1 ? 'match' : 'matches'}`,
+    // "View all 1 match" reads wrong — "all" presupposes more than one — so the
+    // lone-match case drops both the count and the "all".
+    viewAllLabel: total === 1 ? 'View match' : `View all ${total} matches`,
   }
 }
 
