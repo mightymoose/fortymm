@@ -2044,7 +2044,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/DashboardRating/current`.
             internal var current: Swift.Double
             /// - Remark: Generated from `#/components/schemas/DashboardRating/delta`.
-            internal var delta: Swift.Double
+            internal var delta: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/peak`.
             internal var peak: Swift.Double
             /// - Remark: Generated from `#/components/schemas/DashboardRating/percentile`.
@@ -2091,7 +2091,7 @@ internal enum Components {
                 leagueName: Swift.String,
                 strategyKey: Swift.String,
                 current: Swift.Double,
-                delta: Swift.Double,
+                delta: Swift.Double? = nil,
                 peak: Swift.Double,
                 percentile: Swift.Int? = nil,
                 sparkData: [Swift.Double],

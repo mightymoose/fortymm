@@ -1234,7 +1234,7 @@ export interface components {
             /** Current */
             current: number;
             /** Delta */
-            delta: number;
+            delta: number | null;
             /** Peak */
             peak: number;
             /** Percentile */

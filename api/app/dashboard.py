@@ -33,6 +33,7 @@ from app.ratings import RatingStrategyKey, parse_strategy_key
 from app.ratings.rated import had_rating_before, is_rated_member, is_rating_change
 from app.ratings.stats import (
     current_streak_for_user,
+    latest_rated_match_change,
     league_peak_rating,
     league_percentile,
 )
@@ -322,7 +323,14 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
 
     current = rating_row.rating_value
     league_id = rating_row.league_id
-    spark, delta = await _spark_and_delta(db, user_id, league_id)
+    spark = await _spark(db, user_id, league_id)
+    # The SAME loader the profile hero reads (``PlayerDetail.rating_delta``), so the
+    # two heroes cannot disagree about what the player's last match did to them. It
+    # returns a ``RatingChange``, whose ``delta`` is a computed field and is ``None``
+    # when the match ESTABLISHED the rating rather than moving it — which is how the
+    # phantom "-232 from 1500" (#952) stops being constructible here rather than
+    # merely stops being computed here.
+    change = await latest_rated_match_change(db, user_id, league_id)
     peak = await league_peak_rating(db, user_id, league_id, current)
     percentile = await league_percentile(db, league_id, current)
     streak = await current_streak_for_user(db, user_id)
@@ -332,7 +340,7 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
         league_name=rating_row.league.name,
         strategy_key=strategy.key,
         current=current,
-        delta=delta,
+        delta=None if change is None else change.delta,
         peak=peak,
         percentile=percentile,
         spark_data=spark,
@@ -388,27 +396,43 @@ async def _resolve_user_rating(
     ).scalar_one_or_none()
 
 
-async def _spark_and_delta(
+async def _spark(
     db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
-) -> tuple[list[float], float]:
-    """Pull the most-recent history rows once, then derive both the sparkline
-    (last 30 days, oldest-first) and the last-match delta from them. Ordering
-    DESC + reversing avoids the latent bug where ``LIMIT 30 ORDER BY ASC``
-    would silently truncate today's points on a power user with >30 events in
-    the window.
+) -> list[float]:
+    """The sparkline: this player's rating changes in the last 30 days, oldest-first.
+
+    POINTS ONLY. This function used to compute the hero's ``delta`` as well, by
+    subtracting the newest row's ``previous_rating_value`` raw — and that made it
+    the last surviving reader of the phantom 1500 (#952). For a player's first rated
+    match that "previous" value is the prior their league-join seeded them with, so
+    the card announced ``-232 last match``: a fall from a rating they never held,
+    directly above a Recent-matches Δ column that — computed through
+    ``RatingChange`` — already said ``—`` for the very same match. The page
+    contradicted itself because the number was derived twice.
+
+    So it is derived ONCE now, and not here: the delta comes from
+    ``latest_rated_match_change`` (see ``_build_rating``), the same loader the
+    profile hero reads, which pairs each row with ``had_rating_before()`` and hands
+    back a ``RatingChange`` whose ``delta`` is a computed field. There is no raw
+    ``previous_rating_value`` left on the read side of this module — the ``0.0``
+    fallback this function used to return is gone with it, and good riddance: a zero
+    claims a rated match moved a rating by nothing.
+
+    Ordering DESC + reversing avoids the latent bug where ``LIMIT 30 ORDER BY ASC``
+    would silently truncate today's points on a power user with >30 events in the
+    window.
 
     ``is_rating_change()``: the ``initial`` seed row is not a point on this line,
     for the same reason it is not one on the profile's chart — it is the prior the
     league handed the player on join, not a rating they held. The sparkline and the
     chart plot the same table for the same purpose, and must not disagree about
     what a rating point is. A player one rated match old therefore has a
-    single-point spark (their result), not a two-point line rising out of 1500."""
+    single-point spark (their result), not a two-point line sloping out of 1500."""
     cutoff = datetime.now(UTC) - timedelta(days=SPARK_WINDOW_DAYS)
     rows = (
         await db.execute(
             select(
                 RatingHistory.rating_value,
-                RatingHistory.previous_rating_value,
                 RatingHistory.created_at,
             )
             .where(
@@ -420,16 +444,7 @@ async def _spark_and_delta(
             .limit(SPARK_MAX_POINTS)
         )
     ).all()
-    if not rows:
-        return [], 0.0
-    latest = rows[0]
-    delta = (
-        latest.rating_value - latest.previous_rating_value
-        if latest.previous_rating_value is not None
-        else 0.0
-    )
-    spark = [float(r.rating_value) for r in reversed(rows) if r.created_at >= cutoff]
-    return spark, delta
+    return [float(r.rating_value) for r in reversed(rows) if r.created_at >= cutoff]
 
 
 def _strategy_stats(

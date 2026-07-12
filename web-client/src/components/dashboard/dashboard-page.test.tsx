@@ -17,6 +17,7 @@ import {
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
+  establishedDashboardRating,
   sessionResponse,
 } from '@/test/factories'
 import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
@@ -268,6 +269,49 @@ describe('DashboardPage', () => {
     expect(screen.getByText('W3')).toBeInTheDocument()
     expect(screen.getByText('78%')).toBeInTheDocument()
     expect(screen.getByText(/FortyMM/i)).toBeInTheDocument()
+  })
+
+  // #952, the whole-page version of the RatingCard's unit test: what a player
+  // one rated match old actually loads. The hero and the "Recent matches" Δ
+  // column read the SAME match — before this fix the Δ column said "—" (the
+  // match established the rating) while the hero, three inches above it, said
+  // the player had just lost 232 points of a 1500 they never held.
+  it('shows a just-rated player their new rating and NO "last match" chip', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            // One completed rated match: enough to leave the first-match layout.
+            completed_match_count: 1,
+            attention_total_count: 1,
+            recent_results: [
+              dashboardRecentResult({
+                opponent_username: 'ada.lovelace',
+                is_win: false,
+                my_games_won: 0,
+                opponent_games_won: 3,
+                // A *present* change whose `delta` is null: the match brought the
+                // rating into existence rather than moving it.
+                my_rating_change: { before: null, after: 1268, delta: null },
+              }),
+            ],
+            rating: establishedDashboardRating({ current: 1268 }),
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    // The rating the match established is on screen (more than once, in fact:
+    // the hero, and the Peak tile — a one-match player peaks *at* their current
+    // rating)…
+    expect(await screen.findAllByText('1268')).not.toHaveLength(0)
+    // …and nothing anywhere on the page claims a move: no chip, no signed
+    // figure, and no trace of the seeded prior.
+    expect(screen.queryByText(/last match/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/[+-]?\d+ last match/)).not.toBeInTheDocument()
+    expect(screen.queryByText('1500')).not.toBeInTheDocument()
+    expect(screen.queryByText(/232/)).not.toBeInTheDocument()
   })
 
   it('hides the rating card when the user has no rated league', async () => {

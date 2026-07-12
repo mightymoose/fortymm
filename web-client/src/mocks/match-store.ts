@@ -883,23 +883,32 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
 
   // The same timeline every other surface reads, so the dashboard card, the
   // dashboard's Δ column and the match-detail card cannot disagree about what a
-  // match did. `delta` is null on the first (establishing) match — the card's
-  // headline Δ is then 0 only in the sense that nothing moved; `current` starts at
-  // that match's `after`, never at the prior.
+  // match did. `current` starts at the first match's `after`, never at the prior.
   const timeline = myRatingTimeline()
   let current = MOCK_BASE_RATING
   // Peak starts *unset*, not at the prior: a player whose every rating has been
   // below 1500 has never peaked at 1500 — they have peaked at the best rating they
   // actually held.
   let peak: number | null = null
-  let lastDelta = 0
+  // **`null` is a value this mock must be able to emit** (#952). The last rated
+  // match's `delta` is null when that match ESTABLISHED the rating rather than
+  // moving it — i.e. it was the player's first. This used to read `?? 0`, which
+  // flattened that null into a number the moment it left the timeline, so no MSW
+  // scenario could ever put a delta-less rating in front of the card, and the
+  // card's `delta >= 0` phantom (`null >= 0` is `false` ⇒ a *loss*-toned chip)
+  // survived every round of testing. The card now hides the chip on null; the
+  // mock has to be able to say null for that to mean anything.
+  let lastDelta: number | null = null
   const sparkData: number[] = []
   for (const seed of completed) {
     const change = timeline.get(seed.id)
     if (!change) continue
     current = change.after
-    lastDelta = change.delta ?? 0
+    lastDelta = change.delta
     peak = peak === null ? current : Math.max(peak, current)
+    // Rated results only — the seed row is not in here, so a player one match
+    // old has a ONE-POINT spark (which the card pads to a flat line), not a line
+    // sloping down out of a 1500 they never held.
     sparkData.push(current)
   }
   // Glicko-2-ish gloss: RD tightens with games played, volatility holds.

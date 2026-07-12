@@ -1,7 +1,10 @@
 import {
+  mockMatches,
   newMatchSeed,
   projectMatchDetails,
+  projectRating,
   type SeedGame,
+  type SeedMatch,
 } from '@/mocks/match-store'
 
 /** Builds the scratchpad games array for a seed: one entry per scored game,
@@ -55,5 +58,52 @@ describe('canFinalizeSeed (via projectMatchDetails)', () => {
     ])
 
     expect(projectMatchDetails(seed).can_finalize).toBe(false)
+  })
+})
+
+/** The seed store's rated, completed matches, oldest first — the same walk
+ * `projectRating` does. The first of them is the current user's FIRST rated
+ * match: the one that brought their rating into existence. */
+function ratedCompletedSeeds(): SeedMatch[] {
+  return mockMatches
+    .filter(
+      (m): m is SeedMatch & { completed_at: string } =>
+        m.status === 'completed' &&
+        m.completed_at !== null &&
+        m.opponent !== null &&
+        m.affects_rating,
+    )
+    .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+}
+
+describe('projectRating (the dashboard rating card the mock feeds)', () => {
+  // #952. This mock used to flatten the establishing match's null delta to `0`
+  // (`lastDelta = change.delta ?? 0`), so MSW could not *express* a rating that
+  // had been established rather than moved — and the card's `delta >= 0` phantom
+  // (`null >= 0` is `false` ⇒ a loss-toned chip announcing a 232-point fall from
+  // a 1500 the player never held) survived every round of testing. If this test
+  // is ever "simplified" back to a number, the bug becomes untestable again.
+  it('emits a NULL delta when the only rated match ESTABLISHED the rating', () => {
+    const [first] = ratedCompletedSeeds()
+
+    const rating = projectRating([first])
+
+    expect(rating).not.toBeNull()
+    expect(rating?.delta).toBeNull()
+    // The spark carries the rated result only — never the seed row — so a
+    // one-match player has exactly one point, and peaks at the rating they hold.
+    expect(rating?.spark_data).toHaveLength(1)
+    expect(rating?.peak).toBe(rating?.current)
+    expect(rating?.current).not.toBe(1500)
+  })
+
+  it('emits a signed number once a later match has MOVED the rating', () => {
+    const seeds = ratedCompletedSeeds()
+    expect(seeds.length).toBeGreaterThan(1)
+
+    const rating = projectRating(seeds)
+
+    expect(typeof rating?.delta).toBe('number')
+    expect(rating?.delta).not.toBe(0)
   })
 })

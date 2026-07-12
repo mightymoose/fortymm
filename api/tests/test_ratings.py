@@ -1,6 +1,8 @@
 """Coverage for the rating system: strategies, calculator math, validation,
 and the match-completion hook."""
 
+import ast
+import pathlib
 import uuid
 
 import jsonschema
@@ -480,6 +482,51 @@ def _changes(body: dict) -> tuple[dict, dict]:
     assert mine is not None
     assert theirs is not None
     return mine, theirs
+
+
+def test_previous_rating_value_is_read_in_exactly_one_place():
+    """``RatingHistory.previous_rating_value`` may be READ in ONE module, and this
+    test is the fence around it.
+
+    The phantom 1500 (#952) came back four times because it is not a bug in one
+    widget — it is a bug that any reader of this column re-derives on its own. The
+    column holds the state the Glicko-2 update STARTED FROM, which for a player's
+    first rated match is the prior their league-join seeded them with. Subtract it
+    and you have just told a brand-new player they lost 232 points of a rating they
+    never held. Four surfaces did exactly that, one at a time: the match-details
+    chip, the profile's Δ column, the dashboard's Recent-matches Δ, and finally the
+    dashboard hero — each fixed in turn while the next one sat there re-deriving it,
+    because nothing stopped a reader from reaching for the raw column.
+
+    So the read side has exactly ONE door: ``RatingChange.from_history``, which
+    demands ``had_rating_before`` (keyword-only, no default — the question cannot be
+    skipped) and returns a model whose ``delta`` is a COMPUTED field, so a change
+    that reports a fall from a rating the player never held is not constructible.
+
+    This asserts the door is the only one. An ``ast.Attribute`` load of the name —
+    ``row.previous_rating_value``, ``select(RatingHistory.previous_rating_value)``,
+    the two shapes every one of those four bugs took — is allowed in
+    ``app/schemas/rating.py`` and nowhere else. The WRITE side is untouched and
+    deliberately invisible here: it passes the value as a keyword argument
+    (``previous_rating_value=...``), which is an ``ast.keyword``, not an attribute
+    load. ``result_acceptance``, ``recompute`` and ``leagues`` go on recording the
+    truth; only the reading of it is fenced.
+
+    If you are here because this test failed: you do not want the raw column. You
+    want ``RatingChange.from_history(row, had_rating_before=...)``, with
+    ``app.ratings.rated.had_rating_before()`` selected alongside your row — that is
+    what every other read-side surface does.
+    """
+    app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+    readers = {
+        path.relative_to(app_dir).as_posix()
+        for path in app_dir.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Attribute)
+        and node.attr == "previous_rating_value"
+        and isinstance(node.ctx, ast.Load)
+    }
+    assert readers == {"schemas/rating.py"}
 
 
 async def test_match_details_first_rated_match_establishes_a_rating_not_a_fall(

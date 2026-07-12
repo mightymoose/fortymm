@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -445,7 +446,11 @@ async def test_dashboard_rating_reflects_completed_match(
     # scoring you" looks like. Glicko-2 lifts the winner above 1500 and tightens RD.
     assert rating is not None
     assert rating["current"] > 1500.0
-    assert rating["delta"] > 0
+    # No delta: this match ESTABLISHED the rating, it didn't move one. The old
+    # ``delta > 0`` here was the phantom in test form — it read "+24 from 1500" as a
+    # move and so could never have caught #952. Its mirror image (a first LOSS
+    # reported as ``-232 last match``) is what QA found on the hero.
+    assert rating["delta"] is None
     assert rating["peak"] == rating["current"]
     # ONE point: the match. The seed is not a point on this line, exactly as it is
     # not one on the profile's chart — the two plot the same table, and a sparkline
@@ -487,6 +492,72 @@ async def test_dashboard_rating_peak_holds_after_loss(
     assert rating_after_loss["current"] < peak_after_win
     assert rating_after_loss["peak"] == peak_after_win
     assert rating_after_loss["delta"] < 0
+
+
+async def test_dashboard_hero_first_rated_match_establishes_no_delta(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The hero's "last match" chip on a player whose FIRST rated match is their
+    ONLY one: NO delta. Not ``-232``, and not ``0`` (#952).
+
+    This is the QA repro, exactly: a brand-new player loses their first rated match,
+    lands at 1268, and the card announced ``-232 last match`` — a fall from the 1500
+    their league-join seeded, one row below a Recent-matches Δ column that had
+    already been taught to say ``—`` for the very same match. The page contradicted
+    itself because the two fields were computed twice: the Δ column through
+    ``RatingChange``, the hero by subtracting ``previous_rating_value`` raw.
+
+    The player is SESSION-MINTED and the match runs the real propose/accept flow, so
+    the 1500 here is the genuine join seed with its ``initial`` history row — which
+    is the only reason this test has teeth. A fixture that hand-writes
+    ``previous_rating_value`` passes without the fix and proves nothing; that fiction
+    is how this bug survived four rounds.
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+
+    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
+    assert rating is not None
+    # They really are below the seed — the Glicko-2 maths starts there. That is the
+    # WRITE side, and it is correct.
+    assert rating["current"] < 1500.0
+    # ...and the READ side declines to narrate it as a fall. Nothing moved: a rating
+    # came into existence.
+    assert rating["delta"] is None
+    # The other two numbers a 1500 origin would poison. ``peak`` is what they have
+    # actually held (not the seed they never did), and the sparkline is a single
+    # point — their result — rather than a line sloping down out of 1500.
+    assert rating["peak"] == rating["current"]
+    assert rating["spark_data"] == [rating["current"]]
+
+
+async def test_dashboard_hero_second_rated_match_reports_the_real_move(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The counterweight: once a player HOLDS a rating, the hero reports the real
+    move — measured from the rating their first match established.
+
+    Suppressing every delta would satisfy the test above and be just as wrong. This
+    one reds on an "always null" fix, and it reds on a fix that keeps measuring from
+    1500 (the ``before`` here is an EARNED number, and it is not 1500).
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+        established = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
+        moved = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+    first_rating = established["current"]
+    assert first_rating != 1500.0
+    # A real delta, off the real first rating — not off the seed.
+    assert moved["delta"] is not None
+    assert moved["delta"] == pytest.approx(moved["current"] - first_rating)
+    assert moved["delta"] > 0
+    # Two points now, and still no seed at the origin.
+    assert moved["spark_data"] == [first_rating, moved["current"]]
 
 
 def _provenance(user: User, league: League, value: float) -> RatingHistory:
