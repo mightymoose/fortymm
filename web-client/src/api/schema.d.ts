@@ -3067,7 +3067,13 @@ export interface components {
             /** Rating */
             rating: number | null;
         };
-        /** TournamentEventCreate */
+        /**
+         * TournamentEventCreate
+         * @description A new event. Its two numbers are bounded by what their columns can hold —
+         *     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
+         *     ``TournamentEventUpdate`` — so a value that would overflow ``Integer`` or
+         *     ``Numeric(8, 2)`` is a 422 here and never reaches the driver as a 500.
+         */
         TournamentEventCreate: {
             /** Name */
             name: string;
@@ -3143,6 +3149,12 @@ export interface components {
          *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
          *     updatable — it is derived from the event's active entries, not stored — so
          *     sending it is a 422 via ``extra="forbid"``.
+         *
+         *     ``max_players`` and ``entry_fee`` carry the **same** bounds create does — the
+         *     ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers.
+         *     A patch that could smuggle in a value create refuses would defeat create's
+         *     boundary entirely: the event would simply be born small and then edited into the
+         *     500.
          */
         TournamentEventUpdate: {
             /** Name */
