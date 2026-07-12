@@ -136,17 +136,128 @@ describe('EventEditor', () => {
   })
 
   /**
+   * The fields the *server* can refuse — and which the form now refuses first (#783
+   * QA, round two). The rules got a guard and the name did not, so an empty name and
+   * a 256-character one both round-tripped to a 422 while an empty rule was caught in
+   * the form. Same click, two different stories.
+   *
+   * As with the rules: nothing is sent (`onSave` is never called), the message is
+   * under the field, and the organizer lands on the tab that holds it.
+   */
+  describe('a field the server would refuse', () => {
+    it('refuses a BLANK name in the form, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent({ id: 'new-1', name: '' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(eventEditorPage.queryFieldError('Name is required.')).toBeInTheDocument()
+      // No banner: a banner is for a refusal that came back from somewhere. This one
+      // never left the room.
+      expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+
+    it('refuses a name past 255 characters in the form, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', name: 'A'.repeat(256) }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(
+        eventEditorPage.queryFieldError('Name must be 255 characters or fewer.'),
+      ).toBeInTheDocument()
+    })
+
+    it('refuses a CLEARED player limit — the zero that goes on the wire', async () => {
+      // The control sets `Number(e.target.value)`, and `Number('')` is **0** — so an
+      // emptied box is a zero-player event, which the server refuses (`gt=0`). It used
+      // to go anyway, and come back a 422.
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.clear(eventEditorPage.getPlayerLimitInput())
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.getPlayerLimitInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        eventEditorPage.queryFieldError('The player limit must be at least 1.'),
+      ).toBeInTheDocument()
+    })
+
+    it('takes the organizer to BASICS, where the broken field is', async () => {
+      // The rule builder's lesson, applied to the other tab: a message on a tab you
+      // cannot see is indistinguishable from a button that does nothing. Start them
+      // on Eligibility to prove the editor really moves them.
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1', name: '' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Eligibility'))
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(eventEditorPage.getSectionTab('Basics')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('says nothing in red until the organizer actually tries to save', () => {
+      eventEditorPage.render({ event: buildEvent({ id: 'new-1', name: '' }) })
+      expect(eventEditorPage.queryFieldError('Name is required.')).toBeNull()
+    })
+
+    it('clears the message the moment the name is typed, and then saves', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent({ id: 'new-1', name: '' }), onSave })
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(eventEditorPage.queryFieldError('Name is required.')).toBeInTheDocument()
+
+      await userEvent.type(eventEditorPage.getNameInput(), 'Open Singles')
+
+      expect(eventEditorPage.queryFieldError('Name is required.')).toBeNull()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Open Singles' }),
+      )
+    })
+  })
+
+  /**
    * THE data-loss half — and the half that matters most, because client validation
    * only ever prevents the refusals we already know about. Whatever the *next*
    * unknown 422 is, it must not silently eat somebody's work: the sheet stays open,
    * the draft stays in it, and the organizer is told.
+   *
+   * Told **in our words**. The banner used to print `ApiError.detail`, which for a
+   * 422 is Pydantic's: *"String should have at most 255 characters"* — the wire's
+   * vocabulary, a constraint rather than an instruction, and no clue which of eight
+   * fields it is about. `DEFINITION_OF_COMPLETE.md`: *"Raw API detail strings never
+   * reach the UI."*
    */
   describe('a save the server refuses', () => {
     const rejectWith = (error: unknown) => vi.fn().mockRejectedValue(error)
 
-    it('keeps the sheet OPEN, keeps the draft, and shows what happened', async () => {
+    /** FastAPI's real 422 body — a `detail` ARRAY of pydantic errors. The editor is
+     * handed the whole `ApiError`, `body` included, because the `loc` in there is the
+     * one thing it could not have guessed: which field. */
+    const pydantic422 = (field: string, msg: string) =>
+      new ApiError(422, msg, 'create event', {
+        detail: [{ type: 'string_too_long', loc: ['body', field], msg }],
+      })
+
+    it('keeps the sheet OPEN, keeps the draft, and says what happened — in OUR words', async () => {
       const onSave = rejectWith(
-        new ApiError(422, 'String should have at most 255 characters', 'create event'),
+        pydantic422('name', 'String should have at most 255 characters'),
       )
       const onOpenChange = vi.fn()
       eventEditorPage.render({
@@ -160,11 +271,13 @@ describe('EventEditor', () => {
       await waitFor(() =>
         expect(eventEditorPage.queryFailure()).toBeInTheDocument(),
       )
-      // The server's own words about the event, and the promise that nothing was
-      // binned. (The predecessor showed neither: the sheet closed, the event was
-      // never created, and every field the organizer had typed was gone.)
+      // NOT Pydantic's sentence…
+      expect(eventEditorPage.queryFailure()).not.toHaveTextContent(
+        'String should have at most',
+      )
+      // …but the field it named, in the words the form puts above that field.
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
-        'String should have at most 255 characters',
+        'The Event name was rejected. Check that field and try again.',
       )
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
         'your changes are still here',
@@ -175,6 +288,23 @@ describe('EventEditor', () => {
       expect(onOpenChange).not.toHaveBeenCalled()
       // …and the work is still in it.
       expect(eventEditorPage.getNameInput()).toHaveValue('Open Singles')
+    })
+
+    it('words a 422 it cannot map to a field generically — still never pydantic’s', async () => {
+      const onSave = rejectWith(
+        pydantic422('seeding_policy', 'Input should be a valid string'),
+      )
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.queryFailure()).toBeInTheDocument(),
+      )
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(
+        "Some of this event's details were rejected",
+      )
+      expect(eventEditorPage.queryFailure()).not.toHaveTextContent('Input should be')
     })
 
     it('speaks plainly about a failure that is not about the event', async () => {
@@ -193,6 +323,26 @@ describe('EventEditor', () => {
       )
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
         "The server couldn't be reached",
+      )
+    })
+
+    it('passes on a sentence the server wrote for a HUMAN (ADR-0968 fallback)', async () => {
+      // A 403 is not a validator's complaint: its `detail` is prose we wrote, and it
+      // is a refusal the client has no copy of its own for. Show it.
+      const onSave = rejectWith(
+        new ApiError(403, 'You can only modify tournaments you created.', 'update event', {
+          detail: 'You can only modify tournaments you created.',
+        }),
+      )
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.queryFailure()).toBeInTheDocument(),
+      )
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(
+        'You can only modify tournaments you created.',
       )
     })
 

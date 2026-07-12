@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Check, Trash2, TriangleAlert } from 'lucide-react'
 
-import { ApiError } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -14,7 +13,17 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { eligibilityIssues } from '../data/predicate-validation'
+import {
+  EVENT_SAVE_TARGET,
+  saveFailure as classifySaveFailure,
+  saveFailureMessage,
+  type SaveFailure,
+} from '../data/save-failure'
+import {
+  eventIssues,
+  firstInvalidSection,
+  type EventIssues,
+} from '../data/event-validation'
 import type { TournamentEvent, TournamentTable } from '../data/types'
 import { BasicsSection } from './event-editor/basics-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
@@ -42,23 +51,6 @@ export interface EventEditorProps {
   onDelete: (id: string) => void
 }
 
-/** What the organizer is told when a save is refused.
- *
- * A 4xx is the server saying something *about their event* — the name is too long,
- * a field is out of range — so it is their words that get shown. Anything else (a
- * 5xx, a dropped connection) is about the request, not the event, and gets copy
- * that says so rather than a stack-shaped sentence. Either way it lands INSIDE the
- * sheet: the work is still there, and the message has to be where the work is. */
-function saveFailureMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status >= 400 && error.status < 500) {
-      return error.detail ?? 'The server rejected this event.'
-    }
-    return "The server couldn't be reached. Check your connection and try again."
-  }
-  return 'Something went wrong. Try again.'
-}
-
 const SECTIONS = [
   { value: 'basics', label: 'Basics' },
   { value: 'eligibility', label: 'Eligibility' },
@@ -73,15 +65,18 @@ const SECTIONS = [
  * **A save is a request, and a request can be refused.** The two ways the editor
  * takes that seriously:
  *
- * - It *checks the rules first* (`eligibilityIssues`, `data/predicate-validation`)
- *   and refuses to send a draft the server would 422 — a rule with no value, a
- *   `between` with one bound or an inverted pair — pointing the organizer at the
- *   offending row instead. That is a Zod schema mirroring the server's constraints,
- *   which is the house rule for a form (`CLAUDE.md`, `## Forms`).
+ * - It *checks the draft first* (`eventIssues`, `data/event-validation`) and refuses
+ *   to send one the server would 422 — a blank or 256-character name, a cleared
+ *   player limit, a negative fee, a rule with no value, a `between` with one bound or
+ *   an inverted pair — pointing the organizer at the offending field instead. That is
+ *   a Zod schema mirroring the server's constraints, which is the house rule for a
+ *   form (`CLAUDE.md`, `## Forms`), and the same thing `NewTournamentModal` does for
+ *   the tournament's own name.
  * - And when a request is refused *anyway* — an unknown 422, a 5xx, an outage — it
- *   **keeps the sheet open**, keeps the draft, and shows what happened. Client-side
- *   validation only ever prevents the refusals we already know about; this is what
- *   stops the next unknown one from eating somebody's work.
+ *   **keeps the sheet open**, keeps the draft, and shows what happened **in our own
+ *   words** (`data/save-failure`). Client-side validation only ever prevents
+ *   the refusals we already know about; this is what stops the next unknown one from
+ *   eating somebody's work — without reading Pydantic's prose out to them.
  *
  * Neither the Save button nor the tabs are gated on validity: a disabled Save with
  * no explanation is the dead end ADR-0015 is about (and the repo's Forms convention
@@ -104,8 +99,9 @@ export const EventEditor = ({
    * wrong. Once it is true, the messages track the draft live, so fixing a rule
    * clears its message without a second click. */
   const [submitted, setSubmitted] = useState(false)
-  /** The server's refusal of the last save, or `null`. Never a reason to close. */
-  const [saveFailure, setSaveFailure] = useState<string | null>(null)
+  /** How the last save was refused, or `null`. A classified failure — never a raw
+   * server string (see `data/save-failure`). Never a reason to close. */
+  const [failure, setFailure] = useState<SaveFailure | null>(null)
   const [isSaving, setIsSaving] = useState(false)
 
   // Re-seed the working draft and reset to the first section whenever the
@@ -117,38 +113,40 @@ export const EventEditor = ({
     setSection('basics')
     // A fresh event starts clean: last time's red belongs to last time's draft.
     setSubmitted(false)
-    setSaveFailure(null)
+    setFailure(null)
   }
 
   const isNew = !event || event.id.startsWith('new')
 
-  // The verdict on the draft's rules — computed every render, so a fixed rule stops
+  // The verdict on the whole draft — computed every render, so a fixed field stops
   // complaining the moment it is fixed. Shown only once `submitted`.
-  const issues = draft ? eligibilityIssues(draft.predicates) : {}
-  const hasIssues = Object.keys(issues).length > 0
+  const issues: EventIssues = draft
+    ? eventIssues(draft)
+    : { basics: {}, rules: {} }
+  const invalidSection = firstInvalidSection(issues)
 
   const save = async () => {
     if (!draft) return
 
-    if (hasIssues) {
+    if (invalidSection) {
       // Refused HERE, so nothing is sent and nothing can be lost. Take them to the
-      // rules: the messages are on the Eligibility tab, and a save that failed on a
-      // tab you cannot see is indistinguishable from a save that did nothing.
+      // tab holding the offending field: a save that failed on a tab you cannot see
+      // is indistinguishable from a save that did nothing.
       setSubmitted(true)
-      setSection('eligibility')
-      setSaveFailure(null)
+      setSection(invalidSection)
+      setFailure(null)
       return
     }
 
     setSubmitted(true)
-    setSaveFailure(null)
+    setFailure(null)
     setIsSaving(true)
     try {
       await onSave(draft)
       // The parent closes the sheet on success. It is the ONLY thing that closes it:
       // a rejection lands in the catch below, with the draft untouched.
     } catch (error) {
-      setSaveFailure(saveFailureMessage(error))
+      setFailure(classifySaveFailure(error))
     } finally {
       setIsSaving(false)
     }
@@ -191,6 +189,7 @@ export const EventEditor = ({
                 <BasicsSection
                   event={draft}
                   canEdit={canEdit}
+                  issues={submitted ? issues.basics : undefined}
                   onChange={setDraft}
                 />
               </TabsContent>
@@ -198,7 +197,7 @@ export const EventEditor = ({
                 <EligibilitySection
                   event={draft}
                   canEdit={canEdit}
-                  issues={submitted ? issues : undefined}
+                  issues={submitted ? issues.rules : undefined}
                   onChange={setDraft}
                 />
               </TabsContent>
@@ -225,8 +224,12 @@ export const EventEditor = ({
             purpose: a toast is a portal that leaves in four seconds, and what it
             would be reporting here is that the sheet in front of you still holds
             unsaved work. It sits above the footer, next to the button that was
-            just refused. */}
-        {saveFailure && (
+            just refused.
+
+            Every word of it is ours (`saveFailureMessage`): a 422's `detail` is
+            Pydantic's own prose ("String should have at most 255 characters") and
+            never reaches this markup. */}
+        {failure && (
           <Alert
             variant="destructive"
             data-testid="event-editor-error"
@@ -237,7 +240,8 @@ export const EventEditor = ({
               {isNew ? "Couldn't create this event" : "Couldn't save your changes"}
             </AlertTitle>
             <AlertDescription>
-              {saveFailure} Nothing was saved — your changes are still here.
+              {saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved
+              — your changes are still here.
             </AlertDescription>
           </Alert>
         )}

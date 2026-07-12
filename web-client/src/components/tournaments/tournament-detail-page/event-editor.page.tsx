@@ -17,6 +17,15 @@ const scoped = (container: Container) => ({
   getNameInput() {
     return container.getByLabelText(/Event name/)
   },
+  getPlayerLimitInput() {
+    return container.getByLabelText(/Player limit/)
+  },
+  /** A red message under a Basics field (the `Field` row's error `hint`) — the
+   * counterpart of `getRuleErrors()` on the other tab. Queried by the text the
+   * organizer reads. */
+  queryFieldError(message: string) {
+    return container.queryByText(message)
+  },
   /** The editor's report of a refused save — the `Alert` that keeps the failure
    * next to the unsaved work, instead of a toast that leaves in four seconds. */
   queryFailure() {

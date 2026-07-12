@@ -9,6 +9,7 @@ import {
   extractDetail,
   isSessionEndedError,
   setSessionEndedHandler,
+  validationFields,
 } from './client'
 
 afterEach(() => {
@@ -200,4 +201,58 @@ it('leaves a validation message without the prefix untouched', () => {
   expect(
     extractDetail({ detail: [{ msg: 'The winning side must reach at least 11 points.' }] }),
   ).toBe('The winning side must reach at least 11 points.')
+})
+
+/**
+ * `validationFields` answers the question `extractDetail` cannot: **whose words are
+ * these?** A `detail` ARRAY is Pydantic's — its `msg` is machine prose ("String
+ * should have at most 255 characters") that must never reach a user
+ * (`DEFINITION_OF_COMPLETE.md`) — while a `detail` STRING is a sentence we wrote and
+ * may show. So the return is `string[] | null`, and `null` is not "no fields", it is
+ * "not a validation body at all".
+ */
+it('names the fields a pydantic 422 blamed, stripping the `body` prefix', () => {
+  const error = new ApiError(422, 'String should have at most 255 characters', 'x', {
+    detail: [
+      { type: 'string_too_long', loc: ['body', 'name'], msg: 'String should have at most 255 characters' },
+      { type: 'int_type', loc: ['body', 'max_players'], msg: 'Input should be a valid integer' },
+    ],
+  })
+  expect(validationFields(error)).toEqual(['name', 'max_players'])
+})
+
+it('reduces a nested loc to the field a form has a row for', () => {
+  // `['body', 'slot', 'start']` is a complaint about the Time slot as far as the
+  // form is concerned; the leaf is the wire's business.
+  const error = new ApiError(422, null, 'x', {
+    detail: [{ loc: ['body', 'slot', 'start'], msg: 'Input should be a valid string' }],
+  })
+  expect(validationFields(error)).toEqual(['slot'])
+})
+
+it('dedupes two complaints about the same field', () => {
+  const error = new ApiError(422, null, 'x', {
+    detail: [
+      { loc: ['body', 'name'], msg: 'String should have at least 1 character' },
+      { loc: ['body', 'name'], msg: 'String should have at most 255 characters' },
+    ],
+  })
+  expect(validationFields(error)).toEqual(['name'])
+})
+
+it('returns null — not [] — for a refusal the server wrote in words', () => {
+  // The distinction the banner turns on: a 403's `detail` is OUR sentence and may be
+  // shown; a 422's `detail[]` is Pydantic's and may not.
+  const prose = new ApiError(403, 'You can only modify tournaments you created.', 'x', {
+    detail: 'You can only modify tournaments you created.',
+  })
+  expect(validationFields(prose)).toBeNull()
+
+  const coded = new ApiError(409, 'This event is full.', 'x', {
+    detail: { code: 'event_full', message: 'This event is full.' },
+  })
+  expect(validationFields(coded)).toBeNull()
+
+  expect(validationFields(new ApiError(500, null, 'x'))).toBeNull()
+  expect(validationFields(new Error('offline'))).toBeNull()
 })

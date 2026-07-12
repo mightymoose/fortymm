@@ -225,6 +225,33 @@ export class TournamentDetailPage {
     return this.page.getByTestId('predicate-error')
   }
 
+  /** The rule row's Remove control. On a phone it is the row's last *line* rather
+   * than its last *column* — and it used to be off the right-hand edge of the screen
+   * entirely, along with the Value box it belongs to. */
+  get removeRuleButton(): Locator {
+    return this.page.getByRole('button', { name: 'Remove rule' })
+  }
+
+  /** One rule row — the `Value` control lives in its third column (fourth *line*, on
+   * a phone). */
+  get ruleRow(): Locator {
+    return this.page.getByTestId('predicate-row')
+  }
+
+  /** A red message under one of the Basics fields (the `Field` row's error hint) —
+   * the counterpart of `ruleErrors` on the other tab. Keyed on the text the organizer
+   * reads, since that is the whole claim: they were told, here, before anything was
+   * sent. */
+  basicsError(message: string): Locator {
+    return this.eventEditor.getByText(message)
+  }
+
+  /** The event's player-limit box (Basics). Clearing it authors `max_players: 0` —
+   * `Number('')` is `0` — which the server refuses. */
+  get playerLimitInput(): Locator {
+    return this.page.getByLabel(/Player limit/)
+  }
+
   /** The editor's report of a REFUSED SAVE: the alert that keeps the failure beside
    * the unsaved work, instead of a toast that leaves in four seconds — or, as it
    * was, instead of nothing at all. */

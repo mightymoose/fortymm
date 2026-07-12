@@ -40,6 +40,12 @@ export const tournamentDetailPagePage = {
   getEditorSaveButton() {
     return screen.getByRole('button', { name: /Create event|Save changes/ })
   },
+  /** The editor's name field. A NEW event starts blank (`emptyEvent`), and a blank
+   * name is now refused in the form — so a page-level test that wants to reach the
+   * *server* has to fill this in first, exactly as an organizer does. */
+  getEditorNameInput() {
+    return screen.getByLabelText(/Event name/)
+  },
   /** The event editor sheet — present exactly while it is open. A refused save
    * must leave it here, holding the organizer's work. */
   queryEditor() {

@@ -16,6 +16,16 @@ const scoped = (container: Container) => ({
   getPlayerLimitInput() {
     return container.getByLabelText(/Player limit/)
   },
+  getEntryFeeInput() {
+    return container.getByLabelText(/Entry fee/)
+  },
+  /** The red message under a field — the `Field` row's `hint`, rendered as an error.
+   * Queried by its TEXT because that is what the organizer reads; a test that asked
+   * for "the hint node" would pass on a message rendered in the wrong colour under
+   * the wrong control. */
+  queryFieldError(message: string) {
+    return container.queryByText(message)
+  },
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },

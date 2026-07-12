@@ -369,6 +369,8 @@ export class TournamentsStore {
   private detail: TournamentDetailRead
   private entryCounter = 0
   private gate: Promise<void> | null = null
+  private refusingWrites = false
+  private refusingTournamentCreate = false
 
   /** Every intercepted request, for tallies like "exactly one POST landed". */
   readonly requests: RecordedRequest[] = []
@@ -483,6 +485,45 @@ export class TournamentsStore {
   }
 
   /**
+   * Refuse every event write with FastAPI's **422** until the returned callback is
+   * invoked — the *unknown* refusal, which is the only kind left worth testing.
+   *
+   * The editor now mirrors every constraint the server actually has on an event
+   * (`data/event-validation`), so no draft a spec can author through the UI reaches
+   * the wire and comes back 422 — an over-long name is refused in the form now, which
+   * is the whole point of #783's second QA pass and which took away this suite's only
+   * way of *provoking* a server refusal. That must not quietly delete the assertion
+   * underneath it: client validation only ever prevents the refusals we already know
+   * about, and the editor's contract is that **the next unknown one does not eat
+   * somebody's work** — and does not read Pydantic's prose out to them.
+   *
+   * So the refusal is forced rather than provoked, and it answers in FastAPI's own
+   * body shape (a `detail` ARRAY of `{loc, msg}`): whatever the server's next
+   * constraint turns out to be, that is the shape it will arrive in.
+   */
+  refuseEventWrites(): () => void {
+    this.refusingWrites = true
+    return () => {
+      this.refusingWrites = false
+    }
+  }
+
+  /**
+   * The same forced 422, for `POST /v1/tournaments` — the "New tournament" dialog's
+   * one write, and for the same reason: the dialog mirrors every constraint the
+   * server has on what it sends (a name is `VARCHAR(255)` and `NOT NULL`), so the
+   * only 422 left to test is the *unknown* one, and it cannot be provoked through
+   * the form. It is the residual case the dialog exists to survive — and the case it
+   * used to answer by printing Pydantic's sentence onto the name field.
+   */
+  refuseTournamentCreate(): () => void {
+    this.refusingTournamentCreate = true
+    return () => {
+      this.refusingTournamentCreate = false
+    }
+  }
+
+  /**
    * Hold every *mutating* response open until the returned callback is invoked —
    * so a spec can look at the UI mid-flight (e.g. "Enter is disabled while the
    * entry is in the air", which is the double-submit guard). Reads keep flowing,
@@ -540,6 +581,11 @@ export class TournamentsStore {
     }
     if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}`) {
       return json(route, 200, this.readDetail())
+    }
+
+    // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
+    if (method === 'POST' && path === '/v1/tournaments') {
+      return this.createTournament(route, request.postDataJSON())
     }
 
     if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/transitions`) {
@@ -678,6 +724,21 @@ export class TournamentsStore {
   }
 
   /**
+   * `POST /v1/tournaments` — the "New tournament" dialog's write. Refused with the
+   * same FastAPI 422 (a `detail` ARRAY, `loc: ["body", "name"]`) while
+   * `refuseTournamentCreate()` is in force; otherwise a 201 whose id is the one the
+   * store serves a detail page for, so the dialog's success navigation lands
+   * somewhere real.
+   */
+  private async createTournament(route: Route, body: unknown) {
+    if (this.refusingTournamentCreate) return this.unprocessableName(route)
+
+    const fields = body as { name?: string }
+    this.detail = { ...this.detail, name: fields.name ?? this.detail.name }
+    return json(route, 201, this.readDetail())
+  }
+
+  /**
    * `POST …/events` — create an event, and **refuse an over-long name with a 422**,
    * as the server does (`VARCHAR(255)`), in FastAPI's own body shape: a `detail`
    * ARRAY of `{msg}` objects, which `extractDetail` (`src/api/client.ts`) is what
@@ -691,7 +752,7 @@ export class TournamentsStore {
    * real one — and would prove nothing about the form.
    */
   private async createEvent(route: Route, body: unknown) {
-    if (nameTooLong(body)) return this.unprocessableName(route)
+    if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
 
     // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
     // server owns — `entered` is derived, and a new event has no entrants.
@@ -709,7 +770,7 @@ export class TournamentsStore {
   private async updateEvent(route: Route, eventId: string, body: unknown) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
-    if (nameTooLong(body)) return this.unprocessableName(route)
+    if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
 
     const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
     // `entrants` and `entered` are the server's, not the editor's — the write body
@@ -719,10 +780,15 @@ export class TournamentsStore {
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
   }
 
-  /** FastAPI's 422, verbatim: `detail` is an ARRAY of pydantic errors, and it is
-   * `extractDetail` (`src/api/client.ts`) that reduces it to the sentence the editor
-   * shows. A stub answering `{detail: "…"}` here would be testing the client against
-   * a server it will never meet. */
+  /** FastAPI's 422, verbatim: `detail` is an ARRAY of pydantic errors. A stub
+   * answering `{detail: "…"}` here would be testing the client against a server it
+   * will never meet — and would hide the very thing round two was about, because a
+   * plain-string detail is *our* copy and may legitimately be shown, while this `msg`
+   * is **Pydantic's** and may not. The client reads the `loc` (which field) and words
+   * the rest itself (`data/save-failure`); this `msg` must appear NOWHERE on screen.
+   *
+   * Shared by the event writes and `POST /v1/tournaments`, because it is the same
+   * refusal: both names are `VARCHAR(255)`, and FastAPI words them identically. */
   private unprocessableName(route: Route) {
     return json(route, 422, {
       detail: [

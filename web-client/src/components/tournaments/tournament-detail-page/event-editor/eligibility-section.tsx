@@ -80,11 +80,16 @@ export const EligibilitySection = ({
       ) : (
         <div className="flex flex-col gap-3">
           {/* Column headers are form furniture: they label the controls beneath
-              them, and a viewer has none. */}
+              them, and a viewer has none.
+
+              They are also *columns*, and below `sm` the rows they head are stacked
+              (`PredicateRow`) — so there are no columns to head, and three words in a
+              row of their own would label nothing. Hidden there; every control keeps
+              its own `aria-label` regardless, which is what a screen reader reads. */}
           {canEdit && (
             <div
               data-testid="predicate-column-headers"
-              className="grid grid-cols-[160px_180px_1fr_auto] gap-2 pb-1 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase"
+              className="hidden gap-2 pb-1 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase sm:grid sm:grid-cols-[160px_180px_1fr_auto]"
             >
               <div>Field</div>
               <div>Operator</div>

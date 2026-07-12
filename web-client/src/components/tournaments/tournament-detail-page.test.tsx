@@ -87,20 +87,22 @@ describe('TournamentDetailPage', () => {
     })
 
     await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    // A new event starts unnamed (`emptyEvent`), and an unnamed event is a 422 —
+    // which the form now refuses to send. So naming it is part of creating it.
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Twilight Singles',
+    )
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
     expect(onCreateEvent).toHaveBeenCalledTimes(1)
     // A successful create closes the editor — and it is the ONLY thing that does.
     await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
   })
 
-  // The page's half of the data-loss bug: it used to fire the mutation and close
-  // the editor in the same breath, so a 422 landed on a sheet that was already gone
-  // and took every field the organizer had typed with it. The write is awaited now,
-  // and only a RESOLVED one closes anything.
-  it('keeps the event editor open when the create is REFUSED', async () => {
-    const onCreateEvent = vi
-      .fn()
-      .mockRejectedValue(new ApiError(422, 'Name is too long.', 'create event'))
+  it('refuses to create an UNNAMED event, and sends nothing (#783 QA)', async () => {
+    // The blank name used to go to the server, come back a 422, and be reported —
+    // in Pydantic's words ("String should have at least 1 character").
+    const onCreateEvent = vi.fn()
     tournamentDetailPagePage.render({
       tournament: buildTournament({ events: [] }),
       onCreateEvent,
@@ -109,11 +111,50 @@ describe('TournamentDetailPage', () => {
     await userEvent.click(tournamentDetailPagePage.getNewEventButton())
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
 
+    expect(onCreateEvent).not.toHaveBeenCalled()
+    expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
+    expect(tournamentDetailPagePage.queryEditorFailure()).toBeNull()
+  })
+
+  // The page's half of the data-loss bug: it used to fire the mutation and close
+  // the editor in the same breath, so a 422 landed on a sheet that was already gone
+  // and took every field the organizer had typed with it. The write is awaited now,
+  // and only a RESOLVED one closes anything.
+  it('keeps the event editor open when the create is REFUSED', async () => {
+    // FastAPI's real 422 body — a `detail` ARRAY of Pydantic errors, whose `msg` is
+    // machine prose the UI must never repeat (DEFINITION_OF_COMPLETE).
+    const onCreateEvent = vi.fn().mockRejectedValue(
+      new ApiError(422, 'String should have at most 255 characters', 'create event', {
+        detail: [
+          {
+            type: 'string_too_long',
+            loc: ['body', 'name'],
+            msg: 'String should have at most 255 characters',
+          },
+        ],
+      }),
+    )
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Twilight Singles',
+    )
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
     await waitFor(() =>
       expect(tournamentDetailPagePage.queryEditorFailure()).toBeInTheDocument(),
     )
+    // Our copy, naming the field the server blamed — not the server's own sentence.
     expect(tournamentDetailPagePage.queryEditorFailure()).toHaveTextContent(
-      'Name is too long.',
+      'The Event name was rejected',
+    )
+    expect(tournamentDetailPagePage.queryEditorFailure()).not.toHaveTextContent(
+      'String should have at most',
     )
     expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
   })

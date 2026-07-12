@@ -32,6 +32,59 @@ describe('BasicsSection', () => {
     expect(basicsSectionPage.queryPlayerLimitHint()).toBeInTheDocument()
   })
 
+  /**
+   * The section does not decide what is wrong — the editor does (`eventIssues`) and
+   * hands each tab its share. What the section owes is that a message it is given
+   * lands **under the control it is about**, in red, with the control marked invalid
+   * (`CLAUDE.md`, `## Forms`). Nothing here is a toast, and nothing here is a banner.
+   */
+  describe('the fields the server can refuse (#783 QA)', () => {
+    it('marks the name invalid and prints its message', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ name: '' }),
+        issues: { name: 'Name is required.' },
+      })
+      expect(basicsSectionPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(basicsSectionPage.queryFieldError('Name is required.')).toBeInTheDocument()
+    })
+
+    it('replaces the player-limit HINT with its error, rather than stacking both', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ maxPlayers: Number('') }),
+        issues: { maxPlayers: 'Enter a player limit.' },
+      })
+      expect(basicsSectionPage.getPlayerLimitInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError('Enter a player limit.'),
+      ).toBeInTheDocument()
+      // The thing that is wrong outranks the thing that is merely worth knowing.
+      expect(basicsSectionPage.queryPlayerLimitHint()).not.toBeInTheDocument()
+    })
+
+    it('marks the entry fee invalid and prints its message', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ entryFee: -5 }),
+        issues: { entryFee: 'The entry fee cannot be negative.' },
+      })
+      expect(basicsSectionPage.getEntryFeeInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError('The entry fee cannot be negative.'),
+      ).toBeInTheDocument()
+    })
+
+    it('marks nothing invalid when it is given no issues', () => {
+      basicsSectionPage.render({ event: buildEvent({ name: '' }) })
+      expect(basicsSectionPage.getNameInput()).toHaveAttribute('aria-invalid', 'false')
+      expect(basicsSectionPage.queryPlayerLimitHint()).toBeInTheDocument()
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015): a viewer gets a rendering of the data, never a
     // disabled editor. It fails loudly the moment someone adds an ungated

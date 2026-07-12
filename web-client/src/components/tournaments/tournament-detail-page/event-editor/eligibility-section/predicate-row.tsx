@@ -117,9 +117,19 @@ export const PredicateRow = ({
   }
 
   return (
+    // **Stacked below `sm`, four columns above it** — the same breakpoint the sheet
+    // itself switches on (`w-full sm:w-[820px]`), so the row's layout changes exactly
+    // when the space it has does.
+    //
+    // The fixed `160px 180px` prefix is 340px of a 375px phone before the Value input
+    // starts, which put that input — and the Remove button, and (once the rules were
+    // validated) the RED MESSAGE UNDER IT — off the right-hand edge of the screen. The
+    // form then refused to save and showed the reason to nobody: an error you cannot
+    // see is a dead button. A `1fr` column cannot rescue a 340px prefix; the prefix
+    // has to stop being one.
     <div
       data-testid="predicate-row"
-      className="grid grid-cols-[160px_180px_1fr_auto] items-start gap-2"
+      className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[160px_180px_1fr_auto]"
     >
       <OptionSelect
         ariaLabel="Field"
@@ -137,7 +147,10 @@ export const PredicateRow = ({
       <div>
         {schema?.type === 'number' && predicate.op === 'between' && (
           <>
-            <div className="flex items-center gap-2">
+            {/* Two number boxes and the word between them: side by side where there
+                is room, stacked where there is not. Two 160px inputs plus "and" do
+                not fit a phone's column either. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Input
                 type="number"
                 aria-label="Lower bound"
@@ -195,11 +208,14 @@ export const PredicateRow = ({
         )}
       </div>
 
+      {/* Stacked, it is the last thing in the row rather than the last thing in the
+          line — pinned to the right edge, where a thumb finds it, and on screen either
+          way. (It was off it: a control hidden past the viewport is not a control.) */}
       <button
         type="button"
         aria-label="Remove rule"
         onClick={onRemove}
-        className="grid size-9 place-items-center rounded-md border border-transparent text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)]"
+        className="grid size-9 place-items-center justify-self-end rounded-md border border-transparent text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)] sm:justify-self-auto"
       >
         <Trash2 size={16} />
       </button>

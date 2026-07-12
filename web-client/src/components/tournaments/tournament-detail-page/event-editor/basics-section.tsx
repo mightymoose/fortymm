@@ -1,5 +1,6 @@
 import { Input } from '@/components/ui/input'
 
+import type { BasicsIssues } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
@@ -13,6 +14,12 @@ export interface BasicsSectionProps {
    * controls — a viewer gets a rendering of the data, never a disabled form
    * (ADR 0015). */
   canEdit: boolean
+  /** What is wrong on this tab, per field (`eventIssues`, `data/event-validation`)
+   * — or `undefined` while the editor is not yet showing errors. The section does
+   * not *decide* this: the editor validates the whole draft on submit and hands each
+   * tab its share, so "may I save?" and "what does this field say in red?" are one
+   * answer, computed once (exactly as the rule rows already work). */
+  issues?: BasicsIssues
   onChange: (next: TournamentEvent) => void
 }
 
@@ -37,6 +44,7 @@ const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
 export const BasicsSection = ({
   event,
   canEdit,
+  issues,
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -55,11 +63,24 @@ export const BasicsSection = ({
         }
       />
 
-      <Field label="Event name" required readOnly={readOnly} value={event.name}>
+      {/* The name is the one field with nowhere else to be caught: blank and
+          256-characters-long are both a 422, and both used to be learned from the
+          server, in Pydantic's words, after the request had gone. The message is
+          `NewTournamentModal`'s, because it is the same field to the person typing
+          it (`data/event-validation`). */}
+      <Field
+        label="Event name"
+        required
+        readOnly={readOnly}
+        value={event.name}
+        error={!!issues?.name}
+        hint={issues?.name}
+      >
         {(id) => (
           <Input
             id={id}
             autoFocus
+            aria-invalid={!!issues?.name}
             value={event.name}
             placeholder="Open Singles"
             onChange={(e) => set({ name: e.target.value })}
@@ -100,9 +121,15 @@ export const BasicsSection = ({
       </div>
 
       <div className="grid grid-cols-2 gap-4">
+        {/* Clearing either number box leaves `NaN` on the draft, which goes on the
+            wire as `null` — a 422 the organizer used to meet only after the request.
+            The error takes the hint's place while it is there: one line under the
+            control, and the thing that is wrong outranks the thing that is merely
+            worth knowing. */}
         <Field
           label="Player limit"
-          hint="Hard cap. Waitlist opens past this."
+          hint={issues?.maxPlayers ?? 'Hard cap. Waitlist opens past this.'}
+          error={!!issues?.maxPlayers}
           readOnly={readOnly}
           value={numericValue(event.maxPlayers)}
         >
@@ -112,6 +139,7 @@ export const BasicsSection = ({
               type="number"
               min={2}
               max={512}
+              aria-invalid={!!issues?.maxPlayers}
               value={event.maxPlayers}
               onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
             />
@@ -121,12 +149,15 @@ export const BasicsSection = ({
           label="Entry fee"
           readOnly={readOnly}
           value={numericValue(event.entryFee)}
+          error={!!issues?.entryFee}
+          hint={issues?.entryFee}
         >
           {(id) => (
             <Input
               id={id}
               type="number"
               min={0}
+              aria-invalid={!!issues?.entryFee}
               value={event.entryFee}
               onChange={(e) => set({ entryFee: Number(e.target.value) })}
             />

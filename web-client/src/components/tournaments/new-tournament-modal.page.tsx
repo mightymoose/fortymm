@@ -24,6 +24,15 @@ const scoped = (container: Container) => ({
   findError(message: string | RegExp) {
     return container.findByText(message)
   },
+  /** The dialog's refusal banner — what a server rejection the form cannot pin to a
+   * single box lands in. Queried by test id rather than by its copy, so a spec can
+   * assert what it does *not* say. */
+  queryErrorBanner() {
+    return container.queryByTestId('new-tournament-error')
+  },
+  findErrorBanner() {
+    return container.findByTestId('new-tournament-error')
+  },
 })
 
 /**
