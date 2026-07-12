@@ -307,25 +307,32 @@ function PlayerRow({ player }: { player: PlayerSummary }) {
         }
       }}
     >
-      <td>
+      {/* Below 640px the shared match-list stylesheet hides the thead and paints
+       * each row as a card, re-adding the column name only for cells that opt in
+       * via `data-label` (#900). Without it the stat values sat there bare — a
+       * lone "1500" with nothing saying it's a rating. The label copy must match
+       * the <th> text above so the mobile caption and the desktop column agree.
+       * The name/seed cells take the same headline/caption hooks the matches row
+       * uses (`data-cell="players"` / `.id-cell`) instead of a stat label. */}
+      <td className="id-cell">
         <SeedCell rank={player.rank} />
       </td>
-      <td>
+      <td data-cell="players">
         <div className="player">
           <UserAvatar name={player.username} size={32} />
           <span className="player-name">{player.username}</span>
         </div>
       </td>
-      <td>
+      <td data-label="Rating">
         <RatingCell rating={player.rating} />
       </td>
-      <td>
+      <td data-label="W–L">
         <span className="players-record">
           {player.wins}
           <span className="players-record-loss"> – {player.losses}</span>
         </span>
       </td>
-      <td>
+      <td data-label="Form · L5">
         <FormDots form={player.form} />
       </td>
     </tr>

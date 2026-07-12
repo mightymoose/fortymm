@@ -35,17 +35,19 @@ import {
   type SeedMatch,
 } from './match-store'
 import { notificationHandlers } from './notifications-store'
-import { createRbacState, dispatchRbac } from './rbac-engine'
+import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
 import {
   createEvent as createTournamentEvent,
   createTournament,
   deleteEvent as deleteTournamentEvent,
   deleteTournament as deleteTournamentSeed,
+  enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
   updateEvent as updateTournamentEvent,
   updateTournament,
+  withdrawEntry as withdrawTournamentEntry,
 } from './tournaments-store'
 import { PERM } from '@/lib/permissions'
 
@@ -62,14 +64,16 @@ export const mockSession = sessionResponse({
     // its children on their own permission. Grant ADMIN_VIEW so the section
     // expands, AUTH_MANAGE for the RBAC pages, TOURNAMENT_VIEW +
     // TOURNAMENT_CREATE so the Tournaments item appears, its page loads, and the
-    // "New tournament" action shows, and NOTIFICATIONS_BROADCAST so the
-    // Broadcast item appears and its (now permission-gated) tool renders under
-    // `npm run dev`.
+    // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
+    // tester who can self-register into a singles event, and
+    // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
+    // permission-gated) tool renders under `npm run dev`.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
       PERM.TOURNAMENT_VIEW,
       PERM.TOURNAMENT_CREATE,
+      PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
     ],
   },
@@ -879,18 +883,37 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-async function rbacHandler({ request }: { request: Request }) {
-  const url = new URL(request.url)
-  const path = url.pathname.replace(/^\/api/, '')
-  const body = await readJson(request)
-  const result = dispatchRbac(state, request.method, path, body)
-  if (!result) {
-    return HttpResponse.json({ detail: `unmocked ${request.method} ${path}` }, { status: 404 })
+function rbacHandlerFor(rbacState: RbacState) {
+  return async ({ request }: { request: Request }) => {
+    const url = new URL(request.url)
+    const path = url.pathname.replace(/^\/api/, '')
+    const body = await readJson(request)
+    const result = dispatchRbac(rbacState, request.method, path, body)
+    if (!result) {
+      return HttpResponse.json({ detail: `unmocked ${request.method} ${path}` }, { status: 404 })
+    }
+    if (result.status === 204) return new HttpResponse(null, { status: 204 })
+    return HttpResponse.json(result.body as Parameters<typeof HttpResponse.json>[0], {
+      status: result.status,
+    })
   }
-  if (result.status === 204) return new HttpResponse(null, { status: 204 })
-  return HttpResponse.json(result.body as Parameters<typeof HttpResponse.json>[0], {
-    status: result.status,
-  })
+}
+
+/**
+ * The RBAC routes bound to a caller-owned `RbacState`. The default handlers use
+ * the shared `DEMO_SEED` state; a test that needs a deterministic universe
+ * (e.g. "exactly one default role and one plain one") builds its own state and
+ * `server.use(...)`es these over the top.
+ */
+export function rbacHandlersFor(rbacState: RbacState) {
+  const handler = rbacHandlerFor(rbacState)
+  return RBAC_PATHS.flatMap((path) => [
+    http.get(path, handler),
+    http.post(path, handler),
+    http.patch(path, handler),
+    http.put(path, handler),
+    http.delete(path, handler),
+  ])
 }
 
 const RBAC_PATHS = [
@@ -1543,6 +1566,50 @@ export const handlers = [
       return HttpResponse.json(result.event, { status: 201 })
     },
   ),
+  // Entries (ADR-0016). Self-registration only: there is no request body — the
+  // caller IS the entrant. Registered before the bare `:eventId` routes so MSW
+  // never mistakes an entries path for an event path. A withdrawal is addressed
+  // by the *entry's* id (the `id` on each entrant), and is idempotent.
+  http.post(
+    '*/v1/tournaments/:tournamentId/events/:eventId/entries',
+    async ({ params }) => {
+      await delay(250)
+      const result = enterTournamentEvent(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        if (result.status === 400) {
+          return detail('Only singles events can be entered.', 400)
+        }
+        if (result.status === 409) {
+          return detail('You have already entered this event.', 409)
+        }
+        return detail('Event not found.', 404)
+      }
+      return HttpResponse.json(result.entrant, { status: 201 })
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/events/:eventId/entries/:entryId',
+    async ({ params }) => {
+      await delay(250)
+      const result = withdrawTournamentEntry(
+        String(params.tournamentId),
+        String(params.eventId),
+        String(params.entryId),
+      )
+      if (!result.ok) {
+        return detail(
+          result.status === 403
+            ? 'You can only withdraw your own entry.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return new HttpResponse(null, { status: 204 })
+    },
+  ),
   http.patch(
     '*/v1/tournaments/:tournamentId/events/:eventId',
     async ({ params, request }) => {
@@ -1622,11 +1689,5 @@ export const handlers = [
   }),
   ...notificationHandlers,
 
-  ...RBAC_PATHS.flatMap((path) => [
-    http.get(path, rbacHandler),
-    http.post(path, rbacHandler),
-    http.patch(path, rbacHandler),
-    http.put(path, rbacHandler),
-    http.delete(path, rbacHandler),
-  ]),
+  ...rbacHandlersFor(state),
 ]

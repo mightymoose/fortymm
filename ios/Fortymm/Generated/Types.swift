@@ -558,6 +558,38 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
     func deleteEventV1TournamentsTournamentIdEventsEventIdDelete(_ input: Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Input) async throws -> Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Output
+    /// Enter Event
+    ///
+    /// Register the signed-in player in a singles event.
+    ///
+    /// Self-registration only: the entry created is always the caller's own, which
+    /// is why the request carries no body — there is no field in which to name
+    /// someone else. Entering a player who is not you is a director's job, and a
+    /// different endpoint.
+    ///
+    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
+    /// per player, with nowhere to record a partner or a team.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
+    func enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(_ input: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input) async throws -> Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output
+    /// Withdraw From Event
+    ///
+    /// Withdraw the signed-in player's own entry from an event.
+    ///
+    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
+    /// survives, so the event keeps its withdrawal history — and, because the
+    /// uniqueness guard is a *partial* index over active entries only, the player is
+    /// free to enter the same event again afterwards.
+    ///
+    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
+    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
+    /// and asking for a state the resource is already in is a success.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
+    func withdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete(_ input: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input) async throws -> Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -1536,6 +1568,54 @@ extension APIProtocol {
         headers: Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Input.Headers = .init()
     ) async throws -> Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Output {
         try await deleteEventV1TournamentsTournamentIdEventsEventIdDelete(Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Enter Event
+    ///
+    /// Register the signed-in player in a singles event.
+    ///
+    /// Self-registration only: the entry created is always the caller's own, which
+    /// is why the request carries no body — there is no field in which to name
+    /// someone else. Entering a player who is not you is a director's job, and a
+    /// different endpoint.
+    ///
+    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
+    /// per player, with nowhere to record a partner or a team.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
+    internal func enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(
+        path: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Path,
+        headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init()
+    ) async throws -> Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output {
+        try await enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Withdraw From Event
+    ///
+    /// Withdraw the signed-in player's own entry from an event.
+    ///
+    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
+    /// survives, so the event keeps its withdrawal history — and, because the
+    /// uniqueness guard is a *partial* index over active entries only, the player is
+    /// free to enter the same event again afterwards.
+    ///
+    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
+    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
+    /// and asking for a state the resource is already in is a success.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
+    internal func withdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete(
+        path: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Path,
+        headers: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Headers = .init()
+    ) async throws -> Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output {
+        try await withdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete(Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input(
             path: path,
             headers: headers
         ))
@@ -5343,6 +5423,11 @@ internal enum Components {
             /// you got, and there was nothing before it to measure from". A ``0.0`` here
             /// would claim a rated match moved a rating by nothing.
             ///
+            /// The arithmetic itself is ``app.domain.rating.rating_delta`` — never inlined
+            /// here — so this wire model and the match-details domain
+            /// (``app.domain.match.extras.RatingChange.delta``) cannot drift into
+            /// disagreeing about the same player's movement.
+            ///
             /// - Remark: Generated from `#/components/schemas/RatingChange/delta`.
             internal var delta: Swift.Double?
             /// Creates a new `RatingChange`.
@@ -5801,6 +5886,10 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RoleRead/permission_ids`.
             internal var permissionIds: [Swift.String]
+            /// Whether this is the default role held by every user on the platform.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoleRead/is_default`.
+            internal var isDefault: Swift.Bool
             /// Creates a new `RoleRead`.
             ///
             /// - Parameters:
@@ -5810,13 +5899,15 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - permissionIds:
+            ///   - isDefault: Whether this is the default role held by every user on the platform.
             internal init(
                 name: Swift.String,
                 description: Swift.String? = nil,
                 id: Swift.String,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
-                permissionIds: [Swift.String]
+                permissionIds: [Swift.String],
+                isDefault: Swift.Bool
             ) {
                 self.name = name
                 self.description = description
@@ -5824,6 +5915,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.permissionIds = permissionIds
+                self.isDefault = isDefault
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
@@ -5832,6 +5924,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case permissionIds = "permission_ids"
+                case isDefault = "is_default"
             }
         }
         /// - Remark: Generated from `#/components/schemas/RoleUpdate`.
@@ -6284,6 +6377,48 @@ internal enum Components {
                 case events
             }
         }
+        /// One *active* entry in an event. Withdrawn entries are not entrants: they
+        /// appear in neither this list nor the ``entered`` count.
+        ///
+        /// ``id`` is the *entry's* id, not the player's: it is the address a client
+        /// withdraws through (``DELETE …/entries/{entry_id}``), so an entrant that a
+        /// client can see is an entrant it can act on.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead`.
+        internal struct TournamentEntrantRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/user_id`.
+            internal var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/username`.
+            internal var username: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/seed`.
+            internal var seed: Swift.Int?
+            /// Creates a new `TournamentEntrantRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - userId:
+            ///   - username:
+            ///   - seed:
+            internal init(
+                id: Swift.String,
+                userId: Swift.String,
+                username: Swift.String,
+                seed: Swift.Int? = nil
+            ) {
+                self.id = id
+                self.userId = userId
+                self.username = username
+                self.seed = seed
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case userId = "user_id"
+                case username
+                case seed
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/TournamentEventCreate`.
         internal struct TournamentEventCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/name`.
@@ -6415,8 +6550,6 @@ internal enum Components {
             internal var maxPlayers: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
             internal var entryFee: Swift.Double
-            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entered`.
-            internal var entered: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/match_settings`.
@@ -6429,6 +6562,16 @@ internal enum Components {
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/updated_at`.
             internal var updatedAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entrants`.
+            internal var entrants: [Components.Schemas.TournamentEntrantRead]
+            /// The registration count. Derived — there is no stored counter (ADR-0016).
+            ///
+            /// It is ``len(entrants)`` rather than a field of its own precisely so the
+            /// count and the list it counts cannot disagree: an event that says it has
+            /// 52 entrants but lists 51 is not a representable state.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entered`.
+            internal var entered: Swift.Int
             /// Creates a new `TournamentEventRead`.
             ///
             /// - Parameters:
@@ -6439,13 +6582,14 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
-            ///   - entered:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
             ///   - pools:
             ///   - createdAt:
             ///   - updatedAt:
+            ///   - entrants:
+            ///   - entered: The registration count. Derived — there is no stored counter (ADR-0016).
             internal init(
                 id: Swift.String,
                 tournamentId: Swift.String,
@@ -6454,13 +6598,14 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 maxPlayers: Swift.Int,
                 entryFee: Swift.Double,
-                entered: Swift.Int,
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate],
                 pools: [Components.Schemas.Pool],
                 createdAt: Foundation.Date,
-                updatedAt: Foundation.Date
+                updatedAt: Foundation.Date,
+                entrants: [Components.Schemas.TournamentEntrantRead],
+                entered: Swift.Int
             ) {
                 self.id = id
                 self.tournamentId = tournamentId
@@ -6469,13 +6614,14 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
-                self.entered = entered
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
                 self.pools = pools
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
+                self.entrants = entrants
+                self.entered = entered
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -6485,21 +6631,22 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
-                case entered
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
                 case pools
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
+                case entrants
+                case entered
             }
         }
         /// Partial update for an event. Absent fields are unchanged. Every column
         /// these fields back — ``name``/``format``/``draw_type``/``max_players``/
         /// ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
         /// NULL, so an explicit ``null`` on any of them is rejected (422);
-        /// ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
-        /// server-managed registration count and is intentionally NOT updatable here —
+        /// ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+        /// updatable — it is derived from the event's active entries, not stored — so
         /// sending it is a 422 via ``extra="forbid"``.
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate`.
@@ -18232,6 +18379,389 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Enter Event
+    ///
+    /// Register the signed-in player in a singles event.
+    ///
+    /// Self-registration only: the entry created is always the caller's own, which
+    /// is why the request carries no body — there is no field in which to name
+    /// someone else. Entering a player who is not you is a director's job, and a
+    /// different endpoint.
+    ///
+    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// to enter it again. Doubles and teams events are a `400`: an entry is one row
+    /// per player, with nowhere to record a partner or a team.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
+    internal enum EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost {
+        internal static let id: Swift.String = "enter_event_v1_tournaments__tournament_id__events__event_id__entries_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/path/event_id`.
+                internal var eventId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - eventId:
+                internal init(
+                    tournamentId: Swift.String,
+                    eventId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.eventId = eventId
+                }
+            }
+            internal var path: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Path,
+                headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/responses/201/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.TournamentEntrantRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentEntrantRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            internal var created: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Withdraw From Event
+    ///
+    /// Withdraw the signed-in player's own entry from an event.
+    ///
+    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
+    /// survives, so the event keeps its withdrawal history — and, because the
+    /// uniqueness guard is a *partial* index over active entries only, the player is
+    /// free to enter the same event again afterwards.
+    ///
+    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
+    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
+    /// and asking for a state the resource is already in is a success.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
+    internal enum WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete {
+        internal static let id: Swift.String = "withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/path/event_id`.
+                internal var eventId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/path/entry_id`.
+                internal var entryId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - eventId:
+                ///   - entryId:
+                internal init(
+                    tournamentId: Swift.String,
+                    eventId: Swift.String,
+                    entryId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.eventId = eventId
+                    self.entryId = entryId
+                }
+            }
+            internal var path: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Path,
+                headers: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct NoContent: Sendable, Hashable {
+                /// Creates a new `NoContent`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            case noContent(Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.NoContent)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            internal static var noContent: Self {
+                .noContent(.init())
+            }
+            /// The associated value of the enum case if `self` is `.noContent`.
+            ///
+            /// - Throws: An error if `self` is not `.noContent`.
+            /// - SeeAlso: `.noContent`.
+            internal var noContent: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.NoContent {
+                get throws {
+                    switch self {
+                    case let .noContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "noContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/DELETE/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

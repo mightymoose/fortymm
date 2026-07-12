@@ -9,16 +9,15 @@ from sqlalchemy.orm import selectinload
 
 from app.attention import attention_priority, list_attention_kind
 from app.db import get_session
-from app.matches import (
+from app.match_queries import (
     _attention_matches_query,
     current_game_number,
     match_eager_options,
     my_standing_proposal_exists,
     opponent_username,
     participant_filter,
-    side_win_counts,
 )
-from app.matches import (
+from app.match_queries import (
     my_side as resolve_my_side,
 )
 from app.models import (
@@ -37,6 +36,7 @@ from app.ratings.stats import (
     league_peak_rating,
     league_percentile,
 )
+from app.result_acceptance import side_win_counts
 from app.retirement import retirement_deadline
 from app.schemas.dashboard import (
     AttentionKind,

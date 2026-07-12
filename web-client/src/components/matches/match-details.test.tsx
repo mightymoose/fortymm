@@ -445,15 +445,14 @@ describe("MatchDetails — page wiring", () => {
     });
     matchDetailsPage.mockMatch("m-form", match);
 
-    const { container } = matchDetailsPage.render("m-form");
+    matchDetailsPage.render("m-form");
 
-    // Wait for the Players snapshot card title to render. The header now
-    // carries the temporal frame so the per-field labels don't have to.
-    await waitFor(() =>
-      expect(container.querySelector(".md-card__hd h3")).toHaveTextContent(
-        "Players · going into this match",
-      ),
-    );
+    // Wait for the Players snapshot panel to render. It's a labelled landmark
+    // named by its own heading — which carries the temporal frame, so the
+    // per-field labels don't have to.
+    await screen.findByRole("region", {
+      name: "Players · going into this match",
+    });
     // Wiring only: each half's content (form rows, rating box, career strip)
     // is pinned by the players-panel query and component tests. Here we prove
     // the panel projected *this* payload — my history half and the rookie's
@@ -523,29 +522,30 @@ describe("MatchDetails — page wiring", () => {
     });
     matchDetailsPage.mockMatch("m-h2h", match);
 
-    const { container } = matchDetailsPage.render("m-h2h");
+    matchDetailsPage.render("m-h2h");
 
-    await waitFor(() => {
-      const headings = Array.from(
-        container.querySelectorAll(".md-card__hd h3"),
-      );
-      expect(headings.map((h) => h.textContent)).toContain("Head to head");
+    // The panel is a labelled landmark named by its heading; the content
+    // lookups below are scoped inside it, so they also prove the body belongs
+    // to *this* panel.
+    const h2hPanel = await screen.findByRole("region", {
+      name: "Head to head",
     });
-    const h2hCard = container.querySelector(".md-h2h")!;
-    expect(screen.getByText("3 MEETINGS")).toBeInTheDocument();
+    const h2hCard = h2hPanel.querySelector(".md-h2h")!;
+    expect(within(h2hPanel).getByText("3 MEETINGS")).toBeInTheDocument();
     // Win counts: left = me = 2, right = opp = 1.
-    const counts = h2hCard.querySelectorAll(".md-h2h__count");
-    expect(counts[0]).toHaveTextContent("2");
-    expect(counts[1]).toHaveTextContent("1");
+    expect(h2hCard.querySelector(".md-h2h__count--l")).toHaveTextContent(/^2$/);
+    expect(h2hCard.querySelector(".md-h2h__count--r")).toHaveTextContent(/^1$/);
     // Three rows, newest first; the loss row tints the opponent's (right)
     // score, the win row tints mine (left).
     const rows = h2hCard.querySelectorAll(".md-h2h__row");
     expect(rows).toHaveLength(3);
-    const scoreSides = (row: Element) =>
-      row.querySelectorAll(".md-h2h__score-side");
-    expect(scoreSides(rows[0])[1]).toHaveClass("md-h2h__score-side--win");
-    expect(scoreSides(rows[0])[0]).not.toHaveClass("md-h2h__score-side--win");
-    expect(scoreSides(rows[1])[0]).toHaveClass("md-h2h__score-side--win");
+    const leftScore = (row: Element) =>
+      row.querySelector(".md-h2h__score-side--l");
+    const rightScore = (row: Element) =>
+      row.querySelector(".md-h2h__score-side--r");
+    expect(rightScore(rows[0])).toHaveClass("md-h2h__score-side--win");
+    expect(leftScore(rows[0])).not.toHaveClass("md-h2h__score-side--win");
+    expect(leftScore(rows[1])).toHaveClass("md-h2h__score-side--win");
   });
 
   it("shows the rating change card when ratings moved", async () => {
@@ -580,17 +580,12 @@ describe("MatchDetails — page wiring", () => {
     });
     matchDetailsPage.mockMatch("m-rated", match);
 
-    const { container } = matchDetailsPage.render("m-rated");
+    matchDetailsPage.render("m-rated");
 
-    await waitFor(() => {
-      const headings = Array.from(
-        container.querySelectorAll(".md-card__hd h3"),
-      );
-      expect(headings.map((h) => h.textContent)).toContain(
-        "Result · rating change",
-      );
+    const ratingsPanel = await screen.findByRole("region", {
+      name: "Result · rating change",
     });
-    const rows = container.querySelectorAll(".md-rating-row");
+    const rows = ratingsPanel.querySelectorAll(".md-rating-row");
     expect(rows).toHaveLength(2);
     const [winnerRow, loserRow] = Array.from(rows);
     expect(
@@ -615,15 +610,22 @@ describe("MatchDetails — page wiring", () => {
     });
     matchDetailsPage.mockMatch("m-unrated", match);
 
-    const { container } = matchDetailsPage.render("m-unrated");
+    matchDetailsPage.render("m-unrated");
 
-    await waitFor(() =>
-      expect(container.querySelector(".md-card__hd h3")).toBeInTheDocument(),
-    );
-    const headings = Array.from(container.querySelectorAll(".md-card__hd h3"));
-    expect(headings.map((h) => h.textContent)).not.toContain(
-      "Result · rating change",
-    );
+    // Two guards, so the absence below can't pass vacuously on a page that
+    // simply hasn't rendered yet: the always-present Match info panel proves
+    // the page rendered, and the ratings section's own busy status being gone
+    // proves *that* section settled — it resolved to nothing rather than still
+    // being in flight (a suspended Ratings renders that status as its
+    // fallback, so a mid-flight section would fail here rather than sneak a
+    // free pass through the absence assertion).
+    await screen.findByRole("region", { name: "Match info" });
+    expect(
+      screen.queryByRole("status", { name: "Loading rating change" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Result · rating change" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides the rating change card while the match is still live", async () => {
@@ -663,13 +665,17 @@ describe("MatchDetails — page wiring", () => {
 
     const { container } = matchDetailsPage.render("m-live-rated");
 
-    await waitFor(() =>
-      expect(container.querySelector(".md-card__hd h3")).toBeInTheDocument(),
-    );
-    const headings = Array.from(container.querySelectorAll(".md-card__hd h3"));
-    expect(headings.map((h) => h.textContent)).not.toContain(
-      "Result · rating change",
-    );
+    // Same two guards as above, same reason: the page has rendered (Match info
+    // panel) and the ratings section has settled (its busy status is gone), so
+    // the absence assertions below are about a section that *chose* to render
+    // nothing — not one that is still loading.
+    await screen.findByRole("region", { name: "Match info" });
+    expect(
+      screen.queryByRole("status", { name: "Loading rating change" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Result · rating change" }),
+    ).not.toBeInTheDocument();
     expect(container.querySelector(".md-rating-row")).toBeNull();
   });
 });

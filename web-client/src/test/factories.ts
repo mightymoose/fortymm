@@ -107,6 +107,9 @@ export function permission(overrides: Partial<Permission> = {}): Permission {
   }
 }
 
+// `is_default` is derived server-side from the role's name (ADR-0016): exactly
+// one role — the one every user holds — carries it. Default it to false so a
+// seed opts *in* to being the default role rather than out.
 export function role(overrides: Partial<Role> = {}): Role {
   return {
     id: nextId('r'),
@@ -115,6 +118,7 @@ export function role(overrides: Partial<Role> = {}): Role {
     permission_ids: [],
     created_at: ISO,
     updated_at: ISO,
+    is_default: false,
     ...overrides,
   }
 }

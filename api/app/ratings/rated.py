@@ -97,6 +97,35 @@ def had_rating_before() -> ColumnElement[bool]:
     )
 
 
+def reported_rating_before(
+    row: RatingHistory, *, had_rating_before: bool
+) -> float | None:
+    """THE read of ``rating_history.previous_rating_value`` — the only one in ``app/``
+    (``test_previous_rating_value_is_read_in_exactly_one_place`` is the fence around
+    that, and it will fail the moment a second one appears).
+
+    The stored column is the state the Glicko-2 update STARTED FROM, which is not
+    the same thing as the rating the player HELD going in: for a first rated match
+    it is the 1500 the league seeded them with on joining. Reported raw it says
+    "1500 → 1268, −232" — 232 points lost from a rating that was never held. So the
+    column is not readable on its own; it is only readable through this function,
+    which demands the one fact it cannot know about itself.
+
+    ``had_rating_before`` is ``had_rating_before()`` above, selected alongside the
+    row. Keyword-only and with NO DEFAULT, deliberately: every caller must answer
+    it, because defaulting it either way silently mis-narrates one of the two cases
+    — and the wrong default IS the bug (#952).
+
+    Both surfaces that report a rating change come through here — the wire schema
+    ``app.schemas.rating.RatingChange.from_history`` (dashboard, profile, recent
+    matches) and ``app.repositories.match_details_repository.rating_changes`` (the
+    match-details extras) — so they cannot drift into disagreeing about the same
+    player's ``before``, exactly as ``app.domain.rating.rating_delta`` keeps them
+    from disagreeing about the ``delta`` derived from it.
+    """
+    return row.previous_rating_value if had_rating_before else None
+
+
 def is_rated_member() -> ColumnElement[bool]:
     """A ``UserLeagueRating`` row that IS A RUNG ON THE LADDER — the WHERE-clause
     form of "not Unrated", and the single definition of the league's rated

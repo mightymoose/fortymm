@@ -887,7 +887,6 @@ body.dark.fortymm-theme {
   gap: 2px;
 }
 .app-shell__nav-link {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -921,17 +920,6 @@ body.dark.fortymm-theme {
 }
 .app-shell__nav-link.is-active .app-shell__nav-icon {
   color: var(--ball-400);
-}
-.app-shell__nav-link.is-active::before {
-  content: '';
-  position: absolute;
-  left: -3px;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: var(--ball-500);
-  box-shadow: 0 0 8px rgba(255, 122, 26, 0.6);
 }
 
 .app-shell__nav-link.is-parent-active .app-shell__nav-icon {
@@ -2611,12 +2599,6 @@ body.dark.fortymm-theme {
 }
 
 /* ---------- Cards ---------- */
-.fortymm-theme .md-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-}
-
 /* Acceptance callout that leads the match-details page when a posted result
    needs the viewer's action (or is waiting on the opponent's). The active
    "awaiting your acceptance" state is a Featured card (orange ring + accent glow, the
@@ -2838,21 +2820,6 @@ body.dark.fortymm-theme {
   }
 }
 
-.fortymm-theme .md-card__hd {
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid var(--ink-700);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.fortymm-theme .md-card__body {
-  padding: 18px;
-}
-.fortymm-theme .md-card__hd-meta {
-  font: 500 11px var(--font-ui);
-  color: var(--fg-muted);
-  letter-spacing: 0.08em;
-}
 .fortymm-theme .md-rating-card__body {
   display: flex;
   flex-direction: column;
@@ -3272,8 +3239,8 @@ body.dark.fortymm-theme {
   margin: 0 auto;
 }
 /* Card-section skeletons (players panel, match info) — leaf sizes only; the
-   `.md-card`/`.md-profile`/`.md-info-row` containers supply every dimension
-   that drives height, so the swap to real content doesn't shift. */
+   shared `Card` and the `.md-profile`/`.md-info-row` containers supply every
+   dimension that drives height, so the swap to real content doesn't shift. */
 .fortymm-theme .md-sk--card-title {
   width: 130px;
   height: 12px;

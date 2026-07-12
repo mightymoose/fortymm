@@ -1,3 +1,4 @@
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
 import { PredicateRow, type PredicateRowProps } from './predicate-row'
@@ -16,8 +17,21 @@ const scoped = (container: Container) => ({
   getRemoveButton() {
     return container.getByRole('button', { name: 'Remove rule' })
   },
+  queryRemoveButton() {
+    return container.queryByRole('button', { name: 'Remove rule' })
+  },
   getFieldTrigger() {
     return container.getByRole('combobox', { name: 'Field' })
+  },
+  /** Every interactive control in the row, swept by role. Supplement only —
+   * `getFormElements()` is the guarantee. */
+  getInteractiveControls() {
+    return interactiveControlsIn(container)
+  },
+  /** Every interactive element in the row, swept by DOM (`@/test/read-only`).
+   * Empty is the point of the read-only view. */
+  getFormElements() {
+    return interactiveElementsIn(container.getByTestId('predicate-row'))
   },
 })
 

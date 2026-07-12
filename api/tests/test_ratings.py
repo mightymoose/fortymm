@@ -498,24 +498,38 @@ def test_previous_rating_value_is_read_in_exactly_one_place():
     dashboard hero — each fixed in turn while the next one sat there re-deriving it,
     because nothing stopped a reader from reaching for the raw column.
 
-    So the read side has exactly ONE door: ``RatingChange.from_history``, which
-    demands ``had_rating_before`` (keyword-only, no default — the question cannot be
-    skipped) and returns a model whose ``delta`` is a COMPUTED field, so a change
-    that reports a fall from a rating the player never held is not constructible.
+    So the read side has exactly ONE door: ``app.ratings.rated`` — whose
+    ``reported_rating_before(row, *, had_rating_before)`` demands the flag
+    (keyword-only, no default — the question cannot be skipped) and resolves the
+    seeded prior to ``None``. Everything a surface can then do with the result
+    derives itself: ``RatingChange.delta`` is a computed field / property over
+    ``before`` and ``after`` (``app.domain.rating.rating_delta``), so a change that
+    reports a fall from a rating the player never held is not constructible.
+
+    THE DOOR MOVED, AND THE FENCE MOVED WITH IT. It used to be
+    ``schemas.rating.RatingChange.from_history`` — the wire model — which worked
+    only while the wire model was the sole path to a rating change. It no longer is:
+    the match-details extras now load through ``MatchDetailsRepository`` (ADR-0015)
+    and build the *domain* ``RatingChange``, which is not the pydantic one and
+    cannot be reached through it. Two column readers would have been two chances to
+    re-derive the phantom — so the read was extracted DOWN into ``ratings/rated.py``,
+    next to the ``had_rating_before()`` predicate that feeds it, and both surfaces
+    (wire schema and repository) now come through that one function. One reader,
+    relocated — not one reader per surface.
 
     This asserts the door is the only one. An ``ast.Attribute`` load of the name —
     ``row.previous_rating_value``, ``select(RatingHistory.previous_rating_value)``,
     the two shapes every one of those four bugs took — is allowed in
-    ``app/schemas/rating.py`` and nowhere else. The WRITE side is untouched and
+    ``app/ratings/rated.py`` and nowhere else. The WRITE side is untouched and
     deliberately invisible here: it passes the value as a keyword argument
     (``previous_rating_value=...``), which is an ``ast.keyword``, not an attribute
     load. ``result_acceptance``, ``recompute`` and ``leagues`` go on recording the
     truth; only the reading of it is fenced.
 
     If you are here because this test failed: you do not want the raw column. You
-    want ``RatingChange.from_history(row, had_rating_before=...)``, with
+    want ``reported_rating_before(row, had_rating_before=...)``, with
     ``app.ratings.rated.had_rating_before()`` selected alongside your row — that is
-    what every other read-side surface does.
+    what both read-side surfaces do.
     """
     app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
     readers = {
@@ -526,7 +540,7 @@ def test_previous_rating_value_is_read_in_exactly_one_place():
         and node.attr == "previous_rating_value"
         and isinstance(node.ctx, ast.Load)
     }
-    assert readers == {"schemas/rating.py"}
+    assert readers == {"ratings/rated.py"}
 
 
 async def test_match_details_first_rated_match_establishes_a_rating_not_a_fall(

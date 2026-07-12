@@ -169,3 +169,74 @@ test.describe('Administration · Roles', () => {
     await expect.poll(() => store.getUser('u2')!.role_ids).toEqual(['r_score'])
   })
 })
+
+// ADR-0016: `User` is held by every account on the platform. The API refuses to
+// delete or rename it; the page doesn't offer either. Its permissions stay
+// editable — that's what the role is *for*.
+const DEFAULT_ROLE_SEED = {
+  permissions: [{ id: 'p_tv', name: 'tournament.view', description: 'View tournaments.' }],
+  roles: [
+    { id: 'r_user', name: 'User', description: 'Held by everyone.', permission_ids: [], is_default: true },
+    { id: 'r_score', name: 'Scorekeeper', description: 'Tap in points.', permission_ids: ['p_tv'] },
+  ],
+  users: [{ id: 'u1', username: 'alex', role_ids: ['r_user', 'r_score'] }],
+}
+
+test.describe('Administration · Roles · the default role', () => {
+  test('badges it and refuses to offer Delete, explaining why', async ({ page }) => {
+    const { pom } = await RolesPage.navigateTo(page, DEFAULT_ROLE_SEED)
+
+    await expect(pom.roleRowBadge('User')).toBeVisible()
+    await expect(pom.roleRowBadge('Scorekeeper')).toHaveCount(0)
+
+    await pom.roleRow('User').click()
+    await expect(pom.detailBadge).toBeVisible()
+    await expect(pom.deleteButton).toBeDisabled()
+    await expect(pom.deleteTooltipHost).toHaveAttribute(
+      'title',
+      /held by everyone on the platform and can't be deleted/i,
+    )
+  })
+
+  test('locks its name in the edit modal but keeps the description editable', async ({ page }) => {
+    const { pom, store } = await RolesPage.navigateTo(page, DEFAULT_ROLE_SEED)
+    await pom.roleRow('User').click()
+    await pom.editButton.click()
+
+    await expect(pom.editNameInput).toBeDisabled()
+    const description = page.getByLabel('Description')
+    await description.fill('Everyone gets this.')
+    await pom.editSaveButton.click()
+
+    // The PATCH carries the unchanged name alongside the new description — the
+    // API only refuses a name that actually *changes*, so this must go through.
+    await expect.poll(() => store.getRole('r_user')!.description).toBe('Everyone gets this.')
+    expect(store.getRole('r_user')!.name).toBe('User')
+  })
+
+  test('keeps its permission checkboxes tickable', async ({ page }) => {
+    const { pom, store } = await RolesPage.navigateTo(page, DEFAULT_ROLE_SEED)
+    await pom.roleRow('User').click()
+
+    await pom.permToggle('tournament.view').click()
+
+    await expect.poll(() => store.getRole('r_user')!.permission_ids).toEqual(['p_tv'])
+  })
+
+  test('leaves a normal role renameable and deletable', async ({ page }) => {
+    const { pom, store } = await RolesPage.navigateTo(page, DEFAULT_ROLE_SEED)
+    await pom.roleRow('Scorekeeper').click()
+
+    await pom.editButton.click()
+    await expect(pom.editNameInput).toBeEnabled()
+    await pom.editNameInput.fill('Umpire')
+    await pom.editSaveButton.click()
+    await expect.poll(() => store.getRole('r_score')!.name).toBe('Umpire')
+
+    await expect(pom.deleteButton).toBeEnabled()
+    await pom.deleteButton.click()
+    await pom.confirmDeleteButton.click()
+
+    await expect.poll(() => store.listRoles().map((r) => r.name)).toEqual(['User'])
+  })
+})

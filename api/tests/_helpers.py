@@ -4,17 +4,17 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from httpx import ASGITransport, AsyncClient, Request
 from rq import Queue
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.main import app as fastapi_app
-from app.models import User
+from app.models import Permission, Role, RolePermission, User, UserRole
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
@@ -83,6 +83,34 @@ async def make_user(db_session: AsyncSession, username: str) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def grant_permissions(
+    db_session: AsyncSession, user: User, names: Sequence[str]
+) -> None:
+    """Grant ``names`` to ``user`` through real RBAC rows, so tests exercise the
+    genuine permission gate rather than overriding it.
+
+    Each Permission row is reused if an earlier call already created it, and the
+    user gets a role of their own carrying exactly ``names`` — so two users in
+    one test can hold different subsets (view-only vs view+enter, say), which is
+    what proves a route is gated on the permission it claims and not merely on
+    "is signed in".
+    """
+    role = Role(name=f"grant-{user.id}", description="Per-user test grant.")
+    db_session.add(role)
+    await db_session.flush()
+    for name in names:
+        permission = (
+            await db_session.execute(select(Permission).where(Permission.name == name))
+        ).scalar_one_or_none()
+        if permission is None:
+            permission = Permission(name=name, description=name)
+            db_session.add(permission)
+            await db_session.flush()
+        db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.commit()
 
 
 def make_client() -> AsyncClient:
@@ -156,6 +184,44 @@ async def opponent_session(
         yield client, user
     finally:
         await client.aclose()
+
+
+@asynccontextmanager
+async def counted_statements(
+    engine: AsyncEngine,
+) -> AsyncIterator[tuple[AsyncSession, list[str]]]:
+    """Yields ``(session, statements)``: a session whose every emitted SQL
+    statement is appended to the list, for the N+1 tripwires that pin how many
+    round-trips a loader costs.
+
+    Example::
+
+        async with counted_statements(engine) as (session, statements):
+            await MatchDetailsRepository(session).career_before(ids, now)
+        assert len(statements) == 1, statements
+
+    **Why a fresh session, not the ``db_session`` fixture.** The counter must see
+    only the statements the code under test emits: a fresh
+    ``async_sessionmaker`` session keeps the setup's already-committed INSERTs out
+    of the count, and starts with an empty identity map so the shared session's
+    cached rows / pending flushes can't mask a query the loader really would have
+    issued against a cold session (which is what a real request gets).
+
+    **Why the batching callers cite three ids.** A reintroduced per-user loop
+    emits one statement per user, so three ids fail loudly against a pin of one —
+    where a two-id list could still be read off as a coincidence.
+    """
+    statements: list[str] = []
+
+    def before(conn: object, cursor: object, statement: str, *args: object) -> None:
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", before)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            yield session, statements
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", before)
 
 
 # ----- push notifications ---------------------------------------------------

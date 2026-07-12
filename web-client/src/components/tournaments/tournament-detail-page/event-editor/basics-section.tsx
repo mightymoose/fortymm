@@ -1,6 +1,7 @@
 import { Input } from '@/components/ui/input'
 
-import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS } from '../../data/options'
+import { fmtDate } from '../../data/helpers'
+import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
 import { Field } from '../../field'
 import { SectionHeader } from '../section-header'
@@ -8,24 +9,53 @@ import { OptionSelect } from './option-select'
 
 export interface BasicsSectionProps {
   event: TournamentEvent
+  /** When false (a non-creator), the section renders values instead of
+   * controls — a viewer gets a rendering of the data, never a disabled form
+   * (ADR 0015). */
+  canEdit: boolean
   onChange: (next: TournamentEvent) => void
 }
 
+/** The numeric fields are edited through `Number(e.target.value)`, so clearing
+ * one leaves `NaN` on the draft. To a reader that is an *unset* field — an
+ * em-dash — not the literal string "NaN" (what `ReadOnlyValue` would print) and
+ * not `0` (a real, different answer: free to enter). */
+const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
+
 /** The event editor's "Basics" tab: name, format, draw type, caps, and the
- * time-slot window. */
-export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
+ * time-slot window. Each row declares its control *and* the value it holds;
+ * `readOnly` is what picks between them, so a viewer's rows line up with an
+ * editor's and neither can drift (ADR 0015).
+ *
+ * That single flag also drops the form's furniture (the required asterisks and
+ * the "Hard cap…" hint): the rows still declare `required` and `hint`
+ * unconditionally, and `Field` suppresses them for a viewer.
+ *
+ * The read-only `value` is what a *reader* needs, not what the control needs: an
+ * option's label rather than the enum key it is stored under, and a formatted
+ * date rather than the `YYYY-MM-DD` an `<input type="date">` wants. */
+export const BasicsSection = ({
+  event,
+  canEdit,
+  onChange,
+}: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
   const setSlot = (patch: Partial<TournamentEvent['slot']>) =>
     set({ slot: { ...event.slot, ...patch } })
+  const readOnly = !canEdit
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5" data-testid="basics-section">
       <SectionHeader
         title="The basics"
-        subtitle="Name it, decide the format, set the window."
+        subtitle={
+          canEdit
+            ? 'Name it, decide the format, set the window.'
+            : 'Format, entry and schedule.'
+        }
       />
 
-      <Field label="Event name" required>
+      <Field label="Event name" required readOnly={readOnly} value={event.name}>
         {(id) => (
           <Input
             id={id}
@@ -38,7 +68,12 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
       </Field>
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Format" required>
+        <Field
+          label="Format"
+          required
+          readOnly={readOnly}
+          value={labelFor(FORMAT_OPTIONS, event.format, null)}
+        >
           {() => (
             <OptionSelect
               ariaLabel="Format"
@@ -48,7 +83,11 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
             />
           )}
         </Field>
-        <Field label="Draw type">
+        <Field
+          label="Draw type"
+          readOnly={readOnly}
+          value={labelFor(DRAW_TYPE_OPTIONS, event.drawType, null)}
+        >
           {() => (
             <OptionSelect
               ariaLabel="Draw type"
@@ -61,7 +100,12 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Player limit" hint="Hard cap. Waitlist opens past this.">
+        <Field
+          label="Player limit"
+          hint="Hard cap. Waitlist opens past this."
+          readOnly={readOnly}
+          value={numericValue(event.maxPlayers)}
+        >
           {(id) => (
             <Input
               id={id}
@@ -73,7 +117,11 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
             />
           )}
         </Field>
-        <Field label="Entry fee">
+        <Field
+          label="Entry fee"
+          readOnly={readOnly}
+          value={numericValue(event.entryFee)}
+        >
           {(id) => (
             <Input
               id={id}
@@ -94,7 +142,14 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
       </div>
 
       <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-4">
-        <Field label="Date">
+        {/* The editor's value is the raw `YYYY-MM-DD` an `<input type="date">`
+            takes; a reader gets the same date in the words the event card uses
+            ("Jun 13, 2026"), never the wire format. */}
+        <Field
+          label="Date"
+          readOnly={readOnly}
+          value={fmtDate(event.slot.date)}
+        >
           {(id) => (
             <Input
               id={id}
@@ -104,7 +159,12 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
             />
           )}
         </Field>
-        <Field label="Start">
+        <Field
+          label="Start"
+          readOnly={readOnly}
+          value={event.slot.start}
+          valueClassName="font-mono"
+        >
           {(id) => (
             <Input
               id={id}
@@ -115,7 +175,12 @@ export const BasicsSection = ({ event, onChange }: BasicsSectionProps) => {
             />
           )}
         </Field>
-        <Field label="End">
+        <Field
+          label="End"
+          readOnly={readOnly}
+          value={event.slot.end}
+          valueClassName="font-mono"
+        >
           {(id) => (
             <Input
               id={id}

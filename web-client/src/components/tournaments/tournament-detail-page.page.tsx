@@ -17,6 +17,14 @@ const scoped = (container: Container) => ({
   getLifecycleButton(name: RegExp) {
     return container.getByRole('button', { name })
   },
+  /** The Days stat's figure and its unit, read as one string. The unit is a
+   * styled `<span>` sitting beside the figure, so the DOM text carries no space
+   * ("2days") even though a CSS margin renders one — assert against the DOM, not
+   * against what the eye sees. */
+  getDaysStat() {
+    return container.getByText('Days', { selector: 'div' }).previousElementSibling
+      ?.textContent
+  },
   queryLifecycleButton(name: RegExp) {
     return container.queryByRole('button', { name })
   },

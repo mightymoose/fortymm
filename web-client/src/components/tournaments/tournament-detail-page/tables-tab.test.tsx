@@ -54,4 +54,25 @@ describe('TablesTab', () => {
     // The table list itself stays visible (read-only).
     expect(document.body).toHaveTextContent('T1')
   })
+
+  // The subtitle's second sentence is an instruction only the organizer can
+  // follow (ADR 0015, rule 5: copy addresses the reader). Both halves of this
+  // pair matter: dropping the sentence for *everyone* would satisfy the
+  // non-creator assertion alone.
+  it('keeps the organizer-voiced subtitle for the creator', () => {
+    tablesTabPage.render({ catalogue: buildTables(3), canEdit: true })
+
+    expect(document.body).toHaveTextContent(
+      'The physical tables available at this venue. Add them to pools when configuring events.',
+    )
+  })
+
+  it('drops the organizer-voiced subtitle for a non-creator', () => {
+    tablesTabPage.render({ catalogue: buildTables(3), canEdit: false })
+
+    expect(document.body).toHaveTextContent(
+      'The physical tables available at this venue.',
+    )
+    expect(document.body).not.toHaveTextContent('Add them to pools')
+  })
 })

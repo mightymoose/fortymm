@@ -35,12 +35,12 @@ const scoped = (container: Container) => {
     /** The left side's games-won count; carries the `--win` modifier when the
      * left side won that meeting. */
     getLeftScore() {
-      return getRow().querySelectorAll(".md-h2h__score-side")[0]!;
+      return getRow().querySelector(".md-h2h__score-side--l")!;
     },
     /** The right side's games-won count; carries the `--win` modifier when
      * the right side won that meeting. */
     getRightScore() {
-      return getRow().querySelectorAll(".md-h2h__score-side")[1]!;
+      return getRow().querySelector(".md-h2h__score-side--r")!;
     },
     /** The "Rated" marker, or `null` for an unrated meeting. */
     getRatedTag() {

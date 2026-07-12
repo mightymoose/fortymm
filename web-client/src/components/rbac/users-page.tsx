@@ -45,6 +45,15 @@ import {
 import { Avatar, EmptyState, Field, PageHeader, Stat, StatsGrid } from './primitives'
 import { colorFor, fmtDate, fmtDateRel } from './helpers'
 
+// The default role is held by every account on the platform (ADR-0016). A
+// full-replace assignment could otherwise strip it from one user, silently
+// excluding them from any capability later hung off the role — so the API
+// always retains it and the editor doesn't offer the removal in the first
+// place, the way the Roles page disables Delete on the same role. The checkbox
+// stays *checked* (the user does hold it) and disabled.
+const DEFAULT_ROLE_ASSIGN_HINT =
+  "This role is held by everyone on the platform and can't be removed."
+
 export function UsersPage() {
   const { data: users = [], isLoading: usersLoading } = useRbacUsers()
   const { data: roles = [] } = useRoles()
@@ -236,7 +245,7 @@ function UserRow({
   onClick: () => void
 }) {
   return (
-    <div onClick={onClick} className="rbac-row" style={userRowStyle}>
+    <div onClick={onClick} className="rbac-row" data-testid={`user-row-${u.username}`} style={userRowStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
         <Avatar name={u.username} size={34} />
         <div style={{ minWidth: 0 }}>
@@ -507,27 +516,42 @@ function UserDrawerBody({
 
 function RoleAssignRow({ role, on, onToggle }: { role: Role; on: boolean; onToggle: () => void }) {
   const accent = colorFor(role.name)
+  // The default role can't be detached (ADR-0016): render it checked (the user
+  // holds it) and disabled. Every other role stays freely toggleable.
+  const locked = role.is_default
+  const checked = locked ? true : on
   return (
     <div
-      onClick={onToggle}
+      onClick={locked ? undefined : onToggle}
       className="rbac-row"
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 12,
         padding: '12px 14px',
-        cursor: 'pointer',
-        background: on ? `${accent}10` : 'var(--bg-card)',
-        border: `1px solid ${on ? accent + '55' : 'var(--border-subtle)'}`,
+        cursor: locked ? 'default' : 'pointer',
+        background: checked ? `${accent}10` : 'var(--bg-card)',
+        border: `1px solid ${checked ? accent + '55' : 'var(--border-subtle)'}`,
         borderRadius: 'var(--r-md, 10px)',
         transition: 'all 120ms cubic-bezier(0.2, 0.8, 0.2, 1)',
       }}
     >
-      <Checkbox
-        checked={on}
-        onCheckedChange={onToggle}
-        onClick={(e) => e.stopPropagation()}
-      />
+      {/* A disabled checkbox is `pointer-events-none`, so its own `title` would
+          never surface on hover — the wrapper carries the tooltip, mirroring the
+          delete-role-tooltip host on the Roles page. */}
+      <span
+        data-testid={`assign-role-tooltip-${role.name}`}
+        title={locked ? DEFAULT_ROLE_ASSIGN_HINT : undefined}
+        style={{ display: 'inline-flex' }}
+      >
+        <Checkbox
+          checked={checked}
+          disabled={locked}
+          onCheckedChange={locked ? undefined : onToggle}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={role.name}
+        />
+      </span>
       <div
         style={{
           width: 8,
@@ -535,11 +559,11 @@ function RoleAssignRow({ role, on, onToggle }: { role: Role; on: boolean; onTogg
           borderRadius: '50%',
           background: accent,
           flexShrink: 0,
-          boxShadow: on ? `0 0 8px ${accent}88` : 'none',
+          boxShadow: checked ? `0 0 8px ${accent}88` : 'none',
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: on ? 'var(--fg-1)' : 'var(--fg-2)' }}>{role.name}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: checked ? 'var(--fg-1)' : 'var(--fg-2)' }}>{role.name}</div>
         <div
           style={{
             fontSize: 11,

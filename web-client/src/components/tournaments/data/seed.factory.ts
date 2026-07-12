@@ -4,6 +4,7 @@
 // that callers tweak via overrides.
 
 import type {
+  Entrant,
   Pool,
   Predicate,
   Tournament,
@@ -41,24 +42,52 @@ export function buildPool(overrides: Partial<Pool> = {}): Pool {
   }
 }
 
-/** A rated Bo5 Open Singles event, half full, one pool. */
-export function buildEvent(
-  overrides: Partial<TournamentEvent> = {},
-): TournamentEvent {
+/** One entrant — `player.1`, holding entry `entry-1`, unseeded. */
+export function buildEntrant(overrides: Partial<Entrant> = {}): Entrant {
   return {
+    id: 'entry-1',
+    userId: 'u-1',
+    username: 'player.1',
+    seed: null,
+    ...overrides,
+  }
+}
+
+/** `count` distinct entrants — for the cases that care how MANY players are in
+ * an event rather than who they are. */
+export function buildEntrants(count: number): Entrant[] {
+  return Array.from({ length: count }, (_, i) =>
+    buildEntrant({
+      id: `entry-${i + 1}`,
+      userId: `u-${i + 1}`,
+      username: `player.${i + 1}`,
+    }),
+  )
+}
+
+/** A rated Bo5 Open Singles event, half full (52 of 64), one pool.
+ *
+ * `entered` is NOT an override: it is derived from `entrants`, exactly as the
+ * server derives it (ADR-0016), so a fixture cannot claim 52 entries while
+ * listing none. Want a different count? Pass different `entrants`. */
+export function buildEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  const event = {
     id: 'ev-open-singles',
     name: 'Open Singles',
     format: 'singles',
     drawType: 'rr-then-ko',
     maxPlayers: 64,
     entryFee: 45,
-    entered: 52,
+    entrants: buildEntrants(52),
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     predicates: [],
     match: { rated: true, lengthGames: 5 },
     pools: [buildPool()],
     ...overrides,
-  }
+  } satisfies Omit<TournamentEvent, 'entered'>
+  return { ...event, entered: event.entrants.length }
 }
 
 /** The published "Bay Area Open 2026" with a single Open Singles event. */

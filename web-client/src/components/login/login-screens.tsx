@@ -350,49 +350,6 @@ function EmailReceipt({ email }: { email: string }) {
   )
 }
 
-type SolverLine = [string, string, string, string]
-
-const FAILED_VERIFY_LOG: SolverLine[] = [
-  ['200', 'POST', '/auth/verify', 'token signature ok'],
-  ['…', 'GET', '/auth/session', 'connecting…'],
-  ['522', 'GET', '/auth/session', 'origin unreachable'],
-  ['522', 'GET', '/auth/session', 'retry 2/3 · failed'],
-  ['ERR', '···', '/auth/session', 'gave up after 12s'],
-]
-
-function solverStatusColor(status: string) {
-  if (status === '200') return 'var(--serve-500)'
-  if (status === '…') return 'var(--warn)'
-  return 'var(--loss)'
-}
-
-function SolverLog({ lines }: { lines: SolverLine[] }) {
-  return (
-    <div style={logCard}>
-      {lines.map((l, i) => {
-        const statusColor = solverStatusColor(l[0])
-        const pathColor =
-          statusColor === 'var(--loss)' ? 'var(--loss)' : 'var(--ball-500)'
-        return (
-          <div
-            key={i}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '42px 56px 1fr auto',
-              gap: 10,
-            }}
-          >
-            <span style={{ color: statusColor }}>{l[0]}</span>
-            <span style={{ color: 'var(--fg-2)' }}>{l[1]}</span>
-            <span style={{ color: pathColor }}>{l[2]}</span>
-            <span style={{ color: 'var(--fg-muted)' }}>{l[3]}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function SuccessReceipt({
   username,
   email,
@@ -518,71 +475,6 @@ function InlineError({
         }}
       >
         {detail}
-      </div>
-    </div>
-  )
-}
-
-function BounceReceipt({ email }: { email: string }) {
-  return (
-    <div
-      style={{
-        ...receiptCard,
-        borderColor: 'rgba(255,77,109,0.35)',
-        boxShadow:
-          '0 0 0 1px rgba(255,77,109,0.18), 0 8px 24px rgba(255,77,109,0.10)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          padding: '4px 0 12px',
-        }}
-      >
-        <XBadge />
-        <div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              fontWeight: 700,
-              color: 'var(--loss)',
-              letterSpacing: '0.18em',
-            }}
-          >
-            ● ERR_HARD_BOUNCE
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 14,
-              fontWeight: 500,
-              color: 'var(--fg-1)',
-              marginTop: 4,
-            }}
-          >
-            Mailbox doesn’t exist
-          </div>
-        </div>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>To</span>
-        <span style={{ ...receiptV, color: 'var(--loss)' }}>{email}</span>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Reason</span>
-        <span style={receiptV}>550 5.1.1 No such user</span>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Server</span>
-        <span style={{ ...receiptV, color: 'var(--fg-3)' }}>
-          mx1.club37.de
-        </span>
       </div>
     </div>
   )
@@ -852,18 +744,6 @@ const receiptV: CSSProperties = {
 }
 
 const receiptDiv: CSSProperties = { height: 1, background: 'var(--ink-700)' }
-
-const logCard: CSSProperties = {
-  marginTop: 4,
-  background: 'var(--ink-950)',
-  border: '1px solid var(--ink-600)',
-  borderRadius: 'var(--r-md)',
-  padding: 14,
-  fontFamily: 'var(--font-mono)',
-  fontSize: 11.5,
-  color: 'var(--fg-3)',
-  lineHeight: 1.7,
-}
 
 /* ─── Screens ───────────────────────────────────────────────────────── */
 
@@ -1235,75 +1115,6 @@ export function ScreenEmailSendFailed({
   )
 }
 
-export interface ScreenSentBouncedProps {
-  email: string
-  onChangeEmail?: () => void
-  onRetry?: () => void
-  retrying?: boolean
-}
-
-export function ScreenSentBounced({
-  email,
-  onChangeEmail,
-  onRetry,
-  retrying = false,
-}: ScreenSentBouncedProps) {
-  return (
-    <Shell
-      left={
-        <HeroCol
-          eyebrow="● Returned to sender"
-          h1a="No mailbox"
-          h1b="at that address."
-        />
-      }
-      right={
-        <FormCol
-          stepNo="02"
-          stepLabel="Inbox · bounced"
-          title={`Couldn’t deliver to ${email}`}
-          subtitle="Their server bounced our email right back. Probably a typo. Try a different address."
-          accent="var(--loss)"
-        >
-          <BounceReceipt email={email} />
-
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button
-              type="button"
-              style={{ ...btnPrimary, flex: 1 }}
-              onClick={onChangeEmail}
-              disabled={!onChangeEmail}
-            >
-              Use a different email
-            </button>
-            <button
-              type="button"
-              style={btnGhost}
-              onClick={onRetry}
-              disabled={retrying || !onRetry}
-            >
-              {retrying ? 'Retrying…' : 'Retry same address'}
-            </button>
-          </div>
-
-          <div style={fineprint}>
-            Did you mean{' '}
-            <LinkButton onClick={onChangeEmail}>tomas.fischer@club37.de</LinkButton>?
-            <br />
-            <span style={{ color: 'var(--fg-muted)' }}>
-              If your address is right, it might be on a blocklist.{' '}
-              <a href="mailto:support@fortymm.com" style={linkInline}>
-                Tell us
-              </a>
-              .
-            </span>
-          </div>
-        </FormCol>
-      }
-    />
-  )
-}
-
 export interface ScreenVerifyNetErrorProps {
   onRetry?: () => void
   onSendNewLink?: () => void
@@ -1328,17 +1139,19 @@ export function ScreenVerifyNetError({
         <FormCol
           stepNo="03"
           stepLabel="Verifying · failed"
-          title="Couldn’t reach the auth server"
-          subtitle="Couldn’t reach the server. Check your connection — your link is still good for a few more minutes."
+          title="Couldn’t reach FortyMM to verify your link"
+          subtitle="The request didn’t get through. Check your connection and give it another go."
           accent="var(--loss)"
         >
+          {/* Only what we actually know: the request didn't get through. No
+              invented hostnames, status codes, timings or request logs — and no
+              claim about the link's fate we can't stand behind, since a failed
+              request tells us nothing about what the server did (#226). */}
           <InlineError
-            code="ERR_NETWORK_UNREACHABLE"
-            title="auth.fortymm.com is unreachable"
-            detail="The server didn’t answer. Your device looks online; our edge node may be down."
+            code="ERR_NETWORK"
+            title="We couldn’t reach FortyMM"
+            detail="The verification didn’t go through. Your link should still be good — retry it, or send yourself a new one."
           />
-
-          <SolverLog lines={FAILED_VERIFY_LOG} />
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button

@@ -38,6 +38,7 @@ from app.schemas.rating import (
     RatingWindow,
 )
 from app.sessions import get_current_user
+from app.sql import escape_like
 
 router = APIRouter(prefix="/v1")
 
@@ -69,12 +70,6 @@ def _serialize(
         PlayerRead(id=user.id, username=user.username, rating=ratings.get(user.id))
         for user in users
     ]
-
-
-def escape_like(term: str) -> str:
-    """Escape LIKE wildcards so a query of ``%`` matches a literal percent
-    sign rather than every username."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @router.get("/players/recent", response_model=list[PlayerRead])

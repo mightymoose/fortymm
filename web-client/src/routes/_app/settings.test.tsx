@@ -157,6 +157,26 @@ describe('SettingsPage email section', () => {
     )
   })
 
+  it('keeps the honeypot in the DOM but out of the accessibility tree', async () => {
+    await renderSettings()
+
+    const section = (await screen.findByLabelText(/^email$/i)).closest(
+      'section',
+    ) as HTMLElement
+
+    // The trap is still wired: bots parse the DOM, so the field must be there.
+    expect(within(section).getByTestId('email-honeypot')).toBeInTheDocument()
+
+    // ...but a human never perceives it. `*ByRole` skips `aria-hidden`
+    // subtrees, which is the same lens a screen reader uses.
+    expect(
+      within(section).queryByRole('textbox', { name: /leave this empty/i }),
+    ).toBeNull()
+    expect(within(section).getAllByRole('textbox')).toEqual([
+      within(section).getByLabelText(/^email$/i),
+    ])
+  })
+
   it('focuses the email input when a guest is deep-linked via #sec-email', async () => {
     await renderSettings('/settings#sec-email')
     const emailInput = await screen.findByLabelText(/^email$/i)

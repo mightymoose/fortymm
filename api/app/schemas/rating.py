@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, computed_field
 
+from app.domain.rating import rating_delta
 from app.ratings.confidence import ConfidenceLevel, confidence_level
+from app.ratings.rated import reported_rating_before
 
 if TYPE_CHECKING:
     from app.models.rating_history import RatingHistory
@@ -66,8 +68,13 @@ class RatingChange(BaseModel):
         or voided); a null ``delta`` INSIDE a present change is "this is the rating
         you got, and there was nothing before it to measure from". A ``0.0`` here
         would claim a rated match moved a rating by nothing.
+
+        The arithmetic itself is ``app.domain.rating.rating_delta`` — never inlined
+        here — so this wire model and the match-details domain
+        (``app.domain.match.extras.RatingChange.delta``) cannot drift into
+        disagreeing about the same player's movement.
         """
-        return None if self.before is None else self.after - self.before
+        return rating_delta(self.before, self.after)
 
     @classmethod
     def from_history(
@@ -80,9 +87,14 @@ class RatingChange(BaseModel):
         It is keyword-only and has no default deliberately: every caller must answer
         it, because defaulting it either way silently mis-narrates one of the two
         cases — and the wrong default is exactly the bug (#952).
+
+        The raw column is not touched here: ``reported_rating_before`` is its one
+        reader in ``app/``, shared with the match-details path
+        (``MatchDetailsRepository.rating_changes``), so the two surfaces resolve the
+        seeded 1500 prior identically.
         """
         return cls(
-            before=row.previous_rating_value if had_rating_before else None,
+            before=reported_rating_before(row, had_rating_before=had_rating_before),
             after=row.rating_value,
         )
 

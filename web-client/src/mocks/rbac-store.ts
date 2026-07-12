@@ -1,7 +1,7 @@
 import type { SeedSpec } from './rbac-engine'
 
 const ALL = [
-  'p_tv', 'p_tc', 'p_te', 'p_td', 'p_tp',
+  'p_tv', 'p_tc', 'p_te', 'p_td', 'p_tp', 'p_tn',
   'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
   'p_cv', 'p_ca', 'p_cs', 'p_co',
   'p_pv', 'p_pc', 'p_pe', 'p_pd', 'p_pm',
@@ -18,6 +18,7 @@ export const DEMO_SEED: SeedSpec = {
     { id: 'p_te', name: 'tournament.edit', description: 'Rename, reschedule, change format.' },
     { id: 'p_td', name: 'tournament.delete', description: 'Permanently remove a tournament.' },
     { id: 'p_tp', name: 'tournament.publish', description: 'Publish a tournament to the spectator view.' },
+    { id: 'p_tn', name: 'tournament.enter', description: 'Enter yourself into a singles event, and withdraw again.' },
     { id: 'p_dv', name: 'draws.view', description: 'View brackets and seeds.' },
     { id: 'p_dg', name: 'draws.generate', description: 'Run the SMT solver to build a draw.' },
     { id: 'p_de', name: 'draws.edit', description: 'Re-seed or manually swap matchups.' },
@@ -44,13 +45,25 @@ export const DEMO_SEED: SeedSpec = {
     { id: 'p_sx', name: 'system.export', description: 'Download backups and reports.' },
   ],
   roles: [
+    // The default role (ADR-0016): every user holds it from the moment their
+    // row is minted, it ships with zero permissions, and the API refuses to
+    // rename or delete it. `is_default` is what the Roles page badges and
+    // guards on.
+    {
+      id: 'r_user',
+      name: 'User',
+      description:
+        'Held by every user. Carries no permissions by default — add one here to grant it to the whole population, including anonymous visitors.',
+      permission_ids: [],
+      is_default: true,
+    },
     { id: 'r_owner', name: 'Owner', description: 'Full control of the workspace. Granted to founding admins.', permission_ids: ALL },
     {
       id: 'r_td',
       name: 'Tournament Director',
       description: 'Runs events end-to-end. Cannot edit org-wide settings.',
       permission_ids: [
-        'p_tv', 'p_tc', 'p_te', 'p_tp',
+        'p_tv', 'p_tc', 'p_te', 'p_tp', 'p_tn',
         'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
         'p_cv', 'p_ca', 'p_cs', 'p_co',
         'p_pv', 'p_pc', 'p_pe', 'p_pm',
@@ -64,19 +77,20 @@ export const DEMO_SEED: SeedSpec = {
     { id: 'r_read', name: 'Read-only', description: 'Sees everything, changes nothing.', permission_ids: VIEW },
     { id: 'r_weekend', name: 'Weekend Volunteer', description: 'One-off scorer role for weekend tournaments.', permission_ids: ['p_tv', 'p_dv', 'p_cv', 'p_cs', 'p_pv'] },
   ],
+  // Everyone holds `r_user` — that is what "default role" means (ADR-0016).
   users: [
-    { id: 'u1', username: 'tim.nguyen', role_ids: ['r_owner'] },
-    { id: 'u2', username: 'alex.johansen', role_ids: ['r_td'] },
-    { id: 'u3', username: 'maya.okafor', role_ids: ['r_td', 'r_club'] },
-    { id: 'u4', username: 'riley.park', role_ids: ['r_score'] },
-    { id: 'u5', username: 'sam.patel', role_ids: ['r_score', 'r_umpire'] },
-    { id: 'u6', username: 'lin.chen', role_ids: ['r_umpire'] },
-    { id: 'u7', username: 'robin.kim', role_ids: ['r_club'] },
-    { id: 'u8', username: 'dean.silva', role_ids: ['r_read'] },
-    { id: 'u9', username: 'carlos.rossi', role_ids: ['r_read'] },
-    { id: 'u10', username: 'jamie.tran', role_ids: ['r_weekend', 'r_umpire'] },
-    { id: 'u11', username: 'priya.desai', role_ids: ['r_score'] },
-    { id: 'u12', username: 'marcus.webb', role_ids: ['r_weekend'] },
-    { id: 'u13', username: 'eun.han', role_ids: [] },
+    { id: 'u1', username: 'tim.nguyen', role_ids: ['r_user', 'r_owner'] },
+    { id: 'u2', username: 'alex.johansen', role_ids: ['r_user', 'r_td'] },
+    { id: 'u3', username: 'maya.okafor', role_ids: ['r_user', 'r_td', 'r_club'] },
+    { id: 'u4', username: 'riley.park', role_ids: ['r_user', 'r_score'] },
+    { id: 'u5', username: 'sam.patel', role_ids: ['r_user', 'r_score', 'r_umpire'] },
+    { id: 'u6', username: 'lin.chen', role_ids: ['r_user', 'r_umpire'] },
+    { id: 'u7', username: 'robin.kim', role_ids: ['r_user', 'r_club'] },
+    { id: 'u8', username: 'dean.silva', role_ids: ['r_user', 'r_read'] },
+    { id: 'u9', username: 'carlos.rossi', role_ids: ['r_user', 'r_read'] },
+    { id: 'u10', username: 'jamie.tran', role_ids: ['r_user', 'r_weekend', 'r_umpire'] },
+    { id: 'u11', username: 'priya.desai', role_ids: ['r_user', 'r_score'] },
+    { id: 'u12', username: 'marcus.webb', role_ids: ['r_user', 'r_weekend'] },
+    { id: 'u13', username: 'eun.han', role_ids: ['r_user'] },
   ],
 }

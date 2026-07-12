@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
 
@@ -79,6 +79,23 @@ class Pool(BaseModel):
 # ----- read models ----------------------------------------------------------
 
 
+class TournamentEntrantRead(BaseModel):
+    """One *active* entry in an event. Withdrawn entries are not entrants: they
+    appear in neither this list nor the ``entered`` count.
+
+    ``id`` is the *entry's* id, not the player's: it is the address a client
+    withdraws through (``DELETE …/entries/{entry_id}``), so an entrant that a
+    client can see is an entrant it can act on.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    username: str
+    seed: int | None
+
+
 class TournamentEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -91,13 +108,25 @@ class TournamentEventRead(BaseModel):
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
     # Numeric(8,2) column coerces cleanly into float at the read boundary.
     entry_fee: float
-    entered: int
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate]
     pools: list[Pool]
     created_at: datetime
     updated_at: datetime
+    # The event's active entrants, oldest entry first.
+    entrants: list[TournamentEntrantRead]
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
+    @property
+    def entered(self) -> int:
+        """The registration count. Derived — there is no stored counter (ADR-0016).
+
+        It is ``len(entrants)`` rather than a field of its own precisely so the
+        count and the list it counts cannot disagree: an event that says it has
+        52 entrants but lists 51 is not a representable state.
+        """
+        return len(self.entrants)
 
 
 class TournamentRead(BaseModel):
@@ -186,8 +215,8 @@ class TournamentEventUpdate(BaseModel):
     these fields back — ``name``/``format``/``draw_type``/``max_players``/
     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
     NULL, so an explicit ``null`` on any of them is rejected (422);
-    ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
-    server-managed registration count and is intentionally NOT updatable here —
+    ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+    updatable — it is derived from the event's active entries, not stored — so
     sending it is a 422 via ``extra="forbid"``."""
 
     model_config = ConfigDict(extra="forbid")

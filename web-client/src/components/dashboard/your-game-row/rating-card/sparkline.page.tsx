@@ -19,6 +19,13 @@ const scoped = (container: Container) => ({
       .getByTestId('dashboard-sparkline')
       .querySelector('path[stroke]')!
   },
+  /** The gradient area-fill path — the unstroked one, closed down from the
+   * trend line to the baseline. The counterpart to `getTrendLine()`. */
+  getAreaFill() {
+    return container
+      .getByTestId('dashboard-sparkline')
+      .querySelector('path:not([stroke])')!
+  },
 })
 
 /**

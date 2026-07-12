@@ -10,24 +10,30 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 ``api_client`` fixture and ``make_client``).
 """
 
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.models import (
-    Permission,
-    Role,
-    RolePermission,
     Tournament,
+    TournamentEntry,
+    TournamentEntryStatus,
     User,
-    UserRole,
 )
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import make_client, start_session
+from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW, list_tournaments
+from tests._helpers import (
+    counted_statements,
+    grant_permissions,
+    make_client,
+    make_user,
+    start_session,
+)
 
 
 async def _grant_tournament_perms(
@@ -35,24 +41,9 @@ async def _grant_tournament_perms(
     user: User,
     names: Sequence[str] = (TOURNAMENT_VIEW, TOURNAMENT_CREATE),
 ) -> None:
-    """Grant ``names`` to ``user`` via real RBAC rows. Each permission row is
-    reused if a prior call already created it; the user gets a dedicated role
-    carrying exactly ``names`` so different users can hold different subsets
-    (e.g. view-only vs view+create)."""
-    role = Role(name=f"grant-{user.id}", description="Per-user test grant.")
-    db_session.add(role)
-    await db_session.flush()
-    for name in names:
-        permission = (
-            await db_session.execute(select(Permission).where(Permission.name == name))
-        ).scalar_one_or_none()
-        if permission is None:
-            permission = Permission(name=name, description=name)
-            db_session.add(permission)
-            await db_session.flush()
-        db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
-    db_session.add(UserRole(user_id=user.id, role_id=role.id))
-    await db_session.commit()
+    """Grant ``names`` to ``user`` via real RBAC rows, defaulting to the pair the
+    tournament read/create routes gate on."""
+    await grant_permissions(db_session, user, names)
 
 
 @pytest_asyncio.fixture
@@ -318,7 +309,10 @@ async def test_create_event_round_trips_jsonb(
     assert body["max_players"] == 64
     # entry_fee is emitted as a JSON number, not a Decimal string.
     assert body["entry_fee"] == 45
+    # Nobody has entered a brand-new event: the derived count is 0 and the
+    # entrants list is empty (an empty list, not a missing key).
     assert body["entered"] == 0
+    assert body["entrants"] == []
     assert body["slot"] == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     assert body["match_settings"] == {"rated": True, "length_games": 5}
     assert body["predicates"] == [
@@ -512,6 +506,216 @@ async def test_event_ops_on_missing_event_return_404(
     assert (
         await client.delete(f"/v1/tournaments/{created['id']}/events/{missing}")
     ).status_code == 404
+
+
+# ----- entrants and the derived ``entered`` count ---------------------------
+
+
+async def _enter(
+    db_session: AsyncSession,
+    event_id: str,
+    user: User,
+    *,
+    status: TournamentEntryStatus = TournamentEntryStatus.entered,
+    seed: int | None = None,
+) -> TournamentEntry:
+    """Persist an entry directly. The enter/withdraw *routes* land in #781/1c+1d;
+    the read path can't wait for them, so it writes the rows itself."""
+    entry = TournamentEntry(
+        event_id=uuid.UUID(event_id), user_id=user.id, status=status, seed=seed
+    )
+    db_session.add(entry)
+    await db_session.commit()
+    return entry
+
+
+async def test_tournament_events_has_no_entered_column(db_session: AsyncSession):
+    """The registration count is derived, so there is no column to derive it from
+    — and therefore no stored counter that can drift from the entries (ADR-0016).
+
+    Read from the live database rather than the model: this is a claim about the
+    schema, and the model attribute could be gone while the column lingered.
+    """
+    columns = set(
+        (
+            await db_session.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'tournament_events'"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert "entered" not in columns, columns
+    # The query is real: the columns it *does* return are the ones we expect.
+    assert {"id", "max_players", "entry_fee"} <= columns
+
+
+async def test_detail_derives_entered_and_lists_only_active_entrants(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """Two active entrants and one withdrawn one: ``entered`` is 2, and the
+    entrants list holds exactly the two active players. The withdrawn one appears
+    in neither — she is not an entrant, and she is not counted."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    ada = await make_user(db_session, "ada-entrant")
+    bo = await make_user(db_session, "bo-entrant")
+    cass = await make_user(db_session, "cass-withdrew")
+    ada_entry = await _enter(db_session, event["id"], ada, seed=1)
+    await _enter(db_session, event["id"], bo)
+    await _enter(db_session, event["id"], cass, status=TournamentEntryStatus.withdrawn)
+
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    (read_event,) = detail["events"]
+
+    assert read_event["entered"] == 2
+    entrants = {e["username"]: e for e in read_event["entrants"]}
+    assert set(entrants) == {"ada-entrant", "bo-entrant"}
+    assert entrants["ada-entrant"]["user_id"] == str(ada.id)
+    assert entrants["ada-entrant"]["seed"] == 1
+    assert entrants["bo-entrant"]["seed"] is None
+    # Each entrant carries its ENTRY's id — the address a client withdraws
+    # through — not just the player's.
+    assert entrants["ada-entrant"]["id"] == str(ada_entry.id)
+    # And the count is the list's length by construction — they cannot disagree.
+    assert read_event["entered"] == len(read_event["entrants"])
+
+
+async def test_list_derives_entered_and_lists_only_active_entrants(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """The same derivation on the list endpoint, which the tournaments-list card's
+    entry total reads."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    ada = await make_user(db_session, "ada-listed")
+    cass = await make_user(db_session, "cass-listed-withdrew")
+    await _enter(db_session, event["id"], ada)
+    await _enter(db_session, event["id"], cass, status=TournamentEntryStatus.withdrawn)
+
+    rows = (await client.get("/v1/tournaments")).json()
+    listed = next(r for r in rows if r["id"] == created["id"])
+    (read_event,) = listed["events"]
+
+    assert read_event["entered"] == 1
+    assert [e["username"] for e in read_event["entrants"]] == ["ada-listed"]
+
+
+async def test_patch_event_answers_with_its_existing_entrants(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """Editing an event doesn't blank its entrants: the PATCH response carries the
+    people who had already entered, with the count to match."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    ada = await make_user(db_session, "ada-patched")
+    await _enter(db_session, event["id"], ada)
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"name": "Renamed Singles"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Renamed Singles"
+    assert body["entered"] == 1
+    assert [e["username"] for e in body["entrants"]] == ["ada-patched"]
+
+
+# The pin, measured (print the statements below to re-measure): the tournaments +
+# usernames join, the events, and ONE batched load of every event's active
+# entrants. Three, whatever the number of events.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 3
+
+
+@pytest.mark.parametrize("event_count", [1, 4])
+async def test_list_tournaments_statement_count_does_not_grow_with_events(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event_count: int,
+):
+    """The list endpoint returns every tournament with all of its events, so the
+    entry counts and entrants MUST be gathered in one batched query — a
+    ``count(*)`` per event is an N+1 (ADR-0015, ADR-0016).
+
+    The two ``event_count`` cases are what makes this discriminating: a per-event
+    loop emits one statement per event, so it would measure 4 at one event and 7 at
+    four — failing the pin at four even if it slipped past at one. Each event
+    carries a different number of entrants, so a batched loader that silently
+    dropped the grouping would show up as wrong data, not just a low count.
+
+    Counting is scoped to the handler rather than the HTTP request on purpose: an
+    endpoint-level count would also sweep up session / auth statements that have
+    nothing to do with the N+1. It runs on a fresh session — see
+    ``counted_statements``.
+    """
+    client, user = authed_client
+    user_id = user.id  # read outside the counted block; see below
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    for n in range(event_count):
+        event = (
+            await client.post(
+                f"/v1/tournaments/{created['id']}/events",
+                json=_event_payload(name=f"Event {n}"),
+            )
+        ).json()
+        # n + 1 entrants on event n, so a broken grouping can't accidentally look
+        # right, plus a withdrawn one that must never be counted.
+        for i in range(n + 1):
+            await _enter(
+                db_session, event["id"], await make_user(db_session, f"player-{n}-{i}")
+            )
+        await _enter(
+            db_session,
+            event["id"],
+            await make_user(db_session, f"gone-{n}"),
+            status=TournamentEntryStatus.withdrawn,
+        )
+
+    async with counted_statements(engine) as (session, statements):
+        # A transient ``User`` carrying only the id the handler reads: touching the
+        # db_session-bound instance in here could emit a refresh SELECT on the same
+        # engine and be counted as if the handler had issued it.
+        listed = await list_tournaments(db=session, current_user=User(id=user_id))
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_TOURNAMENT_LIST_STATEMENTS, statements
+    # And the block it counted really did the work: every event carries its own
+    # entrants, and the withdrawn player is nowhere.
+    (tournament,) = [t for t in listed if str(t.id) == created["id"]]
+    assert len(tournament.events) == event_count
+    assert [e.entered for e in tournament.events] == list(range(1, event_count + 1))
+    assert all(
+        len(e.entrants) == e.entered
+        and not any(x.username.startswith("gone-") for x in e.entrants)
+        for e in tournament.events
+    )
 
 
 # ----- permission gate -----------------------------------------------------

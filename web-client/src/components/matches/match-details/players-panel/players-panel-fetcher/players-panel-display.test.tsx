@@ -6,14 +6,27 @@ import {
 import { playersPanelDisplayPage } from "./players-panel-display.page";
 
 describe("PlayersPanelDisplay", () => {
+  // The panel wears the shared design-system Card (#218), not a hand-rolled
+  // card class — but `asChild` must keep it a labelled `<section>` landmark.
+  // A silent degrade to an anonymous card `<div>` would fail both halves here.
   it("renders a region landmark named by the visible card heading", () => {
     playersPanelDisplayPage.render();
 
     const panel = playersPanelDisplayPage.getPanel();
-    expect(panel).toHaveClass("md-card");
+    expect(panel.tagName).toBe("SECTION");
     const id = playersPanelDisplayPage.getTitle().getAttribute("id");
     expect(id).toBeTruthy();
     expect(panel).toHaveAttribute("aria-labelledby", id);
+  });
+
+  it("takes its chrome from the shared Card, wrapping the two-profile grid", () => {
+    playersPanelDisplayPage.render();
+
+    const panel = playersPanelDisplayPage.getPanel();
+    expect(panel).toHaveAttribute("data-slot", "card");
+    expect(panel).not.toHaveClass("md-card");
+    // The grid between the two halves is content, not chrome — it survives.
+    expect(playersPanelDisplayPage.queryPlayersGrid()).not.toBeNull();
   });
 
   it("stamps the header with the view's snapshot label", () => {

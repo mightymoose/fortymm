@@ -1,8 +1,12 @@
 import type { CSSProperties } from 'react'
 
-// Off-screen but still focusable so AT users hear "Leave this empty" — bots
-// pattern-match every visible field, then fill blanks anyway. Honeypots work
-// by being targeted by automation, not by being invisible to humans.
+// Positions the bot-trap field off-screen. Call sites must also wrap it in
+// `aria-hidden="true"` with `tabIndex={-1}`, so it stays out of view, out of
+// the tab order and out of the accessibility tree — a human (sighted or on a
+// screen reader) can never reach it, so anything typed into it is a bot. It
+// must stay in the DOM and parseable, though: never `display: none` or the
+// `hidden` attribute, because bots fill every field they can parse and that's
+// the whole trap.
 export const HONEYPOT_STYLE: CSSProperties = {
   position: 'absolute',
   left: '-9999px',
