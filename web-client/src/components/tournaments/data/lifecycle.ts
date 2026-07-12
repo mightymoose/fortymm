@@ -7,6 +7,8 @@
 
 import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 
+import { formatRating } from '@/lib/rating'
+
 import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
 import { myEntrant, predicateSentence } from './helpers'
 import type {
@@ -202,9 +204,19 @@ export type EntryControlState =
  * formatter the read-only event panel uses (ADR-0015 rule 4: "rows that are
  * sentences render as sentences") — followed by the rating they were judged on.
  *
- * "Rating is less than 1500. Your rating is 1650." Both halves are needed: the
+ * "Rating is less than 1500. Your rating is 1662." Both halves are needed: the
  * rule alone does not say why *you* failed it, and the rating alone does not say
  * what it failed.
+ *
+ * The rating is printed through **`formatRating`** (`@/lib/rating`) — the app's
+ * one rating formatter — and not by dropping the raw number into the template.
+ * What the server sends is a Glicko float: interpolating it printed *"Your rating
+ * is 1662.3108939062977."* on a page where every other surface said `1662`,
+ * because a fixture of `1650` makes `${1650}` and `${Math.round(1650)}` the same
+ * string and the round number hid the bug. `formatRating` renders `null` as an
+ * em-dash; `rating` is a `number` in this arm of the union, so that cannot arise
+ * from a well-formed payload — but a malformed one degrades to "Your rating is
+ * —." rather than crashing the card.
  *
  * `predicate_id` addresses a rule in the event's own `predicates`, so the payload
  * does not re-send the rule (a field and its own derivation could disagree). If
@@ -217,7 +229,7 @@ function ineligibleReason(
 ): string {
   const rule = event.predicates.find((p) => p.id === state.predicateId)
   if (!rule) return ENTRY_REFUSAL_NOTICE.rating_ineligible.description
-  return `${predicateSentence(rule)}. Your rating is ${state.rating}.`
+  return `${predicateSentence(rule)}. Your rating is ${formatRating(state.rating)}.`
 }
 
 export function entryControlState({

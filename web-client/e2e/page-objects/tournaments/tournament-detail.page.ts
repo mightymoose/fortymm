@@ -174,6 +174,76 @@ export class TournamentDetailPage {
     return this.page.getByRole('dialog')
   }
 
+  // ----- the event editor (#783 QA: the rule builder, and the refused save) ----
+
+  /** The Events tab's "New event" action — owner-only, and the way into the editor
+   * on a draft event that exists nowhere else yet. */
+  get newEventButton(): Locator {
+    return this.page.getByRole('button', { name: 'New event' })
+  }
+
+  /** The editor's own Save/Create action. */
+  get saveEventButton(): Locator {
+    return this.page.getByRole('button', { name: /Create event|Save changes/ })
+  }
+
+  /** One of the editor's four section tabs. */
+  editorTab(name: 'Basics' | 'Eligibility' | 'Match settings' | 'Table pools'): Locator {
+    return this.page.getByRole('tab', { name })
+  }
+
+  /** The Eligibility tab's "Add rule" — the SectionHeader's action, exactly. Not a
+   * `/Add (a )?rule/`: an event with no rules also renders an empty state offering
+   * "Add a rule", and a loose pattern matches both (strict mode rightly refuses to
+   * guess which). */
+  get addRuleButton(): Locator {
+    return this.page.getByRole('button', { name: 'Add rule', exact: true })
+  }
+
+  /** The rule builder's controls. There is one rule row in every spec below, so
+   * these are unscoped by design — a second row would (rightly) make them
+   * ambiguous rather than silently pick the first. */
+  get ruleOperator(): Locator {
+    return this.page.getByRole('combobox', { name: 'Operator' })
+  }
+
+  get ruleValue(): Locator {
+    return this.page.getByLabel('Value')
+  }
+
+  get ruleLowerBound(): Locator {
+    return this.page.getByLabel('Lower bound')
+  }
+
+  get ruleUpperBound(): Locator {
+    return this.page.getByLabel('Upper bound')
+  }
+
+  /** The red messages under a rule's value control(s) — what the form says about a
+   * rule it refuses to send. */
+  get ruleErrors(): Locator {
+    return this.page.getByTestId('predicate-error')
+  }
+
+  /** The editor's report of a REFUSED SAVE: the alert that keeps the failure beside
+   * the unsaved work, instead of a toast that leaves in four seconds — or, as it
+   * was, instead of nothing at all. */
+  get saveFailure(): Locator {
+    return this.page.getByTestId('event-editor-error')
+  }
+
+  /** The event's name field, in Basics — the proof that a refused save kept the
+   * organizer's typing rather than binning it. */
+  get eventNameInput(): Locator {
+    return this.page.getByLabel(/Event name/)
+  }
+
+  /** Pick an operator from the rule row's listbox. */
+  async chooseOperator(label: string) {
+    await this.ruleOperator.click()
+    await this.page.getByRole('option', { name: label }).click()
+  }
+
   /** The tournament-level "Entries" hero stat: the sum of every event's derived
    * count. It is a `Card` like the event rows are, so it is identified as "the
    * card that says Entries but is not an event card" — event cards all carry a

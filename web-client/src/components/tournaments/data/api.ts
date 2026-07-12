@@ -440,6 +440,15 @@ export function useDeleteTournament() {
   })
 }
 
+/** Create an event.
+ *
+ * **No global `onError` toast**, by the same convention `useCreateTournament`
+ * follows: the `EventEditor` awaits this through `mutateAsync` and surfaces the
+ * failure *inside the sheet it keeps open* — which is the only place that can also
+ * say "your changes are still here". A toast on top of that would double up, and
+ * would be the wrong channel besides: it leaves after four seconds, and the thing
+ * it is reporting (unsaved work) does not. (`CLAUDE.md`, `## Forms`: "don't attach
+ * a global onError toast to a mutation a form surfaces inline".) */
 export function useCreateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -452,10 +461,10 @@ export function useCreateEvent(tournamentId: string) {
         }),
       ),
     onSuccess: () => invalidateTournament(qc, tournamentId),
-    onError: notifyError('create the event'),
   })
 }
 
+/** Patch an event. Errors are the editor's to show — see `useCreateEvent`. */
 export function useUpdateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -471,7 +480,6 @@ export function useUpdateEvent(tournamentId: string) {
         }),
       ),
     onSuccess: () => invalidateTournament(qc, tournamentId),
-    onError: notifyError('update the event'),
   })
 }
 

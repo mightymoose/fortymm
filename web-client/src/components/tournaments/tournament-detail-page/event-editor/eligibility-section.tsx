@@ -3,6 +3,7 @@ import { Filter, Globe, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 import { genId } from '../../data/helpers'
+import type { PredicateIssues } from '../../data/predicate-validation'
 import type { Predicate, TournamentEvent } from '../../data/types'
 import { EmptyState } from '../../empty-state'
 import { SectionHeader } from '../section-header'
@@ -14,6 +15,11 @@ export interface EligibilitySectionProps {
    * rule reads as a sentence and every mutating affordance is hidden — a viewer
    * gets a rendering of the data, never a disabled form (ADR 0015). */
   canEdit: boolean
+  /** What is wrong with the rules, by predicate id — the editor's verdict on the
+   * whole draft (`eligibilityIssues`), handed down so each row can show its own
+   * share in red. Absent until the organizer has tried to save: a rule they are
+   * halfway through typing is not yet wrong. */
+  issues?: Record<string, PredicateIssues>
   onChange: (next: TournamentEvent) => void
 }
 
@@ -23,6 +29,7 @@ export interface EligibilitySectionProps {
 export const EligibilitySection = ({
   event,
   canEdit,
+  issues,
   onChange,
 }: EligibilitySectionProps) => {
   const preds = event.predicates
@@ -90,6 +97,7 @@ export const EligibilitySection = ({
               key={p.id}
               predicate={p}
               canEdit={canEdit}
+              issues={issues?.[p.id]}
               onChange={(np) =>
                 setPreds(preds.map((x, j) => (j === i ? np : x)))
               }

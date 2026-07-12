@@ -1,6 +1,7 @@
 import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 
+import { ApiError } from '@/api/client'
 import { mockTournamentTransitionEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
@@ -88,6 +89,33 @@ describe('TournamentDetailPage', () => {
     await userEvent.click(tournamentDetailPagePage.getNewEventButton())
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
     expect(onCreateEvent).toHaveBeenCalledTimes(1)
+    // A successful create closes the editor — and it is the ONLY thing that does.
+    await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
+  })
+
+  // The page's half of the data-loss bug: it used to fire the mutation and close
+  // the editor in the same breath, so a 422 landed on a sheet that was already gone
+  // and took every field the organizer had typed with it. The write is awaited now,
+  // and only a RESOLVED one closes anything.
+  it('keeps the event editor open when the create is REFUSED', async () => {
+    const onCreateEvent = vi
+      .fn()
+      .mockRejectedValue(new ApiError(422, 'Name is too long.', 'create event'))
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
+    await waitFor(() =>
+      expect(tournamentDetailPagePage.queryEditorFailure()).toBeInTheDocument(),
+    )
+    expect(tournamentDetailPagePage.queryEditorFailure()).toHaveTextContent(
+      'Name is too long.',
+    )
+    expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
   })
 
   it('hides the lifecycle action for a non-creator', () => {

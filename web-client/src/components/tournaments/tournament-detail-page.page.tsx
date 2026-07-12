@@ -40,6 +40,15 @@ export const tournamentDetailPagePage = {
   getEditorSaveButton() {
     return screen.getByRole('button', { name: /Create event|Save changes/ })
   },
+  /** The event editor sheet — present exactly while it is open. A refused save
+   * must leave it here, holding the organizer's work. */
+  queryEditor() {
+    return screen.queryByRole('dialog')
+  },
+  /** The editor's report of a refused save. */
+  queryEditorFailure() {
+    return screen.queryByTestId('event-editor-error')
+  },
 
   within(container: Container = screen) {
     return scoped(container)

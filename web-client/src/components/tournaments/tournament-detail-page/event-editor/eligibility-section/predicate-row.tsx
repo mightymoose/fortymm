@@ -8,6 +8,8 @@ import {
   PRED_OPS_BY_TYPE,
   parsePredicateOp,
 } from '../../../data/options'
+import { RATING_MAX, RATING_MIN } from '../../../data/predicate-validation'
+import type { PredicateIssues } from '../../../data/predicate-validation'
 import type { Predicate } from '../../../data/types'
 import { OptionSelect } from '../option-select'
 
@@ -20,9 +22,26 @@ export interface PredicateRowProps {
    * a new predicate field or operator is a one-file change there, not a hunt
    * through this component. */
   canEdit: boolean
+  /** What is wrong with this rule, per control (`predicateIssues`,
+   * `data/predicate-validation.ts`) — or `undefined` while the editor is not yet
+   * showing errors. The row does not *decide* this: the editor validates the whole
+   * draft on submit and hands each row its share, so "may I save?" and "what does
+   * this row say in red?" are one answer, computed once. */
+  issues?: PredicateIssues
   onChange: (predicate: Predicate) => void
   onRemove: () => void
 }
+
+/** A field error, in the house style: red, small, directly beneath its control
+ * (web-client `CLAUDE.md`, `## Forms` — never a toast for a field). */
+const FieldError = ({ children }: { children: string }) => (
+  <p
+    data-testid="predicate-error"
+    className="mt-1.5 text-xs text-[color:var(--loss)]"
+  >
+    {children}
+  </p>
+)
 
 const FIELD_OPTIONS = Object.entries(PRED_FIELDS).map(([value, schema]) => ({
   value,
@@ -47,6 +66,7 @@ function numberOrNull(raw: string): number | null {
 export const PredicateRow = ({
   predicate,
   canEdit,
+  issues,
   onChange,
   onRemove,
 }: PredicateRowProps) => {
@@ -79,6 +99,12 @@ export const PredicateRow = ({
     ? predicate.value
     : [null, null]
 
+  // The distinct complaints about the two bounds, in bound order. Deduped: both
+  // boxes empty is ONE thing to say, not the same sentence printed twice.
+  const boundMessages = [...new Set([issues?.lower, issues?.upper])].filter(
+    (message): message is string => message !== undefined,
+  )
+
   if (!canEdit) {
     return (
       <p
@@ -110,42 +136,62 @@ export const PredicateRow = ({
 
       <div>
         {schema?.type === 'number' && predicate.op === 'between' && (
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              aria-label="Lower bound"
-              value={between[0] ?? ''}
-              onChange={(e) =>
-                onChange({
-                  ...predicate,
-                  value: [numberOrNull(e.target.value), between[1]],
-                })
-              }
-            />
-            <span className="text-[13px] text-[color:var(--fg-3)]">and</span>
-            <Input
-              type="number"
-              aria-label="Upper bound"
-              value={between[1] ?? ''}
-              onChange={(e) =>
-                onChange({
-                  ...predicate,
-                  value: [between[0], numberOrNull(e.target.value)],
-                })
-              }
-            />
-          </div>
+          <>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                aria-label="Lower bound"
+                min={RATING_MIN}
+                max={RATING_MAX}
+                aria-invalid={!!issues?.lower}
+                value={between[0] ?? ''}
+                onChange={(e) =>
+                  onChange({
+                    ...predicate,
+                    value: [numberOrNull(e.target.value), between[1]],
+                  })
+                }
+              />
+              <span className="text-[13px] text-[color:var(--fg-3)]">and</span>
+              <Input
+                type="number"
+                aria-label="Upper bound"
+                min={RATING_MIN}
+                max={RATING_MAX}
+                aria-invalid={!!issues?.upper}
+                value={between[1] ?? ''}
+                onChange={(e) =>
+                  onChange({
+                    ...predicate,
+                    value: [between[0], numberOrNull(e.target.value)],
+                  })
+                }
+              />
+            </div>
+            {/* Two controls, but often one complaint ("Enter a rating." under both
+                empty boxes says the same thing twice), so the messages are deduped
+                and stacked under the pair. */}
+            {boundMessages.map((message) => (
+              <FieldError key={message}>{message}</FieldError>
+            ))}
+          </>
         )}
         {schema?.type === 'number' && predicate.op !== 'between' && (
-          <Input
-            type="number"
-            aria-label="Value"
-            placeholder={schema.placeholder}
-            value={typeof predicate.value === 'number' ? predicate.value : ''}
-            onChange={(e) =>
-              onChange({ ...predicate, value: numberOrNull(e.target.value) })
-            }
-          />
+          <>
+            <Input
+              type="number"
+              aria-label="Value"
+              placeholder={schema.placeholder}
+              min={RATING_MIN}
+              max={RATING_MAX}
+              aria-invalid={!!issues?.value}
+              value={typeof predicate.value === 'number' ? predicate.value : ''}
+              onChange={(e) =>
+                onChange({ ...predicate, value: numberOrNull(e.target.value) })
+              }
+            />
+            {issues?.value && <FieldError>{issues.value}</FieldError>}
+          </>
         )}
       </div>
 

@@ -23,6 +23,19 @@ const scoped = (container: Container) => ({
   getUpperBoundInput() {
     return container.getByLabelText('Upper bound')
   },
+  /** The validation messages under this row's value control(s) — what the editor
+   * says in red about a rule it will not send (`predicateIssues`). Plural because
+   * a `between` has two bounds and can be wrong at both. */
+  getErrors() {
+    return container.queryAllByTestId('predicate-error')
+  },
+  /** The messages as text, for asserting *what* the row says, not just that it
+   * says something. */
+  getErrorMessages(): (string | null)[] {
+    return container
+      .queryAllByTestId('predicate-error')
+      .map((node: HTMLElement) => node.textContent)
+  },
   getRemoveButton() {
     return container.getByRole('button', { name: 'Remove rule' })
   },

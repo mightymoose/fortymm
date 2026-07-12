@@ -77,10 +77,19 @@ function TournamentDetailRoute() {
           patch: tournamentToUpdateBody(tournament, catalogue),
         })
       }
-      onCreateEvent={(ev) => createEvent.mutate(eventToCreateBody(ev))}
-      onUpdateEvent={(ev) =>
-        updateEvent.mutate({ eventId: ev.id, body: eventToUpdateBody(ev) })
-      }
+      // `mutateAsync`, not `mutate`: the event editor AWAITS these, closes only
+      // when they resolve, and renders the failure inline when they don't (the
+      // `NewTournamentModal` contract — a modal that closes over a rejected write
+      // has silently thrown the user's work away, #614).
+      onCreateEvent={async (ev) => {
+        await createEvent.mutateAsync(eventToCreateBody(ev))
+      }}
+      onUpdateEvent={async (ev) => {
+        await updateEvent.mutateAsync({
+          eventId: ev.id,
+          body: eventToUpdateBody(ev),
+        })
+      }}
       onDeleteEvent={(id) => deleteEvent.mutate(id)}
       onBack={back}
     />

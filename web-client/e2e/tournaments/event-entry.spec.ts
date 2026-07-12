@@ -23,7 +23,11 @@
 import { expect, test } from '@playwright/test'
 
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
-import { EVENT, ME } from '../page-objects/tournaments/tournaments-store'
+import {
+  EVENT,
+  ME,
+  MY_RATING_ROUNDED,
+} from '../page-objects/tournaments/tournaments-store'
 import { PERM } from '../../src/lib/permissions'
 import { expectAxeClean } from '../support/axe'
 
@@ -382,7 +386,15 @@ test.describe('Tournaments · what the event refuses (#783)', () => {
     await expect(notice).toContainText('Not eligible')
     // Specific enough to act on: the event's own rule, read back by id, and my
     // rating on the tournament's ladder. Not "you are not eligible", full stop.
-    await expect(notice).toContainText('Rating is less than 1200. Your rating is 1650.')
+    //
+    // And the rating is ROUNDED — the store judges me on the raw Glicko float the
+    // server really sends (`1662.3108939062977`), so this line is what catches the
+    // notice printing thirteen decimal places at a player, as it did in QA. Every
+    // other rating surface in the app says `1662`; so does this one.
+    await expect(notice).toContainText(
+      `Rating is less than 1200. Your rating is ${MY_RATING_ROUNDED}.`,
+    )
+    await expect(notice).not.toContainText('1662.3')
 
     await expect(pom.enterButton(EVENT.INELIGIBLE)).toHaveCount(0)
     await expect(pom.cardButtons(EVENT.INELIGIBLE)).toHaveCount(0)

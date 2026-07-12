@@ -135,11 +135,26 @@ export function buildFullEvent(
   })
 }
 
-/** An event whose one rule — `rating < 1500` — the caller's 1650 fails, so the
+/**
+ * A **realistic** rating: the raw Glicko-2 float the server actually puts on the
+ * wire, thirteen decimal places and all. Not `1650`.
+ *
+ * The round number was the blind spot. `entry_state.rating` is interpolated into
+ * the "Not eligible" copy, and with a fixture of `1650` the buggy
+ * `${state.rating}` and the correct `${formatRating(state.rating)}` produce the
+ * *same string* — so the test passed either way and the raw float
+ * ("Your rating is 1662.3108939062977.") shipped. A fixture that cannot tell the
+ * fix from the bug is not testing the fix: this one can. */
+export const UNROUNDED_RATING = 1662.3108939062977
+
+/** An event whose one rule — `rating < 1500` — the caller's rating fails, so the
  * server judges them `rating_ineligible` and names the rule that did it
  * (ADR-0783). The `predicateId` addresses the event's OWN predicate: a fixture
  * whose refusal pointed at a rule the event does not carry would be a payload the
- * server cannot send. */
+ * server cannot send.
+ *
+ * The rating it was judged on is `UNROUNDED_RATING` — a float, deliberately (see
+ * above): it is what the server sends, and the UI must print it as `1662`. */
 export function buildIneligibleEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
 ): TournamentEvent {
@@ -150,7 +165,11 @@ export function buildIneligibleEvent(
     maxPlayers: 48,
     entrants: buildEntrants(4),
     predicates: [rule],
-    entryState: { state: 'rating_ineligible', predicateId: rule.id, rating: 1650 },
+    entryState: {
+      state: 'rating_ineligible',
+      predicateId: rule.id,
+      rating: UNROUNDED_RATING,
+    },
     ...overrides,
   })
 }

@@ -98,7 +98,24 @@ const SMALL_CAP = 4
  * the two must be the same object — a refusal pointing at a rule the event does not
  * carry is a payload the server cannot send. */
 const U1200_RULE = { id: 'pr-u1200', field: 'rating', op: '<', value: 1200 } as const
-const MY_RATING = 1650
+
+/** The rating the server judged me on — a **raw Glicko float**, because that is what
+ * the server actually puts on the wire (`entry_state.rating`), thirteen decimals and
+ * all. The card must print it as `1662`, like every other rating surface in the app.
+ *
+ * It was `1650` here, and that round number is precisely why the bug shipped: with
+ * it, the rounded and unrounded renderings are the same string, so no assertion
+ * anywhere — vitest or browser — could tell them apart. */
+const MY_RATING = 1662.3108939062977
+
+/** Rounded, as the UI prints it. The specs assert against THIS. */
+export const MY_RATING_ROUNDED = 1662
+
+/** `tournament_events.name` is `VARCHAR(255)` server-side, and a longer one is a
+ * **422** — the other refusal QA watched the editor swallow (the sheet closed, the
+ * event was never created, and the organizer's typing went with it). Mirrored here
+ * so a browser spec can watch that 422 arrive and see the editor hold its ground. */
+const EVENT_NAME_MAX = 255
 
 /** The rule on the all-unrated event (`unrated: true`). The same cap as `U1200_RULE`
  * — but its entrants hold no rating at all, so every one of them *passed* it, while
@@ -534,6 +551,18 @@ export class TournamentsStore {
       return this.enter(route, enter[2])
     }
 
+    // The event editor's two writes. They were unmocked until #783's QA pass, which
+    // is not a coincidence: nothing in this suite had ever *saved* an event, so
+    // nothing had ever watched the editor receive an answer — and the answer it was
+    // getting (a 422) was being thrown away along with the organizer's work.
+    if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/events`) {
+      return this.createEvent(route, request.postDataJSON())
+    }
+    const updateEvent = path.match(/^\/v1\/tournaments\/([^/]+)\/events\/([^/]+)$/)
+    if (method === 'PATCH' && updateEvent) {
+      return this.updateEvent(route, updateEvent[2], request.postDataJSON())
+    }
+
     const withdraw = path.match(
       /^\/v1\/tournaments\/([^/]+)\/events\/([^/]+)\/entries\/([^/]+)$/,
     )
@@ -648,6 +677,64 @@ export class TournamentsStore {
     return json(route, 201, this.addEntry(eventId))
   }
 
+  /**
+   * `POST …/events` — create an event, and **refuse an over-long name with a 422**,
+   * as the server does (`VARCHAR(255)`), in FastAPI's own body shape: a `detail`
+   * ARRAY of `{msg}` objects, which `extractDetail` (`src/api/client.ts`) is what
+   * turns into the sentence the editor shows. A stub that answered `{detail: "…"}`
+   * would be testing the client against a server it will never meet.
+   *
+   * Everything else is a 201. Notably a rule with a **null value** is one of them:
+   * the API deliberately still accepts a half-written rule (it constrains nobody),
+   * which is exactly why the guard against `Rating < ?` has to live in the client.
+   * A stub that 422'd it would let a spec pass against a server stricter than the
+   * real one — and would prove nothing about the form.
+   */
+  private async createEvent(route: Route, body: unknown) {
+    if (nameTooLong(body)) return this.unprocessableName(route)
+
+    // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
+    // server owns — `entered` is derived, and a new event has no entrants.
+    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    const created = buildTournamentEventRead({
+      ...fields,
+      id: `ev-created-${this.detail.events.length + 1}`,
+      entrants: [],
+    })
+    this.detail = { ...this.detail, events: [...this.detail.events, created] }
+    return json(route, 201, this.read(created))
+  }
+
+  /** `PATCH …/events/{event_id}` — edit an event, with the same 422. */
+  private async updateEvent(route: Route, eventId: string, body: unknown) {
+    const event = this.detail.events.find((e) => e.id === eventId)
+    if (!event) return json(route, 404, { detail: 'event not found' })
+    if (nameTooLong(body)) return this.unprocessableName(route)
+
+    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    // `entrants` and `entered` are the server's, not the editor's — the write body
+    // does not carry them, and echoing the client's view back would clobber
+    // registrations it never saw.
+    this.mutateEvent(eventId, (e) => ({ ...e, ...fields, entrants: e.entrants }))
+    return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
+  }
+
+  /** FastAPI's 422, verbatim: `detail` is an ARRAY of pydantic errors, and it is
+   * `extractDetail` (`src/api/client.ts`) that reduces it to the sentence the editor
+   * shows. A stub answering `{detail: "…"}` here would be testing the client against
+   * a server it will never meet. */
+  private unprocessableName(route: Route) {
+    return json(route, 422, {
+      detail: [
+        {
+          type: 'string_too_long',
+          loc: ['body', 'name'],
+          msg: `String should have at most ${EVENT_NAME_MAX} characters`,
+        },
+      ],
+    })
+  }
+
   /** `DELETE …/entries/{entry_id}` — withdrawal. The server soft-deletes; from
    * the wire that is indistinguishable from dropping the row, since a withdrawn
    * entry appears in neither the roster nor the count. Withdrawing an entry
@@ -697,6 +784,14 @@ export class TournamentsStore {
       events: this.detail.events.map((e) => (e.id === eventId ? fn(e) : e)),
     }
   }
+}
+
+/** The one server-side constraint on an event write this suite mirrors: the name
+ * column's length. Everything else the editor can author, the API accepts — a rule
+ * with no value included, which is exactly why the client has to refuse it. */
+function nameTooLong(body: unknown): boolean {
+  const name = (body as { name?: unknown } | null)?.name
+  return typeof name === 'string' && name.length > EVENT_NAME_MAX
 }
 
 function json(route: Route, status: number, body: unknown) {

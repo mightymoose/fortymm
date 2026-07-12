@@ -198,8 +198,13 @@ describe('EnterEventControl', () => {
       const notice = await page.findIneligibleNotice()
       expect(notice).toHaveTextContent('Not eligible')
       // The rule the server pointed at, read back out of the event's own
-      // predicates — and the rating it judged. Specific enough to act on.
-      expect(notice).toHaveTextContent('Rating is less than 1500. Your rating is 1650.')
+      // predicates — and the rating it judged, ROUNDED. The fixture's rating is
+      // the raw Glicko float the server sends (`UNROUNDED_RATING`,
+      // 1662.3108939062977), so this assertion discriminates: the card once
+      // printed thirteen decimal places here, and a round-number fixture could
+      // not see it.
+      expect(notice).toHaveTextContent('Rating is less than 1500. Your rating is 1662.')
+      expect(notice).not.toHaveTextContent('1662.3')
       expect(page.queryEnterButton('U1500 Singles')).toBeNull()
       expect(page.getButtons()).toHaveLength(0)
     })

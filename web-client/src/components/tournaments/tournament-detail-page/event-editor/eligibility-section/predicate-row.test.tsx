@@ -76,6 +76,81 @@ describe('PredicateRow', () => {
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 
+  // The editor validates the whole draft and hands each row its share (`issues`).
+  // The row's job is to put that message under the control it belongs to, in red,
+  // and mark that control invalid — the house convention for a field error, and the
+  // only placement that stays legible in a list of rules several rows long.
+  describe('the validation messages', () => {
+    it('says nothing at all when the rule is fine', () => {
+      predicateRowPage.render({ predicate: buildPredicate({ value: 1500 }) })
+      expect(predicateRowPage.getErrors()).toHaveLength(0)
+      expect(predicateRowPage.getValueInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('marks the value control invalid and names the problem beneath it', () => {
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: '<', value: null }),
+        issues: { value: 'Enter a rating.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual(['Enter a rating.'])
+      expect(predicateRowPage.getValueInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('marks the offending BOUND of a between, not both', () => {
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: 'between', value: [1600, 1200] }),
+        issues: { upper: 'The upper bound must be at least the lower bound.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual([
+        'The upper bound must be at least the lower bound.',
+      ])
+      expect(predicateRowPage.getUpperBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(predicateRowPage.getLowerBoundInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('says one thing once when BOTH bounds are empty', () => {
+      // Both boxes are blank and the complaint about each is the same sentence.
+      // Printing it twice is noise, so the row dedupes — while still marking both
+      // controls invalid, because both are.
+      predicateRowPage.render({
+        predicate: buildPredicate({ op: 'between', value: [null, null] }),
+        issues: { lower: 'Enter a rating.', upper: 'Enter a rating.' },
+      })
+
+      expect(predicateRowPage.getErrorMessages()).toEqual(['Enter a rating.'])
+      expect(predicateRowPage.getLowerBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(predicateRowPage.getUpperBoundInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    // A rating is a rating: the controls carry the range too, so the browser's own
+    // spinner cannot walk one to 999999999 (which saved, before #783's QA pass).
+    it('bounds the value control to a real rating range', () => {
+      predicateRowPage.render({ predicate: buildPredicate({ value: 1500 }) })
+      expect(predicateRowPage.getValueInput()).toHaveAttribute('min', '0')
+      expect(predicateRowPage.getValueInput()).toHaveAttribute('max', '3000')
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015, rule 6): a viewer gets a rendering of the data,
     // never a disabled editor. The DOM sweep, not a role sweep — the value

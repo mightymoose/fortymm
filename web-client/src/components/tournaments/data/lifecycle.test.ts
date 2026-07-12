@@ -13,6 +13,7 @@ import {
   buildFullEvent,
   buildIneligibleEvent,
   buildTournament,
+  UNROUNDED_RATING,
 } from './seed.factory'
 import type { TournamentStatus } from './types'
 
@@ -206,13 +207,36 @@ describe('entryControlState', () => {
     expect(state({ event: buildIneligibleEvent() })).toEqual({
       kind: 'ineligible',
       lead: 'Not eligible',
-      reason: 'Rating is less than 1500. Your rating is 1650.',
+      reason: 'Rating is less than 1500. Your rating is 1662.',
+    })
+  })
+
+  // …and it prints that rating the way every OTHER surface in the app prints one:
+  // rounded (`formatRating`). The fixture is the point of this test — a raw Glicko
+  // float, thirteen decimals, exactly what the server sends. Its predecessor used a
+  // round 1650, which made `${state.rating}` and `${Math.round(state.rating)}` the
+  // same string: the assertion could not tell the fix from the bug, and the bug
+  // shipped ("Your rating is 1662.3108939062977."). A round-number fixture here
+  // re-creates the blind spot.
+  it('ROUNDS the raw Glicko float it was judged on — never 13 decimal places', () => {
+    const ineligible = buildIneligibleEvent()
+    // The payload really is the unrounded float, so what follows is a claim about
+    // the formatter and not about a fixture that pre-rounded it for us.
+    expect(ineligible.entryState).toMatchObject({ rating: UNROUNDED_RATING })
+    expect(String(UNROUNDED_RATING)).toContain('.')
+
+    expect(state({ event: ineligible })).toMatchObject({
+      reason: 'Rating is less than 1500. Your rating is 1662.',
+    })
+    // …and not a decimal in sight: the whole point is the tail that used to be here.
+    expect(state({ event: ineligible })).toMatchObject({
+      reason: expect.not.stringContaining('1662.3'),
     })
   })
 
   // The rule the refusal points at was edited away under a stale page. Falling back
   // to the generic copy is the honest degrade; half a sentence ("Rating is . Your
-  // rating is 1650.") would not be.
+  // rating is 1662.") would not be.
   it('falls back to generic copy when the refusing rule is not on the event', () => {
     const stale = buildIneligibleEvent({ predicates: [] })
 
