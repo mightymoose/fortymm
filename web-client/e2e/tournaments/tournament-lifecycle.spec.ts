@@ -176,6 +176,15 @@ test.describe('Tournaments · the lifecycle', () => {
     await expect(pom.toasts).toHaveCount(1)
     await expect(pom.toasts).toContainText("Couldn't publish the tournament")
 
+    // …and told something USEFUL. This click is a self-transition
+    // (`published → published`), which is what a stale tab always produces — and
+    // the two-ended phrasing degenerates into tautology exactly there ("this
+    // tournament is published; it cannot be moved to published"), which tells the
+    // director nothing. The sentence they need is the fact that somebody already
+    // did it, so pin the sentence, not just the verb: the title alone would go
+    // green against the tautology this copy replaced.
+    await expect(pom.toasts).toContainText('This tournament is already published.')
+
     // …and told it by a 409, not by an accident. Without this line the test would
     // pass just as happily if the transitions route were UNMOCKED: the 404 would
     // raise the same toast, and the refetch would reconcile the view all the same.

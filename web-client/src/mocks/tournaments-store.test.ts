@@ -456,10 +456,29 @@ describe('transitionTournament', () => {
       ok: false,
       status: 409,
       // The server's wording, verbatim — a stale tab is shown this, so the copy
-      // is part of the contract.
-      detail: `This tournament is ${from}; it cannot be moved to ${to}.`,
+      // is part of the contract. Two shapes: the self-transition is told what
+      // happened, every other illegal edge names both ends.
+      detail:
+        from === to
+          ? `This tournament is already ${to}.`
+          : `This tournament is ${from}; it cannot be moved to ${to}.`,
     })
     expect(findTournament(id)!.status).toBe(from)
+  })
+
+  // The self-transition sentence, pinned on its own rather than only through the
+  // table above — it is the copy a stale tab actually reads, and the tautology it
+  // replaced ("this tournament is live; it cannot be moved to live") told that tab
+  // nothing. `it.each` over the table would happily go green against either shape
+  // if the ternary above were dropped on both sides.
+  it.each(STATUSES)('tells a stale tab that %s is already the status', (s) => {
+    const id = at(s)
+
+    expect(transitionTournament(id, s)).toEqual({
+      ok: false,
+      status: 409,
+      detail: `This tournament is already ${s}.`,
+    })
   })
 
   // `published → archived` is an illegal edge too, so this also pins the ordering:

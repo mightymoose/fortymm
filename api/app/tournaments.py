@@ -503,16 +503,27 @@ async def create_tournament_transition(
 
     if (tournament.status, payload.to) not in LEGAL_TRANSITIONS:
         # The pair, not the target: the same ``to`` that is legal from one status
-        # is a conflict from another. The detail names both ends of the edge the
-        # caller asked for, because that is what a stale tab needs to be told —
-        # and it says nothing a user shouldn't read.
-        raise HTTPException(
-            status_code=409,
-            detail=(
+        # is a conflict from another. Both details name the tournament rather than
+        # the schema, because a player reads them in a toast.
+        #
+        # The self-transition gets its own sentence. It is the common refusal in
+        # practice — a stale tab clicking "Start tournament" on a tournament that
+        # is already live is exactly the ``live → live`` the edge table refuses —
+        # and the two-ended phrasing degenerates into tautology there ("this
+        # tournament is live; it cannot be moved to live"), which tells the player
+        # nothing. What they actually need is the fact that somebody already did
+        # it. Every other illegal edge keeps the two-ended shape: a caller asking
+        # for a genuinely illegal jump needs both ends named, since the target
+        # alone doesn't say why it was refused.
+        detail = (
+            f"This tournament is already {tournament.status.value}."
+            if tournament.status == payload.to
+            else (
                 f"This tournament is {tournament.status.value}; "
                 f"it cannot be moved to {payload.to.value}."
-            ),
+            )
         )
+        raise HTTPException(status_code=409, detail=detail)
 
     tournament.status = payload.to
     await db.commit()

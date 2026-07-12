@@ -284,12 +284,11 @@ describe('useTransitionTournament', () => {
   // refusal has to be VISIBLE — a swallowed 409 is a button that does nothing —
   // and the verb names the edge the user clicked, not the wire call.
   it('surfaces an illegal-edge 409 as an error toast naming what they clicked', async () => {
+    // The server sees `published → published` — a self-transition — so it answers
+    // the sentence that says what happened, not the tautology naming both ends.
     mockTournamentTransitionEndpoint(server, () =>
       HttpResponse.json(
-        {
-          detail:
-            'This tournament is published; it cannot be moved to published.',
-        },
+        { detail: 'This tournament is already published.' },
         { status: 409 },
       ),
     )
@@ -307,8 +306,9 @@ describe('useTransitionTournament', () => {
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't publish the tournament",
       expect.objectContaining({
-        description:
-          'This tournament is published; it cannot be moved to published.',
+        // The description is the server's detail, passed through — this is the
+        // sentence the stale tab is there to read.
+        description: 'This tournament is already published.',
       }),
     )
     // A 409 here is a genuine refusal — nothing moved. Unlike the entry 409 (which
@@ -319,10 +319,7 @@ describe('useTransitionTournament', () => {
   it('invalidates on the 409 too, so the stale view catches up to the status it was refused', async () => {
     mockTournamentTransitionEndpoint(server, () =>
       HttpResponse.json(
-        {
-          detail:
-            'This tournament is published; it cannot be moved to published.',
-        },
+        { detail: 'This tournament is already published.' },
         { status: 409 },
       ),
     )

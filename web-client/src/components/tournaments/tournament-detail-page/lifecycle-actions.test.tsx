@@ -94,9 +94,11 @@ describe('LifecycleActions', () => {
   // but the tournament was published in another tab. The refusal must be VISIBLE —
   // a silent no-op would leave the user clicking a button that does nothing.
   it('surfaces a 409 from a stale view as an error the user can see', async () => {
+    // `published → published` — the stale tab's click IS a self-transition, so the
+    // server answers its self-transition sentence, not the two-ended one.
     mockTournamentTransitionEndpoint(server, () =>
       HttpResponse.json(
-        { detail: 'This tournament is published; it cannot be moved to published.' },
+        { detail: 'This tournament is already published.' },
         { status: 409 },
       ),
     )
@@ -111,8 +113,7 @@ describe('LifecycleActions', () => {
         // The verb is the edge they clicked, not the wire call.
         "Couldn't publish the tournament",
         expect.objectContaining({
-          description:
-            'This tournament is published; it cannot be moved to published.',
+          description: 'This tournament is already published.',
         }),
       ),
     )

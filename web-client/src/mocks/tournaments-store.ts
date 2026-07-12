@@ -475,8 +475,18 @@ export function transitionTournament(
     return {
       ok: false,
       status: 409,
-      // The server's wording, verbatim (`api/app/tournaments.py`).
-      detail: `This tournament is ${existing.status}; it cannot be moved to ${to}.`,
+      // The server's wording, verbatim (`api/app/tournaments.py`), in BOTH of its
+      // shapes. The self-transition (`from === to`) gets its own sentence: it is
+      // the common refusal — a stale tab clicking "Start tournament" on a
+      // tournament that is already live is exactly the `live → live` the table
+      // refuses — and the two-ended phrasing degenerates into tautology there
+      // ("this tournament is live; it cannot be moved to live"), which tells the
+      // player nothing. Every other illegal edge keeps the two-ended shape,
+      // because the target alone doesn't say why the jump was refused.
+      detail:
+        existing.status === to
+          ? `This tournament is already ${to}.`
+          : `This tournament is ${existing.status}; it cannot be moved to ${to}.`,
     }
   }
   const next: StoredTournament = {

@@ -931,6 +931,11 @@ _LEGAL_EDGES = [
 # one list or the other automatically.
 _ALL_EDGES = [(a, b) for a in TournamentStatus for b in TournamentStatus]
 _ILLEGAL_EDGES = [edge for edge in _ALL_EDGES if edge not in _LEGAL_EDGES]
+# The thirteen refusals split into two shapes of sentence, so they are split into
+# two lists here. Same partition-by-subtraction discipline: a self-transition is
+# one whose ends are equal, and everything else is what's left.
+_SELF_EDGES = [edge for edge in _ILLEGAL_EDGES if edge[0] == edge[1]]
+_NON_SELF_ILLEGAL_EDGES = [edge for edge in _ILLEGAL_EDGES if edge[0] != edge[1]]
 
 
 def _edge_params(
@@ -1019,11 +1024,68 @@ async def test_transition_illegal_edge_conflicts_and_leaves_status_unchanged(
     )
 
     assert response.status_code == 409, response.text
-    # Human-readable, and about the tournament rather than the schema: it names
-    # where the tournament is and where the caller tried to send it.
-    detail = response.json()["detail"]
-    assert start.value in detail and target.value in detail
     assert await _status_of(client, created["id"]) == start.value
+    # What the refusal *says* is pinned by the two copy tests below, one per shape
+    # of sentence. Asserting here merely that the detail mentions both ends would
+    # be vacuous for the four self-transitions, where both ends are the same word.
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_SELF_EDGES))
+async def test_self_transition_says_the_tournament_is_already_in_that_status(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """Re-asserting the status a tournament already holds is refused with the fact
+    the caller is missing — that somebody already did it — not with a tautology.
+
+    This is the refusal players actually meet: a second tab clicking "Start
+    tournament" on a tournament that has since gone live sends ``live → live``.
+    "This tournament is live; it cannot be moved to live" is true, unhelpful, and
+    reads as nonsense under the toast title "Couldn't start the tournament".
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail == f"This tournament is already {start.value}."
+    # The tautological shape is gone, not merely reworded around.
+    assert "cannot be moved" not in detail
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_NON_SELF_ILLEGAL_EDGES))
+async def test_non_self_illegal_transition_names_both_ends_of_the_edge(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """The other nine refusals — backwards edges, skipped stages, anything out of
+    the terminal ``archived`` — keep the two-ended sentence.
+
+    A caller asking for a genuinely illegal jump needs both ends named: the target
+    alone doesn't say why it was refused, because the same target is legal from a
+    different status.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        f"This tournament is {start.value}; it cannot be moved to {target.value}."
+    )
 
 
 async def test_transition_by_non_owner_is_403_before_the_edge_is_judged(

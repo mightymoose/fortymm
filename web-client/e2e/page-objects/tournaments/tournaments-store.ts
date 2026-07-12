@@ -416,7 +416,15 @@ export class TournamentsStore {
     const from = this.detail.status
     if (!LEGAL_TRANSITIONS.some(([f, t]) => f === from && t === to)) {
       return json(route, 409, {
-        detail: `This tournament is ${from}; it cannot be moved to ${to}.`,
+        // Both of the server's shapes. A self-transition (`from === to`) — the
+        // stale tab, the commonest refusal there is — is told *what happened*
+        // ("This tournament is already live."), not the tautology the two-ended
+        // phrasing degenerates into there. Every other illegal edge names both
+        // ends, since the target alone doesn't say why it was refused.
+        detail:
+          from === to
+            ? `This tournament is already ${to}.`
+            : `This tournament is ${from}; it cannot be moved to ${to}.`,
       })
     }
 
