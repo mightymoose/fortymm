@@ -22,16 +22,18 @@ through real RBAC rows — so "who may enter" is proven, not stubbed. Mutating
 requests carry the double-submit CSRF token via the client fixtures' event hooks.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.models import (
     DrawType,
@@ -43,7 +45,12 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.tournaments import TOURNAMENT_ENTER, TOURNAMENT_VIEW
+from app.tournaments import (
+    TOURNAMENT_ENTER,
+    TOURNAMENT_VIEW,
+    enter_event,
+    withdraw_from_event,
+)
 from tests._helpers import grant_permissions, make_client, make_user, start_session
 
 ACTIVE_ENTRY_INDEX = "uq_tournament_entries_event_id_user_id_active"
@@ -933,3 +940,193 @@ async def test_withdrawing_an_entry_that_isnt_addressable_here_is_a_404(
 
     (row,) = await _entries_of(db_session, other_event_id, user_id)
     assert row.status is TournamentEntryStatus.entered
+
+
+# ----- the guard fails closed -------------------------------------------------
+
+
+async def test_a_closed_window_refuses_even_when_the_status_is_published(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``_registration_open`` says shut, the routes refuse — whatever the
+    *status* happens to be.
+
+    ``_registration_open`` is the single source of truth every registration rule is
+    meant to hang off (a deadline, a capacity cap, #784), and today it is exactly
+    "status is published". Tomorrow it is not — so this test asks the question that
+    tomorrow asks: a ``published`` tournament whose window the predicate has closed
+    for some *other* reason. The predicate is stubbed rather than a second rule
+    being invented for the test, because the point is precisely that the enforcer
+    must not care *why* it was told no.
+
+    This is a regression test for a guard that failed **open**: it refused only if
+    it could independently re-derive "the status is not published", so a
+    ``published``-but-closed tournament fell through every branch and the write it
+    was asked to refuse went through. A guard may never fail in the permissive
+    direction — and the refusal it gives here is generic, because the status is not
+    the reason and saying it was would be a lie.
+
+    Two events, because the two legs must be able to fail for their *own* reason: a
+    player entering an event they already hold an entry in would be refused by the
+    duplicate-entry index whatever this guard did, and that 409 would sit on top of
+    the fail-open bug and hide it.
+    """
+    client, user = entrant_client
+    to_enter = await _make_event(db_session, status=TournamentStatus.published)
+    to_withdraw = await _make_event(db_session, status=TournamentStatus.published)
+    entry_id = await _seed_entry(db_session, to_withdraw, user)
+    to_enter_id = to_enter.id
+    monkeypatch.setattr("app.tournaments._registration_open", lambda t: False)
+
+    entering = await client.post(_entries_url(to_enter))
+    withdrawing = await client.delete(_entry_url(to_withdraw, entry_id))
+
+    assert entering.status_code == 409, entering.text
+    assert entering.json()["detail"] == "Registration for this tournament is closed."
+    assert withdrawing.status_code == 409, withdrawing.text
+    # And neither refusal wrote: no entry row at all in the event that was entered,
+    # and the withdrawn-from one's entry still active — re-read from the database,
+    # since a refusal that had already flipped it would otherwise answer from this
+    # session's identity map and read as clean.
+    assert await _all_entries(db_session, to_enter_id) == []
+    assert (await _reread(db_session, entry_id)).status is TournamentEntryStatus.entered
+
+
+# ----- the go-live race ------------------------------------------------------
+#
+# "Going live locks the entries" (ADR-0017) is a claim about *time*, and the two
+# tests below are the only ones here that test it as one. Every other status test
+# in this file puts the tournament in a status and then knocks on the door — which
+# a handler that reads the status and writes without a lock passes easily. The bug
+# lives in the gap between that read and that write: under READ COMMITTED an
+# unlocked read is answered from the snapshot of that statement alone, so an entry
+# can pass a ``published`` check and commit *behind* a go-live that landed while it
+# was still in flight, leaving a row in the field the draw (#785) is cut from that
+# arrived after the field was supposed to be sealed. Withdrawal has the mirror bug.
+#
+# So these two drive the gap directly: two sessions on two connections, with the
+# go-live decided-but-uncommitted while the entry/withdrawal arrives. They are not
+# timing-dependent — the blocked side is *made* to block by Postgres, and released
+# by an explicit commit — so there is nothing here to flake.
+
+
+async def _hold_the_go_live_lock(
+    session: AsyncSession, tournament_id: uuid.UUID
+) -> None:
+    """Take the owner's go-live up to, but not including, its commit.
+
+    The tournament row is locked ``FOR UPDATE`` and already flipped to ``live``
+    inside this transaction — and invisible to everyone else until it commits. That
+    is precisely the instant the race lives in, and holding it open is what lets a
+    test drive the other half of the race deterministically rather than firing both
+    sides and hoping the scheduler interleaves them the interesting way.
+
+    The lock is taken the way the transition route takes it, because it is the
+    *route's* lock the other side must collide with.
+    """
+    tournament = (
+        await session.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
+    ).scalar_one()
+    tournament.status = TournamentStatus.live
+    await session.flush()
+
+
+async def test_an_entry_cannot_land_after_the_tournament_has_gone_live(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event: TournamentEvent,
+    player: User,
+) -> None:
+    """An entry in flight when the owner presses go-live is refused, not accepted.
+
+    The owner's go-live holds the tournament's row lock, uncommitted. The player's
+    entry arrives and reads the tournament — and *blocks*, because the entry route
+    reads it ``FOR UPDATE`` as well. When the go-live commits, that read returns
+    ``live``, the status gate refuses, and no row is written.
+
+    Without the lock the entry is never made to wait (which is what
+    ``entering.done()`` catches first): it reads ``published`` from its own
+    snapshot, passes the gate, and commits its INSERT behind the go-live. Two
+    successful requests, and a sealed field with an extra entrant in it.
+    """
+    tournament_id, event_id, player_id = event.tournament_id, event.id, player.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def enter() -> int | str:
+        async with make_session() as session:
+            entrant = (
+                await session.execute(select(User).where(User.id == player_id))
+            ).scalar_one()
+            try:
+                await enter_event(tournament_id, event_id, session, entrant)
+                return "entered"
+            except HTTPException as exc:
+                return exc.status_code
+
+    async with make_session() as go_live:
+        await _hold_the_go_live_lock(go_live, tournament_id)
+        entering = asyncio.create_task(enter())
+        # Every chance to finish — and it cannot, because it is parked on the
+        # tournament's row lock, inside the handler, before its status check.
+        await asyncio.sleep(0.25)
+        if entering.done():
+            pytest.fail(
+                "the entry did not block on the tournament's row lock: it ran to "
+                f"completion against an uncommitted go-live ({entering.result()!r})"
+            )
+        await go_live.commit()
+        outcome = await entering
+
+    assert outcome == 409, outcome
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_an_active_entry_cannot_be_withdrawn_after_the_tournament_goes_live(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event: TournamentEvent,
+    player: User,
+) -> None:
+    """The mirror: a withdrawal in flight when the owner presses go-live is refused.
+
+    Same two sessions, same held lock. A withdrawal that slipped through would pull
+    a player out from under a draw cut from the field they were part of — so the
+    withdrawal route takes the same lock, on the same row, in the same order (which
+    is also why no two of these three routes can deadlock against each other), and
+    the entry is still ``entered`` when the dust settles.
+    """
+    entry_id = await _seed_entry(db_session, event, player)
+    tournament_id, event_id, player_id = event.tournament_id, event.id, player.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def withdraw() -> int | str:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == player_id))
+            ).scalar_one()
+            try:
+                await withdraw_from_event(
+                    tournament_id, event_id, entry_id, session, actor
+                )
+                return "withdrawn"
+            except HTTPException as exc:
+                return exc.status_code
+
+    async with make_session() as go_live:
+        await _hold_the_go_live_lock(go_live, tournament_id)
+        withdrawing = asyncio.create_task(withdraw())
+        await asyncio.sleep(0.25)
+        if withdrawing.done():
+            pytest.fail(
+                "the withdrawal did not block on the tournament's row lock: it ran to "
+                f"completion against an uncommitted go-live ({withdrawing.result()!r})"
+            )
+        await go_live.commit()
+        outcome = await withdrawing
+
+    assert outcome == 409, outcome
+    assert (await _reread(db_session, entry_id)).status is TournamentEntryStatus.entered

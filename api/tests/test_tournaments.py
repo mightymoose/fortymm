@@ -10,15 +10,17 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 ``api_client`` fixture and ``make_client``).
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.models import (
     Tournament,
@@ -27,7 +29,15 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW, list_tournaments
+from app.schemas.tournament import TournamentTransitionCreate
+from app.tournaments import (
+    TOURNAMENT_CREATE,
+    TOURNAMENT_VIEW,
+    _get_tournament_for_update_or_404,
+    _get_tournament_or_404,
+    create_tournament_transition,
+    list_tournaments,
+)
 from tests._helpers import (
     counted_statements,
     grant_permissions,
@@ -1087,4 +1097,96 @@ async def test_transition_with_an_invalid_body_returns_422(
     )
 
     assert response.status_code == 422
+    # A 422 alone would pass against a handler that wrote the status and only then
+    # validated. Refusing at the boundary has to mean nothing moved.
     assert await _status_of(client, created["id"]) == "draft"
+
+
+# ----- the row lock behind the lifecycle -------------------------------------
+#
+# A tournament's status is read by one statement and overwritten by another, and
+# Postgres runs READ COMMITTED — so without a lock the two sit in different
+# instants and every "the status decides this" rule has a window under it. The
+# tests below pin the lock two ways: that it is *asked for* (and only on the
+# writing paths), and that it *works* (two real sessions, one genuinely blocking
+# on the other).
+
+
+async def test_only_the_mutating_loader_takes_the_row_lock(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    authed_client: tuple[AsyncClient, User],
+):
+    """``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``;
+    ``_get_tournament_or_404`` — the loader the read routes use — does not.
+
+    Both halves are load-bearing. A locking loader that quietly stopped locking
+    would reopen the entry-after-go-live race in silence; and a lock added to the
+    *read* loader would make every page view queue behind (and hold up) writers,
+    for a reader that has nothing to serialize against.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = uuid.UUID(created["id"])
+
+    async with counted_statements(engine) as (session, statements):
+        await _get_tournament_for_update_or_404(session, tournament_id)
+    assert any("FOR UPDATE" in s for s in statements), statements
+
+    async with counted_statements(engine) as (session, statements):
+        await _get_tournament_or_404(session, tournament_id)
+    assert not any("FOR UPDATE" in s for s in statements), statements
+
+
+async def test_two_identical_transitions_racing_leave_exactly_one_winner(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    authed_client: tuple[AsyncClient, User],
+):
+    """Two identical ``draft → published`` requests fired at once: one 201, one 409.
+
+    ADR-0017 makes re-asserting a status a *conflict*, not an idempotent no-op —
+    "the only caller that sends it is a stale one". Unlocked, that guarantee held
+    only when nobody was in a hurry: both requests would read ``draft``, both find
+    the edge legal, and both answer 201, so a client could be told it published a
+    tournament somebody else had already published. The row lock serializes them —
+    the loser blocks, re-reads the status the winner *committed*, and gets the 409
+    it is owed.
+
+    Driven on two separate sessions (the handler called directly, as
+    ``test_concurrent_accept_and_counter_serialize`` does for matches): the shared
+    ``db_session`` override runs both requests on one connection, where a lock
+    cannot block and the race cannot appear.
+    """
+    client, owner = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = uuid.UUID(created["id"])
+    owner_id = owner.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def publish() -> int | str:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == owner_id))
+            ).scalar_one()
+            try:
+                moved = await create_tournament_transition(
+                    tournament_id,
+                    TournamentTransitionCreate(to=TournamentStatus.published),
+                    session,
+                    actor,
+                )
+                return moved.status.value
+            except HTTPException as exc:
+                return exc.status_code
+
+    outcomes = await asyncio.gather(publish(), publish())
+
+    assert sorted(outcomes, key=str) == [409, "published"], outcomes
+    async with make_session() as verify:
+        final = (
+            await verify.execute(
+                select(Tournament).where(Tournament.id == tournament_id)
+            )
+        ).scalar_one()
+        assert final.status is TournamentStatus.published
