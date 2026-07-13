@@ -113,8 +113,8 @@ class TournamentFixture(Base):
     #: corrupted draw would silently satisfy it and go live. The merge instead **un-cuts
     #: the event's draw** (a draw cut from a field that double-counted a human is wrong
     #: throughout — its pool sizes and seeding were computed against N+1 entrants), and
-    #: the director re-cuts. See ADR-786. Tracked as its own chore; nothing writes
-    #: fixture rows yet, so the hazard is dormant until then.
+    #: the director re-cuts. See ADR-786; ``_resolve_entry_collisions`` is where it is
+    #: done.
     entry_a_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_entries.id", ondelete="CASCADE"),

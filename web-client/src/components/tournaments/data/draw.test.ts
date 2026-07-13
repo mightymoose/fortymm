@@ -352,14 +352,19 @@ describe('drawRefusalNotice', () => {
 
   // No silent failures: the panel surfaces its errors inline and carries no toast, so
   // every failure — a 5xx, a dead network — must still say something.
-  it('names the verb on a 5xx, and keeps the server’s detail', () => {
+  //
+  // But a 5xx says it in OUR words. Its detail is machinery, not copy, and it must never
+  // reach the UI (`DEFINITION_OF_COMPLETE`) — the guarantee lives in `fallbackNotice`'s
+  // floor, so this asserts the leak is closed rather than that this function has an arm.
+  it('names the verb on a 5xx, and never echoes the server’s detail', () => {
     const notice = drawRefusalNotice(
-      new ApiError(500, 'Something went wrong.', 'remove the draw'),
+      new ApiError(500, "psycopg.errors.NotNullViolation: null value in column 'pool_id'", 'remove the draw'),
       'remove the draw',
     )
 
     expect(notice.title).toBe("Couldn't remove the draw")
-    expect(notice.description).toBe('Something went wrong.')
+    expect(notice.description).not.toContain('psycopg')
+    expect(notice.description).toBe('Something went wrong on our end. Try again in a moment.')
   })
 
   it('says the request never landed when the network is down', () => {

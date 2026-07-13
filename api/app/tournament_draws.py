@@ -11,8 +11,8 @@ and leaves this module with only the three things a database is actually needed 
   ``order_entrants`` wants. Withdrawal is a soft-delete, so a withdrawn entry is not an
   entrant (ADR-0016) and has no place in a draw.
 - **the guard** (``draw_has_play``) — whether this draw shows any evidence of play.
-- **the freeze** (``event_has_draw`` / ``event_pool_ids``) — whether a draw exists at
-  all, and the pool ids it was cut across. The two facts the event ``PATCH`` needs to
+- **the freeze** (``event_has_draw`` / ``event_pools``) — whether a draw exists at
+  all, and the pools it was cut across. The two facts the event ``PATCH`` needs to
   refuse a pools payload that would orphan the fixtures (there is no FK to stop it).
 - **the currency** (``draw_currency_by_event``) — whether each event's draw still
   describes the field it was cut from. The fact the ``published → live`` precondition
@@ -26,7 +26,7 @@ that field must not be separated by another writer's entry (see the route).
 
 import enum
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -140,8 +140,8 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
     return fixtures > 0
 
 
-def event_pool_ids(event: TournamentEvent) -> set[PoolId]:
-    """The ids of the pools this event *currently* has — the set the freeze protects.
+def event_pools(event: TournamentEvent) -> list[Pool]:
+    """The pools this event *currently* has, parsed — the ones the freeze protects.
 
     Parsed through :class:`Pool`, exactly as ``draw_config`` parses them, rather than
     indexed as ``p["id"]`` on an untyped JSONB dict (api/CLAUDE.md — "parse, don't
@@ -149,12 +149,18 @@ def event_pool_ids(event: TournamentEvent) -> set[PoolId]:
     a pool that could be *stored* can be read back here; a malformed one fails loudly
     at the boundary instead of raising a ``KeyError`` somewhere downstream.
 
-    A **set**, because identity is all the freeze is about. The pools' ORDER is free to
-    change under a cut draw (it is only read at the cut, where it seeds the snake), and
-    so is everything else about them — a pool's tables, its window, its name. Only the
-    ids are load-bearing after the cut, because only the ids are what the fixtures hold.
+    Returns the **pools**, not just their ids, though identity is all the freeze
+    compares: a refusal has to *name* the pools it is about (``named_list``), and a
+    caller handed a bare ``set[PoolId]`` has no way back to the names — it would parse
+    every pool a second time to recover them. One parse, and the id set is a
+    comprehension away.
+
+    The ids are the only load-bearing part after the cut, because the ids are what the
+    fixtures hold. Everything else here — a pool's tables, its window, its name, and
+    the ORDER of the list (read only at the cut, where it seeds the snake) — is free to
+    change under a standing draw.
     """
-    return {PoolId(Pool.model_validate(pool).id) for pool in event.pools}
+    return [Pool.model_validate(pool) for pool in event.pools]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
@@ -355,7 +361,7 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )
-    await uncut_draw(db, event)
+    await uncut_draw(db, [event.id])
     db.add_all(
         [
             TournamentFixture(
@@ -371,8 +377,16 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     )
 
 
-async def uncut_draw(db: AsyncSession, event: TournamentEvent) -> None:
-    """Un-cut this event's draw: delete its fixtures, so the event has no draw again.
+async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:
+    """Un-cut these events' draws: delete their fixtures, so they have no draw again.
+
+    Takes **ids, not events**, and takes a collection of them, because the fixtures are
+    addressed by ``event_id`` and nothing else about an event is read. The account-merge
+    path (:func:`app.account_merge._resolve_entry_collisions`) knows only the ids of the
+    events a double-counted human invalidated, and would otherwise have to SELECT whole
+    ``TournamentEvent`` rows purely to hand them back one attribute apiece — and then
+    issue a DELETE per event where one suffices. Unordered, because a DELETE ... IN has
+    no order to respect.
 
     A bulk DELETE rather than ``event.fixtures.clear()`` on the ``delete-orphan``
     relationship: the collection would have to be loaded first (a SELECT of every
@@ -380,13 +394,16 @@ async def uncut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     re-cut of a full round-robin. The relationship's cascade still stands for the paths
     that *do* go through the ORM — deleting the event itself.
 
-    Deleting nothing is not an error. An event whose draw was never cut is already in
-    the state this asks for, which is why the un-cut route answers 204 either way: it is
-    a DELETE, and asking for a state the resource already holds is a success.
+    Deleting nothing is not an error, and neither is being given nothing to delete. An
+    event whose draw was never cut is already in the state this asks for, which is why
+    the un-cut route answers 204 either way: it is a DELETE, and asking for a state the
+    resource already holds is a success.
 
     Does not commit — the caller owns the transaction, because on the re-cut path this
     DELETE and the INSERTs that follow it are one atomic replacement.
     """
+    if not event_ids:
+        return
     await db.execute(
-        delete(TournamentFixture).where(TournamentFixture.event_id == event.id)
+        delete(TournamentFixture).where(TournamentFixture.event_id.in_(event_ids))
     )

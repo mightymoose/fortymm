@@ -159,6 +159,15 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
     }))
 }
 
+/** An event has a draw exactly when it has fixtures — the ONE definition of it, guarded
+ * on by `drawState` below and asked by the editor's two freezes.
+ *
+ * It is deliberately *not* spelled `drawState(event).kind === 'drawn'`. That answers the
+ * same yes/no by grouping every fixture into its pool, sorting each round and building
+ * two Maps, then throwing all of it away — and the event editor asks it twice on every
+ * keystroke. */
+const hasDraw = (event: TournamentEvent): boolean => event.fixtures.length > 0
+
 /**
  * An event's draw, shaped for the reader: pools with their members and rounds, or the
  * designed `undrawn` state.
@@ -171,7 +180,7 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
  *   does not have, lands in `unpooled` — visible, rather than silently gone.
  */
 export function drawState(event: TournamentEvent): DrawState {
-  if (event.fixtures.length === 0) return { kind: 'undrawn' }
+  if (!hasDraw(event)) return { kind: 'undrawn' }
 
   const byId = new Map(event.entrants.map((e) => [e.id, e]))
   const poolIds = new Set(event.pools.map((p) => p.id))
@@ -237,12 +246,6 @@ export type EditFreeze =
       reason: string
     }
 
-/** An event has a draw exactly when it has fixtures. Asked through `drawState` so
- * "does this event have a draw?" has ONE definition — a bare `fixtures.length > 0`
- * scattered across the editor would be the same truthiness-on-a-list check the panel
- * already refused to make. */
-const hasDraw = (event: TournamentEvent): boolean =>
-  drawState(event).kind === 'drawn'
 
 /**
  * May the director change **which pools** this event has?
@@ -362,6 +365,10 @@ export function drawRefusalNotice(error: unknown, verb: string): DrawNotice {
         title: 'You are signed out',
         description: 'Sign in again, then cut the draw. Nothing was changed.',
       }
+    // A 5xx and any unrecognised status land here. The 5xx is safe *because of the
+    // floor*, not because of this arm: `fallbackNotice` will not echo a 5xx detail
+    // (see `./notice`), so what renders is "Couldn't cut the draw — something went
+    // wrong on our end" and never the server's stack-shaped sentence.
     default:
       return fallback
   }

@@ -295,6 +295,10 @@ def named_list(names: list[str]) -> str:
     the go-live precondition's events) alike — so a director cannot tell, from the
     punctuation, which layer refused them.
 
+    They are named by **name**, never by id. The ids are what the guards actually
+    compared, but "pool p-b7f2 cannot be removed" (or "event 3f9c-… has no draw") tells
+    a director looking at a page of named pools and named events nothing to act on.
+
     It lives *here*, at the boundary, because the boundary is the lower layer: a
     validator on ``EventPools`` runs before any route does, and ``app.tournaments``
     already imports this module (the reverse import would be a cycle).

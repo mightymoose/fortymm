@@ -25,7 +25,6 @@ from app.schemas.tournament import (
     EventEntryOpen,
     EventEntryRatingIneligible,
     EventEntryState,
-    Pool,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -46,7 +45,7 @@ from app.tournament_draws import (
     draw_currency_by_event,
     draw_has_play,
     event_has_draw,
-    event_pool_ids,
+    event_pools,
     uncut_draw,
 )
 from app.tournament_eligibility import (
@@ -525,19 +524,6 @@ def _enforce_league_editable(t: Tournament) -> None:
             "while it is a draft."
         ),
     )
-
-
-# The refusals here name a SET of things — the pool-set freeze's pools, the go-live
-# precondition's events — and they name them by NAME. A director reads names, not ids:
-# the ids are what the guards actually compared, but "pool p-b7f2 cannot be removed" (or
-# "event 3f9c-… has no draw") tells the person looking at a page of named pools and
-# named events nothing they can act on.
-#
-# ``named_list`` is the one formatter for all of them, and it lives in
-# ``app.schemas.tournament`` because the boundary needs it too (the duplicate-pool-id
-# 422 names the ids it found twice) and the boundary is the lower layer — this module
-# already imports that one, so the reverse would be a cycle. One formatter, so a
-# director cannot tell from the punctuation which guard refused them.
 
 
 # The statuses in which a tournament has been ANNOUNCED to the world. Publishing
@@ -1233,18 +1219,18 @@ async def _enforce_pool_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    existing = event_pool_ids(event)
+    # Parsed ONCE, and kept: the id set decides *whether* to refuse, and the pools
+    # themselves say *which* — a refusal names them (``named_list``), and re-parsing the
+    # JSONB to recover the names would be the same validation run twice per pool.
+    current = event_pools(event)
+    existing = {PoolId(pool.id) for pool in current}
     incoming = {PoolId(pool.id) for pool in payload.pools}
     if existing == incoming:
         return
     # Named by their names, from whichever side of the change still knows them: a pool
     # being removed is only described by the row we hold, and one being added only by
     # the payload.
-    removed = [
-        Pool.model_validate(pool).name
-        for pool in event.pools
-        if Pool.model_validate(pool).id not in incoming
-    ]
+    removed = [pool.name for pool in current if PoolId(pool.id) not in incoming]
     added = [pool.name for pool in payload.pools if pool.id not in existing]
     raise _pool_set_refusal(removed, added)
 
@@ -2228,6 +2214,6 @@ async def uncut_event_draw(
         db, tournament_id, event_id, current_user
     )
     await _enforce_draw_unplayed(db, event)
-    await uncut_draw(db, event)
+    await uncut_draw(db, [event.id])
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

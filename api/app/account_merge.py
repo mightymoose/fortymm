@@ -38,7 +38,6 @@ from app.models import (
     RatingHistory,
     Tournament,
     TournamentEntryStatus,
-    TournamentEvent,
     User,
     UserLeagueRating,
     UserRole,
@@ -583,20 +582,9 @@ async def _resolve_entry_collisions(
     # (3) Un-cut the draws the double-counted field invalidated. ``uncut_draw`` is
     # the one place a draw is deleted (ADR-0786) — a hand-rolled DELETE here would
     # be a second spelling of "this event has no draw" to keep in step with the
-    # first.
-    events = (
-        (
-            await db.execute(
-                select(TournamentEvent).where(
-                    TournamentEvent.id.in_(collided_event_ids)
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for event in events:
-        await uncut_draw(db, event)
+    # first. It takes the ids straight: the events themselves are never needed, so
+    # loading them would be a SELECT run purely to read back the ids we already hold.
+    await uncut_draw(db, collided_event_ids)
 
 
 async def _self_play_collision(
