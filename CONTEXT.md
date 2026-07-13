@@ -405,9 +405,12 @@ A planned pairing in a **draw**: a round and a position (and a **pool**, when
 the draw is pooled), whose sides may still be unknown. A fixture is not a
 **match** — it *materializes* into one the moment both of its sides are known,
 and the match then runs the normal propose/accept lifecycle. A fixture is
-**pending** (some side still unknown), **ready** (both sides known — its match
-exists), or **decided** (its match completed and the winner recorded on the
-fixture).
+**pending** (some side still unknown), **ready** (both sides known and **no
+match yet** — the signal to create one), **materialized** (its match exists and
+is being played), or **decided** (its match completed and the winner recorded on
+the fixture). *Ready* is the state that ends the moment the match is created:
+`advance()` is idempotent precisely because a fixture that already has a
+`match_id` is no longer ready, and so is never proposed twice.
 _Avoid_: slot (a *Slot* is a window of time), tournament match (a fixture is
 the pre-play pairing; the match is the contest it becomes), tie.
 
