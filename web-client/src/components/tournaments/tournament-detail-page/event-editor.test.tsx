@@ -4,7 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/api/client'
 import { screen, waitFor } from '@/test/utilities'
 
-import { buildEvent, buildPool, buildPredicate } from '../data/seed.factory'
+import {
+  buildEvent,
+  buildFixture,
+  buildPool,
+  buildPredicate,
+} from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
 
 // A name genuinely past the server's VARCHAR(255) limit — the #933 case. A short
@@ -423,6 +428,96 @@ describe('EventEditor', () => {
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
       expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+
+    // **The race.** The editor disables the add/remove-pool controls of an event whose
+    // draw is cut (ADR-0786) — but "is the draw cut?" was answered when the page loaded.
+    // A director with two tabs open, or a co-director across the hall, can cut one after
+    // that, and this sheet's live-looking Add button becomes a change the server will
+    // refuse. So the 409 has to land somewhere designed, and it does: the same inline
+    // banner, with the SERVER's sentence, which is the only copy that knows which pool
+    // went missing and that the way out is to delete the draw.
+    //
+    // That sentence survives *because* `saveFailure` classifies a 409 as `refused` (prose
+    // the API wrote for a human) rather than as `invalid` (a validator's machine words,
+    // which are never shown). This test is what stops a future tidy-up from collapsing
+    // the two.
+    it('surfaces a pool-set 409 with the server’s own sentence — the cut-draw race', async () => {
+      const refusal =
+        'This event’s draw is already cut, so its set of pools is frozen: “Pool B” ' +
+        'already has fixtures drawn into it. A pool’s tables, its time and its name ' +
+        'can all still be changed. To add, remove or re-identify a pool, remove the ' +
+        'draw first, then cut it again.'
+      const onSave = rejectWith(
+        new ApiError(409, refusal, 'update event', { detail: refusal }),
+      )
+      const onOpenChange = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', pools: [buildPool()] }),
+        onSave,
+        onOpenChange,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.queryFailure()).toBeInTheDocument(),
+      )
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(refusal)
+      // Not swallowed, not a raw crash, and not a closed sheet over a discarded draft.
+      expect(eventEditorPage.querySheet()).toBeInTheDocument()
+      expect(onOpenChange).not.toHaveBeenCalled()
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(
+        'your changes are still here',
+      )
+    })
+  })
+
+  // The two freezes, wired end to end through the real sheet — the sections own the
+  // controls, the editor owns the derivation, and this is the seam between them. Both
+  // are read off the event's `fixtures`, which is not a form field: nothing on this
+  // sheet can cut or delete a draw.
+  describe('an event whose draw is cut', () => {
+    const drawn = () =>
+      buildEvent({
+        id: 'ev-1',
+        drawType: 'round-robin',
+        pools: [buildPool()],
+        fixtures: [buildFixture({ poolId: 'p-1' })],
+      })
+
+    it('freezes the draw type on Basics and the pool set on Table pools', async () => {
+      eventEditorPage.render({ event: drawn() })
+
+      // Basics is the tab it opens on.
+      expect(
+        screen.getByRole('combobox', { name: 'Draw type' }),
+      ).toBeDisabled()
+      // …while the format beside it — which no fixture depends on — stays live.
+      expect(screen.getByRole('combobox', { name: 'Format' })).toBeEnabled()
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(screen.getByRole('button', { name: 'Add pool' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Remove pool' })).toBeDisabled()
+      expect(screen.getByTestId('pools-frozen-notice')).toHaveTextContent(
+        'Delete the draw',
+      )
+      // The venue attributes the freeze exists to protect are still editable.
+      expect(screen.getByLabelText('Pool name')).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'T1' })).toBeEnabled()
+    })
+
+    it('freezes nothing when no draw is cut', async () => {
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', pools: [buildPool()] }),
+      })
+
+      expect(screen.getByRole('combobox', { name: 'Draw type' })).toBeEnabled()
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(screen.getByRole('button', { name: 'Add pool' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Remove pool' })).toBeEnabled()
+      expect(screen.queryByTestId('pools-frozen-notice')).toBeNull()
     })
   })
 

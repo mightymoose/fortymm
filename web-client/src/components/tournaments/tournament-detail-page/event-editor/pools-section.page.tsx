@@ -26,9 +26,20 @@ const scoped = (container: Container) => ({
   queryPoolCards() {
     return container.queryAllByTestId('pool-card')
   },
-  /** Every Remove-pool button, in render order — to remove a specific card. */
+  /** Every Remove-pool button, in render order — to remove a specific card.
+   *
+   * `hidden: false` is NOT passed and must not be: a *disabled* button (the cut-draw
+   * freeze, ADR-0786) is still in the accessibility tree with its name, and a query that
+   * dropped it would report "no Remove button" for a state whose whole point is that the
+   * button is there, visible, and dead. */
   getRemovePoolButtons() {
     return container.queryAllByRole('button', { name: 'Remove pool' })
+  },
+  /** The notice that says the pool SET is frozen because the draw is cut — and how to
+   * get out of it. Absent when there is no draw, and absent for a viewer (who has no
+   * add/remove affordance to explain and no draw to delete). */
+  queryFrozenNotice() {
+    return container.queryByTestId('pools-frozen-notice')
   },
   /** The live `pools` array in form state (via the probe), so a test can assert
    * that an add / edit / remove flowed through `useFieldArray`. */
@@ -36,8 +47,11 @@ const scoped = (container: Container) => ({
     const el = container.queryByTestId('pools-probe')
     return el ? (JSON.parse(el.textContent || '[]') as Pool[]) : []
   },
+  /** The double-booking warning. Addressed by testid rather than by `role="alert"`:
+   * the freeze notice is an `Alert` too, and an event can be both frozen and
+   * double-booked — a role query would throw on exactly that overlap. */
   queryConflictAlert() {
-    return container.queryByRole('alert')
+    return container.queryByTestId('pools-conflict-alert')
   },
   /** Every interactive control in the section, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */

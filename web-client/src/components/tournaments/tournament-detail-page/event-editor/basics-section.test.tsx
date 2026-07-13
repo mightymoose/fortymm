@@ -1,9 +1,55 @@
 import { fireEvent, screen } from '@/test/utilities'
 
-import { buildEvent } from '../../data/seed.factory'
+import { buildDrawnEvent, buildEvent } from '../../data/seed.factory'
 import { basicsSectionPage } from './basics-section.page'
 
 describe('BasicsSection', () => {
+  // ADR-0786: the draw type is the strategy that DEALT the event's fixtures, so once a
+  // draw exists it is frozen (the server 409s a change). The editor declines to build
+  // that change — and says why, and how to undo the block, because a director who is
+  // only stopped is stuck.
+  describe('the draw type, once the draw is cut', () => {
+    it('disables the select and says why, with the way out', () => {
+      basicsSectionPage.render({ event: buildDrawnEvent() })
+
+      // Still shown, and still readable — it is a fact about the event they came to
+      // check. It just cannot be changed.
+      const trigger = basicsSectionPage.getDrawTypeTrigger()
+      expect(trigger).toBeDisabled()
+      expect(trigger).toHaveTextContent('Round robin')
+
+      // The reason lives in text under the control, because a disabled trigger holds no
+      // tooltip a screen reader would ever read. It names the type the fixtures were
+      // dealt as — in the select's own words, never `round-robin`.
+      expect(
+        screen.getByText(/its draw type is frozen/i),
+      ).toHaveTextContent('“Round robin”')
+      expect(screen.getByText(/Delete the draw to change the type/i)).toBeInTheDocument()
+    })
+
+    it('leaves the select live when no draw is cut', () => {
+      basicsSectionPage.render({ event: buildEvent() })
+
+      expect(basicsSectionPage.getDrawTypeTrigger()).toBeEnabled()
+      expect(screen.queryByText(/draw type is frozen/i)).toBeNull()
+    })
+
+    // The rest of the tab is untouched by the draw: a director renames an event, moves
+    // its window and drops its fee mid-tournament, draw or no draw.
+    it('leaves the other basics fields editable', () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({ event: buildDrawnEvent(), onChange })
+
+      expect(basicsSectionPage.getNameInput()).toBeEnabled()
+      fireEvent.change(basicsSectionPage.getEntryFeeInput(), {
+        target: { value: '5' },
+      })
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ entryFee: 5 }),
+      )
+    })
+  })
+
   it('shows the event name and format', () => {
     basicsSectionPage.render({
       event: buildEvent({ name: 'Open Singles', format: 'singles' }),

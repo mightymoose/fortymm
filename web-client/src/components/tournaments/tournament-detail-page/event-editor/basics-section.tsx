@@ -1,5 +1,6 @@
 import { Input } from '@/components/ui/input'
 
+import type { EditFreeze } from '../../data/draw'
 import { ENTRY_FEE_MAX, PLAYERS_MAX } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
@@ -30,6 +31,14 @@ export interface BasicsSectionProps {
    * share, so "may I save?" and "what does this field say in red?" are one answer,
    * computed once — exactly as the rule rows already work. */
   errors?: BasicsFieldErrors
+  /** Whether the **draw type** may still be changed (`drawTypeFreeze`, `data/draw`).
+   * Frozen once the event's draw is cut: the fixtures were dealt *as* that type, and
+   * re-labelling it would leave the event claiming a shape its draw does not have — a
+   * 409 on the server (ADR-0786). Frozen means a **disabled select with the reason in
+   * text beneath it**, not a hidden row: the value is still the event's, and a director
+   * who cannot see why they are stuck cannot get unstuck. (Contrast the *viewer* case,
+   * where the whole control is simply absent — ADR-0015.) */
+  drawTypeFreeze: EditFreeze
   onChange: (next: TournamentEvent) => void
 }
 
@@ -60,6 +69,7 @@ export const BasicsSection = ({
   event,
   canEdit,
   errors = {},
+  drawTypeFreeze,
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -123,16 +133,31 @@ export const BasicsSection = ({
             />
           )}
         </Field>
+        {/* The draw type is the strategy that DEALT this event's fixtures, so once a
+            draw exists it is frozen (ADR-0786). The select is disabled and the reason
+            sits under it as text — the hint slot, the same place a validation message
+            would go — because a disabled trigger can carry no tooltip a screen reader
+            would read, and "the button is grey and nobody said why" is the dead end
+            ADR-0015 exists to forbid. It is not an error, so it is not red: the event is
+            fine, this one control is merely spoken for.
+
+            Hidden would be worse: the draw type is a fact about the event the director
+            came here to check, and hiding it would answer a question they did not ask
+            while silently dropping the one they did. */}
         <Field
           label="Draw type"
           readOnly={readOnly}
           value={labelFor(DRAW_TYPE_OPTIONS, event.drawType, null)}
+          hint={
+            drawTypeFreeze.kind === 'frozen' ? drawTypeFreeze.reason : undefined
+          }
         >
           {() => (
             <OptionSelect
               ariaLabel="Draw type"
               value={event.drawType}
               options={DRAW_TYPE_OPTIONS}
+              disabled={drawTypeFreeze.kind === 'frozen'}
               onChange={(v) => set({ drawType: v as DrawType })}
             />
           )}

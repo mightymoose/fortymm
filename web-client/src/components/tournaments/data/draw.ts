@@ -22,6 +22,8 @@
 
 import { ApiError } from '@/api/client'
 
+import { fallbackNotice, type Notice } from './notice'
+import { DRAW_TYPE_OPTIONS, labelFor } from './options'
 import type { Entrant, Fixture, TournamentEvent } from './types'
 
 /** A fixture side whose feeding fixture is not decided yet (`entryAId`/`entryBId` is
@@ -211,12 +213,95 @@ export function drawState(event: TournamentEvent): DrawState {
   return { kind: 'drawn', pools, unpooled: roundsOf(unpooled, byId) }
 }
 
-/** A refusal, in the panel's own voice: a title this client owns, and a sentence
- * beneath it that — for the two refusals that matter — is the **server's**. */
-export interface DrawNotice {
-  title: string
-  description: string
+/**
+ * Whether an editor control is **offered**, or **refused with a reason** — the state a
+ * cut draw puts two of the event editor's controls in (ADR-0786).
+ *
+ * A sum type rather than a `disabled: boolean` plus a `reason?: string`, because those
+ * two are one decision and the pair makes "disabled with nothing to say" — the
+ * unexplained dead end ADR-0015 is about — constructible. Here a frozen control *has*
+ * words, by construction; an open one has none to show.
+ *
+ * The reason is the CLIENT's, not the server's (`DEFINITION_OF_COMPLETE`: raw API detail
+ * strings never reach the UI). The server's own sentence still arrives, verbatim, when a
+ * director loses the race and the PATCH is refused anyway — that is `save-failure`'s
+ * `refused` arm, and it is a different surface for a different moment.
+ */
+export type EditFreeze =
+  | { kind: 'open' }
+  | {
+      kind: 'frozen'
+      /** Why this control is unavailable, and — the load-bearing half — the way out of
+       * it: delete the draw, edit, cut it again. Reads standalone in whichever surface
+       * shows it (a `Field` hint, an `Alert` beneath the section header). */
+      reason: string
+    }
+
+/** An event has a draw exactly when it has fixtures. Asked through `drawState` so
+ * "does this event have a draw?" has ONE definition — a bare `fixtures.length > 0`
+ * scattered across the editor would be the same truthiness-on-a-list check the panel
+ * already refused to make. */
+const hasDraw = (event: TournamentEvent): boolean =>
+  drawState(event).kind === 'drawn'
+
+/**
+ * May the director change **which pools** this event has?
+ *
+ * Frozen the moment a draw exists, because every fixture names its pool by a string id
+ * into that very list: remove a pool (or re-`id` one, which is a removal with an
+ * addition standing where it was) and its fixtures point at nothing; add one and it
+ * arrives with no fixtures, since the draw was dealt across the pools the event had at
+ * the cut. The server refuses it with a 409 (`_enforce_pool_set_frozen`) — this is the
+ * client declining to *build* the change the server would refuse.
+ *
+ * **Only the identity set is frozen**, and the reason says so out loud: a pool's tables,
+ * its window and its name stay editable with a draw standing, on purpose. Venues move
+ * under a running tournament — a table breaks and is pulled, one frees up early — and a
+ * director who could not record that would have to destroy a *correct* draw to move a
+ * table. Over-freezing the section would break the very case the freeze exists to
+ * preserve.
+ */
+export function poolSetFreeze(event: TournamentEvent): EditFreeze {
+  if (!hasDraw(event)) return { kind: 'open' }
+  return {
+    kind: 'frozen',
+    reason:
+      'Every fixture names the pool it was dealt into, so a pool can’t be added or ' +
+      'removed while the draw stands. Delete the draw to change them, then cut it ' +
+      'again. A pool’s name, its tables and its time window can still be edited right ' +
+      'now — a table that breaks mid-event costs you nothing.',
+  }
 }
+
+/**
+ * May the director change this event's **draw type**?
+ *
+ * Frozen once a draw exists, for the sibling reason (`_enforce_draw_type_frozen`, a 409):
+ * the draw type is not a label on an event, it is the strategy that dealt these fixtures.
+ * Re-label it under a standing draw and the event claims a shape its draw does not have —
+ * a `single-elim` event holding pooled round-robin fixtures, which no bracket can render
+ * and no strategy would ever have produced.
+ *
+ * The reason names the type the fixtures were actually dealt as, in the words the select
+ * shows ("Round robin", never `round-robin`).
+ */
+export function drawTypeFreeze(event: TournamentEvent): EditFreeze {
+  if (!hasDraw(event)) return { kind: 'open' }
+  const label = labelFor(DRAW_TYPE_OPTIONS, event.drawType, event.drawType)
+  return {
+    kind: 'frozen',
+    reason:
+      `This event’s draw is cut, so its draw type is frozen — its fixtures were dealt ` +
+      `as a “${label}” draw. Delete the draw to change the type, then cut it again.`,
+  }
+}
+
+/** A refusal, in the panel's own voice: a title this client owns, and a sentence
+ * beneath it that — for the two refusals that matter — is the **server's**.
+ *
+ * The shape (and the `Couldn't <verb>` fallback below) is shared with the header's
+ * lifecycle refusals, which report the same way for the same reason — see `./notice`. */
+export type DrawNotice = Notice
 
 /**
  * Turn a failed draw verb into inline copy.
@@ -241,13 +326,7 @@ export interface DrawNotice {
  * function responsible for.
  */
 export function drawRefusalNotice(error: unknown, verb: string): DrawNotice {
-  const fallback: DrawNotice = {
-    title: `Couldn't ${verb}`,
-    description:
-      error instanceof ApiError
-        ? (error.detail ?? 'The server rejected the request. Try again in a moment.')
-        : 'The request never reached the server. Check your connection and try again.',
-  }
+  const fallback = fallbackNotice(error, verb)
   if (!(error instanceof ApiError)) return fallback
 
   switch (error.status) {

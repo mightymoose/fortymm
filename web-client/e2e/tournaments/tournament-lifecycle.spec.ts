@@ -13,11 +13,13 @@
  *      tournament moving, rather than four unrelated screenshots. Every step here
  *      is the mutation's own refetch coming back and re-deciding the header.
  *
- *   2. **The 409 reaches a human.** The mutation toasts on error; a toast is a
- *      portal, rendered outside the page's tree, on top of the layout, and gone
- *      in four seconds. That it is genuinely *visible* — and that the refused
- *      view then corrects itself instead of freezing on the render the 409
- *      disproved — is a claim about the live DOM.
+ *   2. **The 409 reaches a human.** The refusal is rendered inline, in the header,
+ *      beside the button that was clicked (#786 — the go-live refusal's sentence
+ *      names the events whose draws are missing or stale, and a work list must not
+ *      evaporate after four seconds like a toast). That it is genuinely *visible*,
+ *      that it does not double up with a toast, and that the refused view then
+ *      corrects itself instead of freezing on the render the 409 disproved — all
+ *      claims about the live DOM.
  *
  *   3. **Header and card move together.** The status decides two things a screen
  *      apart: which button the header offers, and what the event card's entry
@@ -176,10 +178,18 @@ test.describe('Tournaments · the lifecycle', () => {
     // The server refuses it: `published → published` is not an edge, it is a
     // conflict (ADR-0017 — "the only caller that sends it is a stale one").
     //
-    // THE assertion, half one: the user is TOLD. A silent 409 would leave them
+    // THE assertion, half one: the user is TOLD — inline, beside the button they
+    // clicked, in an `Alert` the mutation no longer duplicates with a toast (#786:
+    // the same surface carries go-live's refusal, whose sentence is a work list and
+    // has no business disappearing after four seconds). A silent 409 would leave them
     // clicking a button that does nothing, forever.
-    await expect(pom.toasts).toHaveCount(1)
-    await expect(pom.toasts).toContainText("Couldn't publish the tournament")
+    await expect(pom.lifecycleNotice).toBeVisible()
+    await expect(pom.lifecycleNotice).toContainText(
+      "Couldn't publish the tournament",
+    )
+    // Told once, not twice: the inline notice REPLACED the toast, it did not join it
+    // (`web-client/CLAUDE.md`, ## Forms).
+    await expect(pom.toasts).toHaveCount(0)
 
     // …and told something USEFUL. This click is a self-transition
     // (`published → published`), which is what a stale tab always produces — and
@@ -188,7 +198,9 @@ test.describe('Tournaments · the lifecycle', () => {
     // director nothing. The sentence they need is the fact that somebody already
     // did it, so pin the sentence, not just the verb: the title alone would go
     // green against the tautology this copy replaced.
-    await expect(pom.toasts).toContainText('This tournament is already published.')
+    await expect(pom.lifecycleNotice).toContainText(
+      'This tournament is already published.',
+    )
 
     // …and told it by a 409, not by an accident. Without this line the test would
     // pass just as happily if the transitions route were UNMOCKED: the 404 would
@@ -207,13 +219,11 @@ test.describe('Tournaments · the lifecycle', () => {
     await pom.expectLifecycle('Live', 'End tournament')
     expect(store.status).toBe('live')
 
-    // It raised no error of its own. Asserted as "no toast bearing THIS verb"
-    // rather than "still exactly one toast": the refusal above dismisses itself
-    // after a few seconds, so a total count here would be a race against a
-    // countdown — green locally and flaky on a loaded runner.
-    await expect(
-      pom.toasts.filter({ hasText: "Couldn't start the tournament" }),
-    ).toHaveCount(0)
+    // It raised no error of its own — and the refusal from the click before it is
+    // GONE, cleared when the next attempt started: a notice about the click before
+    // last is worse than none.
+    await expect(pom.lifecycleNotice).toHaveCount(0)
+    await expect(pom.toasts).toHaveCount(0)
     expect(store.countOf('POST')).toBe(2) // the refused publish, then the accepted start
   })
 })
@@ -428,26 +438,25 @@ test.describe('Tournaments · the lifecycle · accessibility', () => {
     })
   }
 
-  test('is axe-clean with the refusal toast on screen', async ({ page }) => {
-    // The error state is a state, and it is the one most likely to be missed: the
-    // toast is a portal outside the page's tree, over the top of everything else.
+  test('is axe-clean with the refusal notice on screen', async ({ page }) => {
+    // The error state is a state, and it is the one most likely to be missed. It is
+    // now IN the page — an `Alert` in the header, beside the button (#786) — rather
+    // than a toast portalled over the top of it, so the scan has to reach it where it
+    // actually lives: contrast against the hero, and a live region a screen reader
+    // hears without hunting for it.
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
       status: 'draft',
     })
     store.transitionElsewhere('published')
     await pom.lifecycleButton('Publish').click()
 
-    const toast = pom.toasts.first()
-    await expect(toast).toBeVisible()
-    // Sonner dismisses after a few seconds and pauses that timer while the toaster
-    // is hovered — so hover, rather than race the scan against the countdown. (The
-    // assertion after the scan is what keeps this honest: if the pause ever stops
-    // working, the toast is gone and this test fails loudly instead of quietly
-    // scanning a page without it.)
-    await toast.hover()
+    // Prove the state is really rendered before scanning it: an axe pass over a page
+    // that has not reached the state is a green that means nothing. (And unlike the
+    // toast this replaced, it does not dismiss itself — there is no countdown to race.)
+    await expect(pom.lifecycleNotice).toBeVisible()
 
-    await expectAxeClean(page, 'tournament detail — refused transition toast')
-    await expect(toast).toBeVisible()
+    await expectAxeClean(page, 'tournament detail — refused transition notice')
+    await expect(pom.lifecycleNotice).toBeVisible()
   })
 
   test('is axe-clean for a viewer, who is offered no lifecycle button at all', async ({

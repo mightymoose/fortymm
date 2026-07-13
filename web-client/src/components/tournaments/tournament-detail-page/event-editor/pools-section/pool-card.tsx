@@ -9,6 +9,25 @@ import type { Pool, TournamentTable } from '../../../data/types'
 import { Field } from '../../../field'
 import { ReadOnlyValue } from '../../../read-only-value'
 
+/**
+ * Whether this pool may be **removed from the event** — and if not, where the reason is
+ * written.
+ *
+ * A pool cannot leave an event whose draw is cut: its fixtures name it, and they would be
+ * left pointing at nothing (ADR-0786; the server 409s it). The card does not carry the
+ * *words* for that — one explanation for the whole section, said once, lives above the
+ * cards in `PoolsSection` — so what it carries instead is the **id of that explanation**,
+ * which the disabled button points its `aria-describedby` at. A screen reader landing on
+ * the dead control is told the same sentence a sighted director reads above it.
+ *
+ * A sum type, and not a `canRemove: boolean` + an optional id, because "frozen but with
+ * nothing to point at" is precisely the unexplained dead end (ADR-0015) — and this makes
+ * it unconstructible.
+ */
+export type PoolRemoval =
+  | { kind: 'allowed' }
+  | { kind: 'frozen'; reasonId: string }
+
 export interface PoolCardProps {
   pool: Pool
   /** The tables available to this tournament. */
@@ -17,6 +36,11 @@ export interface PoolCardProps {
    * its window, and the tables it reserves — instead of a name box, three
    * date/time fields and a wall of table toggles (ADR 0015). */
   canEdit: boolean
+  /** Whether this pool may be removed (see `PoolRemoval`). It gates the trash button
+   * and **nothing else**: with the draw cut, the name box, the window and the table
+   * chips are all still live, because a pool's venue attributes were never frozen and
+   * a table that breaks mid-event has to be recorded without destroying the draw. */
+  removal: PoolRemoval
   onChange: (pool: Pool) => void
   onRemove: () => void
 }
@@ -58,6 +82,7 @@ export const PoolCard = ({
   pool,
   tables,
   canEdit,
+  removal,
   onChange,
   onRemove,
 }: PoolCardProps) => {
@@ -127,11 +152,22 @@ export const PoolCard = ({
           className="h-8 flex-1 border-transparent bg-transparent text-[15px] font-semibold shadow-none focus-visible:border-[color:var(--border-default)]"
         />
         <TableCount count={pool.tableIds.length} />
+        {/* Disabled — not hidden — while the draw is cut, and pointed at the section's
+            one explanation of why (ADR-0786). Hiding it would take the way out with it:
+            this button is one deleted draw away from working, which is exactly what
+            distinguishes this case from the viewer's (whose controls are absent, because
+            nothing they could do would bring them back). The accessible name stays
+            "Remove pool" — the name of a control is what it *does*, not what state it is
+            in; the state is `disabled` and the reason is the description. */}
         <button
           type="button"
           aria-label="Remove pool"
+          disabled={removal.kind === 'frozen'}
+          aria-describedby={
+            removal.kind === 'frozen' ? removal.reasonId : undefined
+          }
           onClick={onRemove}
-          className="grid size-7 place-items-center rounded-md text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)]"
+          className="grid size-7 place-items-center rounded-md text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)] disabled:cursor-not-allowed disabled:text-[color:var(--fg-3)] disabled:opacity-50 disabled:hover:bg-transparent"
         >
           <Trash2 size={14} />
         </button>

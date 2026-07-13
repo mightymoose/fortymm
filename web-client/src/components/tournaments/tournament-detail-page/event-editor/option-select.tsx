@@ -20,6 +20,13 @@ export interface OptionSelectProps {
   ariaLabel: string
   placeholder?: string
   className?: string
+  /** A control the organizer may **see** but not **change** — today, a draw type whose
+   * fixtures have already been dealt (ADR-0786). It is disabled rather than hidden
+   * because the value still matters to them and the reason is worth learning; the
+   * caller owes it a visible one in text (the `Field`'s hint), since a disabled trigger
+   * can hold no tooltip a screen reader would read. NOT the read-only-viewer case —
+   * that renders a value, never a dead control (ADR-0015). */
+  disabled?: boolean
 }
 
 /** A thin, typed wrapper over the shadcn `Select` for the simple
@@ -31,9 +38,10 @@ export const OptionSelect = ({
   ariaLabel,
   placeholder,
   className,
+  disabled,
 }: OptionSelectProps) => {
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger aria-label={ariaLabel} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

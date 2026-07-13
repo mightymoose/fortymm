@@ -1,6 +1,13 @@
 import { ApiError } from '@/api/client'
 
-import { drawRefusalNotice, drawState, type DrawState, type FixtureSide } from './draw'
+import {
+  drawRefusalNotice,
+  drawState,
+  drawTypeFreeze,
+  poolSetFreeze,
+  type DrawState,
+  type FixtureSide,
+} from './draw'
 import {
   buildDrawnEvent,
   buildEntrant,
@@ -360,5 +367,51 @@ describe('drawRefusalNotice', () => {
 
     expect(notice.title).toBe("Couldn't cut the draw")
     expect(notice.description).toContain('Check your connection')
+  })
+})
+
+// ADR-0786's two freezes, as the editor asks about them. Pure derivations off the
+// event's `fixtures`, so they are unit-tested here rather than through eight DOM
+// assertions in three sections.
+describe('poolSetFreeze', () => {
+  it('is open while no draw is cut', () => {
+    expect(poolSetFreeze(buildEvent()).kind).toBe('open')
+  })
+
+  it('freezes the moment ONE fixture exists', () => {
+    // The freeze turns on the draw EXISTING, not on it being big, complete, or played:
+    // a single fixture is already a fixture that names its pool.
+    const freeze = poolSetFreeze(
+      buildEvent({ pools: [buildPool()], fixtures: [buildFixture({ poolId: 'p-1' })] }),
+    )
+
+    expect(freeze.kind).toBe('frozen')
+  })
+
+  it('names the way out, and says what is still allowed', () => {
+    const freeze = poolSetFreeze(buildDrawnEvent())
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen pool set')
+
+    // A refusal that only says "no" leaves a director with a broken table nowhere to go.
+    expect(freeze.reason).toContain('Delete the draw')
+    expect(freeze.reason).toContain('cut it again')
+    // …and the half that matters most: the venue attributes were never frozen.
+    expect(freeze.reason).toMatch(/name.*tables.*time window|tables/i)
+  })
+})
+
+describe('drawTypeFreeze', () => {
+  it('is open while no draw is cut', () => {
+    expect(drawTypeFreeze(buildEvent()).kind).toBe('open')
+  })
+
+  it('freezes once the draw is cut, naming the type its fixtures were dealt as', () => {
+    const freeze = drawTypeFreeze(buildDrawnEvent())
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw type')
+
+    // In the select's own words — never the wire's enum key.
+    expect(freeze.reason).toContain('“Round robin”')
+    expect(freeze.reason).not.toContain('round-robin')
+    expect(freeze.reason).toContain('Delete the draw')
   })
 })

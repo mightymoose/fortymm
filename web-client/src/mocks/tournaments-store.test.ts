@@ -6,11 +6,13 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   createEvent,
+  createTournament,
   cutDraw,
   enterEvent,
   findTournament,
   listTournaments,
   markFixturePlayed,
+  placeInStatus,
   resetTournamentsStore,
   transitionTournament,
   uncutDraw,
@@ -18,6 +20,7 @@ import {
   updateTournament,
   withdrawEntry,
   type EnterResult,
+  type TransitionResult,
   type WithdrawResult,
 } from './tournaments-store'
 import type { components } from '@/api/schema'
@@ -25,7 +28,7 @@ import type { components } from '@/api/schema'
 type TournamentStatus = components['schemas']['TournamentStatus']
 
 const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
-const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, no events
+const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, one drawn event
 const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
 const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players, cap 64
 const FULL_SINGLES = 'ev-champ-singles' // seeded 16 of 16 — no room (#783)
@@ -84,9 +87,15 @@ function event(eventId: string) {
  * doubles event.
  *
  * The lifecycle is forward-only, so there is no walking a tournament *back* to
- * `draft`: the draft case is the seeded draft (which has no events of its own)
- * with the two events added to it, and the rest are the seeded `published`
- * tournament moved along legal edges only. */
+ * `draft`: the draft case is the seeded draft with the two events added to it, and
+ * the rest are the seeded `published` tournament PUT in that status.
+ *
+ * `placeInStatus`, not a walk through the transitions, since #786 gave `published →
+ * live` a precondition (every event drawn, every draw current — ADR-0786). These are
+ * tests of ENTRY, and the tournament they need is one that IS live; walking there would
+ * make every one of them depend on the draws of the five seeded events, and the two
+ * events these tests then add would have no draw at all and could not be walked past.
+ * That precondition has tests of its own, below, where a real walk is the point. */
 function tournamentIn(status: TournamentStatus): {
   tournamentId: string
   singlesId: string
@@ -118,12 +127,11 @@ function tournamentIn(status: TournamentStatus): {
       doublesId: doubles.event.id,
     }
   }
-  // `published` is where the seed already is (so: no steps); `live` and
-  // `archived` are one and two legal edges further on.
-  const forward: TournamentStatus[] = ['live', 'archived']
-  for (const step of forward.slice(0, forward.indexOf(status) + 1)) {
-    const moved = transitionTournament(TOURNAMENT, step)
-    if (!moved.ok) throw new Error(`setup failed: could not reach ${status}`)
+  // `published` is where the seed already is; `live` and `archived` are seeded states
+  // here, not journeys (see the note above).
+  placeInStatus(TOURNAMENT, status)
+  if (findTournament(TOURNAMENT)!.status !== status) {
+    throw new Error(`setup failed: could not reach ${status}`)
   }
   return {
     tournamentId: TOURNAMENT,
@@ -674,6 +682,125 @@ describe('transitionTournament', () => {
     })
   })
 
+  // ----- the go-live precondition (ADR-0786) --------------------------------
+  //
+  // The store must not be more permissive than the server here, or the UI could be
+  // built — and go green in vitest and in `npm run dev` — against a Start button that
+  // works on a tournament the API would refuse. Each case below is one of the three
+  // things `_enforce_ready_to_go_live` refuses, and the sentence is pinned because the
+  // client shows the sentence.
+
+  /** The 409's sentence, or a failed assertion — so the cases below read `detail`
+   * without a cast, and a refusal that is *not* the 409 (a 403, a 404) fails loudly
+   * instead of quietly skipping every assertion after it. */
+  function refusalDetail(result: TransitionResult): string {
+    if (result.ok || result.status !== 409) {
+      throw new Error(`expected a 409, got ${JSON.stringify(result)}`)
+    }
+    return result.detail
+  }
+
+  /** A brand-new, empty tournament, published — i.e. announced, with nothing in it. */
+  function announcedEmptyTournament(): string {
+    const created = createTournament({
+      name: 'Announced, Empty',
+      description: null,
+      start_date: '2026-09-01',
+      end_date: '2026-09-02',
+      address: {
+        venue: 'TBC',
+        street: '',
+        city: 'Oakland',
+        region: 'CA',
+        postal: '',
+        country: 'USA',
+      },
+      table_catalogue: [],
+    })
+    const published = transitionTournament(created.id, 'published')
+    if (!published.ok) throw new Error('setup failed: could not publish')
+    return created.id
+  }
+
+  it('PUBLISHES an empty tournament — announcing one early is fine', () => {
+    // The positive control for the refusal below: it is *starting* an empty tournament
+    // that is refused, not announcing it. A guard that failed here would be the one that
+    // stopped a director putting a date up before writing the events.
+    const id = announcedEmptyTournament()
+
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('refuses to START an empty tournament — there is nothing to run', () => {
+    const id = announcedEmptyTournament()
+
+    expect(transitionTournament(id, 'live')).toEqual({
+      ok: false,
+      status: 409,
+      detail:
+        'This tournament has no events, so there is nothing to start. Add an event ' +
+        'and cut its draw, then start the tournament.',
+    })
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('refuses to start when events have NO DRAW, and names them', () => {
+    // The seeded published tournament: five events, only `ev-u1200` drawn.
+    const detail = refusalDetail(transitionTournament(PUBLISHED, 'live'))
+
+    // The NAMES are the point — a director with five events, told merely "something
+    // isn't ready", is left clicking through all five.
+    expect(detail).toContain('“Open Singles”')
+    expect(detail).toContain('“U1500 Singles”')
+    expect(detail).toContain('have no draw yet')
+    // …and the one event that IS drawn is not blamed.
+    expect(detail).not.toContain('“U1200 Singles”')
+    expect(findTournament(PUBLISHED)!.status).toBe('published')
+  })
+
+  it('STARTS a tournament whose every event has a current draw', () => {
+    // The happy path of the precondition, and the reason the seed holds a drawn,
+    // startable tournament at all: without this, every assertion above would be equally
+    // satisfied by a store that simply refused to start anything.
+    const id = at('published') // the seeded draft, published — its one event is drawn
+
+    const result = transitionTournament(id, 'live')
+
+    expect(result.ok).toBe(true)
+    expect(findTournament(id)!.status).toBe('live')
+  })
+
+  it('refuses to start on a STALE draw — somebody entered after it was cut', () => {
+    // Registration stays open right up to go-live, which is exactly how a draw goes
+    // stale: the field the fixtures were dealt from is not the field that would play.
+    const id = at('published')
+    const entered = enterEvent(id, 'ev-slam-open')
+    if (!entered.ok) throw new Error('setup failed: could not enter')
+
+    const detail = refusalDetail(transitionTournament(id, 'live'))
+
+    expect(detail).toContain('“Slam Open Singles”')
+    expect(detail).toContain('has a draw that no longer matches its entrants')
+    // A stale draw is not an uncut one: the director is told their draw needs
+    // RE-cutting, not that they never cut it.
+    expect(detail).not.toContain('no draw yet')
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('starts again once the stale draw is RE-CUT', () => {
+    // The way out, end to end — and the proof that the refusal above is about the draw's
+    // currency and not about the entrant simply existing.
+    const id = at('published')
+    enterEvent(id, 'ev-slam-open')
+    expect(transitionTournament(id, 'live').ok).toBe(false)
+
+    const recut = cutDraw(id, 'ev-slam-open')
+    if (!recut.ok) throw new Error('setup failed: could not re-cut')
+
+    expect(transitionTournament(id, 'live').ok).toBe(true)
+    expect(findTournament(id)!.status).toBe('live')
+  })
+
   // The load-bearing half of ADR-0017: with `status` gone from `TournamentUpdate`,
   // editing a tournament's fields cannot move its lifecycle. The transitions
   // resource is the only door.
@@ -998,5 +1125,66 @@ describe('the pool set freezes while a draw exists', () => {
 
     expect(result.ok).toBe(true)
     expect(poolsOf(ROUND_ROBIN).map((p) => p.id)).toEqual(['p-fresh'])
+  })
+})
+
+// The pool-set freeze's SIBLING (ADR-0786): the other fact a cut draw froze. The mock
+// enforces it for the same reason it enforces the pool set — a mock more permissive than
+// the server it stands in for is a trap, and the UI built against it would look perfect
+// in `npm run dev` and 409 in production.
+describe('the draw type freezes while a draw exists', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const ROUND_ROBIN = 'ev-u1200'
+  const eventOf = (eventId: string) =>
+    findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
+
+  it('refuses a PATCH that re-labels the draw type of a cut draw', () => {
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      draw_type: 'single-elim',
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(409)
+    // The way out — otherwise the director is stuck: `single-elim` has no generator, so
+    // they could not even re-cut their way back into agreement with themselves.
+    expect(result.status === 409 && result.detail).toContain('remove the draw')
+    // A refused write writes nothing.
+    expect(eventOf(ROUND_ROBIN).draw_type).toBe('round-robin')
+  })
+
+  // ⚠️ The one that keeps the freeze from eating the edits it exists to permit. The
+  // editor PATCHes the WHOLE form back — draw type included — to move a pool's tables.
+  // A guard that fired on the mere *presence* of `draw_type` would refuse that, and the
+  // pools editor would be unusable against a server that allows it.
+  it('ALLOWS a PATCH that re-sends the SAME draw type (the whole-form save)', () => {
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      draw_type: 'round-robin',
+      pools: eventOf(ROUND_ROBIN).pools.map((p) => ({ ...p, table_ids: ['t9'] })),
+    })
+
+    expect(result.ok).toBe(true)
+    expect(eventOf(ROUND_ROBIN).pools[0].table_ids).toEqual(['t9'])
+  })
+
+  it('leaves an UNDRAWN event’s draw type free to change', () => {
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      draw_type: 'round-robin',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(eventOf(EMPTY_SINGLES).draw_type).toBe('round-robin')
+  })
+
+  it('un-freezes the moment the draw is removed', () => {
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      draw_type: 'single-elim',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(eventOf(ROUND_ROBIN).draw_type).toBe('single-elim')
   })
 })

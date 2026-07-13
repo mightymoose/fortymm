@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { ApiError } from '@/api/client'
+
 import {
   entryControlState,
   lifecycleEdgeFor,
+  lifecycleRefusalNotice,
   LIFECYCLE_EDGE,
   REGISTRATION_WINDOW,
 } from './lifecycle'
@@ -306,5 +309,105 @@ describe('lifecycleEdgeFor', () => {
       label: 'Start tournament',
       verb: 'start the tournament',
     })
+  })
+})
+
+// The words a refused transition is reported in — the header shows them inline and
+// carries no toast, so this function is the *only* thing standing between a failed click
+// and silence.
+describe('lifecycleRefusalNotice', () => {
+  const START = LIFECYCLE_EDGE.published!
+  const PUBLISH = LIFECYCLE_EDGE.draft!
+
+  // The go-live precondition's 409 (ADR-0786). The server's sentence is kept WHOLE,
+  // because it names the events the director has to go and fix — the one half of the
+  // refusal they can act on, authored where the events are.
+  it.each([
+    'This tournament has no events, so there is nothing to start. Add an event and cut its draw, then start the tournament.',
+    'This tournament cannot start yet: “Open Singles” has no draw yet. A draw is cut from the field as it stands at the time…',
+    'This tournament cannot start yet: “Under 1200” has a draw that no longer matches its entrants. …',
+    'This tournament cannot start yet: “Under 1200” has no draw yet; and “Over 40s” has a draw that no longer matches their entrants. …',
+  ])('carries the server’s 409 sentence verbatim: %s', (detail) => {
+    const notice = lifecycleRefusalNotice(
+      new ApiError(409, detail, 'move the tournament'),
+      START,
+    )
+
+    expect(notice.kind).toBe('refused')
+    expect(notice.description).toBe(detail)
+    // The title is the CLIENT's, and it names the edge that was clicked — not the wire
+    // call that carried it.
+    expect(notice.title).toBe("Couldn't start the tournament")
+  })
+
+  // The same 409 answers a stale tab (a re-asserted edge). It carries no code, so the
+  // client does not try to tell the two apart — it shows the sentence, which is written
+  // for exactly that reader.
+  it('shows the stale-tab 409 the same way', () => {
+    const notice = lifecycleRefusalNotice(
+      new ApiError(409, 'This tournament is already published.', 'move the tournament'),
+      PUBLISH,
+    )
+
+    expect(notice.kind).toBe('refused')
+    expect(notice.title).toBe("Couldn't publish the tournament")
+    expect(notice.description).toBe('This tournament is already published.')
+  })
+
+  it('has words of its own for a 403 — and does not blame the director', () => {
+    const notice = lifecycleRefusalNotice(
+      new ApiError(403, 'Only the creator can move this tournament.', 'move'),
+      START,
+    )
+
+    expect(notice.kind).toBe('forbidden')
+    expect(notice.title).toBe("You can't move this tournament")
+    expect(notice.description).toContain('Nothing was changed')
+  })
+
+  it('names the edge’s verb when the session has gone (401)', () => {
+    const notice = lifecycleRefusalNotice(new ApiError(401, null, 'move'), START)
+
+    expect(notice.kind).toBe('signed-out')
+    expect(notice.description).toContain('start the tournament')
+  })
+
+  // A 5xx detail is machinery ("Internal Server Error", a stack-shaped string): the
+  // client owns this one entirely (`DEFINITION_OF_COMPLETE` — raw API detail strings
+  // never reach the UI).
+  it.each([500, 502, 503])('owns the copy for a %d', (status) => {
+    const notice = lifecycleRefusalNotice(
+      new ApiError(status, 'Internal Server Error', 'move'),
+      START,
+    )
+
+    expect(notice.kind).toBe('server-error')
+    expect(notice.description).not.toContain('Internal Server Error')
+    expect(notice.description).toContain('nothing was changed')
+  })
+
+  // No response at all — a dead network. There is no server sentence to show, and
+  // pretending there is ("the server rejected the request") would send the director
+  // looking for a fault that is not there.
+  it('says the request never got there when there was no response', () => {
+    const notice = lifecycleRefusalNotice(new TypeError('Failed to fetch'), START)
+
+    expect(notice.kind).toBe('unreachable')
+    expect(notice.description).toContain('never reached the server')
+    expect(notice.description).toContain('nothing was changed')
+  })
+
+  // The catch-all — a 404 on a tournament deleted in another tab. It is a designed case,
+  // not a hole: there is no `null` arm anywhere in this function, because the header has
+  // no toast to fall back on.
+  it('still has something to say about an unexpected status', () => {
+    const notice = lifecycleRefusalNotice(
+      new ApiError(404, 'Tournament not found.', 'move'),
+      START,
+    )
+
+    expect(notice.kind).toBe('unexpected')
+    expect(notice.title).toBe("Couldn't start the tournament")
+    expect(notice.description).toBe('Tournament not found.')
   })
 })

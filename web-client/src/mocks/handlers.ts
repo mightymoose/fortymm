@@ -971,6 +971,34 @@ function validateEventBody(
       return detail('Entry fee can’t be negative.', 422)
     }
   }
+  // A pool id IDENTIFIES a pool, and a fixture names its pool by that string (ADR-0786).
+  // Two pools sharing one id is a payload the interior cannot hold: the cut deals onto
+  // the same `(event_id, pool_id, round, position)` twice and the fixture table's unique
+  // index fires — a **500** (`_pool_ids_are_unique`, `api/app/schemas/tournament.py`).
+  //
+  // It lives HERE, at the mock's boundary rather than in the store's freeze, for the two
+  // reasons the server's validator does:
+  //  • it is a 422 in *every* state the event could be in — an event with no draw at all
+  //    still cannot have two pools called `p-a`;
+  //  • and the PATCH path is the worse of the two, because the pool-set freeze compares
+  //    SETS: `[A, A, B]` against a cut event holding `{A, B}` is the same set, so the
+  //    freeze waves it through and the next cut dies. The guard that protects the draw
+  //    was admitting the payload that poisons it.
+  if (body.pools !== undefined && body.pools !== null) {
+    const seen = new Set<string>()
+    const duplicated = body.pools
+      .map((pool) => pool.id)
+      .filter((id) => (seen.has(id) ? true : (seen.add(id), false)))
+    if (duplicated.length > 0) {
+      return detail(
+        `A pool id identifies one pool: ${[...new Set(duplicated)]
+          .map((id) => `“${id}”`)
+          .join(', ')} is used by more than one pool of this event. Give each pool an ` +
+          'id of its own.',
+        422,
+      )
+    }
+  }
   return null
 }
 

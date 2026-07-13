@@ -443,14 +443,22 @@ export function useUpdateTournament() {
  * stale tab's belief at that. Whether (current, `to`) is an edge at all is the
  * server's judgement, and an illegal one is a **409**.
  *
- * That 409 is a *genuine* failure — nothing moved — so it toasts, unlike the
- * already-entered 409 below (which means "you are already in", and is benign). But
- * like the entry mutations it reconciles **`onSettled`, not `onSuccess`**: since the
- * UI only ever offers the edge that is legal from the status it last read, a 409 can
- * only mean this view is stale (the classic case: publish in tab A, then click
- * Publish in tab B). Re-reading the tournament is what corrects the badge and
- * swaps the button for the one that *is* legal now — invalidating on success only
- * would leave the stale tab offering the very button it was just refused. */
+ * That 409 is a *genuine* failure — nothing moved — unlike the already-entered 409
+ * below (which means "you are already in", and is benign). It reconciles
+ * **`onSettled`, not `onSuccess`**, like the entry and draw mutations: a 409 means this
+ * view and the server's state disagree — either the tournament moved on in another tab,
+ * or (going live) its draws are not what this page last read — so re-reading it is what
+ * corrects the badge and swaps the button for the one that *is* legal now. Invalidating
+ * on success only would leave the stale tab offering the very button it was just refused.
+ *
+ * **No global `onError` toast**, by the convention the draw and event mutations already
+ * follow (`web-client/CLAUDE.md`, ## Forms: a mutation whose errors are surfaced inline
+ * must not also toast, or the user is told twice). `LifecycleActions` awaits this through
+ * `mutateAsync` and renders every refusal **inline, beside the button**, in the words
+ * `./lifecycle` owns — carrying the server's own sentence for the 409, which is the one
+ * that names what the director has to go and fix (ADR-0786: the events with no draw, or
+ * with a stale one). A toast would tell them the same thing twice and then take the work
+ * list away after four seconds. */
 export function useTransitionTournament(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -464,8 +472,6 @@ export function useTransitionTournament(tournamentId: string) {
       ),
     // Reconcile on BOTH paths — the 409 IS the stale-view signal.
     onSettled: () => invalidateTournament(qc, tournamentId),
-    // The verb is the edge the user asked for, so the toast names their click.
-    onError: (error, edge) => notifyError(edge.verb)(error),
   })
 }
 

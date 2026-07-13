@@ -73,6 +73,16 @@ export class TournamentDetailPage {
     })
   }
 
+  /** The header's inline **refusal** — where a rejected transition is reported now
+   * (#786): an `Alert` beside the button that was clicked, not a toast. It carries the
+   * client's title and, beneath it, the server's own sentence — which for a refused
+   * **Start tournament** is the one that *names the events* whose draws are missing or
+   * stale, i.e. the work list the director acts on. A toast would take that away after
+   * four seconds. */
+  get lifecycleNotice(): Locator {
+    return this.page.getByTestId('lifecycle-notice')
+  }
+
   /** Assert the pill reads exactly this status, and that the header offers
    * exactly the button that status has an edge for — the two halves of one claim
    * ("the view moved"), which drift apart if a spec only ever checks the badge. */

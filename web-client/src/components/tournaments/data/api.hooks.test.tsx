@@ -68,15 +68,20 @@ function edgeFrom(from: 'draft' | 'published' | 'live'): LifecycleEdge {
 
 vi.mock('sonner', async () => {
   const actual = await vi.importActual<typeof import('sonner')>('sonner')
-  return { ...actual, toast: { ...actual.toast, error: vi.fn(), info: vi.fn() } }
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: vi.fn(), info: vi.fn(), success: vi.fn() },
+  }
 })
 
-/** Both toast channels start clean: the entry cases assert not just which toast
- * fired, but that the *other* one did not (a benign 409 that also raised a red
- * error toast would satisfy a one-sided assertion). */
+/** Every toast channel starts clean: the entry cases assert not just which toast
+ * fired, but that the *others* did not (a benign 409 that also raised a red error
+ * toast would satisfy a one-sided assertion) — and the lifecycle cases assert that
+ * NONE of them fired at all, since that mutation reports through its caller now. */
 beforeEach(() => {
   vi.mocked(toast.error).mockClear()
   vi.mocked(toast.info).mockClear()
+  vi.mocked(toast.success).mockClear()
 })
 
 describe('useTournaments', () => {
@@ -296,8 +301,13 @@ describe('useTransitionTournament', () => {
   // The stale-tab race (ADR-0017's reason for 409-ing a re-assertion): tab A
   // published; THIS tab still reads `draft`, so it still offers Publish. The
   // refusal has to be VISIBLE — a swallowed 409 is a button that does nothing —
-  // and the verb names the edge the user clicked, not the wire call.
-  it('surfaces an illegal-edge 409 as an error toast naming what they clicked', async () => {
+  // but this mutation is not the thing that shows it. It **hands the error to its
+  // caller**, whole, and stays quiet: `LifecycleActions` renders every refusal inline,
+  // beside the button, so a toast here would say the same thing twice
+  // (`web-client/CLAUDE.md`, ## Forms: never both). The 409 that matters most is
+  // go-live's precondition (ADR-0786), whose sentence *names the events* the director
+  // has to go and fix — a work list belongs on the page, not in a four-second toast.
+  it('hands the 409 to its caller — with the server’s sentence — and does NOT toast', async () => {
     // The server sees `published → published` — a self-transition — so it answers
     // the sentence that says what happened, not the tautology naming both ends.
     mockTournamentTransitionEndpoint(server, () =>
@@ -317,17 +327,18 @@ describe('useTransitionTournament', () => {
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't publish the tournament",
-      expect.objectContaining({
-        // The description is the server's detail, passed through — this is the
-        // sentence the stale tab is there to read.
-        description: 'This tournament is already published.',
-      }),
-    )
-    // A 409 here is a genuine refusal — nothing moved. Unlike the entry 409 (which
-    // means "you are already in"), it must NOT be downgraded to an info note.
+    // The error the component catches: the status it branches on, and the sentence it
+    // shows. Both survive the trip — nothing is flattened into a message string.
+    const error = result.current.error
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(409)
+    expect((error as ApiError).detail).toBe('This tournament is already published.')
+
+    // Silence on every ring of the toaster, not just the error one: a refusal
+    // announced as a cheerful `toast.success` would still be a double-up.
+    expect(toast.error).not.toHaveBeenCalled()
     expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('invalidates on the 409 too, so the stale view catches up to the status it was refused', async () => {
@@ -354,7 +365,11 @@ describe('useTransitionTournament', () => {
     })
   })
 
-  it('names the edge in the failure toast: ending a tournament reads as ending it', async () => {
+  // A 5xx is not a refusal, and it is still not a toast: the same caller reports it, in
+  // its own words (`lifecycleRefusalNotice`'s `server-error` arm — which deliberately
+  // does NOT repeat the server's detail, since a 5xx detail is machinery). What this
+  // mutation owes the caller is the status; what it owes the user is nothing.
+  it('stays quiet on a 5xx too — the error is the caller’s to report', async () => {
     mockTournamentTransitionEndpoint(server, () =>
       HttpResponse.json({ detail: 'Server error.' }, { status: 500 }),
     )
@@ -363,15 +378,13 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    // The edge out of `live` — "End tournament". Its verb is what the toast says.
+    // The edge out of `live` — "End tournament".
     result.current.mutate(edgeFrom('live'))
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't end the tournament",
-      expect.objectContaining({ description: 'Server error.' }),
-    )
+    expect((result.current.error as ApiError).status).toBe(500)
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
 

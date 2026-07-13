@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
+import { drawTypeFreeze, poolSetFreeze, type EditFreeze } from '../data/draw'
 import { eligibilityIssues } from '../data/predicate-validation'
 import {
   EVENT_SAVE_TARGET,
@@ -205,6 +206,20 @@ export const EventEditor = ({
     entryFee: errors.entryFee?.message,
   }
 
+  // **What a cut draw freezes** (ADR-0786), derived from the SAVED event and never from
+  // the draft: `fixtures` is not a form field — nothing on this sheet can cut a draw or
+  // remove one — so the draft's copy of it is the server's answer, unedited. An event
+  // still being created (`event === null`) has no draw, and cannot: there is nobody
+  // entered to deal.
+  //
+  // Two freezes, two controls, two different tabs — so they are two values, not one
+  // `frozen: boolean` handed to both. The pools section may not add or remove a pool;
+  // the Basics tab may not re-label the draw type. Everything else on both tabs stays
+  // live, including — pointedly — a pool's tables, window and name.
+  const OPEN: EditFreeze = { kind: 'open' }
+  const poolsFreeze = event ? poolSetFreeze(event) : OPEN
+  const drawTypeLock = event ? drawTypeFreeze(event) : OPEN
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -248,6 +263,7 @@ export const EventEditor = ({
                   event={draft}
                   canEdit={canEdit}
                   errors={basicsErrors}
+                  drawTypeFreeze={drawTypeLock}
                   onChange={applyChange}
                 />
               </TabsContent>
@@ -270,6 +286,7 @@ export const EventEditor = ({
                   control={form.control}
                   tables={tables}
                   canEdit={canEdit}
+                  freeze={poolsFreeze}
                 />
               </TabsContent>
             </Tabs>
