@@ -28,6 +28,62 @@ describe('PoolCard', () => {
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * The name box is the one control on this card that can author a pool the server
+   * refuses (`Pool.name`, `min_length=1`) — the id and the default name are minted. The
+   * card does not *judge* the name (the editor's resolver does, and refuses the save);
+   * what it owes is the verdict, under the box, in red, wired so a screen reader hears
+   * it too.
+   */
+  describe('a name the server would refuse', () => {
+    it('renders the message under the box, and marks the box invalid', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+      })
+
+      expect(poolCardPage.queryNameError()).toHaveTextContent('Name is required.')
+      expect(poolCardPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+    })
+
+    // A `<p>` that merely sits below an input is *beside* it on screen and nowhere at
+    // all to a screen reader.
+    it('points the box at the message', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+      })
+
+      const describedBy = poolCardPage.getNameInput().getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(poolCardPage.queryNameError()).toHaveAttribute('id', describedBy)
+    })
+
+    it('says nothing, and claims nothing, when the name is fine', () => {
+      poolCardPage.render({ pool: buildPool({ name: 'Pool A' }) })
+
+      expect(poolCardPage.queryNameError()).toBeNull()
+      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-invalid', 'true')
+      // No dangling description either — an `aria-describedby` pointing at an element
+      // that is not there is an axe violation of its own.
+      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-describedby')
+    })
+
+    // A viewer has no box to clear, so there is nothing to tell them to fix. (The
+    // editor never hands one down for a read-only card; this is the card refusing to
+    // render one even if it did.)
+    it('tells a viewer nothing about a name they cannot edit', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+        canEdit: false,
+      })
+
+      expect(poolCardPage.queryNameError()).toBeNull()
+      expect(poolCardPage.queryNameInput()).toBeNull()
+    })
+  })
+
   // The pool-set freeze, at the level of one card (ADR-0786). The *reason* is not the
   // card's to say — the section says it once, above the cards — so what the card owes is
   // a dead button that points at it.

@@ -20,6 +20,7 @@ export const PoolsHarness = ({
   tables,
   canEdit,
   freeze,
+  nameIssues,
 }: PoolsHarnessInputs) => {
   const form = useForm<EventFormValues>({
     defaultValues: eventToFormValues(event),
@@ -31,6 +32,10 @@ export const PoolsHarness = ({
         tables={tables}
         canEdit={canEdit}
         freeze={freeze}
+        // Handed in, exactly as the editor hands it in — the section renders the verdict
+        // it is given and computes none of its own. (Whether the *editor* computes the
+        // right one, and refuses the save, is `event-editor.test.tsx`'s claim.)
+        nameIssues={nameIssues}
       />
       <PoolsProbe control={form.control} />
     </>

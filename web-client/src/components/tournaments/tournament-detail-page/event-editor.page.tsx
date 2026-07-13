@@ -20,6 +20,21 @@ const scoped = (container: Container) => ({
   getPlayerLimitInput() {
     return container.getByLabelText(/Player limit/)
   },
+  /** A pool's name box (Table pools). Singular: the seeded event has one pool, and a
+   * test that wants two says so and reads them off `getPoolNameInputs()`. */
+  getPoolNameInput() {
+    return container.getByLabelText('Pool name')
+  },
+  getPoolNameInputs() {
+    return container.queryAllByLabelText('Pool name')
+  },
+  /** The red messages under the pool name boxes, in card order — the Table pools
+   * counterpart of `queryFieldError` on Basics and `getRuleErrors()` on Eligibility. */
+  getPoolNameErrors(): (string | null)[] {
+    return container
+      .queryAllByTestId('pool-name-error')
+      .map((node: HTMLElement) => node.textContent)
+  },
   /** A red message under a Basics field (the `Field` row's error `hint`) — the
    * counterpart of `getRuleErrors()` on the other tab. Queried by the text the
    * organizer reads. */

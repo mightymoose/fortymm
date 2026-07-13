@@ -5,4 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+coverage.json
+htmlcov/
 .mypy_cache/
+# mutmut copies the tree into `mutants/` and keeps its results in `.mutmut-cache`.
+mutants/
+.mutmut-cache

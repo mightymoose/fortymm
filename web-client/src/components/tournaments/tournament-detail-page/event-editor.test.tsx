@@ -283,6 +283,154 @@ describe('EventEditor', () => {
   })
 
   /**
+   * The same lesson, one tab over — and the last field in this editor that could still
+   * author a 422 (#786).
+   *
+   * The pools editor **mints** a pool's id and its default name ("Pool A"), so the happy
+   * path could never make a blank one. But the name **box is live**, and an emptied box
+   * was a save the form allowed and the server refused — with Pydantic's own prose
+   * ("String should have at least 1 character") arriving in the editor's banner, naming
+   * no field, in the wire's vocabulary. The API now states the floor (`Pool.name`,
+   * `min_length=1`), and this is what means the organizer never meets it.
+   *
+   * ⚠️ The assertion that discriminates is **`onSave`**, not the red. A form that
+   * rendered the message and fired the request anyway would sail through a test that
+   * only looked for the message — and the 422 would come back and land in the banner
+   * exactly as before. Nothing may be *sent*.
+   */
+  describe('a pool the server would refuse', () => {
+    it('refuses a BLANK pool name in the form, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.clear(eventEditorPage.getPoolNameInput())
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // Nothing left the room — so the 422 that would have come back never existed.
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.getPoolNameInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      // And no banner: a banner reports a refusal that came back from somewhere.
+      expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+
+    // A space is not a name, and the server agrees — Pydantic's `min_length` counts the
+    // characters it was *sent*, so a client that trimmed only on display would post
+    // `" "` and be refused. The schema trims first, exactly as the event's name does.
+    it('refuses a WHITESPACE-ONLY pool name, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.clear(eventEditorPage.getPoolNameInput())
+      await userEvent.type(eventEditorPage.getPoolNameInput(), '   ')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+    })
+
+    it('takes the organizer to TABLE POOLS, where the broken pool is', async () => {
+      // A message on a tab you cannot see is indistinguishable from a button that does
+      // nothing — the rule builder's lesson, and the name box's, applied to the fourth
+      // tab. The editor opens on Basics, so this proves it really moves them.
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: '' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(eventEditorPage.getSectionTab('Table pools')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    // Per ROW, not per section: the red belongs under the box that is empty. A section
+    // that raised one error for the whole list would point a director with six pools at
+    // all six.
+    it('reds the pool that is blank, and leaves the one that is not alone', async () => {
+      eventEditorPage.render({
+        event: buildEvent({
+          pools: [
+            buildPool({ id: 'p-a', name: '' }),
+            buildPool({ id: 'p-b', name: 'Pool B' }),
+          ],
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      const [blank, named] = eventEditorPage.getPoolNameInputs()
+      expect(blank).toHaveAttribute('aria-invalid', 'true')
+      expect(named).not.toHaveAttribute('aria-invalid', 'true')
+    })
+
+    it('says nothing in red until the organizer actually tries to save', async () => {
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.clear(eventEditorPage.getPoolNameInput())
+
+      // A box they are halfway through re-typing is not yet wrong.
+      expect(eventEditorPage.getPoolNameErrors()).toEqual([])
+    })
+
+    it('clears the message the moment the name is typed, and then saves', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: '' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+
+      await userEvent.type(eventEditorPage.getPoolNameInput(), 'Championship')
+
+      await waitFor(() => expect(eventEditorPage.getPoolNameErrors()).toEqual([]))
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(onSave.mock.calls.at(-1)?.[0].pools[0].name).toBe('Championship')
+    })
+
+    // The name is trimmed on the way out, so what is saved is the name that will be
+    // read off a wall — and what is *counted* by the server's `min_length` is the same
+    // string the client judged.
+    it('saves the pool name trimmed', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.clear(eventEditorPage.getPoolNameInput())
+      await userEvent.type(eventEditorPage.getPoolNameInput(), '  Championship  ')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(onSave.mock.calls.at(-1)?.[0].pools[0].name).toBe('Championship')
+    })
+  })
+
+  /**
    * THE data-loss half — and the half that matters most, because client validation
    * only ever prevents the refusals we already know about. Whatever the *next*
    * unknown 422 is, it must not silently eat somebody's work: the sheet stays open,

@@ -130,16 +130,32 @@ class OrderedEntrant:
 
 @dataclass(frozen=True, slots=True)
 class DrawConfig:
-    """What a cut needs to know about the event itself.
+    """What a cut needs to know about the event itself — which is its **pools**, and
+    nothing else.
+
+    Deliberately **not** the draw type. The draw type is what chose the strategy
+    (:func:`strategy_for`, which runs *before* this config is ever built), so a strategy
+    reading it back off its own config would be a second source of truth for a decision
+    already made — and a second source that can *disagree*: with a ``draw_type`` field
+    here, ``RoundRobinStrategy().plan_initial(DrawConfig(draw_type=DrawType.swiss, …))``
+    was a sentence you could write, and the field it named was read by nobody. (It was
+    genuinely dead: mutation-testing set it to ``None`` and killed no test, and no test
+    *could* have killed it.) The danger is not the dead field, it is the live one it
+    invites — the next strategy (rr-then-ko, swiss) branching on ``config.draw_type``
+    in the belief that it is authoritative, on an event whose real draw type is the one
+    that picked the strategy. Its absence is what makes that unsayable.
 
     ``pool_ids`` are the ids of the event's configured pools, **in the event's own pool
     order** — that order is what the snake seeds against, so it must not be re-sorted.
     Empty for an un-pooled draw type (single-elim), where every fixture's ``pool_id``
     is ``NULL``. The pool *id set* freezes while a draw exists, which is what lets a
-    fixture's string ref stay valid without a foreign key.
+    fixture's string ref stay valid without a foreign key. No id among them is ever the
+    empty string — ``Pool.id`` is a ``ValueObjectId`` (``min_length=1``) at the write
+    boundary, which is what keeps ``ready_fixtures``' "pooled?" test (``pool_id is
+    None``) and its sort key (``pool_id or ""``) answering the same question the same
+    way.
     """
 
-    draw_type: DrawType
     pool_ids: tuple[PoolId, ...] = ()
 
 
@@ -326,6 +342,18 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     idempotent; excluding the decided keeps a fixture whose match was later unlinked
     (``match_id`` is ``ON DELETE SET NULL``) from rising from the dead and being played
     twice. Ordered by ``(pool, round, position)`` so the plan itself is deterministic.
+
+    The sort key asks two questions of ``pool_id`` — "is it pooled?" (``pool_id is
+    None``, which sorts the un-pooled last) and "which pool?" (``pool_id or ""``) — and
+    the two agree only because an id is never ``""``. It was: ``Pool.id`` was a bare
+    ``str``, and a fixture drawn into an empty-id pool answered *pooled* to the first
+    question while colliding with the un-pooled group's ``""`` in the second. The floor
+    that closes it is at the write boundary (``ValueObjectId``, ``min_length=1``), not
+    here — an ``if not pool_id`` in this sort would be a runtime check standing in for a
+    state that should not exist. Which is why the ``""`` fallback is now *unobservable*:
+    it is reached only by the ``None`` group, which the first key element has already
+    partitioned off, so its value cannot change an order. (Mutation testing agrees —
+    replacing it with any other string survives, and after this it is *supposed* to.)
     """
     ready = [
         f

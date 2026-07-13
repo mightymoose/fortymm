@@ -38,6 +38,7 @@ import {
   ANNOUNCED_STATUSES,
   EVENT,
   ME,
+  READY_TO_START,
   STATUSES,
 } from '../page-objects/tournaments/tournaments-store'
 import { expectAxeClean } from '../support/axe'
@@ -58,7 +59,14 @@ test.describe('Tournaments · the lifecycle', () => {
   test('the owner walks draft → published → live → archived, one edge at a time', async ({
     page,
   }) => {
+    // `READY_TO_START` — a tournament whose every event is drawn, and whose draws still
+    // seat exactly their entrants. Going live has a PRECONDITION now (ADR-0786), and it
+    // is a rule about the tournament rather than a preference of this spec's: a
+    // tournament with an undrawn event is refused the start with a 409, so a walk seeded
+    // any other way would be refused at the third step and would look like a bug in the
+    // header. (The refusal itself is `tournament-draw.spec.ts`'s subject.)
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...READY_TO_START,
       status: 'draft',
     })
 
@@ -97,6 +105,7 @@ test.describe('Tournaments · the lifecycle', () => {
     // (ADR-0017), and this is the only test in the repo that watches both ends of
     // it move at once, on one page, off one refetch.
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...READY_TO_START,
       status: 'draft',
     })
     const card = pom.eventCard(EVENT.JOURNEY)
@@ -123,6 +132,16 @@ test.describe('Tournaments · the lifecycle', () => {
     await pom.expectEntryCount(EVENT.JOURNEY, 3, 64)
 
     // --- go live: the door shuts, with me inside ------------------------------
+    // First, the price of the door having been open: my entry landed AFTER this event's
+    // draw was cut, so the draw no longer seats the field that would play — it is stale,
+    // and the server refuses to start on it (ADR-0786). That is not an obstacle this
+    // spec is working around; it is the loop the ADR describes, and going live without
+    // closing it would mean starting a tournament that has me on its roster and nowhere
+    // in its fixtures. Re-cut, then start. (The refusal itself, and its copy, are
+    // `tournament-draw.spec.ts`'s subject.)
+    await pom.recutDrawButton(EVENT.JOURNEY).click()
+    await expect(pom.drawPanel(EVENT.JOURNEY)).toContainText(ME.username)
+
     await pom.lifecycleButton('Start tournament').click()
 
     // THE assertion of this slice's subtlest case. I am still an entrant — the
@@ -161,7 +180,13 @@ test.describe('Tournaments · the lifecycle', () => {
   }) => {
     // The director has this tournament open here, and published it from their
     // phone. This page still shows a draft: badge "Draft", button "Publish".
+    //
+    // Seeded ready to start (`READY_TO_START`), because the last act of this spec is a
+    // *successful* Start — the proof that the reconciled view is a working one and not a
+    // picture. A tournament whose draws were not cut would be refused that start for a
+    // reason that has nothing to do with the stale tab under test.
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...READY_TO_START,
       status: 'draft',
     })
     await pom.expectLifecycle('Draft', 'Publish')

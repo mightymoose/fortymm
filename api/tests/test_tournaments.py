@@ -26,6 +26,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.draws import DrawError
 from app.leagues import seed_user_league_rating
 from app.models import (
     League,
@@ -1152,6 +1153,7 @@ async def _enter(
     status: TournamentEntryStatus = TournamentEntryStatus.entered,
     seed: int | None = None,
     created_at: datetime | None = None,
+    entry_id: uuid.UUID | None = None,
 ) -> TournamentEntry:
     """Persist an entry directly. The enter/withdraw *routes* land in #781/1c+1d;
     the read path can't wait for them, so it writes the rows itself.
@@ -1162,10 +1164,19 @@ async def _enter(
     written: left to the column's ``now()`` default, two entries written in the same
     breath differ by microseconds, and a draw asserted against that is a test that
     passes on the clock's goodwill.
+
+    ``entry_id`` is settable for the same reason, one rung further down: the ordering
+    rule's LAST tie-break is the entry id, so a draw test that leaves the ids to
+    ``uuid4`` cannot tell "ordered by registration" from "ordered by id" except by
+    luck — the two agree at random, and with a small field they agree often. Minting the
+    ids in a *known* order (see the unseeded-registration-order draw test, which mints
+    them backwards) is what makes the two rules distinguishable.
     """
     entry = TournamentEntry(
         event_id=uuid.UUID(event_id), user_id=user.id, status=status, seed=seed
     )
+    if entry_id is not None:
+        entry.id = entry_id
     if created_at is not None:
         entry.created_at = created_at
     db_session.add(entry)
@@ -2535,6 +2546,106 @@ async def test_go_live_blocks_on_an_in_flight_entry_and_then_finds_the_draw_stal
     assert currency is DrawCurrency.stale
 
 
+async def test_two_events_each_with_a_current_draw_go_live_together(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Currency is a fact about **one event**, and a tournament with two of them goes
+    live when both are current.
+
+    The precondition asks "do these fixtures seat exactly these entrants" of every event
+    it is starting, and the loader answers for all of them in one batched pair of
+    statements. Batched — so the two events' entries come back from the *same* query,
+    and the whole of the correctness is in keying them apart afterwards. Read that
+    result as one undifferentiated field and each event's draw is measured against
+    **both** events' entrants: each seats four of the eight, each is called stale, and a
+    tournament whose draws are both perfectly current is refused with a 409 telling the
+    director to re-cut the draws they already cut. They could re-cut them all night.
+
+    Every other currency test has a single event, where "the event's entries" and "every
+    entry in the table" are the same set.
+    (Measured: dropping the ``event_id.in_(...)`` filter from ``draw_currency_by_event``
+    survived the entire suite.)
+    """
+    client, _ = authed_client
+    tournament_id, (one, two) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B), _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, one["id"], 4, prefix="one")
+    await _seed_field(db_session, two["id"], 4, prefix="two")
+    await _cut_the_draw(client, tournament_id, one["id"])
+    await _cut_the_draw(client, tournament_id, two["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    response = await _go_live(client, tournament_id)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "live"
+    assert await _status_of(client, tournament_id) == "live"
+
+
+async def test_going_live_is_undisturbed_by_another_tournaments_entries(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A tournament goes live on **its own** field. Somebody else's entries are in the
+    same table, and they must not reach the query that judges this one.
+
+    The currency loader keys its result by the ``event_id`` on each row it reads, so an
+    unfiltered read is not merely wasteful — it comes back holding rows for events the
+    caller never asked about, and there is nowhere to put them. Not a wrong answer: no
+    answer. A 500 on go-live, for every tournament in the database after the first one
+    to take an entry.
+
+    Which is precisely why no single-tournament test can see it. The suite truncates
+    between tests, so "every entry in the table" and "this tournament's entries" are
+    the same rows in almost every test written here — and this is the one where they
+    are not.
+    (Measured: dropping the ``event_id.in_(...)`` filter from ``draw_currency_by_event``
+    survived the entire suite, including a two-event tournament going live.)
+    """
+    client, _ = authed_client
+    tournament_id, _event_id, _entries = await _ready_to_start(client, db_session)
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    # A wholly unrelated tournament, with an event and a field of its own. Nothing about
+    # it is this tournament's business — including, especially, on the way to live.
+    _other_id, (other_event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, other_event["id"], 4, prefix="other")
+
+    response = await _go_live(client, tournament_id)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "live"
+    assert await _status_of(client, tournament_id) == "live"
+
+
+async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
+    engine: AsyncEngine,
+) -> None:
+    """``draw_currency_by_event`` of an empty list answers ``{}`` — and asks the
+    database nothing at all to do it.
+
+    The batch loader's contract is "two statements for the whole batch, whatever the
+    number of events", and *none* is a number of events: a draft tournament with no
+    events reaches the go-live precondition, and this is the loader it reaches. The
+    short-circuit is the difference between an empty answer and an ``IN ()`` — a
+    predicate that is not merely wasteful but false for every row, and which no version
+    of this function should ever be asked to mean.
+
+    The statement count is the assertion, not decoration: an implementation that dropped
+    the guard would still return ``{}`` (there are no events to key the result by), and
+    would pass every assertion but this one.
+    """
+    async with counted_statements(engine) as (session, statements):
+        currency = await draw_currency_by_event(session, [])
+
+    assert currency == {}
+    assert statements == [], statements
+
+
 # ----- the league a tournament is judged on (ADR-0783) ----------------------
 #
 # A tournament's ``league_id`` is the rating ladder its events' eligibility rules
@@ -3805,6 +3916,8 @@ async def _seed_field(
     *,
     prefix: str = "p",
     seeded: bool = True,
+    seeds: Sequence[int] | None = None,
+    descending_ids: bool = False,
 ) -> list[TournamentEntry]:
     """``count`` active entries, in a draw order this test *states* rather than races
     for: seeds 1..N by default, and staggered registration times besides.
@@ -3812,6 +3925,18 @@ async def _seed_field(
     The draw's order is seed-ascending, then registration order (ADR-0786). Both are
     pinned here so the pool each entrant snakes into is a fact of the fixture, not of
     how quickly the rows happened to be inserted.
+
+    Two knobs exist to make the ordering rules *distinguishable from each other*, which
+    the default field deliberately cannot do — its seeds ascend in the same order its
+    registrations do, so "ordered by seed" and "ordered by registration" deal the same
+    draw and no assertion about the result can tell them apart:
+
+    * ``seeds`` gives the seeds explicitly, so a test can hand the field a seed order
+      that *contradicts* its registration order.
+    * ``descending_ids`` mints the entry ids backwards, so the last tie-break (the id)
+      disagrees with registration order too, rather than agreeing with it by chance.
+
+    The returned list is always in REGISTRATION order, whatever the seeds and ids say.
     """
     start = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
     return [
@@ -3819,11 +3944,33 @@ async def _seed_field(
             db_session,
             event_id,
             await make_user(db_session, f"{prefix}{n}"),
-            seed=n if seeded else None,
+            seed=(seeds[n - 1] if seeds is not None else n) if seeded else None,
             created_at=start + timedelta(minutes=n),
+            entry_id=uuid.UUID(int=1_000 + count - n) if descending_ids else None,
         )
         for n in range(1, count + 1)
     ]
+
+
+def _members_by_pool(
+    rows: list[TournamentFixture],
+) -> dict[str | None, set[uuid.UUID]]:
+    """Who ended up in which pool — read back off the fixtures, because there is no pool
+    membership table (ADR-0786): a pool *is* the fixtures drawn into it.
+
+    Pool-aware, unlike ``_pairs``, and that matters more than it looks: the snake of
+    four entrants over two pools is symmetric under reversal — deal them backwards and
+    the set of PAIRS is identical, only the pool each pair sits in changes. A
+    pairing-only assertion on a field that small therefore passes against a draw dealt
+    in the wrong order, which is exactly the bug the ordering tests exist to catch.
+    """
+    members: dict[str | None, set[uuid.UUID]] = {}
+    for row in rows:
+        seated = {row.entry_a_id, row.entry_b_id} - {None}
+        members.setdefault(row.pool_id, set()).update(
+            entry_id for entry_id in seated if entry_id is not None
+        )
+    return members
 
 
 async def _fixture_rows(
@@ -3978,28 +4125,122 @@ async def test_an_unseeded_field_is_drawn_in_registration_order(
     ``created_at`` is what reaches the planner, not the order Postgres felt like
     returning them in.
 
-    Four unseeded players, registered 1→4 and written in that order, over two pools: the
-    snake puts 1 and 4 together and 2 and 3 together. A cut that read the field in *any*
-    other order (the table's physical order, the id order) would deal them differently,
-    and there is no way to see that from the shape of the draw alone — both pools hold
-    one fixture either way. So the pairings are what is asserted.
+    Six unseeded players, registered 1→6, over two pools: the snake deals 1, 4, 5 into
+    pool A and 2, 3, 6 into pool B.
+
+    **The field is built to make every wrong order visibly wrong**, which takes some
+    doing, and it is the whole substance of this test:
+
+    * The **entry ids are minted backwards** (``descending_ids``), against registration
+      order. The ordering rule's last tie-break IS the entry id, so a cut that never
+      read ``created_at`` at all would fall through to the ids and deal a *different*
+      draw — whereas with the ``uuid4`` ids the rest of the suite uses, the two orders
+      agree at random, and a draw dealt by id looks right about one time in twenty.
+      (Measured: dropping ``created_at`` from the planner's input survived this test.)
+    * Six, not four. The four-over-two snake is **symmetric under reversal** — deal the
+      field backwards and the same two pairs come out, sitting in each other's pools —
+      so a reversed order is invisible to a pairing assertion on a field that small.
+    * And the assertion is **pool-aware** (``_members_by_pool``), because who a player
+      is drawn *against* is only half of what the snake decides; which pool they play
+      in is the other half, and it is the half a symmetric mis-deal gets wrong.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client, _rr_payload(POOL_A, POOL_B)
     )
-    first, second, third, fourth = await _seed_field(
-        db_session, event["id"], 4, seeded=False
+    field = await _seed_field(
+        db_session, event["id"], 6, seeded=False, descending_ids=True
+    )
+    first, second, third, fourth, fifth, sixth = field
+    # The ids really do disagree with the registrations — otherwise the test below is
+    # asserting against two rules that happen to agree, and proves neither.
+    assert [e.id for e in field] == sorted((e.id for e in field), reverse=True)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 201, response.text
+    rows = await _fixture_rows(db_session, event["id"])
+    assert _members_by_pool(rows) == {
+        "p-a": {first.id, fourth.id, fifth.id},  # the snake's 1, 4, 5
+        "p-b": {second.id, third.id, sixth.id},  # its 2, 3, 6
+    }
+
+
+async def test_a_seed_outranks_the_registration_it_contradicts(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The cut orders the field by **seed** where one is set — and this is the test that
+    the ``seed`` column is read at all.
+
+    The seeds here run *backwards* against the registrations: the player who registered
+    last is seed 1, and the one who registered first is seed 6. So the draw order is the
+    reverse of the registration order, and the snake deals seeds 1, 4, 5 into pool A —
+    which is to say the 6th, 3rd and 2nd players to register.
+
+    Every other draw test in this file seeds its field 1..N in registration order,
+    where the two rules agree and either one alone produces the right answer. Blank the
+    seed on the way out of the database and all of them still pass; this one does not.
+    (Measured — it is the mutant that survived: ``seed=None`` in
+    ``active_draw_entrants``.)
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    # Registered 1st..6th; seeded 6th..1st.
+    first, second, third, fourth, fifth, sixth = await _seed_field(
+        db_session, event["id"], 6, seeds=[6, 5, 4, 3, 2, 1]
     )
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
 
     assert response.status_code == 201, response.text
     rows = await _fixture_rows(db_session, event["id"])
-    assert _pairs(rows) == {
-        frozenset({first.id, fourth.id}),  # pool A: the snake's 1 and 4
-        frozenset({second.id, third.id}),  # pool B: its 2 and 3
+    assert _members_by_pool(rows) == {
+        # Draw order is 6, 5, 4, 3, 2, 1 (by seed), so the snake's 1st, 4th and 5th are
+        # the players who registered 6th, 3rd and 2nd.
+        "p-a": {sixth.id, third.id, second.id},
+        "p-b": {fifth.id, fourth.id, first.id},
     }
+
+
+async def test_the_cut_reads_only_the_field_of_the_event_it_is_cutting(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A cut reads **this event's** entrants. Not the tournament's, and not the table's.
+
+    Two events under one tournament, each with its own four players. Cutting the first
+    must seat exactly its own four — and the second event, whose draw nobody asked for,
+    must still have none.
+
+    Every other draw test in this file builds a tournament with a **single** event, and
+    against a single event a cut that forgot to filter by ``event_id`` at all is
+    indistinguishable from a correct one: the only entries in the table are the ones it
+    should have read. This is the test that can tell the difference, and it is the
+    difference between a draw and a draw with eight strangers in it.
+    (Measured: dropping ``TournamentEntry.event_id == event_id`` from
+    ``active_draw_entrants``'s WHERE survived the entire suite.)
+    """
+    client, _ = authed_client
+    tournament_id, (event, other) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B), _rr_payload(POOL_A, POOL_B)
+    )
+    ours = await _seed_field(db_session, event["id"], 4, prefix="ours")
+    theirs = await _seed_field(db_session, other["id"], 4, prefix="theirs")
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 201, response.text
+    rows = await _fixture_rows(db_session, event["id"])
+    seated = {f.entry_a_id for f in rows} | {f.entry_b_id for f in rows}
+    assert seated == {entry.id for entry in ours}
+    assert not seated & {entry.id for entry in theirs}
+    # Two pools of two: one fixture each. Eight entrants would have made six.
+    assert len(rows) == 2
+    # And the event nobody cut has no draw. A cut is one event's business.
+    assert await _fixture_rows(db_session, other["id"]) == []
 
 
 async def test_a_second_cut_replaces_the_draw_wholesale(
@@ -4279,6 +4520,58 @@ async def test_cutting_a_draw_that_is_not_a_competition_is_422(
     assert await _fixture_rows(db_session, event["id"]) == []
 
 
+async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_message(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``DrawError`` subclass this route has never heard of is still a designed 422 —
+    with a **generic** sentence, never the exception's own.
+
+    ``_draw_refusal`` matches on the two errors that exist today and composes copy for
+    each. Its fallback arm is what a *third* one hits, and the rule there is that a
+    message written for a developer (or worse, one carrying a table name, a pool ref, a
+    line number) must not become the sentence a director reads. Refusing vaguely is a
+    bug report someone files; leaking internals is a defect that has already reached the
+    UI.
+
+    The only honest way to raise the base error is to invent the subclass the domain
+    does not have yet — which is precisely the future this arm exists for. A ``500``
+    here would be the alternative, and the 500 is the thing to avoid: the domain
+    *refused*, and a refusal is an answer.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+
+    class SwissRoundNotSettled(DrawError):
+        """The DrawError of some slice that has not been written."""
+
+    async def _raise_an_unknown_draw_error(
+        db: AsyncSession, event: TournamentEvent
+    ) -> None:
+        raise SwissRoundNotSettled(
+            "tournament_fixtures.pool_id='p-a' has a NULL seat at (round=2, position=1)"
+        )
+
+    monkeypatch.setattr("app.tournaments.cut_draw", _raise_an_unknown_draw_error)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail == "This event's draw cannot be cut as the event stands."
+    # Not one word of the exception's own message — not the column, not the ref, not the
+    # coordinates. The generic arm means generic.
+    assert "pool_id" not in detail
+    assert "NULL" not in detail
+    assert "p-a" not in detail
+    # And, like every other refusal on this path, it writes nothing.
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
 async def test_a_refused_re_cut_leaves_the_standing_draw_untouched(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -4505,6 +4798,44 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
         )
     ).scalar_one()
     return list(pools)
+
+
+async def test_a_draw_of_one_fixture_still_freezes_the_pool_set(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """One pool, two players, **one fixture** — the smallest draw there is — freezes the
+    pool set exactly as a full one does.
+
+    What the freeze turns on is whether the event has *any* fixtures, and the boundary
+    between "any" and "none" is one. Every other freeze test cuts a four-fixture draw,
+    so a guard that had drifted to "more than one fixture" — a single character away,
+    and the kind of thing a refactor does on the way past — would pass all of them and
+    fail only here: the pools would be replaced under the draw, and its one fixture
+    would be left pointing at a pool the event no longer has. There is no foreign key
+    to catch it.
+    (Measured: ``event_has_draw``'s ``count > 0`` mutated to ``count > 1`` survived the
+    entire suite. This is the test that kills it.)
+
+    It is not an exotic shape, either — it is a club night with one pool and two players
+    who turned up.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 2)
+    cut = await client.post(_draw_url(tournament_id, event["id"]))
+    assert cut.status_code == 201, cut.text
+    fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
+    assert len(fixtures_before) == 1
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": [POOL_B]},
+    )
+
+    assert response.status_code == 409, response.text
+    assert await _pools_of(db_session, event["id"]) == [POOL_A]
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
 
 
 async def _cut_two_pool_event(
@@ -4975,6 +5306,157 @@ async def test_an_undrawn_event_also_refuses_a_pools_patch_that_duplicates_an_id
     assert response.status_code == 422, response.text
     assert "“p-c”" in _pools_error(response)
     assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+
+
+# ----- an id is not the empty string (422) -----------------------------------
+#
+# The rule above says an id names ONE pool. This one says an id is a *thing*:
+# ``Pool.id`` was a bare ``str``, so ``Pool(id="")`` validated, and an event could be
+# created and patched holding a pool with no id at all (measured: 201).
+#
+# An empty pool id is not a cosmetic defect, because a fixture names its pool by that
+# string (ADR-0786) and the domain asks two questions of the ref that DISAGREE about
+# ``""``. In ``app.draws.ready_fixtures``: "is this fixture pooled?" is ``pool_id is
+# None`` — and ``""`` is not ``None``, so *yes, pooled* — while the sort key that orders
+# the plan reads ``pool_id or ""``, where the empty id collapses onto the value the
+# UN-pooled fixtures sort under. One fixture, pooled by one rule and un-pooled by the
+# other, and a draw whose order depends on which of the two you asked.
+#
+# The fix is not a runtime check downstream, and not a defensive ``if not pool_id`` in
+# the sort: it is a floor on the type at the write boundary (``ValueObjectId``,
+# ``min_length=1``), so the state never exists to be reasoned about (api/CLAUDE.md,
+# "make illegal states unrepresentable"). Like every other rule about a pools payload it
+# holds on **both verbs** — an event that could not be born with an empty pool id but
+# could be *edited* into one is an event that can hold it.
+
+
+def _error_locs(response: Response) -> list[list[Any]]:
+    """Every ``loc`` a pydantic 422 named, as lists.
+
+    The refusal must be attributed to the FIELD, not merely to the request: a client
+    renders a validation error under the input that caused it, and a 422 that pointed at
+    ``body`` alone would leave the organizer hunting a blank box.
+    """
+    return [error["loc"] for error in response.json()["detail"]]
+
+
+@pytest.mark.parametrize(
+    ("pool", "field"),
+    [
+        pytest.param({**POOL_A, "id": ""}, "id", id="empty-id"),
+        pytest.param({**POOL_A, "name": ""}, "name", id="empty-name"),
+    ],
+)
+async def test_creating_an_event_with_an_empty_pool_id_or_name_is_refused(
+    authed_client: tuple[AsyncClient, User],
+    pool: dict[str, Any],
+    field: str,
+) -> None:
+    """An event cannot be **born** with a pool whose id — or whose name — is ``""``.
+
+    The id is the one with teeth (see the section comment: a fixture drawn into ``""``
+    is pooled and un-pooled at the same time). The name is refused for the plainer
+    reason that a pool is *called* something: it is what the director clicks, what the
+    double-booking warning quotes and what a player reads off a wall, and a list of
+    three blank rows is not a thing anyone can act on.
+
+    And the refusal writes nothing: a 422 that had already stored the event would be a
+    422 in name only.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events", json=_rr_payload(pool, POOL_B)
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "pools", 0, field] in _error_locs(response), response.text
+    assert await _events_of(client, created["id"]) == []
+
+
+@pytest.mark.parametrize(
+    ("pool", "field"),
+    [
+        pytest.param({**POOL_C, "id": ""}, "id", id="empty-id"),
+        pytest.param({**POOL_C, "name": ""}, "name", id="empty-name"),
+    ],
+)
+async def test_a_pools_patch_that_empties_a_pool_id_or_name_is_refused(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    pool: dict[str, Any],
+    field: str,
+) -> None:
+    """The **other verb**, and the one that would otherwise be the hole: an event born
+    with two perfectly good pools, edited into holding one with no id.
+
+    Deliberately an **un-drawn** event, where the pool-set freeze does not apply at
+    all. On a *cut* event this payload changes the pool set (``{"", p-b}`` is not
+    ``{p-a, p-b}``), so the freeze would 409 it and the test would pass without the
+    boundary rule existing — proving nothing about the boundary. Here there is no draw
+    and no freeze:
+    pools replace wholesale, and the only thing between the column and ``""`` is the
+    schema.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": [pool]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "pools", 0, field] in _error_locs(response), response.text
+    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+
+
+async def test_creating_a_tournament_with_an_empty_table_id_is_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """A table in the venue catalogue is the same string-ref pattern as a pool: a pool
+    holds a list of these ids (``table_ids``) and nothing else connects the two — no
+    table, no foreign key, no index. An id of ``""`` is a table nothing can name, and a
+    ``table_ids`` entry of ``""`` would "resolve" against it.
+
+    Closing the hole on pools and leaving it open on the thing pools point AT would be a
+    boundary drawn half way.
+    """
+    client, _ = authed_client
+
+    response = await client.post(
+        "/v1/tournaments",
+        json=_create_payload(
+            table_catalogue=[{"id": "", "label": "Table 1", "court": "A"}]
+        ),
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue", 0, "id"] in _error_locs(response), response.text
+
+
+async def test_patching_a_table_catalogue_with_an_empty_table_id_is_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The table catalogue's patch verb, for the reason every pools rule is stated
+    on both verbs: a tournament that could not be created with an id-less table and
+    could be edited into one is a tournament that holds an id-less table."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"table_catalogue": [{"id": "", "label": "Table 9", "court": "B"}]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue", 0, "id"] in _error_locs(response), response.text
+    # And the catalogue it was born with is the catalogue it still has.
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == ["t1", "t2"]
 
 
 # ----- the draw-type freeze (409) -------------------------------------------

@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { Trash2 } from 'lucide-react'
 
 import { Card } from '@/components/ui/card'
@@ -41,14 +42,30 @@ export interface PoolCardProps {
    * chips are all still live, because a pool's venue attributes were never frozen and
    * a table that breaks mid-event has to be recorded without destroying the draw. */
   removal: PoolRemoval
+  /** What is wrong with this pool's **name**, in the organizer's words, or `undefined`
+   * when nothing is — the resolver's verdict on this row (`poolNameSchema`), handed
+   * down by `PoolsSection` and rendered under the box.
+   *
+   * It is a `string | undefined` rather than a `boolean` + a table of copy here,
+   * because the sentence is the schema's: one rule, one wording, said wherever it is
+   * shown. A viewer never sees it — a read-only card has no box to clear. */
+  nameError?: string
   onChange: (pool: Pool) => void
   onRemove: () => void
 }
 
 /** The card's chrome, shared by both renderings so the two cannot drift apart
- * (ADR 0015, rule 3: the read-only view mirrors the editor's layout). */
-const HEADER_ROW =
-  'flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] p-3.5'
+ * (ADR 0015, rule 3: the read-only view mirrors the editor's layout).
+ *
+ * The header is split in two because only the *editor's* header can grow a second line
+ * — the red under the name box. So the rule below the header belongs to the **block**,
+ * not to the row: hang the border off the row and a validation message renders *below*
+ * the divider, in the window's whitespace, reading as though it were about the date.
+ * The read-only branch, which has neither box nor message, composes the two back into
+ * the one row it has always been. */
+const HEADER_ROW_INNER = 'flex items-center gap-2.5 p-3.5'
+const HEADER_BORDER = 'border-b border-[color:var(--border-subtle)]'
+const HEADER_ROW = cn(HEADER_ROW_INNER, HEADER_BORDER)
 const OVERLINE =
   'mb-1.5 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase'
 const WINDOW_ROW = 'grid grid-cols-3 gap-3 p-3.5'
@@ -83,9 +100,15 @@ export const PoolCard = ({
   tables,
   canEdit,
   removal,
+  nameError,
   onChange,
   onRemove,
 }: PoolCardProps) => {
+  // The id of the red message, so the *box* points at it (`aria-describedby`). A `<p>`
+  // that merely sits below an input is next to it on screen and nowhere at all to a
+  // screen reader.
+  const nameErrorId = useId()
+
   const setSlot = (patch: Partial<Pool['slot']>) =>
     onChange({ ...pool, slot: { ...pool.slot, ...patch } })
 
@@ -144,33 +167,60 @@ export const PoolCard = ({
 
   return (
     <Card className="gap-0 p-0" data-testid="pool-card">
-      <div className={HEADER_ROW}>
-        <Input
-          aria-label="Pool name"
-          value={pool.name}
-          onChange={(e) => onChange({ ...pool, name: e.target.value })}
-          className="h-8 flex-1 border-transparent bg-transparent text-[15px] font-semibold shadow-none focus-visible:border-[color:var(--border-default)]"
-        />
-        <TableCount count={pool.tableIds.length} />
-        {/* Disabled — not hidden — while the draw is cut, and pointed at the section's
-            one explanation of why (ADR-0786). Hiding it would take the way out with it:
-            this button is one deleted draw away from working, which is exactly what
-            distinguishes this case from the viewer's (whose controls are absent, because
-            nothing they could do would bring them back). The accessible name stays
-            "Remove pool" — the name of a control is what it *does*, not what state it is
-            in; the state is `disabled` and the reason is the description. */}
-        <button
-          type="button"
-          aria-label="Remove pool"
-          disabled={removal.kind === 'frozen'}
-          aria-describedby={
-            removal.kind === 'frozen' ? removal.reasonId : undefined
-          }
-          onClick={onRemove}
-          className="grid size-7 place-items-center rounded-md text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)] disabled:cursor-not-allowed disabled:text-[color:var(--fg-3)] disabled:opacity-50 disabled:hover:bg-transparent"
-        >
-          <Trash2 size={14} />
-        </button>
+      <div className={HEADER_BORDER}>
+        <div className={HEADER_ROW_INNER}>
+          <Input
+            aria-label="Pool name"
+            value={pool.name}
+            onChange={(e) => onChange({ ...pool, name: e.target.value })}
+            aria-invalid={!!nameError}
+            aria-describedby={nameError ? nameErrorId : undefined}
+            className={cn(
+              'h-8 flex-1 border-transparent bg-transparent text-[15px] font-semibold shadow-none focus-visible:border-[color:var(--border-default)]',
+              // The box is *chromeless* until it is wrong: a transparent border is the
+              // whole look of this header. So the red border has to be said out loud
+              // here — `aria-invalid` alone styles nothing a transparent border shows.
+              nameError &&
+                'border-[color:var(--loss)] focus-visible:border-[color:var(--loss)]',
+            )}
+          />
+          <TableCount count={pool.tableIds.length} />
+          {/* Disabled — not hidden — while the draw is cut, and pointed at the section's
+              one explanation of why (ADR-0786). Hiding it would take the way out with it:
+              this button is one deleted draw away from working, which is exactly what
+              distinguishes this case from the viewer's (whose controls are absent, because
+              nothing they could do would bring them back). The accessible name stays
+              "Remove pool" — the name of a control is what it *does*, not what state it is
+              in; the state is `disabled` and the reason is the description. */}
+          <button
+            type="button"
+            aria-label="Remove pool"
+            disabled={removal.kind === 'frozen'}
+            aria-describedby={
+              removal.kind === 'frozen' ? removal.reasonId : undefined
+            }
+            onClick={onRemove}
+            className="grid size-7 place-items-center rounded-md text-[color:var(--loss)] hover:bg-[color:rgba(255,77,109,0.16)] disabled:cursor-not-allowed disabled:text-[color:var(--fg-3)] disabled:opacity-50 disabled:hover:bg-transparent"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+
+        {/* The refusal, under the box it is about and above the divider — the shape every
+            other field in this editor uses (`Field`'s error hint, `CLAUDE.md` `## Forms`):
+            inline, in red, never a toast and never a banner. A blank pool name is a 422
+            the server now states (`min_length=1`), and this is what means it is never
+            *reached*: the save is refused in the form, so nothing is sent and Pydantic's
+            prose has nothing to arrive in. */}
+        {nameError && (
+          <p
+            id={nameErrorId}
+            data-testid="pool-name-error"
+            className="-mt-2 px-3.5 pb-3 text-xs text-[color:var(--loss)]"
+          >
+            {nameError}
+          </p>
+        )}
       </div>
 
       <div className={WINDOW_ROW}>

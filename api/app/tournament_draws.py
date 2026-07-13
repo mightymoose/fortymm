@@ -83,14 +83,21 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
 
 
 def draw_config(event: TournamentEvent) -> DrawConfig:
-    """What the cut needs to know about the event itself: its draw type, and the ids of
-    the pools it has configured — **in the event's own pool order**, which is the order
-    the snake seeds against.
+    """What the cut needs to know about the event itself: the ids of the pools it has
+    configured — **in the event's own pool order**, which is the order the snake seeds
+    against.
+
+    It does **not** carry the event's ``draw_type``, though it once did. The draw type
+    is what ``cut_draw`` picks the *strategy* with (``strategy_for(event.draw_type)``),
+    and it does so before this config exists; copying it in here as well gave the domain
+    a second place to learn a fact it had already acted on — one that no strategy read,
+    and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
     The pools are *parsed*, not indexed: ``TournamentEvent.pools`` is JSONB, and
     ``p["id"]`` on an untyped dict is a ``KeyError`` waiting for the one malformed row
     (api/CLAUDE.md — "parse, don't validate"). ``Pool`` is the same model the write
-    boundary validated them with, so a pool that could be *stored* can be read here.
+    boundary validated them with, so a pool that could be *stored* can be read here —
+    and its ``min_length=1`` id is why a ``PoolId`` reaching the domain is never ``""``.
 
     Every configured pool is passed, whatever the draw type. An un-pooled strategy
     (single-elim, #785) ignores them and writes ``NULL`` pool refs; a pooled one deals
@@ -98,7 +105,6 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     string ref that resolves against the event the client is already holding.
     """
     return DrawConfig(
-        draw_type=event.draw_type,
         pool_ids=tuple(PoolId(Pool.model_validate(pool).id) for pool in event.pools),
     )
 

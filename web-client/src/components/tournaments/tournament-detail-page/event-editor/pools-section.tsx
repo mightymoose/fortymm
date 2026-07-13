@@ -27,6 +27,14 @@ export interface PoolsSectionProps {
   /** Whether the event's **set of pools** may still change (`poolSetFreeze`,
    * `data/draw`). Frozen once its draw is cut — see the component doc below. */
   freeze: EditFreeze
+  /** What is wrong with each pool's **name**, keyed by pool id (`poolNameIssues`,
+   * `data/event-validation`) — rendered in red under the box it is about.
+   *
+   * `undefined` is *"do not say anything yet"*, and it is what the editor passes until
+   * the organizer has actually pressed Save: a name box they are halfway through
+   * re-typing is not yet wrong. The same shape, and the same reasoning, as
+   * `EligibilitySection`'s `issues`. */
+  nameIssues?: Record<string, string>
 }
 
 /**
@@ -58,12 +66,22 @@ export interface PoolsSectionProps {
  * lose every placement to a broken table. A section that greyed itself out wholesale
  * would look tidy, pass a test that only checked Add and Remove, and break the one case
  * this freeze exists to permit.
+ *
+ * ## A pool is *called* something
+ *
+ * The name box being live is also the one way this editor can author a pool the server
+ * refuses: an id and a default name are **minted** (`addPool`), but an emptied name box
+ * is a `min_length=1` 422 (`Pool.name`, `api/app/schemas/tournament.py`). So the rule is
+ * mirrored client-side (`poolNameSchema`) and its verdict arrives here as `nameIssues`,
+ * in red, under the box — and the save is refused in the form, which is what means
+ * Pydantic's prose never reaches anybody.
  */
 export const PoolsSection = ({
   control,
   tables,
   canEdit,
   freeze,
+  nameIssues,
 }: PoolsSectionProps) => {
   // The frozen notice is what both the Add button and every Remove button point at with
   // `aria-describedby`: one explanation, in one place, said once.
@@ -214,6 +232,10 @@ export const PoolsSection = ({
                   ? { kind: 'frozen', reasonId: freezeNoticeId }
                   : { kind: 'allowed' }
               }
+              // The one thing on this card the organizer can *clear* — and the server
+              // now refuses a pool with no name (`min_length=1`). The card says so under
+              // the box; the save never leaves the room.
+              nameError={nameIssues?.[pools[i].id]}
               onChange={(np) => update(i, np)}
               onRemove={() => remove(i)}
             />

@@ -4,6 +4,7 @@ No database, no app — every test here builds its input from literals, which is
 point of keeping the strategies pure.
 """
 
+import dataclasses
 import uuid
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,7 @@ from app.draws import (
     RoundRobinStrategy,
     UnsupportedDrawType,
     order_entrants,
+    ready_fixtures,
     strategy_for,
 )
 from app.models.tournament import DrawType
@@ -66,7 +68,7 @@ def _pool_ids(count: int) -> tuple[PoolId, ...]:
 
 
 def _config(pool_count: int) -> DrawConfig:
-    return DrawConfig(draw_type=DrawType.round_robin, pool_ids=_pool_ids(pool_count))
+    return DrawConfig(pool_ids=_pool_ids(pool_count))
 
 
 def _members_by_pool(fixtures: list[PlannedFixture]) -> dict[PoolId | None, set[int]]:
@@ -148,6 +150,30 @@ class TestOrderEntrants:
 
         assert [e.entry_id for e in ordered] == [_entry_id(2), _entry_id(1)]
 
+    def test_the_seeds_own_order_beats_their_registration_order(self) -> None:
+        # The seeds are ordered BY SEED, not by when they registered — and the two are
+        # made to disagree here on purpose, because a field where they agree cannot tell
+        # the two rules apart. Seed 1 registered dead last, seed 3 first; the draw is
+        # 1, 2, 3 regardless, which is the whole point of a seed.
+        #
+        # (This is the case the ordering key's second element exists for. Collapse it to
+        # a constant — the seeded then tie, and fall through to ``created_at`` — and
+        # every other ordering test here still passes: they all seed in registration
+        # order. Mutation testing is what found that, and this is what it found.)
+        ordered = order_entrants(
+            [
+                _entrant(1, seed=3, minutes=0),
+                _entrant(2, seed=2, minutes=30),
+                _entrant(3, seed=1, minutes=60),
+            ]
+        )
+
+        assert [e.entry_id for e in ordered] == [
+            _entry_id(3),  # seed 1, registered last
+            _entry_id(2),  # seed 2
+            _entry_id(1),  # seed 3, registered first
+        ]
+
     def test_identical_registration_instants_still_order_deterministically(
         self,
     ) -> None:
@@ -188,6 +214,11 @@ class TestStrategyRegistry:
         assert excinfo.value.draw_type is draw_type
         # And it must be catchable as the one domain base a route handler switches on.
         assert isinstance(excinfo.value, DrawError)
+        # Its ``str()`` is the *developer's* sentence — the director's is composed by
+        # the route from ``draw_type`` — but it still has to name the type, or the log
+        # line and the traceback say only that something, somewhere, is unimplemented.
+        assert draw_type.value in str(excinfo.value)
+        assert "not implemented yet" in str(excinfo.value)
 
     def test_every_draw_type_is_handled_one_way_or_the_other(self) -> None:
         # The match has no catch-all, so an unhandled member would fall through and
@@ -197,6 +228,28 @@ class TestStrategyRegistry:
                 assert strategy_for(draw_type) is not None
             except UnsupportedDrawType:
                 pass
+
+    def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
+        self,
+    ) -> None:
+        """``strategy_for`` (above) is where a draw type is *read*, and picking the
+        strategy is the whole of what it decides. ``DrawConfig`` used to carry a copy of
+        it as well — populated by ``draw_config``, read by no strategy, and chosen from
+        the event's own column *before* the config was ever built.
+
+        A second source of truth for a settled decision, and one that could contradict
+        the strategy holding it: ``RoundRobinStrategy().plan_initial(DrawConfig(
+        draw_type=DrawType.swiss, …))`` was a sentence you could write, and nothing
+        anywhere would notice. Nothing *could*: mutation testing set that field to
+        ``None`` and killed no test, because no line of production code read it.
+
+        So this asserts on the config's **shape**, not on a behaviour — there is no
+        behaviour to assert on, which is precisely the finding. It is the only assertion
+        that can fail when the field comes back, and it is what stops the next strategy
+        (rr-then-ko, swiss) from branching on ``config.draw_type`` in the belief that it
+        is authoritative.
+        """
+        assert [field.name for field in dataclasses.fields(DrawConfig)] == ["pool_ids"]
 
 
 class TestRoundRobinCut:
@@ -346,33 +399,66 @@ class TestRoundRobinCut:
             )
         ]
 
+    # The refusal's message is not diagnostics — it is **copy**. ``_draw_refusal``
+    # passes a ``DegenerateDraw``'s ``str()`` through to the 422 body verbatim, on
+    # purpose (only the strategy knows *which* degeneracy it hit), so the sentence
+    # authored here is the sentence a director reads, and the numbers in it are the
+    # numbers they have to change. It is pinned where it is written.
     @pytest.mark.parametrize(
-        ("entrants", "pools"),
+        ("entrants", "pools", "message"),
         [
-            (1, 1),  # a lone entrant has nobody to play
-            (0, 1),  # a ghost pool
-            (3, 2),  # the snake would leave pool B with one entrant
-            (5, 3),  # ...and pool C with one
+            pytest.param(
+                1,
+                1,
+                "1 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+                "entrants, who would have nobody to play.",
+                id="a-lone-entrant-has-nobody-to-play",
+            ),
+            pytest.param(
+                0,
+                1,
+                "0 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+                "entrants, who would have nobody to play.",
+                id="a-ghost-pool",
+            ),
+            pytest.param(
+                3,
+                2,
+                "3 entrants across 2 pool(s) would leave a pool with fewer than 2 "
+                "entrants, who would have nobody to play.",
+                id="the-snake-would-leave-pool-B-with-one",
+            ),
+            pytest.param(
+                5,
+                3,
+                "5 entrants across 3 pool(s) would leave a pool with fewer than 2 "
+                "entrants, who would have nobody to play.",
+                id="...and-pool-C-with-one",
+            ),
         ],
     )
     def test_a_pool_of_fewer_than_two_is_refused(
-        self, entrants: int, pools: int
+        self, entrants: int, pools: int, message: str
     ) -> None:
         with pytest.raises(DegenerateDraw) as excinfo:
             RoundRobinStrategy().plan_initial(_config(pools), _ordered(entrants))
 
         assert isinstance(excinfo.value, DrawError)
+        # Both numbers, because either one of them is a thing the director can move:
+        # cut fewer pools, or go and find another player.
+        assert str(excinfo.value) == message
 
     def test_a_draw_with_no_pools_is_refused(self) -> None:
-        with pytest.raises(DegenerateDraw):
-            RoundRobinStrategy().plan_initial(
-                DrawConfig(draw_type=DrawType.round_robin, pool_ids=()), _ordered(4)
-            )
+        with pytest.raises(DegenerateDraw) as excinfo:
+            RoundRobinStrategy().plan_initial(DrawConfig(pool_ids=()), _ordered(4))
+
+        # A different degeneracy and a different sentence: no arrangement of the field
+        # fixes this one, so it names the pools rather than the entrants.
+        assert str(excinfo.value) == "A round-robin draw needs at least one pool."
 
     def test_pools_are_named_by_the_events_own_pool_ids(self) -> None:
         # A pool id is a string ref into the event's JSONB pools, not an index we mint.
         config = DrawConfig(
-            draw_type=DrawType.round_robin,
             pool_ids=(PoolId("pool-morning"), PoolId("pool-evening")),
         )
 
@@ -481,3 +567,79 @@ class TestRoundRobinAdvance:
 
     def test_an_empty_draw_advances_to_an_empty_plan(self) -> None:
         assert RoundRobinStrategy().advance([]) == AdvancePlan()
+
+
+class TestReadyFixtures:
+    """``ready_fixtures`` is shared by every strategy — "ready" is a property of the
+    fixture, not of the draw type — so it is tested as the total function it is, against
+    inputs no single strategy produces on its own."""
+
+    def _state(
+        self,
+        n: int,
+        *,
+        pool_id: PoolId | None,
+        round: int,
+        position: int,
+    ) -> FixtureState:
+        return FixtureState(
+            fixture_id=FixtureId(uuid.UUID(int=n)),
+            pool_id=pool_id,
+            round=round,
+            position=position,
+            entry_a_id=_entry_id(1),
+            entry_b_id=_entry_id(2),
+        )
+
+    def test_pooled_fixtures_are_ready_before_un_pooled_ones(self) -> None:
+        # The mixed set is the one a pooled-then-knockout draw will hand this: the pool
+        # fixtures carry a pool ref, the KO fixtures behind them carry NULL. A ``None``
+        # does not compare against a ``str``, so the sort key has to *decide* where the
+        # un-pooled sit rather than fall over — and where they sit has to be a fact, not
+        # whatever order the rows came back in.
+        ko = self._state(1, pool_id=None, round=1, position=1)
+        b1 = self._state(2, pool_id=PoolId("B"), round=1, position=1)
+        a2 = self._state(3, pool_id=PoolId("A"), round=1, position=2)
+        a1 = self._state(4, pool_id=PoolId("A"), round=1, position=1)
+        a_round2 = self._state(5, pool_id=PoolId("A"), round=2, position=1)
+
+        # Fed in scrambled — and it is the *stated* order that is asserted, not merely
+        # that the output is self-consistently sorted (which a reversed rule would also
+        # be).
+        ready = ready_fixtures([ko, a_round2, b1, a2, a1])
+
+        assert ready == (
+            a1.fixture_id,
+            a2.fixture_id,
+            a_round2.fixture_id,
+            b1.fixture_id,
+            ko.fixture_id,  # the un-pooled sort last, behind every pool
+        )
+
+    def test_readiness_ignores_the_draw_type_that_planned_the_fixture(self) -> None:
+        # Same three states, asked of the shared helper and of the strategy: a fixture
+        # that is ready is ready, and a strategy cannot make it less so.
+        ready = self._state(1, pool_id=PoolId("A"), round=1, position=1)
+        materialized = FixtureState(
+            fixture_id=FixtureId(uuid.UUID(int=2)),
+            pool_id=PoolId("A"),
+            round=1,
+            position=2,
+            entry_a_id=_entry_id(3),
+            entry_b_id=_entry_id(4),
+            match_id=MatchId(uuid.UUID(int=99)),
+        )
+        pending = FixtureState(
+            fixture_id=FixtureId(uuid.UUID(int=3)),
+            pool_id=None,
+            round=2,
+            position=1,
+            entry_a_id=_entry_id(1),
+            entry_b_id=None,
+        )
+        fixtures = [ready, materialized, pending]
+
+        assert ready_fixtures(fixtures) == (ready.fixture_id,)
+        assert RoundRobinStrategy().advance(fixtures) == AdvancePlan(
+            side_fills=(), ready_fixture_ids=(ready.fixture_id,)
+        )

@@ -14,6 +14,10 @@ export interface PoolsHarnessInputs {
   /** Whether the event's pool SET may still change (ADR-0786) — derived from the event
    * by default, see below. */
   freeze: EditFreeze
+  /** What is wrong with each pool's **name**, keyed by pool id (`poolNameIssues`).
+   * `undefined` by default, because that is the state a card is normally in: the editor
+   * says nothing in red until the organizer has actually tried to save. */
+  nameIssues?: Record<string, string>
 }
 
 export function buildPoolsSectionProps(

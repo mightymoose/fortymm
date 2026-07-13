@@ -1,8 +1,6 @@
-import type { ReactNode } from 'react'
-
 import { Input } from '@/components/ui/input'
 
-import type { FieldBase, FieldProps } from './field'
+import type { FieldBase, FieldControl, FieldProps } from './field'
 import type { ReadOnlyValueContent } from './read-only-value'
 
 /** Overrides for `buildFieldProps`. Flat, unlike `FieldProps` itself: a test may
@@ -12,18 +10,25 @@ export type FieldOverrides = Partial<FieldBase> & {
   readOnly?: boolean
   value?: ReadOnlyValueContent
   valueClassName?: string
-  children?: (controlId: string) => ReactNode
+  children?: FieldControl
 }
 
 /** Props for `Field` — a required "Name" row wrapping a plain text input.
  * Naming `readOnly` puts the row in the read-only-capable branch, where the
- * component requires a `value`; omitting it keeps the row an editor. */
+ * component requires a `value`; omitting it keeps the row an editor.
+ *
+ * The default control wires **both** ids the row hands it — `id` and
+ * `aria-describedby` — because that is what a well-formed call site does
+ * (`FieldControl`), and a factory that dropped the description would make the row's
+ * own hint association untestable through it. */
 export function buildFieldProps(overrides: FieldOverrides = {}): FieldProps {
   const { readOnly, value, valueClassName, ...rest } = overrides
   const editor = {
     label: 'Name',
     required: true,
-    children: (id: string) => <Input id={id} defaultValue="" />,
+    children: ((id, hintId) => (
+      <Input id={id} aria-describedby={hintId} defaultValue="" />
+    )) satisfies FieldControl,
     ...rest,
   }
   return readOnly === undefined

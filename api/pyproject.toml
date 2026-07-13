@@ -24,6 +24,8 @@ dependencies = [
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "mutmut>=3.2",
     "httpx>=0.27.0",
     "fakeredis[lua]>=2.20",
     "testcontainers[postgres]>=4.8",
@@ -44,6 +46,61 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+
+[tool.coverage.run]
+source = ["app"]
+# **Load-bearing, not boilerplate.** SQLAlchemy's asyncio layer runs its sync-style
+# internals inside a greenlet (``greenlet_spawn``), and a greenlet switch swaps the
+# thread state coverage's tracer hangs off — so without this, tracing is silently lost
+# the moment a request first `await`s the database. Everything after that await goes
+# unrecorded: whole route bodies that the suite plainly exercises get reported as
+# uncovered (measured, on the same green suite: `app/tournaments.py` read 77% without
+# this line and 98% with it, and `create_event` — which every tournament test POSTs to —
+# read as entirely unexecuted). The numbers are not merely pessimistic, they are wrong,
+# and they are wrong in the direction that makes you go and write tests for lines that
+# were already covered.
+concurrency = ["thread", "greenlet"]
+
+[tool.mutmut]
+# Mutation testing — the DEFINITION_OF_COMPLETE gate for service/domain modules (≥80%).
+#
+#     TEST_DATABASE_URL=postgresql+asyncpg://... mutmut run --max-children 1
+#     mutmut results        # what survived
+#     mutmut show <mutant>  # the diff that survived
+#
+# Both flags are load-bearing, and neither is a preference:
+#
+# * TEST_DATABASE_URL, because `app/tournament_draws.py` is the half of the draw that
+#   touches the database, so its tests need one — and without this every mutant spins up
+#   its own testcontainers Postgres (~10s each, several hundred mutants).
+# * --max-children 1, because mutmut's children would otherwise share that one database
+#   and truncate each other's tables mid-test. The failures that causes are counted as
+#   MUTANTS KILLED — a contaminated run reports a *higher* score than an honest one, so
+#   the number would be wrong in the direction nobody checks.
+source_paths = ["app"]
+# The draw's two halves: `app/draws.py` is the pure planner (no session, no query) and
+# `app/tournament_draws.py` is the persistence around it. Add other service/domain
+# modules here as they come under the gate.
+only_mutate = ["app/draws.py", "app/tournament_draws.py"]
+# The tests that exercise them, and only those: mutmut re-runs the selection per mutant,
+# so pointing it at the whole suite would re-prove the notification taxonomy a few
+# hundred times.
+#
+# "And only those" is the cheap half of that sentence; "the tests that exercise them" is
+# the half that has to be *checked*, because a selection that misses a test file does not
+# fail — it reports a **survivor**, and a survivor is read as a hole in the suite. This
+# selection missed `tests/test_account_merge.py`, which is where `uncut_draw` is called
+# from `app/account_merge.py` (the merge un-cuts the draws its collision-resolution
+# invalidated) and where `cut_draw` is called directly to set that state up. A mutant in
+# `uncut_draw` duly "survived" a suite that already killed it, and the reflex a survivor
+# provokes is to go and write a test that exists. Grep the mutated modules for their
+# importers before trusting this list.
+pytest_add_cli_args_test_selection = [
+    "tests/test_draws.py",
+    "tests/test_tournaments.py",
+    "tests/test_tournament_fixtures.py",
+    "tests/test_account_merge.py",
+]
 
 [tool.ruff]
 target-version = "py313"

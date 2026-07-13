@@ -26,6 +26,20 @@ const scoped = (container: Container) => ({
   queryPoolCards() {
     return container.queryAllByTestId('pool-card')
   },
+  /** Every pool's name box, in card order — the card-scoped `getNameInput()` throws
+   * once there is more than one pool, and "which card is red?" is a question about the
+   * whole list. */
+  getPoolNameInputs() {
+    return container.queryAllByLabelText('Pool name')
+  },
+  /** The red messages under the name boxes, in card order (`poolNameIssues`). Empty
+   * until a save has been attempted — the editor hands the section nothing before
+   * then. */
+  getPoolNameErrors(): (string | null)[] {
+    return container
+      .queryAllByTestId('pool-name-error')
+      .map((node: HTMLElement) => node.textContent)
+  },
   /** Every Remove-pool button, in render order — to remove a specific card.
    *
    * `hidden: false` is NOT passed and must not be: a *disabled* button (the cut-draw

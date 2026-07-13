@@ -101,12 +101,16 @@ export const BasicsSection = ({
         error={!!errors.name}
         hint={errors.name}
       >
-        {(id) => (
+        {/* `hintId` is the row's hint — here the red message, when there is one. A
+            control that does not point at it is a control whose error is *beside* it on
+            screen and nowhere at all to a screen reader (`Field`, `FieldControl`). */}
+        {(id, hintId) => (
           <Input
             id={id}
             autoFocus
             value={event.name}
             aria-invalid={!!errors.name}
+            aria-describedby={hintId}
             placeholder="Open Singles"
             onChange={(e) => set({ name: e.target.value })}
           />
@@ -152,12 +156,18 @@ export const BasicsSection = ({
             drawTypeFreeze.kind === 'frozen' ? drawTypeFreeze.reason : undefined
           }
         >
-          {() => (
+          {/* The trigger POINTS at the reason (`aria-describedby`), it does not merely
+              sit above it. A disabled trigger is not focusable and carries no tooltip,
+              so the description is the only channel it has left — and one it had, in
+              fact, been leaving empty (`aria-describedby: null`) while the pools section
+              one tab over wired the identical freeze correctly. */}
+          {(_id, hintId) => (
             <OptionSelect
               ariaLabel="Draw type"
               value={event.drawType}
               options={DRAW_TYPE_OPTIONS}
               disabled={drawTypeFreeze.kind === 'frozen'}
+              describedById={hintId}
               onChange={(v) => set({ drawType: v as DrawType })}
             />
           )}
@@ -191,13 +201,14 @@ export const BasicsSection = ({
           readOnly={readOnly}
           value={numericValue(event.maxPlayers)}
         >
-          {(id) => (
+          {(id, hintId) => (
             <Input
               id={id}
               type="number"
               min={1}
               max={PLAYERS_MAX}
               aria-invalid={!!errors.maxPlayers}
+              aria-describedby={hintId}
               // Hold empty as empty and submit `null`.
               value={event.maxPlayers ?? ''}
               onChange={(e) =>
@@ -217,13 +228,14 @@ export const BasicsSection = ({
           readOnly={readOnly}
           value={numericValue(event.entryFee)}
         >
-          {(id) => (
+          {(id, hintId) => (
             <Input
               id={id}
               type="number"
               min={0}
               max={ENTRY_FEE_MAX}
               aria-invalid={!!errors.entryFee}
+              aria-describedby={hintId}
               // Blank is `NaN` — *missing* — while a typed `0` is a legitimate free
               // event and saves.
               value={Number.isNaN(event.entryFee) ? '' : event.entryFee}

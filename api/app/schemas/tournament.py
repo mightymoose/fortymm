@@ -104,6 +104,32 @@ EventEntryFee = Annotated[
 
 # ----- value-objects (typed JSONB) -----------------------------------------
 
+ValueObjectId = Annotated[str, Field(min_length=1)]
+"""The **identity** of a JSONB value-object — a pool, a table in the venue catalogue.
+
+These ids are *string refs*, not foreign keys: pools and tables have no tables of their
+own, so a pool is addressed by a client-supplied string and nothing in the database
+constrains it. That is precisely why the constraint has to be stated *here*: the empty
+string is not an identity, and it was a **representable** one — ``Pool(id="")``
+validated, and an event could be created and patched holding it.
+
+It is not a theoretical illegal state. A fixture names its pool by this string
+(ADR-0786) and the rest of the system asks two questions of that ref, which an empty id
+answers *inconsistently*: "is this fixture pooled?" is ``pool_id is not None`` — and
+``""`` is not ``None``, so **yes** — while the sort that orders a draw's fixtures reads
+``pool_id or ""`` (``app.draws.ready_fixtures``), where ``""`` is indistinguishable from
+the un-pooled group it deliberately sorts apart. One fixture, pooled by one rule and
+un-pooled by the other, and a draw whose order depends on which one you ask. A ``str``
+with no floor admits that state; a ``min_length=1`` makes it unsayable — at the
+boundary, in the type, rather than as a runtime check downstream (api/CLAUDE.md, "make
+illegal states unrepresentable").
+
+Unlike the pool-id *uniqueness* rule (``_pool_ids_are_unique``, an ``AfterValidator``
+that contributes nothing to the JSON schema), this **does** change the OpenAPI shape:
+``minLength: 1`` is a real JSON-schema keyword, so the generated clients learn the rule
+too — which is a feature. A rule the client can express is a rule the organizer meets
+under the field instead of in a 422."""
+
 
 class Address(BaseModel):
     """A tournament venue address. Stored as a JSONB value-object."""
@@ -219,11 +245,19 @@ class Predicate(BaseModel):
 
 
 class TournamentTable(BaseModel):
-    """A physical table in the venue catalogue, referenced by id from pools."""
+    """A physical table in the venue catalogue, referenced by id from pools.
+
+    Its ``id`` is a ``ValueObjectId`` for the same reason a pool's is: a pool holds a
+    list of these strings (``table_ids``) and nothing else connects the two, so an id
+    that is the empty string is a table nothing can name — and a ``table_ids`` entry of
+    ``""`` would "resolve" against it. It is the same string-ref pattern with the same
+    hole, and closing it in one place and not the other would leave the boundary
+    half-drawn.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: ValueObjectId
     label: str
     court: str
 
@@ -234,13 +268,20 @@ class Pool(BaseModel):
     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
     these ids. Which is only a coherent thing to say if an id names one pool — see
-    ``EventPools``, the type the event's list of them actually has.
+    ``EventPools``, the type the event's list of them actually has — and if an id is a
+    thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
+    a fixture drawn into it is pooled by one rule and un-pooled by another.
+
+    Its ``name`` has the same floor for the plainer reason: a pool is *called*
+    something — it is what the director clicks, what the conflict warnings quote, and
+    what a player reads off a wall. ``""`` is not a name, and an event whose pools list
+    is three blank rows is not a thing anyone could act on.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    name: str
+    id: ValueObjectId
+    name: str = Field(min_length=1)
     slot: Slot
     table_ids: list[str]
 

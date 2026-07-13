@@ -27,6 +27,28 @@ describe('BasicsSection', () => {
       expect(screen.getByText(/Delete the draw to change the type/i)).toBeInTheDocument()
     })
 
+    // …and the trigger POINTS at that reason. Rendering the sentence under the control
+    // puts it *beside* the control on screen and nowhere at all in the accessibility
+    // tree: a disabled trigger is not focusable and holds no tooltip, so
+    // `aria-describedby` is the only channel it has left. The pools section one tab over
+    // wired exactly this freeze correctly (`pools-frozen-notice`), while here the
+    // `Field` hint had no `id` to point at and the trigger's description was `null` —
+    // the same dead end, said out loud to sighted directors only.
+    it('points the disabled select at the reason (aria-describedby)', () => {
+      basicsSectionPage.render({ event: buildDrawnEvent() })
+
+      const trigger = basicsSectionPage.getDrawTypeTrigger()
+      const describedBy = trigger.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+
+      // The id resolves to the element that really holds the reason — not merely to
+      // *an* id (a dangling `aria-describedby` describes nothing, and is a WCAG
+      // failure of its own).
+      const description = document.getElementById(describedBy!)
+      expect(description).toHaveTextContent(/its draw type is frozen/i)
+      expect(description).toHaveTextContent(/Delete the draw to change the type/i)
+    })
+
     it('leaves the select live when no draw is cut', () => {
       basicsSectionPage.render({ event: buildEvent() })
 

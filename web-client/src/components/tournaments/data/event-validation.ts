@@ -109,6 +109,65 @@ export const nameSchema = z
   .max(NAME_MAX, { error: `Name must be ${NAME_MAX} characters or fewer.` })
 
 /**
+ * A **pool's** name: present. The same floor the server now states
+ * (`Pool.name: str = Field(min_length=1)`, `api/app/schemas/tournament.py`), and the
+ * same words as the event's own name — because to the organizer clearing a box it is
+ * the same news, and a second wording for one fact is a second thing to drift.
+ *
+ * The pools editor *mints* a pool's id and its default name ("Pool A"), so the happy
+ * path could never author a blank one — but the name **box is live**, and an emptied
+ * box was a save the form allowed and the server refused, with Pydantic's own prose
+ * ("String should have at least 1 character") arriving in the editor's banner. That is
+ * the hole `nameSchema` closed for the event a release ago, still open one tab over:
+ * the whole point of the house rule (web-client `CLAUDE.md`, `## Forms`) is that a rule
+ * the client can express is a rule met **under the field**, not in a 422.
+ *
+ * ⚠️ **No ceiling**, deliberately: `Pool.name` has `min_length=1` and no `max_length`
+ * (unlike the event's `VARCHAR(255)` — a pool lives in JSONB, which has no column to
+ * overflow). Mirroring a bound the API does not have would be inventing one, and a save
+ * refused here is a save nothing on the server would ever have refused.
+ *
+ * A pool's **id** is not mirrored, though the server floors that too (`ValueObjectId`):
+ * it is minted (`genId('p')`, `data/helpers`) and there is no box for it, so an error
+ * about it is one no organizer could ever act on or even *see* — an unfixable red is
+ * worse than the impossible 422 it guards. The same goes for a table's id.
+ */
+export const poolNameSchema = z
+  .string()
+  .trim()
+  .min(1, { error: 'Name is required.' })
+
+/**
+ * What is wrong with each pool's **name**, keyed by pool id — `poolNameSchema` read a
+ * second way, for the second reader.
+ *
+ * The resolver's verdict on the array (`eventSchema`) is what refuses the *save*; this
+ * is what puts the red under the *box*, and the two are the same rule and the same
+ * sentence because the message comes off the schema itself, never re-typed beside it.
+ * (`eligibilityIssues` is the same shape for the same reason: one rule, two readers of
+ * it — never two rules.)
+ *
+ * A second reader is needed at all because RHF's `useFieldArray.update()` — how a pool
+ * card writes an edit back — deliberately does **not** re-run the resolver (it sets no
+ * `_actioned` flag, unlike append/remove: `useFieldArray`, RHF 7.81). So the resolver's
+ * `errors.pools` is the verdict of the last *submit* and would sit there, in red, under
+ * a name the organizer has already fixed. Computed from live form values instead, it
+ * stops complaining the moment they type — which is what the event's own name box does
+ * one tab over, and the organizer cannot be expected to know which of the two is backed
+ * by which mechanism.
+ */
+export function poolNameIssues(
+  pools: readonly { id: string; name: string }[],
+): Record<string, string> {
+  const issues: Record<string, string> = {}
+  for (const pool of pools) {
+    const result = poolNameSchema.safeParse(pool.name)
+    if (!result.success) issues[pool.id] = result.error.issues[0].message
+  }
+  return issues
+}
+
+/**
  * The event's player limit — **nullable, because `null` means "no cap"** (ADR-0935).
  *
  * `.nullable()` is the whole design: a blank box is not an error and not a zero, it is
@@ -171,7 +230,8 @@ export const entryFeeSchema = z
     }
   })
 
-/** The editor's four tabs, of which two can hold something invalid. A sum type rather
- * than a `string`, so "which tab do I open?" is answered from a closed set the editor's
- * `TabsContent` values are checked against. */
-export type EventSection = 'basics' | 'eligibility'
+/** The editor's four tabs, of which three can hold something invalid (Match settings
+ * comes off closed pickers). A sum type rather than a `string`, so "which tab do I
+ * open?" is answered from a closed set the editor's `TabsContent` values are checked
+ * against. */
+export type EventSection = 'basics' | 'eligibility' | 'pools'

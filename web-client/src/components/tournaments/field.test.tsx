@@ -16,6 +16,38 @@ describe('Field', () => {
     expect(fieldPage.queryHint('Required')).toHaveClass('text-[color:var(--loss)]')
   })
 
+  // The hint is the sentence that explains the control — a validation message, or the
+  // reason a control is frozen (ADR-0786). Rendered as a bare `<p>` with no `id` it is
+  // *below* the control on screen and nowhere at all in the accessibility tree, which
+  // is how the draw-type select came to be disabled, explained in text, and yet
+  // `aria-describedby: null` to anyone hearing the page rather than seeing it.
+  describe('the hint association', () => {
+    it('hands the control the id of the hint it renders', () => {
+      fieldPage.render({ label: 'Player limit', hint: 'Blank = no cap.' })
+
+      const describedBy = fieldPage
+        .getControl('Player limit')
+        .getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      // …and it resolves to the hint itself. Asserting merely that *an* id is set would
+      // pass on one pointing at nothing — a description that describes nothing.
+      expect(document.getElementById(describedBy!)).toHaveTextContent(
+        'Blank = no cap.',
+      )
+    })
+
+    it('hands the control NO id when the row shows no hint', () => {
+      // A dangling `aria-describedby` is a WCAG failure of its own
+      // (`aria-valid-attr-value`), so the row must hand out `undefined` — not an id
+      // for an element it never rendered.
+      fieldPage.render({ label: 'Player limit' })
+
+      expect(fieldPage.getControl('Player limit')).not.toHaveAttribute(
+        'aria-describedby',
+      )
+    })
+  })
+
   // ADR 0015: `Field` owns the read-only *branch*, not merely a flag. The row is
   // handed both its control and the value it holds, and decides between them —
   // so a call site cannot leak a live control to a reader by forgetting a

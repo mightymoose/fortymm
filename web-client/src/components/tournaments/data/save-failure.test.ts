@@ -25,6 +25,32 @@ const nameTooLong = new ApiError(
   },
 )
 
+/** FastAPI's real 422 body for a pool whose name was cleared — the server's new floor
+ * (`Pool.name`, `min_length=1`). The form now refuses this save before it is sent
+ * (`poolNameSchema`), so an organizer should never meet it; a stale tab, or a
+ * hand-crafted request, still can — and what comes back must not be read out to them.
+ *
+ * ⚠️ Note the `loc`: a pool's name is nested TWO levels down, through an array INDEX
+ * (`["body", "pools", 0, "name"]`). `validationFields` drops the non-string parts and
+ * keeps the first segment after `body`, so the field it blames is `pools` — which the
+ * event's label table has a row for ("Table pools"). A 422 whose `loc` fell through to
+ * no label at all would be worded generically, which is a worse answer than naming the
+ * tab. */
+const poolNameBlank = new ApiError(
+  422,
+  'String should have at least 1 character',
+  'update event',
+  {
+    detail: [
+      {
+        type: 'string_too_short',
+        loc: ['body', 'pools', 0, 'name'],
+        msg: 'String should have at least 1 character',
+      },
+    ],
+  },
+)
+
 const say = (error: unknown): string =>
   saveFailureMessage(saveFailure(error), EVENT_SAVE_TARGET)
 
@@ -33,6 +59,17 @@ describe('saveFailure', () => {
     expect(saveFailure(nameTooLong)).toEqual<SaveFailure>({
       kind: 'invalid',
       fields: ['name'],
+    })
+  })
+
+  /** The blank pool name (#786) — the schema mirrors it client-side now, but the
+   * classifier is the backstop for the stale tab that does not know that yet. It is an
+   * `invalid`, its `loc` resolves to the `pools` field, and its `msg` — Pydantic's
+   * "String should have at least 1 character" — is thrown away, exactly like the name's. */
+  it('classifies a blank POOL name — through the array index in its loc', () => {
+    expect(saveFailure(poolNameBlank)).toEqual<SaveFailure>({
+      kind: 'invalid',
+      fields: ['pools'],
     })
   })
 
@@ -197,6 +234,16 @@ describe('saveFailureMessage', () => {
  * noun, and the labels it prints over its rows). A second copy table would pass these
  * too, and would then drift, which is the failure ADR-0968 is about.
  */
+describe('saveFailureMessage · a pool the server refused', () => {
+  /** In OUR words, naming the tab the pool is on — never the wire's. */
+  it('names the Table pools tab, and never says “String”', () => {
+    const message = say(poolNameBlank)
+    expect(message).toContain('Table pools')
+    expect(message).not.toContain('String')
+    expect(message).not.toContain('at least 1 character')
+  })
+})
+
 describe('saveFailureMessage · the tournament dialog', () => {
   const sayTournament = (error: unknown): string =>
     saveFailureMessage(saveFailure(error), TOURNAMENT_SAVE_TARGET)

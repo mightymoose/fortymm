@@ -2712,7 +2712,14 @@ export interface components {
          *     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
          *     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
          *     these ids. Which is only a coherent thing to say if an id names one pool — see
-         *     ``EventPools``, the type the event's list of them actually has.
+         *     ``EventPools``, the type the event's list of them actually has — and if an id is a
+         *     thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
+         *     a fixture drawn into it is pooled by one rule and un-pooled by another.
+         *
+         *     Its ``name`` has the same floor for the plainer reason: a pool is *called*
+         *     something — it is what the director clicks, what the conflict warnings quote, and
+         *     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
+         *     is three blank rows is not a thing anyone could act on.
          */
         Pool: {
             /** Id */
@@ -3454,6 +3461,13 @@ export interface components {
         /**
          * TournamentTable
          * @description A physical table in the venue catalogue, referenced by id from pools.
+         *
+         *     Its ``id`` is a ``ValueObjectId`` for the same reason a pool's is: a pool holds a
+         *     list of these strings (``table_ids``) and nothing else connects the two, so an id
+         *     that is the empty string is a table nothing can name — and a ``table_ids`` entry of
+         *     ``""`` would "resolve" against it. It is the same string-ref pattern with the same
+         *     hole, and closing it in one place and not the other would leave the boundary
+         *     half-drawn.
          */
         TournamentTable: {
             /** Id */

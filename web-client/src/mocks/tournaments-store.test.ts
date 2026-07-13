@@ -595,6 +595,10 @@ describe('transitionTournament', () => {
   const DRAFT = 'summer-slam-2026' // seeded `draft`, owned
   const PUBLISHED = 'bay-area-open-2026' // seeded `published`, owned
   const NOT_MINE = 'club-champs-2026' // seeded `published`, can_edit: false
+  /** `DRAFT`'s only event: round-robin, 8 entrants, a draw already cut across its two
+   * pools — i.e. the one seeded event whose draw is CURRENT, which is what makes that
+   * tournament the only one in the seed that can go live at all. */
+  const SLAM_EVENT = 'ev-slam-open'
 
   const LEGAL: [TournamentStatus, TournamentStatus][] = [
     ['draft', 'published'],
@@ -784,6 +788,62 @@ describe('transitionTournament', () => {
     // A stale draw is not an uncut one: the director is told their draw needs
     // RE-cutting, not that they never cut it.
     expect(detail).not.toContain('no draw yet')
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  // ⚠️ THE case that pins `drawCurrency` as a **set** comparison rather than a count.
+  //
+  // The test above adds an entrant, so the field grows: 8 seated, 9 active. A currency
+  // check written as `active.length === seated.size` refuses that one too — and passes
+  // every other test in this file. (Measured, not theorised: mutating the store's
+  // comparison to a count left all 2464 vitest tests green.) The case that tells the two
+  // apart is a **swap**, and it is the one that actually loses a director their morning:
+  // the field is the same SIZE and is not the same field, so a count-based check calls
+  // the draw current, the tournament starts, and a player who withdrew is scheduled to
+  // play while their replacement is scheduled nowhere.
+  //
+  // The unit of the comparison is the ENTRY, not the player: the server soft-deletes a
+  // withdrawn entry and INSERTs a fresh row when someone re-enters (the partial unique
+  // index — and the store mints a new entry id for the same reason). So "I withdrew and
+  // came back" is, on the wire, exactly what "player A left and player B took the place"
+  // is — one seated id the event no longer lists, one listed id the draw does not seat —
+  // and it is the only swap this store's own routes can make, since the dev user is the
+  // only person who can enter or withdraw here.
+  it('refuses to start on a SWAPPED field — the same NUMBER of entrants, different entries', () => {
+    const id = at('published')
+    const first = enterEvent(id, SLAM_EVENT)
+    if (!first.ok) throw new Error('setup failed: could not enter')
+    // The draw is cut over the field as it stands: 9 entrants, `first.entrant` among them.
+    if (!cutDraw(id, SLAM_EVENT).ok) throw new Error('setup failed: could not cut')
+
+    // …and then the swap: that entry leaves, and another arrives in its place.
+    const out = withdrawEntry(id, SLAM_EVENT, first.entrant.id)
+    if (!out.ok) throw new Error('setup failed: could not withdraw')
+    const second = enterEvent(id, SLAM_EVENT)
+    if (!second.ok) throw new Error('setup failed: could not re-enter')
+    // A re-entry is a NEW entry, never the resurrection of the withdrawn one — which is
+    // what makes this a swap at all.
+    expect(second.entrant.id).not.toBe(first.entrant.id)
+
+    // The discriminator itself, asserted rather than assumed: the counts AGREE. Without
+    // this line the test could quietly drift into being another "somebody entered" case
+    // — and would then go green against the very mutation it exists to kill.
+    const event = findTournament(id)!.events.find((e) => e.id === SLAM_EVENT)!
+    const seated = new Set(
+      event.fixtures.flatMap((f) =>
+        [f.entry_a_id, f.entry_b_id].filter((x): x is string => x !== null),
+      ),
+    )
+    expect(event.entrants).toHaveLength(seated.size)
+    // …and the SETS do not: the draw seats an entry the event no longer lists, and the
+    // event lists an entry the draw seats nowhere.
+    expect(seated.has(first.entrant.id)).toBe(true)
+    expect(seated.has(second.entrant.id)).toBe(false)
+
+    const detail = refusalDetail(transitionTournament(id, 'live'))
+
+    expect(detail).toContain('“Slam Open Singles”')
+    expect(detail).toContain('has a draw that no longer matches its entrants')
     expect(findTournament(id)!.status).toBe('published')
   })
 

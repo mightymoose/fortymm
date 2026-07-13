@@ -208,6 +208,51 @@ describe('PoolsSection', () => {
     })
   })
 
+  /**
+   * A pool is *called* something, and the server now says so (`Pool.name`,
+   * `min_length=1`). The section does not *decide* that — the editor's resolver does,
+   * and it is what refuses the save — but the section is where the verdict has to land:
+   * under the box that is empty, on the card it is about.
+   */
+  describe('a pool with no name', () => {
+    it('reds the named pool’s card and no other', () => {
+      poolsSectionPage.render({
+        event: buildEvent({ pools: twoPools() }),
+        nameIssues: { 'p-2': 'Name is required.' },
+      })
+
+      const [poolA, poolB] = poolsSectionPage.getPoolNameInputs()
+      expect(poolsSectionPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      expect(poolB).toHaveAttribute('aria-invalid', 'true')
+      expect(poolA).not.toHaveAttribute('aria-invalid', 'true')
+    })
+
+    // Keyed by pool ID, not by index: a director who removes the first of three pools
+    // renumbers every card, and an index-keyed message would then be red under the
+    // wrong box.
+    it('follows the pool it belongs to when a card above it is removed', async () => {
+      poolsSectionPage.render({
+        event: buildEvent({ pools: twoPools() }),
+        nameIssues: { 'p-2': 'Name is required.' },
+      })
+
+      await userEvent.click(poolsSectionPage.getRemovePoolButtons()[0])
+
+      // One card left — Pool B, the blank one — and the red is still under it.
+      expect(poolsSectionPage.queryPoolCards()).toHaveLength(1)
+      expect(poolsSectionPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      expect(poolsSectionPage.getPoolNameInputs()[0]).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+    })
+
+    it('says nothing in red when the editor hands it no issues', () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: twoPools() }) })
+      expect(poolsSectionPage.getPoolNameErrors()).toEqual([])
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015, rule 6). Rendered *with* pools on purpose: an
     // event with none has nothing but the Add button, so a sweep over the empty
