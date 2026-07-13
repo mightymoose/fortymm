@@ -6,11 +6,14 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   createEvent,
+  cutDraw,
   enterEvent,
   findTournament,
   listTournaments,
+  markFixturePlayed,
   resetTournamentsStore,
   transitionTournament,
+  uncutDraw,
   updateEvent,
   updateTournament,
   withdrawEntry,
@@ -43,6 +46,11 @@ const CLOSED_PHRASE: Record<Exclude<TournamentStatus, 'published'>, string> = {
   live: 'already under way',
   archived: 'has ended',
 }
+
+/** A window of time, for the pool literals the draw cases patch events with. Nothing
+ * about a draw turns on *when* a pool plays — only on which pools there are — so one
+ * slot serves them all. */
+const SLOT = { date: '2026-06-14', start: '09:00', end: '12:00' }
 
 const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
 const CLOSED_STATUSES = ['draft', 'live', 'archived'] as const
@@ -737,5 +745,258 @@ describe('draft visibility', () => {
   it("still serves another organiser's ANNOUNCED tournament, read-only", () => {
     expect(listedIds()).toContain(FOREIGN_PUBLISHED)
     expect(findTournament(FOREIGN_PUBLISHED)!.can_edit).toBe(false)
+  })
+})
+
+// The draw (ADR-0786). A mock that were more permissive than the server it stands in
+// for would be a trap: a Generate button that "worked" in `npm run dev` and 422'd in
+// production would look like a server bug rather than the missing generator it is. So
+// each refusal below is one the API really makes, in the API's own order.
+describe('cutting and un-cutting a draw', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const FOREIGN = 'club-champs-2026' // `u-office`'s, published: readable, not writable
+  const FOREIGN_EVENT = 'ev-cc-open'
+  /** Round-robin, two pools, nine entrants — the seed's one cuttable (and pre-cut)
+   * event, because round-robin is the only draw type with a generator today. */
+  const ROUND_ROBIN = 'ev-u1200'
+
+  const eventOf = (tournamentId: string, eventId: string) =>
+    findTournament(tournamentId)!.events.find((e) => e.id === eventId)!
+
+  const poolNamed = (id: string) => ({
+    id,
+    name: id,
+    slot: SLOT,
+    table_ids: [],
+  })
+
+  it('seeds the round-robin event ALREADY DRAWN, and every other event with no draw', () => {
+    const drawn = eventOf(TOURNAMENT, ROUND_ROBIN)
+    // 9 entrants snaked across 2 pools → pools of 5 and 4 → C(5,2) + C(4,2) = 16 pairs.
+    expect(drawn.fixtures).toHaveLength(16)
+    for (const other of findTournament(TOURNAMENT)!.events.filter(
+      (e) => e.id !== ROUND_ROBIN,
+    )) {
+      // `[]`, not null: an event with no draw is EMPTY, and empty is a state.
+      expect(other.fixtures).toEqual([])
+    }
+  })
+
+  it('cuts every pair exactly once, inside a pool, and nobody twice in a round', () => {
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
+    const result = cutDraw(TOURNAMENT, ROUND_ROBIN)
+    if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
+
+    const pools = eventOf(TOURNAMENT, ROUND_ROBIN).pools.map((p) => p.id)
+    // Every fixture names one of THIS event's pools — a `pool_id` is a string ref into
+    // that JSONB, not a foreign key, so a draw pointing at a pool the event does not
+    // have is a draw nothing can render.
+    expect(new Set(result.fixtures.map((f) => f.pool_id))).toEqual(new Set(pools))
+
+    // Every pair meets exactly once…
+    const pairs = result.fixtures.map((f) =>
+      [f.entry_a_id, f.entry_b_id].sort().join('|'),
+    )
+    expect(new Set(pairs).size).toBe(pairs.length)
+
+    // …and nobody plays twice in the same (pool, round): the circle method's whole
+    // promise, and the thing a naive "pair them up" planner gets wrong.
+    for (const fixture of result.fixtures) {
+      const sameRound = result.fixtures.filter(
+        (f) => f.pool_id === fixture.pool_id && f.round === fixture.round,
+      )
+      const players = sameRound.flatMap((f) => [f.entry_a_id, f.entry_b_id])
+      expect(new Set(players).size).toBe(players.length)
+    }
+  })
+
+  it('re-cuts an unplayed draw deterministically — the same field cuts the same draw', () => {
+    const before = eventOf(TOURNAMENT, ROUND_ROBIN).fixtures
+
+    const again = cutDraw(TOURNAMENT, ROUND_ROBIN)
+
+    if (!again.ok) throw new Error('a re-cut of an unplayed draw must be allowed')
+    // Nothing is random (ADR-0786) — entrants are ordered by seed, then registration
+    // order — which is what makes a re-cut a reviewable act rather than a gamble.
+    expect(again.fixtures).toEqual(before)
+  })
+
+  it('re-cuts WHOLESALE against the event as it stands now — new pools, new draw', () => {
+    // The plan is made against the CURRENT config, never patched onto the old one. Two
+    // pools of 5 + 4 (16 pairs) become one pool of 9 (36 pairs) — and the fixtures that
+    // referred to the old pools are gone, not re-pointed.
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true) // the freeze lifts first
+    updateEvent(TOURNAMENT, ROUND_ROBIN, { pools: [poolNamed('p-single')] })
+
+    const result = cutDraw(TOURNAMENT, ROUND_ROBIN)
+
+    if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
+    expect(result.fixtures).toHaveLength(36) // C(9,2)
+    expect(new Set(result.fixtures.map((f) => f.pool_id))).toEqual(
+      new Set(['p-single']),
+    )
+  })
+
+  it('un-cutting empties the draw; un-cutting again is still a success (idempotent DELETE)', () => {
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN)).toEqual({ ok: true })
+    expect(eventOf(TOURNAMENT, ROUND_ROBIN).fixtures).toEqual([])
+    // An event with no draw is already in the state this asks for.
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN)).toEqual({ ok: true })
+    expect(uncutDraw(TOURNAMENT, EMPTY_SINGLES)).toEqual({ ok: true })
+  })
+
+  // The 422s — the refusals a director actually meets, each naming what they must change.
+  it('refuses a draw type with no generator yet (only round-robin has one)', () => {
+    const result = cutDraw(TOURNAMENT, FULL_SINGLES) // `single-elim`, 16 entrants
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+    expect(result.status === 422 && result.detail).toContain('single-elim')
+  })
+
+  it('refuses a pooled draw with NO pools — there is nowhere to deal the field', () => {
+    // `ev-open-singles` is `rr-then-ko`, so make it the one type that CAN be cut and
+    // leave its pools empty: the refusal must be about the pools, not the type.
+    updateEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', pools: [] })
+
+    const result = cutDraw(TOURNAMENT, FULLISH_SINGLES)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+    expect(result.status === 422 && result.detail).toContain('at least one pool')
+  })
+
+  it('refuses a field too small for its pools — a pool of one has nobody to play', () => {
+    // Three pools, three entrants… would be three pools of one. The server refuses it,
+    // so the mock must: a pool of one is not a competition.
+    updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      draw_type: 'round-robin',
+      pools: [poolNamed('p-1'), poolNamed('p-2'), poolNamed('p-3')],
+    })
+    enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
+
+    const result = cutDraw(TOURNAMENT, EMPTY_SINGLES)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+    expect(result.status === 422 && result.detail).toContain('fewer than 2 entrants')
+  })
+
+  // The play guard — the ONE reason a cut or an un-cut is refused, and it is not the
+  // tournament's status (ADR-0786 rejected status-gating: it would forbid the legitimate
+  // day-of re-cut while protecting nothing).
+  it.each([
+    { evidence: 'a recorded winner', played: { winner_entry_id: 'entry-ev-u1200-1' } },
+    { evidence: 'a linked match', played: { match_id: 'm-1' } },
+  ])('refuses both verbs once a fixture shows $evidence — and destroys nothing', ({
+    played,
+  }) => {
+    const fixtures = eventOf(TOURNAMENT, ROUND_ROBIN).fixtures
+    markFixturePlayed(TOURNAMENT, ROUND_ROBIN, fixtures[0].id, played)
+
+    const recut = cutDraw(TOURNAMENT, ROUND_ROBIN)
+    expect(recut.ok).toBe(false)
+    if (!recut.ok) expect(recut.status).toBe(409)
+
+    const removed = uncutDraw(TOURNAMENT, ROUND_ROBIN)
+    expect(removed.ok).toBe(false)
+    if (!removed.ok) expect(removed.status).toBe(409)
+
+    // The standing draw survives a refusal — the guard's whole promise. A re-cut that
+    // deleted first and refused second would have eaten the very score it was protecting.
+    const after = eventOf(TOURNAMENT, ROUND_ROBIN).fixtures
+    expect(after).toHaveLength(fixtures.length)
+    expect(after[0]).toMatchObject(played)
+  })
+
+  // 404 → 403 → 409, the API's ordering: a stranger never learns whether an event's draw
+  // has been played, because ownership is judged before the draw's state is looked at.
+  it("refuses a stranger's cut with a 403, and an unknown event with a 404", () => {
+    expect(cutDraw(FOREIGN, FOREIGN_EVENT)).toEqual({ ok: false, status: 403 })
+    expect(uncutDraw(FOREIGN, FOREIGN_EVENT)).toEqual({ ok: false, status: 403 })
+    expect(cutDraw(TOURNAMENT, 'ev-nope')).toEqual({ ok: false, status: 404 })
+    expect(uncutDraw('no-such-tournament', 'ev-nope')).toEqual({
+      ok: false,
+      status: 404,
+    })
+  })
+})
+
+// The pool-set FREEZE (ADR-0786): while a draw exists, an event's pools may change in
+// every way except identity. A fixture's `pool_id` is a string ref into this very JSONB
+// and there is no foreign key to stop a PATCH from orphaning it — "integrity is
+// procedural, not schematic" — so the procedure is here, in the mock, for the same
+// reason it is on the server.
+describe('the pool set freezes while a draw exists', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const ROUND_ROBIN = 'ev-u1200'
+  const poolsOf = (eventId: string) =>
+    findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!.pools
+
+  it('refuses a PATCH that removes a pool the draw was dealt across', () => {
+    const [poolA] = poolsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, { pools: [poolA] })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(409)
+    // The sentence ends with the way OUT — remove the draw, change the pools, cut again
+    // — because a refusal a director cannot act on is just a wall.
+    expect(result.status === 409 && result.detail).toContain('remove the draw first')
+    // …and the pools are untouched: a refused write writes nothing.
+    expect(poolsOf(ROUND_ROBIN)).toHaveLength(2)
+  })
+
+  it('refuses a PATCH that ADDS a pool — an added pool would arrive with no fixtures', () => {
+    const pools = poolsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: [...pools, { id: 'p-new', name: 'Pool C', slot: SLOT, table_ids: [] }],
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.status).toBe(409)
+  })
+
+  // Only IDENTITY is frozen. A pool's tables and its window stay editable with a draw
+  // standing, on purpose: venues change under running tournaments (a table breaks, a
+  // table frees up), and a director who cannot record that would have to un-cut a draw
+  // that is *correct*.
+  it('ALLOWS a venue edit — same pool ids, new tables and a new window', () => {
+    const pools = poolsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: pools.map((p) => ({
+        ...p,
+        name: `${p.name} (moved)`,
+        table_ids: ['t9'],
+        slot: SLOT,
+      })),
+    })
+
+    expect(result.ok).toBe(true)
+    expect(poolsOf(ROUND_ROBIN)[0].table_ids).toEqual(['t9'])
+  })
+
+  it('leaves an UNDRAWN event’s pools wholesale-replaceable, as they have always been', () => {
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      pools: [{ id: 'p-anything', name: 'A', slot: SLOT, table_ids: [] }],
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('un-freezes the moment the draw is removed', () => {
+    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: [{ id: 'p-fresh', name: 'Pool A', slot: SLOT, table_ids: [] }],
+    })
+
+    expect(result.ok).toBe(true)
+    expect(poolsOf(ROUND_ROBIN).map((p) => p.id)).toEqual(['p-fresh'])
   })
 })

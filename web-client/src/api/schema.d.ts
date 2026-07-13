@@ -1023,6 +1023,17 @@ export interface paths {
          *     re-asserting the status the tournament already holds — a request to publish
          *     an already-published tournament is a stale client, not a no-op.
          *
+         *     **Going live has a precondition** (ADR-0786): the tournament must have at least
+         *     one event, and every event must have a **draw** whose fixtures seat exactly its
+         *     current entrants. Three things are refused with a `409` that names the events at
+         *     fault — a tournament with **no events** (there is nothing to start), an event with
+         *     **no draw**, and an event whose draw is **stale**, cut before somebody entered or
+         *     withdrew. Cut (or re-cut) the draws it names, then go live. Registration is open
+         *     right up to that moment, which is exactly why a draw can go stale under it.
+         *
+         *     **Publishing** an empty tournament is unaffected and stays legal: announcing a
+         *     tournament early is fine, starting an empty one is not.
+         *
          *     Owner-only, like every other tournament mutation.
          */
         post: operations["create_tournament_transition_v1_tournaments__tournament_id__transitions_post"];
@@ -1063,7 +1074,34 @@ export interface paths {
         delete: operations["delete_event_v1_tournaments__tournament_id__events__event_id__delete"];
         options?: never;
         head?: never;
-        /** Update Event */
+        /**
+         * Update Event
+         * @description Edit an event. Absent fields are left alone; `predicates` and `pools` replace
+         *     wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
+         *     id identifies one pool, and the fixtures of a draw name their pool by it.
+         *
+         *     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
+         *     fixtures were derived from:
+         *
+         *     * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
+         *       event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
+         *       would leave the fixtures drawn into it pointing at nothing, and an added one would
+         *       arrive with no fixtures, since the draw was dealt across the pools that existed at
+         *       the cut.
+         *     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
+         *       so changing it under a standing draw is a `409` too: the event would claim a shape
+         *       its draw does not have. Re-sending the draw type the event already has is not a
+         *       change, and is not refused.
+         *
+         *     Nothing else freezes. The event's name, fee, rules and `max_players`, and each
+         *     pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
+         *     venues change under a running tournament, and recording that must never cost a
+         *     director the draw. To change the pools themselves or the draw type, remove the draw
+         *     (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
+         *     are ordinary fields.
+         *
+         *     Owner-only.
+         */
         patch: operations["update_event_v1_tournaments__tournament_id__events__event_id__patch"];
         trace?: never;
     };
@@ -1166,6 +1204,70 @@ export interface paths {
          *     nothing left to lock.
          */
         delete: operations["withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/events/{event_id}/draw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cut Event Draw
+         * @description Cut this event's draw — generate its **fixtures** from its entrants — and answer
+         *     with them.
+         *
+         *     Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
+         *     status: a draw may be cut and re-cut freely while a director inspects the pools and
+         *     the seeding. Nothing else creates fixtures, and going live requires every event to
+         *     have one (ADR-0786).
+         *
+         *     **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
+         *     fresh set is planned from the event's *current* active entrants — the old ones are
+         *     not patched, and their ids do not survive. That is the point: a draw is a plan made
+         *     against a field, and once the field has changed (somebody entered, somebody
+         *     withdrew) the whole plan is re-made, pool sizes and seeding included.
+         *
+         *     Entrants are ordered by **seed** ascending where one is set, then by **registration
+         *     order**. Nothing is random, so the same field always cuts the same draw.
+         *
+         *     Refused with a `409` once the draw shows any **evidence of play** — any fixture with
+         *     a recorded winner, or any fixture that has become a real match. A re-cut would throw
+         *     those away, and a draw must never silently eat a score.
+         *
+         *     Refused with a `422` when this event cannot produce a draw at all: its draw type has
+         *     no generator yet (only round-robin does today), it has **no pools** configured for a
+         *     pooled draw type, or its field is too small for the pools it has — a pool with fewer
+         *     than two players has nobody to play. The message names what to change.
+         *
+         *     Owner-only. Fixtures come back in pool → round → position order, exactly as the
+         *     tournament-detail page carries them.
+         */
+        post: operations["cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post"];
+        /**
+         * Uncut Event Draw
+         * @description Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+         *
+         *     The way back from a draw the director does not want. The event, its entrants and the
+         *     rest of the tournament are untouched — only the fixtures go — and the director is
+         *     free to change the pools and cut again.
+         *
+         *     Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
+         *     fixture with a recorded winner, or one that has become a real match. Undoing a draw
+         *     that has been played would delete the fixtures those results belong to.
+         *
+         *     An event with **no draw is already in the state this asks for**, so removing a draw
+         *     that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+         *
+         *     Owner-only.
+         */
+        delete: operations["uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2606,6 +2708,11 @@ export interface components {
         /**
          * Pool
          * @description A slice of tables reserved for a window of time within an event.
+         *
+         *     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
+         *     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
+         *     these ids. Which is only a coherent thing to say if an id names one pool — see
+         *     ``EventPools``, the type the event's list of them actually has.
          */
         Pool: {
             /** Id */
@@ -3195,6 +3302,8 @@ export interface components {
             entrants: components["schemas"]["TournamentEntrantRead"][];
             /** Entry State */
             entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
+            /** Fixtures */
+            fixtures: components["schemas"]["TournamentFixtureRead"][];
             /**
              * Entered
              * @description The registration count. Derived — there is no stored counter (ADR-0016).
@@ -3242,6 +3351,56 @@ export interface components {
             predicates?: components["schemas"]["Predicate"][] | null;
             /** Pools */
             pools?: components["schemas"]["Pool"][] | null;
+        };
+        /**
+         * TournamentFixtureRead
+         * @description One planned pairing of an event's draw (ADR-0786): a round and a position —
+         *     plus a pool, when the draw is pooled — whose sides may still be unknown.
+         *
+         *     A fixture is **not** a match. It materializes into one later (#788), and until it
+         *     does ``match_id`` is ``null``.
+         *
+         *     **Every ``null`` on this model is a fact, not a missing field**, and a client that
+         *     dropped them would lose the draw's whole point:
+         *
+         *     * ``entry_a_id`` / ``entry_b_id`` — ``null`` means **TBD**: the feeding fixture has
+         *       not been decided yet, and ``advance()`` will fill this side in. It never means a
+         *       bye — a bye is the *absence of a fixture row*, not a fixture with an empty side
+         *       (ADR-0786), so there is no ``is_bye`` flag here to tell the two apart.
+         *     * ``winner_entry_id`` — ``null`` while the fixture is undecided.
+         *     * ``match_id`` — ``null`` until the fixture becomes a real match, which only happens
+         *       once the tournament is ``live``.
+         *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
+         *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+         *       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
+         *       JSONB, not a foreign key, because pools are value-objects with no table.
+         *
+         *     The entries are carried as **ids only**. The name and username behind
+         *     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
+         *     them, keyed by that very id — so a client joins the two. Copying the username onto
+         *     the fixture as well would be carrying a field and its own derivation
+         *     (api/CLAUDE.md), and the copy that drifts is the one a player reads off a bracket.
+         */
+        TournamentFixtureRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Pool Id */
+            pool_id: string | null;
+            /** Round */
+            round: number;
+            /** Position */
+            position: number;
+            /** Entry A Id */
+            entry_a_id: string | null;
+            /** Entry B Id */
+            entry_b_id: string | null;
+            /** Winner Entry Id */
+            winner_entry_id: string | null;
+            /** Match Id */
+            match_id: string | null;
         };
         /** TournamentRead */
         TournamentRead: {
@@ -5604,6 +5763,72 @@ export interface operations {
                 tournament_id: string;
                 event_id: string;
                 entry_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentFixtureRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
             };
             cookie?: {
                 session?: string | null;

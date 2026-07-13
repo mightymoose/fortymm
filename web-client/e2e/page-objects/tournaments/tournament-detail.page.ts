@@ -112,14 +112,23 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).getByTestId('ineligible-notice')
   }
 
-  /** EVERY button inside one event card — the locator the "no *disabled* Enter"
-   * claim actually needs. `enterButton()` is keyed on the accessible name, so it
-   * proves only that a button *called* "Enter X" is absent; this proves the card
-   * offers no control at all beyond its own open-target overlay (which is a sibling
-   * of the card, not inside it — see `eventCard`). ADR-0015: hide the affordance,
-   * never disable it. */
+  /** Every button inside one event card **except the draw panel's** — the locator the
+   * "no *disabled* Enter" claim actually needs. `enterButton()` is keyed on the
+   * accessible name, so it proves only that a button *called* "Enter X" is absent; this
+   * proves the card offers no ENTRY control at all beyond its own open-target overlay
+   * (which is a sibling of the card, not inside it — see `eventCard`). ADR-0015: hide
+   * the affordance, never disable it.
+   *
+   * The draw's verbs (Generate / Re-cut / Delete, ADR-0786) live inside the same card
+   * and are excluded on purpose: they are a *director's* controls, gated on the
+   * tournament's `can_edit` rather than on anything about entry, and a full or
+   * rating-ineligible event is exactly as drawable as any other. Folding them in would
+   * make this locator quietly assert "an owner may not cut a draw for a full event",
+   * which is not true and is not what any of its callers mean. */
   cardButtons(eventName: string): Locator {
-    return this.eventCard(eventName).getByRole('button')
+    return this.eventCard(eventName).locator(
+      'button:not([data-testid^="draw-panel-"] button)',
+    )
   }
 
   withdrawButton(eventName: string): Locator {

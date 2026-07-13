@@ -52,6 +52,13 @@ Each `DrawType` is a strategy behind a `Protocol` with two pure operations:
   re-run after *every* result (and at go-live) rather than triggered by
   carefully-chosen events.
 
+  Idempotence forces the definition of **ready**: both sides known **and** not
+  already materialized (`match_id is None`) **and** not already decided
+  (`winner_entry_id is None`). Ready cannot mean merely "both sides known", or
+  every run would re-propose the whole event's matches forever. The
+  already-decided clause also stops a fixture whose match row was unlinked
+  (`match_id` is `ON DELETE SET NULL`) from rising from the dead.
+
 Two alternatives were rejected:
 
 - **Full replan** (recompute the whole draw from live entries at each step) —

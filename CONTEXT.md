@@ -414,11 +414,12 @@ the pre-play pairing; the match is the contest it becomes), tie.
 **Pool**:
 One concept with two faces, deliberately not split: a reserved slice of the
 venue (a set of tables for a window of time) *and*, once a round-robin draw is
-cut, the group of entrants who play all-play-all on that slice. The set of pools
-an event has is frozen the moment a draw exists — pools can no longer be added,
-removed, or renamed — but a pool's venue attributes (its tables, its time
-window) stay editable mid-event, because the venue changes under a running
-tournament (a table breaks, a table frees up).
+cut, the group of entrants who play all-play-all on that slice. The set of pool
+**identities** an event has is frozen the moment a draw exists — pools can no
+longer be added, removed, or re-identified, because every **fixture** names the
+pool it belongs to — but a pool's venue attributes (its tables, its time window)
+and its display name stay editable mid-event, because the venue changes under a
+running tournament (a table breaks, a table frees up).
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 

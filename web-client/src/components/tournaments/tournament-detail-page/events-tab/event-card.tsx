@@ -34,6 +34,18 @@ export interface EventCardProps {
    * clicks instead of opening the editor.
    */
   action?: ReactNode
+  /**
+   * The event's **draw** (`DrawPanel`) — the pools it was cut across, and the
+   * director's cut / re-cut / delete verbs (ADR-0786). A slot, like `action`, and
+   * for the same reason: it reads the session and owns two mutations, and this
+   * card is a pure view over its props.
+   *
+   * Rendered in its own raised layer, *above* the stretched open target — it holds
+   * real buttons, and a control under that overlay would be dead. That also means a
+   * click anywhere in the draw is a click on the draw, not on "open the editor",
+   * which is what you want of a panel a director reads a fixture list off.
+   */
+  draw?: ReactNode
 }
 
 /** A row card for one event on the tournament's Events tab: title with rated /
@@ -51,6 +63,7 @@ export const EventCard = ({
   username,
   onOpen,
   action,
+  draw,
 }: EventCardProps) => {
   // What the EVENT has left — read off the numbers, never off `entryState`.
   // `entryState` is the server's judgement about *this caller* (an ineligible one
@@ -221,6 +234,13 @@ export const EventCard = ({
             (no controls of its own), so it sits happily under the stretched open
             target. */}
         <EntrantsList event={ev} username={username} />
+
+        {/* The draw (ADR-0786). Raised above the stretched open target below, because
+            unlike the roster it holds real controls — the director's Generate / Re-cut /
+            Delete — and a button underneath that overlay would never receive a click.
+            `empty:hidden` is not needed: the panel always renders *something* (its
+            empty state is a designed data state, not nothing). */}
+        {draw && <div className="relative z-10">{draw}</div>}
       </Card>
 
       {/* Full-card open target: a sibling of the card, sitting beneath the

@@ -18,10 +18,12 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { entryRefusalNotice } from './entry-refusal'
+import { parseFixtures } from './fixtures'
 import type { LifecycleEdge } from './lifecycle'
 import type {
   Entrant,
   EventEntryState,
+  Fixture,
   Pool,
   Predicate,
   PredicateValue,
@@ -128,6 +130,18 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     predicates: e.predicates.map(apiToPredicate),
     match: { rated: e.match_settings.rated, lengthGames: e.match_settings.length_games },
     pools: e.pools.map(apiToPool),
+    // PARSED, not cast (`./fixtures`, `.claude/rules/parse-at-boundaries.md`). Every
+    // other field above is mapped on the compiler's word that the payload matches
+    // `schema.d.ts`; the draw is checked at RUNTIME, because it is the one structure on
+    // this payload a renderer walks by shape — pool → round → position, sides that may
+    // be null — so a malformed fixture would otherwise surface as an `undefined` in a
+    // bracket cell, three components away from the response that carried it.
+    //
+    // Both callers of this mapper run inside a `queryFn` (see the queries below), so
+    // the throw lands where a failed fetch lands: the query errors, the cache is never
+    // primed with the bad payload, and the boundary renders. An event whose draw has
+    // not been cut parses to `[]` — the designed empty state, not an error.
+    fixtures: parseFixtures(e.fixtures),
   }
 }
 
@@ -264,21 +278,48 @@ export function useTournaments(): Tournament[] {
   return data ?? []
 }
 
+/** What one tournament's detail fetch resolves to: the tournament in its domain shape,
+ * plus the table catalogue the wire carries alongside it (the Tables tab edits the
+ * catalogue itself — labels and courts, not just ids — so the domain `Tournament`'s
+ * `tableIds` is not enough for it).
+ *
+ * The mapping runs in the `queryFn`, so what the CACHE holds is the parsed value, and
+ * a payload the parse rejects never becomes one (`.claude/rules/parse-at-boundaries.md`
+ * — "turn unstructured input into a trusted typed value once, at the edge"). It used to
+ * run in each consumer's `select`, which looks equivalent and is not: TanStack Query
+ * *catches* a throw from `select` and reports an error result while leaving the raw
+ * payload sitting in `query.state.data` — so `throwOnError` (which asks whether there
+ * is data) would answer "there is", swallow the throw, and the detail route, seeing an
+ * undefined `data` that is not `isPending`, would render **"Tournament not found"** for
+ * a tournament the server had just sent. A malformed draw must fail loudly, not quietly
+ * turn a tournament into a 404. */
+type TournamentDetail = {
+  tournament: Tournament
+  tables: TournamentTable[]
+}
+
 /** The detail query, shared by `useTournament` and `useTables` so both read one
- * cache entry from a single fetch. It returns the raw `TournamentDetailRead` (or
- * `null` on 404); each consumer selects its own projection. A 403 bubbles to the
- * `RbacBoundary`; any other error throws. */
+ * cache entry from a single fetch — and one parse. It resolves to the mapped
+ * `TournamentDetail` (or `null` on 404); each consumer selects its own projection. A
+ * 403 bubbles to the `RbacBoundary`; any other error throws. */
 function tournamentDetailQuery(id: string) {
   return queryOptions({
     queryKey: tournamentKey(id),
-    queryFn: async (): Promise<TournamentDetailRead | null> => {
+    queryFn: async (): Promise<TournamentDetail | null> => {
       const result = await api.GET('/v1/tournaments/{tournament_id}', {
         params: { path: { tournament_id: id } },
       })
       // A 404 is an expected "doesn't exist" — resolve to null rather than
       // throw, so the route renders its own not-found screen.
       if (result.response?.status === 404) return null
-      return unwrap('load tournament', result)
+      const payload: TournamentDetailRead = unwrap('load tournament', result)
+      // The parse boundary: `apiToTournament` runs `parseFixtures` over every event's
+      // draw, so a malformed fixture throws HERE — inside the fetch — and is reported
+      // as a failed query rather than half-entering the app.
+      return {
+        tournament: apiToTournament(payload),
+        tables: payload.table_catalogue,
+      }
     },
     // Bubble everything except a 404 (which resolved to null above and never
     // reaches here as an error) — but only while there is NOTHING on screen. A
@@ -297,23 +338,24 @@ function tournamentDetailQuery(id: string) {
   })
 }
 
-/** A single tournament's detail, mapped to a prototype `Tournament` — or `null`
- * when the id 404s (so the detail route can show its "not found" UI). */
+/** A single tournament's detail, as a prototype `Tournament` — or `null` when the id
+ * 404s (so the detail route can show its "not found" UI). A projection of the parsed
+ * cache entry: the mapping already happened, in the `queryFn`. */
 export function useTournament(id: string) {
   return useQuery({
     ...tournamentDetailQuery(id),
-    select: (data) => (data === null ? null : apiToTournament(data)),
+    select: (data) => data?.tournament ?? null,
   })
 }
 
 /** The current tournament's table catalogue, as prototype `TournamentTable[]`.
  * The API stores the full catalogue on the tournament, so this is the detail
- * query's `table_catalogue` (its shape already matches the prototype). Reads
- * the same cache entry as `useTournament`. */
+ * payload's `table_catalogue` (its shape already matches the prototype). Reads
+ * the same cache entry — and the same single fetch — as `useTournament`. */
 export function useTables(id: string): TournamentTable[] {
   const { data } = useQuery({
     ...tournamentDetailQuery(id),
-    select: (data) => data?.table_catalogue ?? [],
+    select: (data) => data?.tables ?? [],
   })
   return data ?? []
 }
@@ -333,11 +375,15 @@ export function useTables(id: string): TournamentTable[] {
 // | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useCutDraw              | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useUncutDraw            | ['tournaments'], ['tournaments', id]     | onSettled |
 //
 // There are only two keys, because there are only two queries: the list and one
-// tournament's detail (events, entrants and the table catalogue all arrive nested
-// in the detail — see the queries above). Create is the one mutation that touches
-// only the list: it has no detail entry to stale yet. The three `onSettled` rows
+// tournament's detail (events, entrants, the table catalogue AND every event's draw all
+// arrive nested in the detail — see the queries above; there is deliberately no
+// `GET …/draw`, because a per-event draw fetch would be an N+1 on the server and a
+// suspense waterfall on the client, ADR-0786). Create is the one mutation that touches
+// only the list: it has no detail entry to stale yet. The five `onSettled` rows
 // reconcile on FAILURE as well as success, which is deliberate — see the notes on
 // each.
 
@@ -610,5 +656,111 @@ export function useWithdrawEntry(tournamentId: string) {
     // view/state disagreement just like the entry 409 is.
     onSettled: () => invalidateTournament(qc, tournamentId),
     onError: notifyError('withdraw from the event'),
+  })
+}
+
+// ----- the draw (ADR-0786) -------------------------------------------------
+//
+// Two verbs, and NO query of their own. An event's fixtures ride the tournament detail
+// payload it already fetches (`event.fixtures`), so cutting and un-cutting invalidate
+// the tournament — list + detail — and the refetched event carries the new draw. That
+// is the whole invalidation set: the same two keys `invalidateTournament` already
+// covers. A `GET …/draw` per event would be an N+1 on the server and a suspense
+// waterfall on the page, which is exactly why the API does not offer one.
+//
+// Both reconcile **`onSettled`, not `onSuccess`**, like the entry and lifecycle
+// mutations and for the same reason: their most interesting failure is the one that
+// says *this screen is stale*. A cut is refused with a **409** when the draw shows
+// evidence of play (a fixture has a winner, or has become a real match) — which cannot
+// be true of the draw this page is looking at, or it would not have offered the button.
+// Something happened that this tab has not read yet, so the only sane response is to
+// re-read the server: invalidating on success only would leave the director staring at
+// the same Re-cut button that was just refused. The 403 (not the owner) and the 422
+// (this event cannot be planned) are not stale-view failures, and re-reading is merely
+// harmless for them — one rule for both verbs beats two rules that could disagree.
+
+/** Cut (or **re-cut**) an event's draw: `POST …/events/{event_id}/draw`. Owner-only.
+ * Resolves to the created fixtures, parsed (`./fixtures`) — the same list the next read
+ * of the tournament will carry, in the same pool → round → position order.
+ *
+ * A re-cut **replaces the draw wholesale**: the old fixtures are deleted and a fresh set
+ * is planned from the event's *current* active entrants, so their ids do not survive.
+ * Nothing here is optimistic for that reason — there is no local edit to apply, only a
+ * new draw to read back.
+ *
+ * The three refusals, all of which the server owns and this client merely reports:
+ * - **403** — not the owner. The UI does not offer the verb to a non-owner, so this can
+ *   only mean the page is looking at somebody else's tournament.
+ * - **409** — the draw shows evidence of play; it can no longer be cut or removed.
+ * - **422** — this event cannot be planned as it stands: an unsupported draw type (only
+ *   round-robin has a generator today), no pools configured, or a field too small for
+ *   the pools it has. The server's sentence names what the director must change, which
+ *   is why it is a sentence and not a code.
+ *
+ * **No global `onError` toast**, by the same convention `useCreateEvent` and
+ * `useUpdateEvent` follow: the `DrawPanel` awaits this through `mutateAsync` and renders
+ * every refusal **inline, on the event's card** — where the button was, in the words
+ * `data/draw.ts` owns, carrying the server's own sentence for the 409 and the 422. A
+ * toast on top of that would tell the director the same thing twice, and would be the
+ * wrong channel besides: it leaves after four seconds, and the sentence it carries is
+ * the one they have to act on (`web-client/CLAUDE.md`, ## Forms: "don't attach a global
+ * onError toast to a mutation a form surfaces inline"). */
+export function useCutDraw(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (eventId: string): Promise<Fixture[]> => {
+      const fixtures = unwrap(
+        'cut the draw',
+        await api.POST(
+          '/v1/tournaments/{tournament_id}/events/{event_id}/draw',
+          {
+            params: {
+              path: { tournament_id: tournamentId, event_id: eventId },
+            },
+          },
+        ),
+      )
+      // The response is untrusted like every other payload — parse it, don't cast it.
+      // This is also what stops a bad cut from priming the caller with half a draw.
+      return parseFixtures(fixtures)
+    },
+    // Reconcile on BOTH paths — see the note above.
+    onSettled: () => invalidateTournament(qc, tournamentId),
+  })
+}
+
+/** Un-cut an event's draw: `DELETE …/events/{event_id}/draw`. Owner-only, and a **204**
+ * with no body.
+ *
+ * The way back from a draw the director does not want — the event, its entrants and the
+ * rest of the tournament are untouched, only the fixtures go, and the pool set unfreezes
+ * so the pools can be edited before cutting again.
+ *
+ * **Idempotent**: removing a draw that was never cut is a 204, not a 404 (this is a
+ * DELETE, and an event with no draw is already in the state it asks for). The one
+ * refusal is the same **409** the cut has — a draw with evidence of play cannot be
+ * removed, because the results on it would go with it.
+ *
+ * **No global `onError` toast**, for the reason given on `useCutDraw`: the `DrawPanel`
+ * surfaces the refusal inline, and a toast would double it up. */
+export function useUncutDraw(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (eventId: string) => {
+      unwrap(
+        'remove the draw',
+        await api.DELETE(
+          '/v1/tournaments/{tournament_id}/events/{event_id}/draw',
+          {
+            params: {
+              path: { tournament_id: tournamentId, event_id: eventId },
+            },
+          },
+        ),
+        { allowEmpty: true },
+      )
+    },
+    // Reconcile on BOTH paths — see the note above.
+    onSettled: () => invalidateTournament(qc, tournamentId),
   })
 }

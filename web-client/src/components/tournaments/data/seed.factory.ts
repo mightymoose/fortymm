@@ -7,6 +7,7 @@ import type {
   Address,
   Entrant,
   EventEntryState,
+  Fixture,
   Pool,
   Predicate,
   Tournament,
@@ -127,6 +128,11 @@ export function buildEvent(
     predicates: [],
     match: { rated: true, lengthGames: 5 },
     pools: [buildPool()],
+    // NO DRAW CUT (ADR-0786) — `[]` is the designed state of an event whose director
+    // has not cut one, and it is the state every event starts in. An override, not a
+    // derivation: the same field makes a different draw across two pools than across
+    // three, so a fixture that quietly cut one would be inventing a decision.
+    fixtures: [],
     ...overrides,
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
@@ -210,6 +216,102 @@ export function buildIneligibleEvent(
       predicateId: rule.id,
       rating: UNROUNDED_RATING,
     },
+    ...overrides,
+  })
+}
+
+/** One fixture of a cut draw (ADR-0786): round 1, position 1 of `Pool A`, between the
+ * first two entrants, undecided and not yet a match.
+ *
+ * Every `null` is a fact, so none of them is a default worth having *silently*: pass
+ * `entryBId: null` for a **TBD** side (never a bye — a bye is the ABSENCE of a fixture),
+ * `poolId: null` for an un-pooled (knockout) fixture. */
+export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
+  return {
+    id: 'fx-1',
+    poolId: 'p-a',
+    round: 1,
+    position: 1,
+    entryAId: 'entry-1',
+    entryBId: 'entry-2',
+    winnerEntryId: null,
+    matchId: null,
+    ...overrides,
+  }
+}
+
+/**
+ * An event whose draw **is cut**: a round-robin U1200 Singles, five entrants
+ * (`player.1`…`player.5`) dealt across two pools by the snake the API uses, and the
+ * fixtures that field really produces.
+ *
+ *     Pool A — player.1, player.4, player.5   (ODD: 3 rounds of ONE fixture)
+ *     Pool B — player.2, player.3             (1 round of one fixture)
+ *
+ * The odd pool is the point of the fixture. Pool A's rounds hold one fixture each
+ * because the third player **sits that round out** — and that is all a bye is
+ * (ADR-0786: "a bye is modeled as absence"; an odd round-robin pool simply has fewer
+ * fixtures per round). A factory that dealt two even pools could not tell a renderer
+ * that invents a "bye" row from one that doesn't.
+ *
+ * The fixtures are listed in the server's order (pool → round → position). A test that
+ * wants to prove the panel *sorts* rather than trusting that order passes a shuffled
+ * `fixtures` override.
+ */
+export function buildDrawnEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-u1200',
+    name: 'U1200 Singles',
+    drawType: 'round-robin',
+    maxPlayers: 24,
+    entrants: buildEntrants(5),
+    pools: [
+      buildPool({ id: 'p-a', name: 'Pool A' }),
+      buildPool({
+        id: 'p-b',
+        name: 'Pool B',
+        slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
+      }),
+    ],
+    fixtures: [
+      // Pool A: the all-play-all of players 1, 4 and 5 — one fixture a round, the third
+      // player sitting out each time.
+      buildFixture({
+        id: 'fx-a-1',
+        poolId: 'p-a',
+        round: 1,
+        position: 1,
+        entryAId: 'entry-1',
+        entryBId: 'entry-4',
+      }),
+      buildFixture({
+        id: 'fx-a-2',
+        poolId: 'p-a',
+        round: 2,
+        position: 1,
+        entryAId: 'entry-1',
+        entryBId: 'entry-5',
+      }),
+      buildFixture({
+        id: 'fx-a-3',
+        poolId: 'p-a',
+        round: 3,
+        position: 1,
+        entryAId: 'entry-4',
+        entryBId: 'entry-5',
+      }),
+      // Pool B: two players, so one fixture, and the draw is done.
+      buildFixture({
+        id: 'fx-b-1',
+        poolId: 'p-b',
+        round: 1,
+        position: 1,
+        entryAId: 'entry-2',
+        entryBId: 'entry-3',
+      }),
+    ],
     ...overrides,
   })
 }

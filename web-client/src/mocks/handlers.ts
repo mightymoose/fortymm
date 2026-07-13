@@ -41,12 +41,14 @@ import { DEMO_SEED } from './rbac-store'
 import {
   createEvent as createTournamentEvent,
   createTournament,
+  cutDraw as cutTournamentDraw,
   deleteEvent as deleteTournamentEvent,
   deleteTournament as deleteTournamentSeed,
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
   transitionTournament,
+  uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
   updateTournament,
   withdrawEntry as withdrawTournamentEntry,
@@ -1688,6 +1690,61 @@ export const handlers = [
       return new HttpResponse(null, { status: 204 })
     },
   ),
+  // The draw (ADR-0786). Registered before the bare `:eventId` routes, like the
+  // entries routes above, so MSW can never mistake a draw path for an event path.
+  //
+  // Cutting is an EXPLICIT act — nothing else in the mock creates a fixture, and no
+  // status change cuts one — and it is refused exactly as the server refuses it: 403
+  // (not the owner), 409 (the draw shows evidence of play: a fixture with a winner or a
+  // linked match), 422 (this event cannot be planned — an unsupported draw type, no
+  // pools, or a pool that would get fewer than two entrants). The refusal SENTENCES come
+  // from the store, because for the 422 the sentence is the answer: it names the numbers
+  // the director has to change.
+  http.post(
+    '*/v1/tournaments/:tournamentId/events/:eventId/draw',
+    async ({ params }) => {
+      await delay(250)
+      const result = cutTournamentDraw(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        if (result.status === 409 || result.status === 422) {
+          return detail(result.detail, result.status)
+        }
+        return detail(
+          result.status === 403
+            ? 'Only the creator can cut this draw.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.fixtures, { status: 201 })
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/events/:eventId/draw',
+    async ({ params }) => {
+      await delay(250)
+      const result = uncutTournamentDraw(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        // The play guard, again: a draw that has been played cannot be removed either.
+        if (result.status === 409) return detail(result.detail, 409)
+        return detail(
+          result.status === 403
+            ? 'Only the creator can remove this draw.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      // 204 whether or not there was a draw to remove — this is a DELETE, and asking
+      // for a state the resource is already in is a success.
+      return new HttpResponse(null, { status: 204 })
+    },
+  ),
   http.patch(
     '*/v1/tournaments/:tournamentId/events/:eventId',
     async ({ params, request }) => {
@@ -1703,6 +1760,10 @@ export const handlers = [
         body ?? {},
       )
       if (!result.ok) {
+        // The pool-set freeze (ADR-0786): this PATCH would add, remove or re-`id` a pool
+        // on an event whose draw is cut, orphaning the fixtures drawn into it. The
+        // store's sentence says so — and says how to get out of it.
+        if (result.status === 409) return detail(result.detail, 409)
         return detail(
           result.status === 403
             ? 'Only the creator can edit this event.'

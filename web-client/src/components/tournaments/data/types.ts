@@ -82,6 +82,42 @@ export interface Pool {
   tableIds: string[]
 }
 
+/**
+ * One planned pairing of an event's **draw** (ADR-0786): a round and a position —
+ * plus a pool, when the draw is pooled — whose sides may still be unknown.
+ *
+ * A fixture is **not a match**. It materializes into one later (#788), and until it
+ * does `matchId` is `null`. The whole set of an event's fixtures is its draw; an event
+ * with no draw cut has `fixtures: []` (the designed empty state, never `null`).
+ *
+ * **Entrant names are deliberately not here.** A fixture carries entry *ids*, and the
+ * usernames behind them are already on the page — the event's `entrants` list is keyed
+ * by that very id — so a renderer joins the two. Copying the username onto the fixture
+ * as well would be carrying a field and its own derivation, and the two copies would
+ * drift the moment a player is renamed.
+ *
+ * The `null`s are all facts, and they are three different facts:
+ * - `entryAId` / `entryBId` — **TBD**: the feeding fixture is not decided yet. Never a
+ *   bye; a bye is the *absence of a fixture*, not a fixture with an empty side.
+ * - `winnerEntryId` — undecided.
+ * - `matchId` — not yet materialized.
+ * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
+ *   this is the KO stage of an rr-then-ko. When set, it names a `Pool` in this same
+ *   event's `pools`.
+ *
+ * Parsed at the boundary by `./fixtures` — this interface is what comes out.
+ */
+export interface Fixture {
+  id: string
+  poolId: string | null
+  round: number
+  position: number
+  entryAId: string | null
+  entryBId: string | null
+  winnerEntryId: string | null
+  matchId: string | null
+}
+
 /** One *active* entry in an event. Withdrawn entries are not entrants — they
  * appear in neither this list nor the `entered` count (ADR-0016).
  *
@@ -175,6 +211,15 @@ export interface TournamentEvent {
   predicates: Predicate[]
   match: MatchSettings
   pools: Pool[]
+  /** This event's **draw** — every fixture the cut produced, in pool → round → position
+   * order, as the server sends them (ADR-0786).
+   *
+   * **`[]` is the designed "no draw cut" state**, and it is the state every event is
+   * born in: cutting is an explicit, reviewable act (`POST …/draw`), and nothing else
+   * creates fixtures. Read it; never write it — a draw changes only through the two
+   * draw verbs, never through an event PATCH (which is why `eventToUpdateBody` omits
+   * it, exactly as it omits the server-derived `entered`). */
+  fixtures: Fixture[]
 }
 
 /** A physical table in the venue catalogue, referenced by id from a

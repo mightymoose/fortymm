@@ -7,8 +7,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.draws import DegenerateDraw, DrawError, PoolId, UnsupportedDrawType
 from app.leagues import resolve_league
 from app.models import (
+    DrawType,
     EventFormat,
     Tournament,
     TournamentEntry,
@@ -23,6 +25,7 @@ from app.schemas.tournament import (
     EventEntryOpen,
     EventEntryRatingIneligible,
     EventEntryState,
+    Pool,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -30,11 +33,22 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
+    TournamentFixtureRead,
     TournamentRead,
     TournamentTransitionCreate,
     TournamentUpdate,
+    named_list,
 )
 from app.sessions import get_current_user
+from app.tournament_draws import (
+    DrawCurrency,
+    cut_draw,
+    draw_currency_by_event,
+    draw_has_play,
+    event_has_draw,
+    event_pool_ids,
+    uncut_draw,
+)
 from app.tournament_eligibility import (
     Eligible,
     RatingIneligible,
@@ -47,6 +61,7 @@ from app.tournament_queries import (
     active_entry_count,
     entrant_rating,
     entrant_ratings_by_league,
+    fixtures_by_event,
 )
 
 # Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
@@ -92,9 +107,12 @@ require_create = require_permission(TOURNAMENT_CREATE)
 # idempotent no-op: the only caller that sends it is a stale one, and answering
 # 200 would tell it that it did something when somebody else did).
 #
-# One table, at one dispatch point, is also where slice B (#785) hangs the
-# go-live precondition ("requires a generated draw") — a per-target rule that
-# would otherwise have to be remembered in a route of its own.
+# One table, at one dispatch point, is also where the go-live precondition hangs
+# (``_enforce_ready_to_go_live``, ADR-0786): a tournament may only *start* with at
+# least one event, each with a draw that seats exactly its current entrants. That is
+# a rule about the TARGET rather than the edge — it says nothing about who may publish
+# or archive — and it lives beside this table, in the one handler that consults it,
+# rather than in a route of its own that somebody would have to remember to call.
 LEGAL_TRANSITIONS: frozenset[tuple[TournamentStatus, TournamentStatus]] = frozenset(
     {
         (TournamentStatus.draft, TournamentStatus.published),
@@ -221,6 +239,7 @@ def _serialize_event(
     e: TournamentEvent,
     *,
     entrants: list[TournamentEntrantRead],
+    fixtures: list[TournamentFixtureRead],
     rating: float | None,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
@@ -233,6 +252,15 @@ def _serialize_event(
     # ``entry_state`` is the caller's, and it is computed from the entrants already
     # loaded plus the caller's ``rating`` on this tournament's league — passed in,
     # never fetched here, so no serializer can turn into an N+1.
+    #
+    # ``fixtures`` — the event's draw (ADR-0786) — is passed in for exactly that
+    # reason. ``e.fixtures`` is right there on the ORM instance and would read
+    # *correctly*: a lazy load would fetch the rows and the response would be
+    # identical. It would also fire one SELECT per event, on the LIST endpoint that
+    # returns every event of every tournament — an N+1 that no assertion about the
+    # body can see. It is loaded once, in a batch, by ``fixtures_by_event``, which
+    # also owns the pool → round → position ordering, so the serializer never sorts
+    # and no two call sites can order a bracket differently.
     return TournamentEventRead.model_validate(
         {
             "id": e.id,
@@ -250,6 +278,7 @@ def _serialize_event(
             "updated_at": e.updated_at,
             "entrants": entrants,
             "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
+            "fixtures": fixtures,
         }
     )
 
@@ -261,6 +290,7 @@ def _serialize_detail(
     current_user_id: uuid.UUID,
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
+    fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
     rating: float | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
@@ -278,7 +308,12 @@ def _serialize_detail(
                 current_user_id=current_user_id,
             ),
             "events": [
-                _serialize_event(e, entrants=entrants_by_event[e.id], rating=rating)
+                _serialize_event(
+                    e,
+                    entrants=entrants_by_event[e.id],
+                    fixtures=fixtures_by_event[e.id],
+                    rating=rating,
+                )
                 for e in events
             ],
         }
@@ -492,6 +527,19 @@ def _enforce_league_editable(t: Tournament) -> None:
     )
 
 
+# The refusals here name a SET of things — the pool-set freeze's pools, the go-live
+# precondition's events — and they name them by NAME. A director reads names, not ids:
+# the ids are what the guards actually compared, but "pool p-b7f2 cannot be removed" (or
+# "event 3f9c-… has no draw") tells the person looking at a page of named pools and
+# named events nothing they can act on.
+#
+# ``named_list`` is the one formatter for all of them, and it lives in
+# ``app.schemas.tournament`` because the boundary needs it too (the duplicate-pool-id
+# 422 names the ids it found twice) and the boundary is the lower layer — this module
+# already imports that one, so the reverse would be a cycle. One formatter, so a
+# director cannot tell from the punctuation which guard refused them.
+
+
 # The statuses in which a tournament has been ANNOUNCED to the world. Publishing
 # is the act that makes a tournament public (ADR-0017), and nothing walks
 # backwards out of it, so everything from ``published`` onward is announced and
@@ -551,15 +599,16 @@ async def list_tournaments(
     current_user: User = Depends(get_current_user),
 ) -> list[TournamentDetailRead]:
     # The list page's cards render event-derived stats (event count, total
-    # entries, table count), so the list returns the full aggregate — events and
-    # their entrants included — rather than a thinner summary. FOUR queries, no
-    # N+1, whatever the number of tournaments or events: the tournaments+usernames
+    # entries, table count), so the list returns the full aggregate — events, their
+    # entrants and their draws included — rather than a thinner summary. FIVE queries,
+    # no N+1, whatever the number of tournaments or events: the tournaments+usernames
     # join, then all their events, then all those events' active entrants in one
-    # batch, then the caller's rating on every distinct league those tournaments run
-    # on (which every event's ``entry_state`` is judged against, ADR-0783). A
-    # per-event entry count or a per-tournament rating would be the N+1 this shape
-    # exists to avoid, and a statement-count tripwire in tests/test_tournaments.py
-    # fails if one comes back.
+    # batch, then all those events' fixtures in one batch (ADR-0786), then the caller's
+    # rating on every distinct league those tournaments run on (which every event's
+    # ``entry_state`` is judged against, ADR-0783). A per-event entry count, a
+    # per-event draw, or a per-tournament rating would be the N+1 this shape exists to
+    # avoid, and a statement-count tripwire in tests/test_tournaments.py fails if one
+    # comes back.
     #
     # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
     # so it never enters the result set — and, because the filter is a WHERE clause
@@ -593,7 +642,14 @@ async def list_tournaments(
         )
         for event in events:
             events_by_tournament[event.tournament_id].append(event)
-    entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
+    event_ids = [e.id for e in events]
+    entrants_by_event = await active_entrants_by_event(db, event_ids)
+    # And ONE batch for every one of those events' fixtures — its draw (ADR-0786).
+    # Batched for the same reason the entrants are: the list returns every event of
+    # every tournament, so reading ``event.fixtures`` in the loop would be a SELECT per
+    # event. Uncut draws come back as ``[]``, so an event nobody has cut a draw for
+    # costs nothing and answers with an empty list rather than a null.
+    event_fixtures = await fixtures_by_event(db, event_ids)
     # ONE batch for the caller's ratings, keyed by league — deduplicated, because
     # every tournament on the default league shares the one number, and because the
     # ladders a page happens to list is not a reason to ask the same question twice.
@@ -607,6 +663,7 @@ async def list_tournaments(
             current_user_id=current_user.id,
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
+            fixtures_by_event=event_fixtures,
             rating=ratings[tournament.league_id],
         )
         for tournament, username in rows
@@ -706,8 +763,18 @@ async def get_tournament(
         .scalars()
         .all()
     )
-    entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
-    # A FOURTH and last query: the caller's rating on the tournament's league, read
+    event_ids = [e.id for e in events]
+    entrants_by_event = await active_entrants_by_event(db, event_ids)
+    # A FOURTH query batches every one of those events' fixtures — their DRAWS
+    # (ADR-0786). The draw rides on this page rather than on a ``GET …/draw`` of its
+    # own: one endpoint per page (root CLAUDE.md), so the bracket cannot become a
+    # second round-trip that the page has to wait for. Batched across the events for
+    # the same reason the entrants are — a draw read per event is an N+1 that grows
+    # with the very thing the page is describing — and it is the loader, not this
+    # route, that orders them (pool → round → position) and answers ``[]`` for an
+    # event whose draw has not been cut.
+    event_fixtures = await fixtures_by_event(db, event_ids)
+    # A FIFTH and last query: the caller's rating on the tournament's league, read
     # ONCE for the whole page. It is what every event's ``entry_state`` is judged
     # against (ADR-0783), and a tournament has exactly one ladder — so a rating read
     # inside the per-event loop would issue a query per event to learn the same
@@ -719,6 +786,7 @@ async def get_tournament(
         current_user_id=current_user.id,
         events=events,
         entrants_by_event=entrants_by_event,
+        fixtures_by_event=event_fixtures,
         rating=rating,
     )
 
@@ -796,6 +864,138 @@ async def delete_tournament(
 # ----- lifecycle routes ----------------------------------------------------
 
 
+# The one thing a tournament with no events can never do. Publishing one stays legal
+# — announcing a tournament before its events are written up is ordinary — but
+# *starting* it is not: there is nothing to run, no draw to have, and (without this)
+# nothing for the per-event checks below to fail on, so an empty tournament would sail
+# through a precondition that is vacuously true of it and land in ``live`` (ADR-0786;
+# the hole the #782 hand-off flagged).
+_NOTHING_TO_START = (
+    "This tournament has no events, so there is nothing to start. Add an event and cut "
+    "its draw, then start the tournament."
+)
+
+
+def _go_live_refusal(*, uncut: list[str], stale: list[str]) -> HTTPException:
+    """The 409 for a tournament whose draws are not ready to be played (ADR-0786).
+
+    409, not 403, for the reason ADR-0017 fixed for this whole module: the caller is
+    the owner and going live is theirs to do — it is the *tournament* that is in the
+    wrong state for it. The same request succeeds the moment the draws are cut, which
+    is what a conflict means and what a 403 would deny.
+
+    **It names the events**, because a refusal a director cannot act on is barely
+    better than a 500: "some event has no draw" leaves them clicking through a
+    ten-event tournament looking for it. Names, not ids (``named_list``) — the ids
+    are what this guard compared, but they are not what the director is looking at.
+
+    The two failures are kept apart in the sentence, because they are two different
+    jobs. An **uncut** event needs a first cut. A **stale** one has a draw the
+    director may well have reviewed and approved — it is simply older than the field,
+    because somebody entered or withdrew after it was cut — and needs re-cutting,
+    which will move players around inside it. Collapsing the two into "cut the draws"
+    would tell the director of a stale event that nothing they did was kept.
+    """
+    clauses = []
+    if uncut:
+        clauses.append(
+            f"{named_list(uncut)} {'has' if len(uncut) == 1 else 'have'} no draw yet"
+        )
+    if stale:
+        clauses.append(
+            f"{named_list(stale)} "
+            + (
+                "has a draw that no longer matches its entrants"
+                if len(stale) == 1
+                else "have draws that no longer match their entrants"
+            )
+        )
+    return HTTPException(
+        status_code=409,
+        detail=(
+            "This tournament cannot start yet: "
+            + "; and ".join(clauses)
+            + ". A draw is cut from the field as it stands at the time, and "
+            "registration stays open right up to the moment a tournament goes live — "
+            "so cut the draw for each event named (again, if somebody entered or "
+            "withdrew since it was last cut), then start the tournament."
+        ),
+    )
+
+
+async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) -> None:
+    """Raise the 409 unless every event of this tournament has a draw, and every one of
+    those draws still describes the field it will be played by (ADR-0786).
+
+    **The** ``published → live`` **precondition** — the per-target rule ADR-0017 left
+    room for at its single dispatch point, and the reason that room was left. Going
+    live is what seals the field (registration closes with it) and, from #788, what
+    turns every ready fixture into a real match. Both are irreversible in practice and
+    both are computed from the draw — so the draw has to be *right* at the instant the
+    tournament starts, not merely to have existed at some point before it.
+
+    Three ways it is not, and each of the three is refused:
+
+    * **No events at all.** ``_NOTHING_TO_START``. It has to be checked, and checked
+      first, because the per-event rules below say nothing about a tournament with no
+      events: "every event has a current draw" is *true* of a tournament with none.
+    * **An event with no draw** (``uncut``) — nothing to play.
+    * **An event whose draw is stale** — its fixtures no longer seat exactly its
+      active entrants. Registration stays open all the way to go-live, so a draw cut
+      on Tuesday is a plan for Tuesday's field: a player who entered on Wednesday is
+      in no fixture (they would sit out the tournament they paid for), and a player
+      who withdrew is still seated in one (their opponents get a match nobody plays).
+
+    **Read under the tournament's row lock, which the transition route has already
+    taken** — this function does not take a second one, and must not. That lock is the
+    whole mechanism: every writer of the entrant field (the entry route, the withdraw
+    route) queues on that same row first, so an entry cannot land between this check
+    and the ``UPDATE`` that follows it. Postgres runs READ COMMITTED, so unlocked, the
+    currency this reads would be the currency of *its own statement's snapshot* — and
+    a tournament could go live, on a draw this function had just certified as current,
+    into a field with one more player in it than the draw seats. The check would have
+    been true when it was made and false by the time it mattered, which is the only
+    kind of guard worse than none.
+
+    A ``match`` with ``assert_never``, not an ``if``: a fourth thing that can be true
+    of a draw (a fixture pointing at a pool the event no longer has, say) is a type
+    error here until somebody decides whether it may go live, rather than falling
+    through to ``current`` — a precondition must never fail in the permissive
+    direction.
+    """
+    events = (
+        await db.execute(
+            select(TournamentEvent.id, TournamentEvent.name)
+            .where(TournamentEvent.tournament_id == tournament.id)
+            # The page's order, so the refusal names the events in the order the
+            # director is looking at them.
+            .order_by(TournamentEvent.created_at)
+        )
+    ).all()
+    if not events:
+        raise HTTPException(status_code=409, detail=_NOTHING_TO_START)
+    # ONE batched read for the whole tournament (two statements, whatever the number
+    # of events): this runs with the row lock held, and a per-event query would hold
+    # it for a time that grows with the tournament.
+    currency = await draw_currency_by_event(db, [event_id for event_id, _ in events])
+    uncut: list[str] = []
+    stale: list[str] = []
+    for event_id, name in events:
+        state = currency[event_id]
+        match state:
+            case DrawCurrency.current:
+                continue
+            case DrawCurrency.uncut:
+                uncut.append(name)
+            case DrawCurrency.stale:
+                stale.append(name)
+            case _:
+                assert_never(state)
+    if not uncut and not stale:
+        return
+    raise _go_live_refusal(uncut=uncut, stale=stale)
+
+
 @router.post(
     "/tournaments/{tournament_id}/transitions",
     response_model=TournamentRead,
@@ -815,6 +1015,17 @@ async def create_tournament_transition(
     backwards, skipping a stage, moving out of the terminal `archived`, and
     re-asserting the status the tournament already holds — a request to publish
     an already-published tournament is a stale client, not a no-op.
+
+    **Going live has a precondition** (ADR-0786): the tournament must have at least
+    one event, and every event must have a **draw** whose fixtures seat exactly its
+    current entrants. Three things are refused with a `409` that names the events at
+    fault — a tournament with **no events** (there is nothing to start), an event with
+    **no draw**, and an event whose draw is **stale**, cut before somebody entered or
+    withdrew. Cut (or re-cut) the draws it names, then go live. Registration is open
+    right up to that moment, which is exactly why a draw can go stale under it.
+
+    **Publishing** an empty tournament is unaffected and stays legal: announcing a
+    tournament early is fine, starting an empty one is not.
 
     Owner-only, like every other tournament mutation.
     """
@@ -858,7 +1069,25 @@ async def create_tournament_transition(
         )
         raise HTTPException(status_code=409, detail=detail)
 
+    # THE per-target precondition, at the one dispatch point ADR-0017 reserved for it —
+    # the edge table above says *where* you may go, and this says whether the tournament
+    # is in a fit state to get there. Only ``live`` has one (ADR-0786): a tournament may
+    # be published with no events and no draws (announcing early is fine), and archiving
+    # asks nothing of the draws it is putting away.
+    #
+    # Inside the row lock this handler already holds, and it must stay inside it: the
+    # currency it checks is a fact about the entrant field, and every writer of that
+    # field queues on this same row — so an entry cannot land between the check and the
+    # ``UPDATE`` below. A second lock is neither taken nor needed.
+    if payload.to is TournamentStatus.live:
+        await _enforce_ready_to_go_live(db, tournament)
+
     tournament.status = payload.to
+    # #788 (materialization) hangs HERE, as the transition's final act: once the status
+    # is ``live``, the first ``advance()`` turns every ready fixture into a real match,
+    # in the same transaction as the status write. Nothing creates matches yet —
+    # fixtures are the whole of a draw today — and the precondition above is what
+    # guarantees that when it does, it will have a complete, current draw to work from.
     await db.commit()
     await db.refresh(tournament)
     # The owner is the current user (``_require_owner`` just said so), so the
@@ -901,7 +1130,10 @@ async def create_event(
     await db.commit()
     await db.refresh(event)
     # A just-created event has no entries, so its entrants are empty and its
-    # derived ``entered`` count is 0 — no query needed to learn that.
+    # derived ``entered`` count is 0 — no query needed to learn that. Its draw is
+    # empty for the same reason and with the same certainty: fixtures are only ever
+    # written by the cut (ADR-0786), which is an explicit act on an event that already
+    # exists, so an event one statement old cannot have any. ``[]``, not a query.
     #
     # Its ``entry_state`` is still the CALLER's, computed exactly as it is on the
     # read paths (the director who just created the event is a player too, and the
@@ -909,7 +1141,187 @@ async def create_event(
     # tournament's league: answering with a state the endpoint had guessed rather
     # than computed is how the read and the guard come apart.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    return _serialize_event(event, entrants=[], rating=rating)
+    return _serialize_event(event, entrants=[], fixtures=[], rating=rating)
+
+
+def _pool_set_refusal(removed: list[str], added: list[str]) -> HTTPException:
+    """The 409 for a pools payload that would change *which pools* a cut event has.
+
+    409, not 403 (ADR-0017's refusal-code doctrine): the caller is the owner and the
+    request is well-formed — it is the *resource* that is in the wrong state for it. The
+    same payload becomes legal the moment the draw is removed, which is precisely what a
+    conflict means and what a 403 would deny.
+
+    Both halves are named, because a re-**id**'d pool is exactly one removal plus one
+    addition and the director has to be told which of their pools went missing:
+
+    * a **removed** pool leaves its fixtures pointing at a pool that no longer exists —
+      the dangling ref no foreign key is there to catch (ADR-0786);
+    * an **added** pool arrives with **no fixtures**, because the draw was dealt across
+      the pools the event had at the cut, and nothing re-deals it.
+
+    The sentence ends with the way out (remove the draw, change the pools, cut again)
+    and with what is still allowed, because a refusal that only says "no" leaves a
+    director who has to move a broken table with nowhere to go — and the answer is that
+    they don't need us: tables, times and names were never frozen.
+    """
+    clauses = []
+    if removed:
+        clauses.append(
+            f"{named_list(removed)} already has fixtures drawn into it, "
+            "which this change would leave pointing at a pool that no longer exists"
+        )
+    if added:
+        clauses.append(
+            f"{named_list(added)} would arrive with no fixtures in it, "
+            "because the draw was cut across the pools this event had at the time"
+        )
+    return HTTPException(
+        status_code=409,
+        detail=(
+            "This event's draw is already cut, so its set of pools is frozen: "
+            + "; and ".join(clauses)
+            + ". A pool's tables, its time and its name can all still be changed. "
+            "To add, remove or re-identify a pool, remove the draw first, then cut it "
+            "again."
+        ),
+    )
+
+
+async def _enforce_pool_set_frozen(
+    db: AsyncSession, event: TournamentEvent, payload: TournamentEventUpdate
+) -> None:
+    """Raise the 409 once a ``pools`` payload would change *which pools* an event with a
+    cut draw has (ADR-0786).
+
+    A fixture names its pool by a **string ref** into this same event's ``pools`` JSONB,
+    and there is no pools table for it to foreign-key. So the database cannot refuse the
+    edit that orphans it, and the integrity of that reference is procedural — it is this
+    function, and nothing else. Remove a pool (or change its ``id``, which is a removal
+    with an addition standing where it was) and every fixture drawn into it refers to
+    nothing; add one and it arrives with no fixtures, because the draw was dealt across
+    the pools that existed at the cut.
+
+    What is frozen is the **id set**, and only the id set. A pool's ``table_ids``, its
+    ``slot`` and its ``name`` stay editable with a draw standing, on purpose — this is
+    the case the freeze exists to *permit*, not to prevent. Venues move under a running
+    tournament (a table breaks and is pulled, one frees up early, a pool slips an hour),
+    and a director who cannot record that has to un-cut a draw that is *correct* —
+    losing the placements — to move a table. A rename is likewise allowed: identity
+    lives in the ``id``, so "Pool A" becoming "Morning Pool" is a display change and
+    every fixture still resolves.
+
+    Asked **before** anything is written (and, like every judge-then-write guard in this
+    module, under the tournament's row lock), so a refusal leaves both the pools and the
+    fixtures exactly as they were. Not merely rolled back — never written: a guard that
+    fired after the ``setattr`` loop would be relying on the transaction to undo it, and
+    the day somebody makes an intermediate ``commit`` for convenience the refusal starts
+    persisting the very thing it refuses.
+
+    With **no draw cut** this is a no-op and ``pools`` replaces wholesale, as it always
+    has. There are no fixtures to orphan, and the pools of an un-drawn event are just
+    configuration; ``DELETE …/draw`` un-freezes the set by construction for the same
+    reason.
+    """
+    # An absent ``pools`` key is the only way this is ``None`` — an explicit ``null`` is
+    # a 422 at the schema (the column is NOT NULL) — so "not sent" is the whole meaning
+    # of it, and an event whose pools are not being replaced has nothing to enforce.
+    if payload.pools is None:
+        return
+    # The freeze turns on the draw EXISTING, not on it having been played: an unplayed
+    # draw is the ordinary state of a tournament that has not started, and it is just as
+    # orphanable as a played one.
+    if not await event_has_draw(db, event.id):
+        return
+    existing = event_pool_ids(event)
+    incoming = {PoolId(pool.id) for pool in payload.pools}
+    if existing == incoming:
+        return
+    # Named by their names, from whichever side of the change still knows them: a pool
+    # being removed is only described by the row we hold, and one being added only by
+    # the payload.
+    removed = [
+        Pool.model_validate(pool).name
+        for pool in event.pools
+        if Pool.model_validate(pool).id not in incoming
+    ]
+    added = [pool.name for pool in payload.pools if pool.id not in existing]
+    raise _pool_set_refusal(removed, added)
+
+
+def _draw_type_refusal(current: DrawType) -> HTTPException:
+    """The 409 for a ``draw_type`` change on an event whose draw is already cut.
+
+    Same doctrine as the pool-set freeze, one field over (ADR-0017): 409, not 403 — the
+    caller is the owner and the payload is well-formed; it is the *resource* that is in
+    the wrong state, and the same request becomes legal the moment the draw is removed.
+
+    And it says how, because the alternative is a director who is **stuck**. The draw
+    type is what chose the strategy that dealt these fixtures, so an event that is
+    ``single-elim`` while holding pooled round-robin fixtures cannot even be re-cut back
+    into agreement with itself: today ``single-elim`` has no strategy, so the re-cut is
+    a 422, and the only way out is to patch the draw type *back* to a value the director
+    never asked for — which they have to guess. The refusal names the way out instead.
+    """
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"This event's draw is already cut, so its draw type is frozen: its "
+            f"fixtures were dealt as a “{current.value}” draw, and changing the type "
+            "would leave the event claiming a shape its draw does not have. To change "
+            "the draw type, remove the draw first, then cut it again."
+        ),
+    )
+
+
+async def _enforce_draw_type_frozen(
+    db: AsyncSession, event: TournamentEvent, payload: TournamentEventUpdate
+) -> None:
+    """Raise the 409 once a ``draw_type`` payload would change the draw type of an event
+    that **has a draw** (ADR-0786).
+
+    A draw type is not a label on an event — it is the strategy that dealt the event's
+    fixtures, and the fixtures are the shape that strategy prescribes. Patch it under a
+    standing draw and the two facts contradict each other: a ``single-elim`` event
+    holding pooled round-robin fixtures (measured — the PATCH answered **200**), whose
+    bracket no client can render and whose draw no strategy would ever have produced.
+
+    The **go-live currency check cannot catch it**, which is why this guard has to
+    exist rather than being someone else's problem: currency compares the *entrant set*
+    the fixtures seat against the event's active entrants (``draw_currency_by_event``),
+    and re-labelling the draw type moves neither. The corrupted event reads as
+    ``current`` and starts.
+
+    Sibling of ``_enforce_pool_set_frozen``, and the same shape of rule: what a cut draw
+    freezes is *the facts its fixtures were derived from* — the pools they were dealt
+    across, and the strategy that dealt them. Everything else about the event (its name,
+    its fee, its rules, a pool's tables and window) stays editable, because a director
+    must never have to destroy a correct draw to record an ordinary change.
+
+    **Presence is not enough — the change is what is refused.** A ``draw_type`` equal to
+    the one the event already has changes nothing, so it is not a conflict, and a guard
+    that fired on the mere presence of the key would refuse a page that PATCHes the
+    whole event form back (draw type included) to move a pool's tables — the very edit
+    the freeze exists to permit. (This is where it differs from
+    ``_enforce_league_editable``, which *does* refuse the field it already holds: there,
+    the field is settled by a
+    lifecycle status no request of the caller's can move, so the only client that sends
+    it is a stale one. Here, the way out — remove the draw — is on the caller's own
+    keyboard.)
+
+    Asked **before** anything is written, like every judge-then-write guard in this
+    module, and under the tournament's row lock: a refusal leaves the draw type and the
+    fixtures exactly as they were, never written and then rolled back.
+    """
+    if payload.draw_type is None or payload.draw_type is event.draw_type:
+        return
+    # Only now the query — and only for a payload that really moves the draw type. It is
+    # the same ``event_has_draw`` the pool freeze asks, and a payload that changes both
+    # asks it twice: two COUNTs on an indexed column, both under a lock we already hold,
+    # in exchange for two guards that each read as one rule.
+    if not await event_has_draw(db, event.id):
+        return
+    raise _draw_type_refusal(event.draw_type)
 
 
 @router.patch(
@@ -923,13 +1335,54 @@ async def update_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    # The owner-scoped load is the guard (404 then 403) — the event, not the
-    # tournament, is the row this route edits. But the tournament is kept, not
-    # discarded: its ``league_id`` is the ladder the event's refreshed ``entry_state``
-    # is judged on (ADR-0783), and it is already loaded, so re-fetching it would be a
-    # second query for a row we are holding.
-    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
+    """Edit an event. Absent fields are left alone; `predicates` and `pools` replace
+    wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
+    id identifies one pool, and the fixtures of a draw name their pool by it.
+
+    **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
+    fixtures were derived from:
+
+    * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
+      event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
+      would leave the fixtures drawn into it pointing at nothing, and an added one would
+      arrive with no fixtures, since the draw was dealt across the pools that existed at
+      the cut.
+    * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
+      so changing it under a standing draw is a `409` too: the event would claim a shape
+      its draw does not have. Re-sending the draw type the event already has is not a
+      change, and is not refused.
+
+    Nothing else freezes. The event's name, fee, rules and `max_players`, and each
+    pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
+    venues change under a running tournament, and recording that must never cost a
+    director the draw. To change the pools themselves or the draw type, remove the draw
+    (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
+    are ordinary fields.
+
+    Owner-only.
+    """
+    # The row lock first, then the owner check — the same pair, in the same order, that
+    # the transition route and the tournament PATCH take, and that the draw verbs take
+    # (which is what keeps them all free of a deadlock cycle). This route is a
+    # judge-then-write path now: ``_enforce_pool_set_frozen`` reads whether a draw
+    # exists and then writes the pools that draw's fixtures refer to. Postgres runs READ
+    # COMMITTED, so unlocked, a cut committing between those two would be a cut across
+    # pools this request is in the middle of replacing — a draw born orphaned, refused
+    # by nothing.
+    #
+    # The tournament is kept, not discarded: its ``league_id`` is the ladder the event's
+    # refreshed ``entry_state`` is judged on (ADR-0783), and it is already loaded, so
+    # re-fetching it would be a second query for a row we are holding.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
+    # 404 → 403 → 409, the ordering ADR-0017 fixed: the state of this event's draw is
+    # never the reason a stranger's request is refused. And it is asked before the loop
+    # below, so a refusal writes nothing at all.
+    await _enforce_pool_set_frozen(db, event, payload)
+    # The draw's other frozen fact, judged in the same window and for the same reason:
+    # the strategy that dealt the fixtures is not a label to be re-typed under them.
+    await _enforce_draw_type_frozen(db, event, payload)
     # As in update_tournament: model_dump(exclude_unset=True) serializes the
     # nested value-objects (slot/match_settings/predicates/pools) to plain
     # dicts/lists, so one setattr loop covers the JSONB columns and scalars.
@@ -939,13 +1392,17 @@ async def update_event(
     await db.refresh(event)
     # An edited event keeps whatever entrants it already had — reload them rather
     # than answering with an empty list (and a ``entered`` of 0) that would be a
-    # lie for any event people have entered.
+    # lie for any event people have entered. Its DRAW survives the edit too (a PATCH
+    # is not a re-cut, ADR-0786), so its fixtures are reloaded for the same reason:
+    # answering ``[]`` here would tell the director their draw had just been thrown
+    # away, and the page would render it that way.
     entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+    fixtures = (await fixtures_by_event(db, [event.id]))[event.id]
     # And its ``entry_state`` is recomputed from the event as it now stands: an owner
     # who has just tightened a rule or lowered ``max_players`` is answered with what
     # the event says NOW, not with what it said before their edit.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    return _serialize_event(event, entrants=entrants, rating=rating)
+    return _serialize_event(event, entrants=entrants, fixtures=fixtures, rating=rating)
 
 
 @router.delete(
@@ -1537,5 +1994,240 @@ async def withdraw_from_event(
     # unlike the enter route, there is no IntegrityError here to catch and no
     # database error that could reach the response body.
     entry.status = TournamentEntryStatus.withdrawn
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ----- the draw (ADR-0786) --------------------------------------------------
+#
+# One sub-resource, two verbs: POST cuts (or re-cuts) an event's draw, DELETE un-cuts
+# it. The draw is *read* on the tournament-detail BFF, with the event that owns it —
+# one endpoint per page (root CLAUDE.md) — so there is deliberately no ``GET …/draw``
+# here to make a bracket a second round-trip.
+#
+# Both verbs are owner-only and take the tournament's row lock, and both are refused for
+# exactly one reason: **evidence of play**. Not the tournament's status — status-gating
+# was considered and rejected (ADR-0786), because it forbids the legitimate day-of move
+# (a no-show is withdrawn before the first ball, and the director re-cuts) while
+# protecting nothing the play guard does not already protect.
+
+
+def _draw_refusal(error: DrawError) -> HTTPException:
+    """The 422 for a draw the domain will not produce — in words a director can read.
+
+    A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
+    a competition (``DegenerateDraw``) or is not a format we can cut yet
+    (``UnsupportedDrawType``). So it is a 422 — the request is well-formed and
+    authorized, but its *content* (this event's pools, this event's field, this event's
+    draw type) cannot be turned into a draw — rather than the 500 an uncaught exception
+    would be, and rather than a 409, which would invite a retry that will fail
+    identically until the director changes the event.
+
+    A ``match`` over the error, not ``str(error)`` over whatever arrives:
+
+    * ``UnsupportedDrawType`` carries the ``draw_type`` **structurally**, so the
+      sentence is composed here from the fact rather than parsed out of a message. Its
+      own ``str()`` ("… is not implemented yet") is written for the developer who has
+      to go implement it; the director needs to be told which of *their* events cannot
+      be cut, and that the rest of the tournament is unaffected.
+    * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
+      it is passed through on purpose: only the strategy knows *which* degeneracy it hit
+      — no pools at all, or a snake that would leave some pool with one player and
+      nobody to play — and the numbers in that sentence ("5 entrants across 3 pool(s)")
+      are the numbers the director has to change. Recomposing it here would be a second
+      copy of a rule this route does not own, and the copy that drifts is the one a
+      director reads.
+    * The fallback arm is a **generic** sentence, never the exception's own. A
+      ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
+      message nobody wrote for a human — refusing vaguely is a bug report; leaking
+      internals is a defect that reaches the UI. (Its author gives it its own arm, the
+      same way ``_registration_refusal_detail`` buys its totality.)
+    """
+    match error:
+        case UnsupportedDrawType():
+            detail = (
+                f"A {error.draw_type.value} draw cannot be cut yet. "
+                "Change the event's draw type to one that can, or wait for support."
+            )
+        case DegenerateDraw():
+            detail = str(error)
+        case _:
+            detail = "This event's draw cannot be cut as the event stands."
+    return HTTPException(status_code=422, detail=detail)
+
+
+async def _enforce_draw_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
+    """Raise the 409 once an event's draw shows **evidence of play** — the single gate
+    on both cutting and un-cutting a draw (ADR-0786).
+
+    It is what makes a re-cut safe. A cut replaces the draw wholesale, so a draw with a
+    decided fixture (a recorded winner) or a materialized one (a linked match, which may
+    already carry games on its scratchpad) cannot be re-cut without throwing away
+    results that players actually produced. The draw must never silently eat a score, so
+    the refusal is on the *evidence*, not on the tournament's status: a director may cut
+    and re-cut as often as they like right up until the first fixture becomes real.
+
+    Read under the tournament's row lock, like every other judge-then-write guard in
+    this module (``_enforce_event_has_room``): the evidence this reads is the evidence
+    the write below is authorized by, and an unlocked read would sit in a different
+    instant from it.
+
+    409, not 403: the caller is the owner and the draw is theirs — it is the draw that
+    is past the point where a re-cut means anything. "Not you" would be a lie; the truth
+    is "not now, not any more".
+
+    One sentence for both verbs, because it is one fact. A re-cut and an un-cut are
+    refused for the same reason (the fixtures that would be destroyed are the ones that
+    have been played), and two sentences saying so would be two things to keep true.
+    """
+    if not await draw_has_play(db, event.id):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "This event's draw is already under way — at least one fixture has a match "
+            "or a recorded winner — so it can no longer be cut or removed."
+        ),
+    )
+
+
+async def _get_owned_event_for_draw_or_404(
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    current_user: User,
+) -> TournamentEvent:
+    """The event whose draw is about to be written, loaded under the tournament's row
+    lock and the owner check — the refusal ordering both draw verbs share.
+
+    **404 → 403 → 409**, the ordering ADR-0017 fixed and every route in this module
+    keeps: a tournament that does not exist (or an event that is not under it) is a 404
+    before ownership is considered, so a stranger probing ids learns nothing; a
+    non-owner is a 403 before the draw's *state* is looked at, so the refusal never
+    leaks whether an event has been played. The 409 (``_enforce_draw_unplayed``) is the
+    caller's own, and comes last.
+
+    The tournament is loaded through the **locking** loader — the same lock, on the same
+    row, taken first, that the entry, withdrawal, transition and PATCH routes take
+    (which is what keeps them free of a deadlock cycle) — and ``_require_owner`` is then
+    asked here, exactly as ``update_tournament`` and the transition route do.
+
+    The lock is not decoration. A cut reads the event's active field and writes fixtures
+    *derived from it*; Postgres runs READ COMMITTED, so an unlocked read answers from
+    its own statement's snapshot, and an entry (or a withdrawal) committing between the
+    read and the INSERT would leave a persisted draw that never matched any real field
+    of players — a pool of the wrong size, an entrant seated nowhere, or one seated in a
+    draw they had left. Every writer of the entrant field already queues on this row, so
+    taking it here is what puts the cut in the same queue: the loser blocks and re-reads
+    the field the winner *committed*.
+    """
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+    return await _get_event_or_404(db, tournament_id, event_id)
+
+
+@router.post(
+    "/tournaments/{tournament_id}/events/{event_id}/draw",
+    response_model=list[TournamentFixtureRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def cut_event_draw(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[TournamentFixtureRead]:
+    """Cut this event's draw — generate its **fixtures** from its entrants — and answer
+    with them.
+
+    Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
+    status: a draw may be cut and re-cut freely while a director inspects the pools and
+    the seeding. Nothing else creates fixtures, and going live requires every event to
+    have one (ADR-0786).
+
+    **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
+    fresh set is planned from the event's *current* active entrants — the old ones are
+    not patched, and their ids do not survive. That is the point: a draw is a plan made
+    against a field, and once the field has changed (somebody entered, somebody
+    withdrew) the whole plan is re-made, pool sizes and seeding included.
+
+    Entrants are ordered by **seed** ascending where one is set, then by **registration
+    order**. Nothing is random, so the same field always cuts the same draw.
+
+    Refused with a `409` once the draw shows any **evidence of play** — any fixture with
+    a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    those away, and a draw must never silently eat a score.
+
+    Refused with a `422` when this event cannot produce a draw at all: its draw type has
+    no generator yet (only round-robin does today), it has **no pools** configured for a
+    pooled draw type, or its field is too small for the pools it has — a pool with fewer
+    than two players has nobody to play. The message names what to change.
+
+    Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    tournament-detail page carries them.
+    """
+    # 404 → 403 first (and the tournament's row lock with them), so the draw's own
+    # state is never the reason a stranger's request is refused.
+    event = await _get_owned_event_for_draw_or_404(
+        db, tournament_id, event_id, current_user
+    )
+    # Then the one gate on the write: has this draw been played? Asked before anything
+    # is planned or deleted, so a refused re-cut leaves the standing draw exactly as it
+    # was — the guard's whole promise.
+    await _enforce_draw_unplayed(db, event)
+    try:
+        # Plans, deletes and re-inserts inside THIS transaction — the lock above is
+        # still held, so the field it reads cannot move under it, and the DELETE and
+        # the INSERTs land together or not at all. A DrawError is raised before the
+        # DELETE, so a 422 destroys nothing either.
+        await cut_draw(db, event)
+    except DrawError as error:
+        # The domain refusing to produce a draw is not a bug — it is an answer, and it
+        # is the caller's to act on. ``from None`` so no traceback shape reaches the
+        # client; the sentence is composed in ``_draw_refusal``.
+        await db.rollback()
+        raise _draw_refusal(error) from None
+    await db.commit()
+    # Read the draw back through the SAME loader the detail page reads it through, so
+    # the fixtures this mutation answers with are byte-for-byte the ones the page will
+    # show — same shape, same pool → round → position order. Composing the response
+    # from the objects just added would be a second serialization of the same rows,
+    # ordered by whatever the planner happened to emit.
+    return (await fixtures_by_event(db, [event.id]))[event.id]
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/events/{event_id}/draw",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def uncut_event_draw(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+
+    The way back from a draw the director does not want. The event, its entrants and the
+    rest of the tournament are untouched — only the fixtures go — and the director is
+    free to change the pools and cut again.
+
+    Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
+    fixture with a recorded winner, or one that has become a real match. Undoing a draw
+    that has been played would delete the fixtures those results belong to.
+
+    An event with **no draw is already in the state this asks for**, so removing a draw
+    that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+
+    Owner-only.
+    """
+    # The same 404 → 403 → 409 ordering, and the same row lock, as the cut: this verb
+    # deletes what that verb writes, and the guard that protects the fixtures cannot
+    # depend on which route is asking.
+    event = await _get_owned_event_for_draw_or_404(
+        db, tournament_id, event_id, current_user
+    )
+    await _enforce_draw_unplayed(db, event)
+    await uncut_draw(db, event)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

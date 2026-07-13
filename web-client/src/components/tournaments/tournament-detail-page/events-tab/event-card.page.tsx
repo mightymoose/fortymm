@@ -2,6 +2,7 @@ import { render, screen, type Container } from '@/test/utilities'
 
 import { EventCard, type EventCardProps } from './event-card'
 import { buildEventCardProps } from './event-card.factory'
+import { drawPanelPage } from './draw-panel.page'
 import { entrantsListPage } from './entrants-list.page'
 
 const scoped = (container: Container) => ({
@@ -10,6 +11,10 @@ const scoped = (container: Container) => ({
   // event name. Spread first, so the card's own accessors below win any name
   // clash.
   ...entrantsListPage.within(container),
+  // The draw the card hosts in its `draw` slot (`DrawPanel`): `queryPanel`,
+  // `getPoolLines`, `queryGenerateButton`, … The card only wires it in — the panel's
+  // own quartet pins its content.
+  ...drawPanelPage.within(container),
 
   /** The full-card open target — labelled `Edit <event>` for an owner, or
    * `View <event>` for a non-owner (read-only). Pass the verb to assert the

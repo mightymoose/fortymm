@@ -1,12 +1,14 @@
 import userEvent from '@testing-library/user-event'
 
 import {
+  buildDrawnEvent,
   buildEntrant,
   buildEntrants,
   buildEvent,
   buildPool,
   buildPredicate,
 } from '../../data/seed.factory'
+import { DrawPanel } from './draw-panel'
 import { eventCardPage } from './event-card.page'
 
 describe('EventCard', () => {
@@ -406,5 +408,54 @@ describe('EventCard', () => {
     expect(eventCardPage.queryNestedButtons()).toHaveLength(0)
     // The bare card is exactly one button: the stretched open target.
     expect(eventCardPage.queryAllButtons()).toHaveLength(1)
+  })
+
+  // Wiring only — the draw's content (pools, rounds, the vs-lines, the refusals) is
+  // pinned by `DrawPanel`'s own quartet. What the CARD owes it is a home that is not
+  // underneath the stretched open target, and a hosted control that is a *sibling* of
+  // that target rather than a button inside a button.
+  describe('the draw slot', () => {
+    it('hosts the draw it is given', () => {
+      eventCardPage.render({
+        event: buildDrawnEvent(),
+        draw: (
+          <DrawPanel
+            tournamentId="bay-area-open-2026"
+            event={buildDrawnEvent()}
+            canEdit
+          />
+        ),
+      })
+
+      expect(eventCardPage.queryPanel('ev-u1200')).toBeInTheDocument()
+      expect(eventCardPage.getPoolLines('p-a')).toEqual([
+        'player.1 vs player.4',
+        'player.1 vs player.5',
+        'player.4 vs player.5',
+      ])
+    })
+
+    it('keeps the draw’s controls out of the open target — never a button in a button', () => {
+      eventCardPage.render({
+        event: buildDrawnEvent(),
+        draw: (
+          <DrawPanel
+            tournamentId="bay-area-open-2026"
+            event={buildDrawnEvent()}
+            canEdit
+          />
+        ),
+      })
+
+      expect(eventCardPage.queryNestedButtons()).toHaveLength(0)
+      // The open target, plus the draw's own two verbs.
+      expect(eventCardPage.queryAllButtons()).toHaveLength(3)
+    })
+
+    it('renders no draw section at all when it is given none', () => {
+      eventCardPage.render({ event: buildEvent({ id: 'ev-open-singles' }) })
+
+      expect(eventCardPage.queryPanel('ev-open-singles')).toBeNull()
+    })
   })
 })

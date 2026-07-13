@@ -1,4 +1,5 @@
 import uuid
+from collections import Counter
 from datetime import date, datetime
 from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
@@ -228,7 +229,13 @@ class TournamentTable(BaseModel):
 
 
 class Pool(BaseModel):
-    """A slice of tables reserved for a window of time within an event."""
+    """A slice of tables reserved for a window of time within an event.
+
+    Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
+    by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
+    these ids. Which is only a coherent thing to say if an id names one pool — see
+    ``EventPools``, the type the event's list of them actually has.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -236,6 +243,81 @@ class Pool(BaseModel):
     name: str
     slot: Slot
     table_ids: list[str]
+
+
+def named_list(names: list[str]) -> str:
+    """The things a refusal is about, as a human would say them: ``“Pool B”``, or
+    ``“Pool B” and “Pool C”``, or ``“Pool B”, “Pool C” and “Pool D”``.
+
+    One formatter for every refusal that names a *set* of things — this module's 422s
+    (a duplicated pool id) and ``app.tournaments``' 409s (the pool-set freeze's pools,
+    the go-live precondition's events) alike — so a director cannot tell, from the
+    punctuation, which layer refused them.
+
+    It lives *here*, at the boundary, because the boundary is the lower layer: a
+    validator on ``EventPools`` runs before any route does, and ``app.tournaments``
+    already imports this module (the reverse import would be a cycle).
+    """
+    quoted = [f"“{name}”" for name in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+
+
+def _pool_ids_are_unique(pools: list[Pool]) -> list[Pool]:
+    """Refuse an event's pools when two of them claim the same ``id`` (422).
+
+    A pool id is an **identity**, and everything downstream of these value-objects is
+    built on the assumption that it identifies one pool. Nothing enforced it: pools are
+    JSONB with client-supplied string ids, there is no pools table and so no unique
+    index, and ``[A, A]`` was stored verbatim (measured: **201**). The bill arrived at
+    the cut, which deals the field across the event's pool ids and writes a fixture per
+    pairing — two pools with one id deal onto the same ``(event_id, pool_id, round,
+    position)``, the fixture table's unique constraint fires, and the director gets a
+    **500** from the driver
+    (``uq_tournament_fixtures_event_id_pool_id_round_position``, reproduced before this
+    validator existed). A boundary that admits what the interior cannot hold is not a
+    boundary.
+
+    It is a rule about the **list**, not about a ``Pool``, so it is a validator on the
+    list type — and it is stated **once**, on the alias both write schemas share, for
+    the reason the numeric bounds are shared (see ``EventMaxPlayers``): "the patch path
+    is the hole" is the same bug wearing a different verb. Guarding only ``create``
+    would leave the event to be born clean and then edited into the 500 — and the patch
+    path is the *worse* of the two, because the pool-set freeze that protects a cut draw
+    compares **sets**: ``[A, A, B]`` against a cut event holding ``{A, B}`` is the same
+    set, so the freeze waved it through (measured: **200**) and the next cut died. The
+    guard that exists to protect the draw was admitting the payload that poisons it.
+
+    The duplicated **ids** are named, not the pools' names: an id is what is duplicated,
+    two pools sharing one id may well have different names, and the id is what the
+    director must edit. The refusal is a 422 rather than a 409 because this is a
+    malformed payload in any state the event could possibly be in — an event with no
+    draw at all still cannot have two pools called ``p-a``.
+    """
+    counted = Counter(pool.id for pool in pools)
+    duplicated = [pool_id for pool_id, count in counted.items() if count > 1]
+    if duplicated:
+        raise ValueError(
+            f"A pool id identifies one pool: {named_list(duplicated)} "
+            f"{'is' if len(duplicated) == 1 else 'are'} used by more than one pool of "
+            "this event. Give each pool an id of its own."
+        )
+    return pools
+
+
+EventPools = Annotated[list[Pool], AfterValidator(_pool_ids_are_unique)]
+"""An event's pools: any number of them, no two sharing an ``id``.
+
+Shared verbatim by ``TournamentEventCreate`` and ``TournamentEventUpdate``, so the
+uniqueness rule cannot drift between the two verbs — sharing the alias is what makes
+them impossible to drift apart, exactly as it is for ``EventMaxPlayers``.
+
+An ``AfterValidator``, deliberately: it runs on the parsed ``list[Pool]`` (so it reads
+``pool.id``, not ``pool["id"]``) and it contributes **nothing** to the JSON schema, so
+the OpenAPI shape of ``pools`` is unchanged and the generated clients keep the array
+they already had. A rule a client cannot express in a schema keyword is not a reason to
+let the server hold a state it cannot survive."""
 
 
 # ----- read models ----------------------------------------------------------
@@ -352,6 +434,47 @@ class TournamentEntrantRead(BaseModel):
     rating: float | None
 
 
+class TournamentFixtureRead(BaseModel):
+    """One planned pairing of an event's draw (ADR-0786): a round and a position —
+    plus a pool, when the draw is pooled — whose sides may still be unknown.
+
+    A fixture is **not** a match. It materializes into one later (#788), and until it
+    does ``match_id`` is ``null``.
+
+    **Every ``null`` on this model is a fact, not a missing field**, and a client that
+    dropped them would lose the draw's whole point:
+
+    * ``entry_a_id`` / ``entry_b_id`` — ``null`` means **TBD**: the feeding fixture has
+      not been decided yet, and ``advance()`` will fill this side in. It never means a
+      bye — a bye is the *absence of a fixture row*, not a fixture with an empty side
+      (ADR-0786), so there is no ``is_bye`` flag here to tell the two apart.
+    * ``winner_entry_id`` — ``null`` while the fixture is undecided.
+    * ``match_id`` — ``null`` until the fixture becomes a real match, which only happens
+      once the tournament is ``live``.
+    * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
+      un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+      set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
+      JSONB, not a foreign key, because pools are value-objects with no table.
+
+    The entries are carried as **ids only**. The name and username behind
+    ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
+    them, keyed by that very id — so a client joins the two. Copying the username onto
+    the fixture as well would be carrying a field and its own derivation
+    (api/CLAUDE.md), and the copy that drifts is the one a player reads off a bracket.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    pool_id: str | None
+    round: int
+    position: int
+    entry_a_id: uuid.UUID | None
+    entry_b_id: uuid.UUID | None
+    winner_entry_id: uuid.UUID | None
+    match_id: uuid.UUID | None
+
+
 class TournamentEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -392,6 +515,19 @@ class TournamentEventRead(BaseModel):
     # a pair that can disagree (api/CLAUDE.md). So ``open`` means "the event admits
     # you", not "the button is live": the client composes the three.
     entry_state: EventEntryState
+    # The event's DRAW: its fixtures, in pool → round → position order (ADR-0786).
+    #
+    # It rides on this payload rather than on a ``GET …/draw`` of its own, because the
+    # tournament-detail page is one page and the repo's BFF rule gives it one endpoint
+    # (root CLAUDE.md). A separate draw endpoint would make every event's bracket a
+    # second round-trip the page cannot start until this one lands — a suspense
+    # waterfall, which is a defect here, not a design.
+    #
+    # **Empty is the designed state of an event whose draw has not been cut**, not an
+    # error and not a ``null``: an event with no draw is the normal condition of every
+    # event ever created (cutting is an explicit act, ADR-0786), so it answers ``[]``
+    # and the client renders "no draw yet" from a list it can iterate either way.
+    fixtures: list[TournamentFixtureRead]
 
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
     @property
@@ -578,7 +714,10 @@ class TournamentEventCreate(BaseModel):
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
-    pools: list[Pool] = Field(default_factory=list)
+    # ``EventPools``, not ``list[Pool]``: no two of an event's pools may share an ``id``
+    # (a fixture names its pool by that string, and a duplicate id 500'd the cut). The
+    # same alias the patch schema carries, so the rule holds on both verbs.
+    pools: EventPools = Field(default_factory=list)
 
 
 class TournamentEventUpdate(BaseModel):
@@ -612,7 +751,11 @@ class TournamentEventUpdate(BaseModel):
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
-    pools: list[Pool] | None = None
+    # The create schema's pools, exactly: a payload that could smuggle a duplicate id in
+    # by PATCH would defeat create's boundary entirely — and it is the patch path the
+    # pool-set freeze cannot cover, since it compares SETS and ``[A, A, B]`` is the same
+    # set as ``{A, B}``. See ``_pool_ids_are_unique``.
+    pools: EventPools | None = None
 
     @field_validator(
         "name",

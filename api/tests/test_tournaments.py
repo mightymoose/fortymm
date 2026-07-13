@@ -14,13 +14,14 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -29,11 +30,14 @@ from app.leagues import seed_user_league_rating
 from app.models import (
     League,
     LeagueVisibility,
+    Match,
+    MatchSettings,
     RatingStrategy,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentFixture,
     TournamentStatus,
     User,
     UserLeagueRating,
@@ -42,8 +46,10 @@ from app.models.tournament import DrawType, EventFormat
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryRatingIneligible,
+    TournamentEventUpdate,
     TournamentTransitionCreate,
 )
+from app.tournament_draws import DrawCurrency, draw_currency_by_event
 from app.tournament_entry_refusals import EntryRefusal
 from app.tournaments import (
     TOURNAMENT_CREATE,
@@ -51,8 +57,11 @@ from app.tournaments import (
     _get_owned_tournament_or_404,
     _get_tournament_for_update_or_404,
     create_tournament_transition,
+    cut_event_draw,
     get_tournament,
     list_tournaments,
+    uncut_event_draw,
+    update_event,
 )
 from tests._helpers import (
     counted_statements,
@@ -1142,15 +1151,60 @@ async def _enter(
     *,
     status: TournamentEntryStatus = TournamentEntryStatus.entered,
     seed: int | None = None,
+    created_at: datetime | None = None,
 ) -> TournamentEntry:
     """Persist an entry directly. The enter/withdraw *routes* land in #781/1c+1d;
-    the read path can't wait for them, so it writes the rows itself."""
+    the read path can't wait for them, so it writes the rows itself.
+
+    ``created_at`` is REGISTRATION ORDER, and the draw's ordering rule falls back to it
+    for every unseeded entrant (ADR-0786). It is settable here so a test about that
+    order can *state* the order rather than infer it from how fast the rows were
+    written: left to the column's ``now()`` default, two entries written in the same
+    breath differ by microseconds, and a draw asserted against that is a test that
+    passes on the clock's goodwill.
+    """
     entry = TournamentEntry(
         event_id=uuid.UUID(event_id), user_id=user.id, status=status, seed=seed
     )
+    if created_at is not None:
+        entry.created_at = created_at
     db_session.add(entry)
     await db_session.commit()
     return entry
+
+
+async def _cut(
+    db_session: AsyncSession,
+    event_id: str,
+    *,
+    round: int,
+    position: int,
+    pool_id: str | None = None,
+    entry_a: TournamentEntry | None = None,
+    entry_b: TournamentEntry | None = None,
+) -> TournamentFixture:
+    """Persist ONE fixture directly, at the coordinates given.
+
+    Sides default to ``None`` — TBD, the state most of a freshly cut draw is in
+    (ADR-0786) — and ``pool_id`` defaults to ``None``, an un-pooled fixture.
+
+    It sits beside ``_enter`` because it is the same kind of thing: the way a test
+    puts the database into a state the *routes* would take several acts to reach. The
+    read-path tests needed it before a cut route existed; the statement-count pins need
+    it to describe a *drawn* event; and the play-guard tests need it to write the one
+    state nothing can produce yet (a fixture with a winner, or with a match).
+    """
+    fixture = TournamentFixture(
+        event_id=uuid.UUID(event_id),
+        pool_id=pool_id,
+        round=round,
+        position=position,
+        entry_a_id=entry_a.id if entry_a is not None else None,
+        entry_b_id=entry_b.id if entry_b is not None else None,
+    )
+    db_session.add(fixture)
+    await db_session.commit()
+    return fixture
 
 
 async def test_tournament_events_has_no_entered_column(db_session: AsyncSession):
@@ -1270,11 +1324,12 @@ async def test_patch_event_answers_with_its_existing_entrants(
 
 
 # The pin, measured (print the statements below to re-measure): the tournaments +
-# usernames join, the events, ONE batched load of every event's active entrants, and
-# ONE batched load of the caller's rating on every league those tournaments run on
-# (which each event's ``entry_state`` is judged against, ADR-0783). Four, whatever the
-# number of tournaments and events.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 4
+# usernames join, the events, ONE batched load of every event's active entrants, ONE
+# batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load of
+# the caller's rating on every league those tournaments run on (which each event's
+# ``entry_state`` is judged against, ADR-0783). Five, whatever the number of tournaments
+# and events.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 5
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -1298,6 +1353,15 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
     N+1 this test exists to prevent: every event's ``entry_state`` is judged against
     the caller's rating on the tournament's ladder (ADR-0783), and a rating fetched
     inside the per-event loop reads the same number once per event.
+
+    And every event here carries a **cut draw**, which is what makes the pin cover the
+    fixtures loader at all. It did not, until it did: with no fixtures anywhere in the
+    fixture, an N+1 conditioned on an event actually *having* a draw — ``if
+    event.fixtures:`` in the serializer, a loader that skips the empty ones — cost this
+    test nothing and left it green, while the real page paid a query per drawn event.
+    A pin whose data has none of the thing it is pinning is not a pin. (The detail
+    endpoint's twin, ``test_detail_statement_count_does_not_grow_with_drawn_events``,
+    was written that way from the start; this one is now.)
 
     Counting is scoped to the handler rather than the HTTP request on purpose: an
     endpoint-level count would also sweep up session / auth statements that have
@@ -1326,6 +1390,11 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
             await make_user(db_session, f"gone-{n}"),
             status=TournamentEntryStatus.withdrawn,
         )
+        # Two fixtures per event — a DRAWN event (ADR-0786). Two, not one, so a loader
+        # that read a single row per event would show up as missing data rather than as
+        # a low count.
+        await _cut(db_session, event["id"], pool_id="p-a", round=1, position=1)
+        await _cut(db_session, event["id"], pool_id="p-a", round=1, position=2)
 
     async with counted_statements(engine) as (session, statements):
         # A transient ``User`` carrying only the id the handler reads: touching the
@@ -1338,13 +1407,18 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
 
     assert len(statements) == EXPECTED_TOURNAMENT_LIST_STATEMENTS, statements
     # And the block it counted really did the work: every event carries its own
-    # entrants, and the withdrawn player is nowhere.
+    # entrants and its own draw, and the withdrawn player is nowhere.
     (tournament,) = [t for t in listed if str(t.id) == created["id"]]
     assert len(tournament.events) == event_count
     assert [e.entered for e in tournament.events] == list(range(1, event_count + 1))
     assert all(
         len(e.entrants) == e.entered
         and not any(x.username.startswith("gone-") for x in e.entrants)
+        for e in tournament.events
+    )
+    assert all(
+        [(f.pool_id, f.round, f.position) for f in e.fixtures]
+        == [("p-a", 1, 1), ("p-a", 1, 2)]
         for e in tournament.events
     )
 
@@ -1718,6 +1792,73 @@ async def _status_of(client: AsyncClient, tournament_id: str) -> str:
     return status_value
 
 
+async def _event_with_entrants(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    tournament_id: str,
+    *,
+    name: str = "Open Singles",
+    players: int = 2,
+) -> tuple[str, list[TournamentEntry]]:
+    """A **round-robin** event under ``tournament_id``, with ``players`` active entrants
+    and **no draw yet** — the state a director is in just before they cut one.
+
+    Round-robin because it is the one draw type with a strategy today, so this event can
+    be handed to the real ``POST …/draw`` (``_cut_the_draw``): the go-live precondition
+    is a claim about the fixtures the *cut route* writes, and a test that hand-rolled
+    them with ``_cut`` would be asserting against a draw of its own invention.
+
+    ``predicates=[]`` — the eligibility rules are not what is under test here, and the
+    default payload's "under 1500" rule has nothing to say about the unrated players
+    below.
+    """
+    created = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_event_payload(name=name, draw_type="round-robin", predicates=[]),
+    )
+    assert created.status_code == 201, created.text
+    event_id: str = created.json()["id"]
+    entries = [
+        await _enter(
+            db_session,
+            event_id,
+            await make_user(db_session, f"player-{uuid.uuid4().hex[:12]}"),
+        )
+        for _ in range(players)
+    ]
+    return event_id, entries
+
+
+async def _cut_the_draw(client: AsyncClient, tournament_id: str, event_id: str) -> None:
+    """Cut the event's draw through the real route, so the fixtures the precondition
+    reads are the fixtures the product writes."""
+    response = await client.post(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}/draw"
+    )
+    assert response.status_code == 201, response.text
+
+
+async def _withdraw(db_session: AsyncSession, entry: TournamentEntry) -> None:
+    """Withdraw an entry the way the route does — a soft delete (ADR-0016), so the row
+    (and every fixture pointing at it) survives."""
+    entry.status = TournamentEntryStatus.withdrawn
+    await db_session.commit()
+
+
+async def _ready_to_start(
+    client: AsyncClient, db_session: AsyncSession, *, players: int = 2
+) -> tuple[str, str, list[TournamentEntry]]:
+    """A tournament that could go live right now: one event, ``players`` entrants, and a
+    draw cut from exactly them. Left in whatever status it was created in (``draft``) —
+    the caller decides where on the lifecycle it sits."""
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event_id, entries = await _event_with_entrants(
+        client, db_session, created["id"], players=players
+    )
+    await _cut_the_draw(client, created["id"], event_id)
+    return created["id"], event_id, entries
+
+
 @pytest.mark.parametrize(("start", "target"), _edge_params(_LEGAL_EDGES))
 async def test_transition_legal_edge_moves_the_tournament_and_persists(
     authed_client: tuple[AsyncClient, User],
@@ -1726,18 +1867,25 @@ async def test_transition_legal_edge_moves_the_tournament_and_persists(
     target: TournamentStatus,
 ):
     """Each of the three forward edges is accepted, answers with the moved
-    tournament, and the move is still there on the next read."""
+    tournament, and the move is still there on the next read.
+
+    The tournament is built **ready to start** — an event, its entrants, and a draw cut
+    from exactly them — because one of the three edges (``published → live``) now has a
+    precondition, and a tournament with no draw cannot walk it (ADR-0786). The other two
+    edges ask nothing of the draw and are indifferent to its presence
+    (``test_publish_and_archive_ask_nothing_of_the_draws`` pins that they stay so).
+    """
     client, _ = authed_client
-    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
-    await _set_status(db_session, created["id"], start)
+    tournament_id, _event_id, _entries = await _ready_to_start(client, db_session)
+    await _set_status(db_session, tournament_id, start)
 
     response = await client.post(
-        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+        f"/v1/tournaments/{tournament_id}/transitions", json={"to": target.value}
     )
 
     assert response.status_code == 201, response.text
     assert response.json()["status"] == target.value
-    assert await _status_of(client, created["id"]) == target.value
+    assert await _status_of(client, tournament_id) == target.value
 
 
 @pytest.mark.parametrize(("start", "target"), _edge_params(_ILLEGAL_EDGES))
@@ -1990,6 +2138,401 @@ async def test_two_identical_transitions_racing_leave_exactly_one_winner(
             )
         ).scalar_one()
         assert final.status is TournamentStatus.published
+
+
+# ----- the go-live precondition (ADR-0786) -----------------------------------
+#
+# ``published → live`` is the one edge with a precondition, and it hangs at the same
+# dispatch point as the edge table itself (ADR-0017 reserved the spot). A tournament may
+# only START with at least one event, each carrying a draw whose fixtures seat exactly
+# its current entrants. Registration stays open right up to go-live, so "has a draw" is
+# not enough: the draw has to still be a plan for the field that will play it.
+#
+# The tests below are written against the *set* of entrants, not their number, because
+# that is the distinction the guard turns on — and the one a plausible-looking count
+# check gets wrong (see ``test_a_swap_between_the_cut_and_go_live_is_stale``).
+
+
+async def _go_live(client: AsyncClient, tournament_id: str) -> Any:
+    return await client.post(
+        f"/v1/tournaments/{tournament_id}/transitions", json={"to": "live"}
+    )
+
+
+async def test_going_live_with_no_events_is_refused(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """A tournament with **no events** cannot start: there is nothing to run.
+
+    The case that makes the per-event rules below sound: "every event has a current
+    draw" is *vacuously true* of a tournament with no events, so without this check an
+    empty tournament would sail straight into ``live`` — the hole the #782 hand-off
+    flagged, closed by ADR-0786.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await _go_live(client, created["id"])
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        "This tournament has no events, so there is nothing to start. Add an event "
+        "and cut its draw, then start the tournament."
+    )
+    assert await _status_of(client, created["id"]) == "published"
+
+
+async def test_publishing_a_tournament_with_no_events_still_succeeds(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """Announcing early is fine; starting nothing is not (ADR-0786).
+
+    The other half of the rule above, and the half a guard placed on the *tournament*
+    rather than on the ``live`` target would have broken: a director writes the events
+    up after the dates are announced, and publishing is what opens registration.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": "published"}
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "published"
+    assert await _status_of(client, created["id"]) == "published"
+
+
+async def test_going_live_with_an_uncut_draw_names_the_event(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """An event nobody has cut a draw for refuses the whole tournament — and the refusal
+    says **which** event, by name.
+
+    A director with ten events cannot act on "some event has no draw", and the id the
+    guard actually compared is not what they are looking at, so neither the event id nor
+    any other raw uuid appears in the sentence.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event_id, _entries = await _event_with_entrants(
+        client, db_session, created["id"], name="Under 1200"
+    )
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await _go_live(client, created["id"])
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "“Under 1200” has no draw yet" in detail
+    assert event_id not in detail
+    assert await _status_of(client, created["id"]) == "published"
+
+
+async def test_going_live_with_an_event_nobody_entered_is_refused(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """**The ∅ == ∅ case.** An event with *no entrants* and *no draw* is refused, by
+    name, exactly as any other undrawn event is.
+
+    It is the case a currency check written as "do the fixtures seat the entrants?" gets
+    wrong in the *permissive* direction, and it is the only one where being wrong means
+    a tournament starts: an event nobody has entered seats nobody and has nobody to
+    seat, so the two sets compare **equal** — ∅ == ∅ — and a draw that does not exist
+    reads as ``current``. The tournament goes live on an event that cannot be played
+    (its draw could not even be cut: the strategy refuses a field that small).
+
+    ``draw_currency_by_event`` therefore decides ``uncut`` on the **fixtures existing**,
+    read off the rows, and not on the seated set being empty. That is a deliberate line
+    of that function and this is the test that holds it there: rewrite the ``uncut`` arm
+    as ``if not seated[event_id]`` — which passes every other go-live test in this file,
+    because every one of them has entrants — and only this one reds.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event_id, entries = await _event_with_entrants(
+        client, db_session, created["id"], name="Under 1200", players=0
+    )
+    assert entries == [], "the whole point of this test is that NOBODY entered"
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await _go_live(client, created["id"])
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "“Under 1200” has no draw yet" in detail
+    assert event_id not in detail
+    assert await _status_of(client, created["id"]) == "published"
+
+
+async def test_an_entry_after_the_cut_makes_the_draw_stale_and_a_re_cut_fixes_it(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """The headline case: the draw was cut, and *then* somebody entered.
+
+    The new player is in no fixture — they would sit out the tournament they entered —
+    so the tournament is refused, by name, until the draw is cut again. And after the
+    re-cut the very same request succeeds: the refusal is a *conflict* (409), not a
+    permission (403), and the way out of it is exactly the one the sentence names.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _entries = await _ready_to_start(client, db_session)
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    # The late entrant, arriving after the draw was cut — which registration being open
+    # in ``published`` makes an ordinary thing, not an exotic one.
+    await _enter(db_session, event_id, await make_user(db_session, "late-arrival"))
+
+    refused = await _go_live(client, tournament_id)
+
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert "“Open Singles” has a draw that no longer matches its entrants" in detail
+    assert await _status_of(client, tournament_id) == "published"
+
+    # The way out the refusal names: cut the draw again, from the field as it stands.
+    await _cut_the_draw(client, tournament_id, event_id)
+    started = await _go_live(client, tournament_id)
+
+    assert started.status_code == 201, started.text
+    assert await _status_of(client, tournament_id) == "live"
+
+
+async def test_a_withdrawal_after_the_cut_makes_the_draw_stale(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """A player *leaving* after the cut is staleness too — the direction an
+    "is everybody seated?" check would miss.
+
+    The draw still seats the player who withdrew, so their opponents are holding
+    fixtures nobody will play. Nothing is missing from the draw; something surplus is in
+    it, and the set comparison catches that as readily as the other direction.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, entries = await _ready_to_start(
+        client, db_session, players=3
+    )
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    await _withdraw(db_session, entries[0])
+
+    response = await _go_live(client, tournament_id)
+
+    assert response.status_code == 409, response.text
+    assert (
+        "“Open Singles” has a draw that no longer matches its entrants"
+        in response.json()["detail"]
+    )
+    assert await _status_of(client, tournament_id) == "published"
+
+    # And the re-cut still gets them started — with a draw for the field that is
+    # actually there.
+    await _cut_the_draw(client, tournament_id, event_id)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+
+async def test_a_swap_between_the_cut_and_go_live_is_stale(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """**The discriminating case.** One player withdraws and another enters between the
+    cut and go-live: the field has *the same number of players in it* and is not the
+    same field.
+
+    A currency check written as a count — "the draw has as many entrants as the event
+    does" — passes this, and it is precisely the state that must not start: the draw
+    seats a player who has left (their opponents get a match nobody will play) and seats
+    the player who replaced them nowhere (they sit out the event they entered). The
+    entrant *count* is asserted to be unchanged below, so this test fails the moment the
+    guard is weakened into counting.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, entries = await _ready_to_start(client, db_session)
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    before = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert before.json()["events"][0]["entered"] == 2
+
+    # The swap: one out, one in. Same count, different people.
+    await _withdraw(db_session, entries[0])
+    await _enter(db_session, event_id, await make_user(db_session, "the-replacement"))
+
+    after = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert after.json()["events"][0]["entered"] == 2, (
+        "the whole point of this test is that the COUNT did not move"
+    )
+
+    response = await _go_live(client, tournament_id)
+
+    assert response.status_code == 409, response.text
+    assert (
+        "“Open Singles” has a draw that no longer matches its entrants"
+        in response.json()["detail"]
+    )
+    assert await _status_of(client, tournament_id) == "published"
+
+
+async def test_the_refusal_names_every_offending_event_and_spares_the_ready_one(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """Three events — one ready, one never cut, one gone stale — and the refusal names
+    the two that are broken, each under the sentence that says what is wrong with it.
+
+    Two failures, two jobs: an uncut event needs a first cut; a stale one has a draw the
+    director may have reviewed and approved, which is simply older than the field. And
+    the event that IS ready is not named at all — a refusal that listed every event
+    would send the director to re-cut a draw that is perfectly good.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = created["id"]
+
+    ready_id, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Open Singles"
+    )
+    await _cut_the_draw(client, tournament_id, ready_id)
+
+    await _event_with_entrants(client, db_session, tournament_id, name="Under 1200")
+
+    stale_id, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Over 40s"
+    )
+    await _cut_the_draw(client, tournament_id, stale_id)
+    await _enter(
+        db_session, stale_id, await make_user(db_session, "over-40s-latecomer")
+    )
+
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    response = await _go_live(client, tournament_id)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "“Under 1200” has no draw yet" in detail
+    assert "“Over 40s” has a draw that no longer matches its entrants" in detail
+    assert "Open Singles" not in detail
+    assert await _status_of(client, tournament_id) == "published"
+
+
+async def test_publish_and_archive_ask_nothing_of_the_draws(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """The precondition is on the ``live`` **target**, and nowhere else.
+
+    A tournament whose events have no draws at all still publishes (registration has to
+    open before anybody can enter, let alone be drawn) and still archives (a tournament
+    that is over is not asked to tidy its draws before it can be put away). Only
+    starting needs a draw.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _event_with_entrants(client, db_session, created["id"], name="Under 1200")
+
+    published = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": "published"}
+    )
+    assert published.status_code == 201, published.text
+
+    # Straight to ``live`` in the database — the edge under test here is the one *out*
+    # of it, and walking in through the route would need the very draw this test is
+    # asserting is not required.
+    await _set_status(db_session, created["id"], TournamentStatus.live)
+    archived = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": "archived"}
+    )
+
+    assert archived.status_code == 201, archived.text
+    assert await _status_of(client, created["id"]) == "archived"
+
+
+async def _hold_a_late_entry(
+    session: AsyncSession,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """A player's entry, taken up to but not including its commit — exactly as the entry
+    route takes it: the **tournament's** row ``FOR UPDATE`` first, then the INSERT.
+
+    That uncommitted instant is where the race lives, and holding it open is what lets
+    the test below drive the interesting interleaving deterministically, instead of
+    firing both sides and hoping the scheduler obliges — a ``gather`` of the two passes
+    even against a *removed* guard, because go-live happens to win every time.
+
+    """
+    await session.execute(
+        select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+    )
+    session.add(TournamentEntry(event_id=event_id, user_id=user_id))
+    await session.flush()
+
+
+async def test_go_live_blocks_on_an_in_flight_entry_and_then_finds_the_draw_stale(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+):
+    """The precondition is judged **inside the go-live row lock**, against the field as
+    last *committed* — so an entry in flight cannot slip between the check and the
+    ``UPDATE``.
+
+    A player's entry holds the tournament's row lock, uncommitted, with its INSERT
+    already made. The owner presses go-live — and *blocks*, because the transition route
+    reads that same row ``FOR UPDATE`` (``starting.done()`` catches it if it does not).
+    When the entry commits, go-live's read returns, its currency check runs on the
+    field that now includes the new player, and it refuses: the draw seats one fewer
+    player than the event has.
+
+    Without the lock — or with the check hoisted above it — go-live would read the
+    field from its own snapshot, certify a draw that was current *at that instant*,
+    and commit. Both requests succeed, and the tournament starts on a draw that leaves
+    a paying entrant in no fixture. READ COMMITTED offers nothing here; the shared lock
+    on the tournament row is the entire mechanism, and this is the test that says so.
+    """
+    client, owner = authed_client
+    tournament_id, event_id, _entries = await _ready_to_start(client, db_session)
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    latecomer = await make_user(db_session, "the-latecomer")
+
+    tournament_uuid = uuid.UUID(tournament_id)
+    event_uuid = uuid.UUID(event_id)
+    owner_id, latecomer_id = owner.id, latecomer.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def go_live() -> int | str:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == owner_id))
+            ).scalar_one()
+            try:
+                moved = await create_tournament_transition(
+                    tournament_uuid,
+                    TournamentTransitionCreate(to=TournamentStatus.live),
+                    session,
+                    actor,
+                )
+                return moved.status.value
+            except HTTPException as exc:
+                return exc.status_code
+
+    async with make_session() as entering:
+        await _hold_a_late_entry(entering, tournament_uuid, event_uuid, latecomer_id)
+        starting = asyncio.create_task(go_live())
+        # Every chance to finish — and it cannot, because it is parked on the
+        # tournament's row lock, inside the handler, before it has judged anything.
+        await asyncio.sleep(0.25)
+        if starting.done():
+            pytest.fail(
+                "go-live did not block on the tournament's row lock: it ran to "
+                f"completion against an in-flight entry ({starting.result()!r})"
+            )
+        await entering.commit()
+        outcome = await starting
+
+    assert outcome == 409, outcome
+    assert await _status_of(client, tournament_id) == "published"
+    async with make_session() as verify:
+        currency = (await draw_currency_by_event(verify, [event_uuid]))[event_uuid]
+    assert currency is DrawCurrency.stale
 
 
 # ----- the league a tournament is judged on (ADR-0783) ----------------------
@@ -2807,10 +3350,11 @@ async def test_the_list_and_the_detail_agree_about_an_entrants_rating(
 
 # The pin, measured: the tournament + username join, its events, ONE batched load of
 # those events' active entrants (their ratings on the tournament's ladder ride along on
-# that same statement — see ``active_entrants_by_event``), and ONE read of the caller's
-# rating on the tournament's league. Four, whatever the number of events, and whatever
-# the number of entrants in them.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 4
+# that same statement — see ``active_entrants_by_event``), ONE batched load of those
+# events' fixtures — their draws (ADR-0786) — and ONE read of the caller's rating on the
+# tournament's league. Five, whatever the number of events, whatever the number of
+# entrants in them, and whatever the size of their draws.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 5
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -2926,3 +3470,1727 @@ async def test_detail_statement_count_does_not_grow_with_entrants(
     assert [e.rating is not None for e in entrants] == [
         n % 2 == 0 for _ in detail.events for n in range(entrant_count)
     ]
+
+
+# ----- the draw on the detail page (ADR-0786) -------------------------------
+#
+# A draw is the event's **fixtures**: planned pairings, each at a (pool, round,
+# position), whose sides may still be TBD. They ride on the tournament-detail BFF
+# rather than on a ``GET …/draw`` of their own — one endpoint per page (root
+# CLAUDE.md), so a bracket is never a second round-trip the page has to wait for.
+#
+# Nothing writes fixtures yet (the cut endpoint is 1c), so these tests write the rows
+# themselves — exactly as the entrants tests did before the entry route existed.
+
+
+def _coords(event: dict[str, Any]) -> list[tuple[str | None, int, int]]:
+    """An event's draw as the sequence of coordinates it came back in."""
+    return [(f["pool_id"], f["round"], f["position"]) for f in event["fixtures"]]
+
+
+async def _events_by_name(
+    client: AsyncClient, tournament_id: str
+) -> dict[str, dict[str, Any]]:
+    return {e["name"]: e for e in await _events_of(client, tournament_id)}
+
+
+async def test_an_events_draw_comes_back_in_pool_round_position_order(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The draw is ordered by the server, deterministically: pool, then round, then
+    position — the three columns that identify a fixture within its draw.
+
+    The rows are written in deliberately the WRONG order (round 2 before round 1, pool
+    B before pool A, the KO fixture first of all), because insertion order is what a
+    read that forgot to order by anything would come back in — and on a draw cut in one
+    pass, insertion order and the right order would happen to coincide. A test seeded
+    in the right order could not tell the two apart, and would pass against a read with
+    no ORDER BY at all.
+
+    The un-pooled fixture (``pool_id`` NULL — the KO stage of this rr-then-ko event)
+    sorts LAST, after the pools that feed it. NULL is a real value in this domain ("this
+    fixture belongs to no pool"), not a missing one, so it has a defined place in the
+    order rather than an incidental one.
+    """
+    client, _ = authed_client
+    tournament_id, (drawn, _) = await _tournament_with_events(
+        client,
+        _event_payload(name="Open Singles"),
+        _event_payload(name="Under 1500"),
+    )
+
+    await _cut(db_session, drawn["id"], pool_id="p-b", round=2, position=1)
+    await _cut(db_session, drawn["id"], pool_id=None, round=1, position=1)
+    await _cut(db_session, drawn["id"], pool_id="p-b", round=1, position=2)
+    await _cut(db_session, drawn["id"], pool_id="p-a", round=1, position=1)
+    await _cut(db_session, drawn["id"], pool_id="p-b", round=1, position=1)
+
+    events = await _events_by_name(client, tournament_id)
+
+    assert _coords(events["Open Singles"]) == [
+        ("p-a", 1, 1),
+        ("p-b", 1, 1),
+        ("p-b", 1, 2),
+        ("p-b", 2, 1),
+        (None, 1, 1),
+    ]
+
+
+async def test_an_event_whose_draw_is_uncut_carries_an_empty_list(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An event with no draw is not an error and not a ``null`` — it is an event whose
+    draw has not been cut, which is the normal state of every event ever created
+    (cutting is an explicit act, ADR-0786). It answers ``[]``.
+
+    Its neighbour on the same tournament *is* cut, so this also pins the grouping: a
+    loader that batched the fixtures but lost the event key would spill one event's draw
+    onto the other, and a test with a single event could not see that.
+    """
+    client, _ = authed_client
+    tournament_id, (drawn, undrawn) = await _tournament_with_events(
+        client,
+        _event_payload(name="Open Singles"),
+        _event_payload(name="Under 1500"),
+    )
+    await _cut(db_session, drawn["id"], pool_id="p-a", round=1, position=1)
+
+    events = await _events_by_name(client, tournament_id)
+
+    assert _coords(events["Open Singles"]) == [("p-a", 1, 1)]
+    assert events["Under 1500"]["fixtures"] == []
+
+
+async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A fixture's ``null`` side is its whole meaning: **TBD** — the feeding fixture is
+    not decided yet (ADR-0786). It must survive serialization as a ``null``, not be
+    dropped from the payload as an absent key: a client cannot render a bracket slot it
+    was never told about, and "the key is missing" and "the side is unknown" are not the
+    same fact.
+
+    ``winner_entry_id`` and ``match_id`` are the same story — undecided, and not yet a
+    match. The exact key set is asserted, so a field silently dropped (or a username
+    silently *added*) fails here.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    ada = await make_user(db_session, "ada-drawn")
+    entry = await _enter(db_session, event["id"], ada)
+    await _cut(
+        db_session, event["id"], pool_id="p-a", round=1, position=1, entry_a=entry
+    )
+
+    (read,) = await _events_of(client, tournament_id)
+    (fixture,) = read["fixtures"]
+
+    assert set(fixture) == {
+        "id",
+        "pool_id",
+        "round",
+        "position",
+        "entry_a_id",
+        "entry_b_id",
+        "winner_entry_id",
+        "match_id",
+    }
+    assert fixture["entry_a_id"] == str(entry.id)
+    # The three facts that are not known yet — each present, each null.
+    assert fixture["entry_b_id"] is None
+    assert fixture["winner_entry_id"] is None
+    assert fixture["match_id"] is None
+
+
+async def test_a_fixtures_sides_are_entry_ids_the_events_entrants_list_resolves(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The contract that lets the fixture carry ids alone: **every entry id a fixture
+    names is on the same event's ``entrants`` list**, so a client joins the two and
+    reads the player's name off the one copy of it.
+
+    The fixture deliberately does NOT repeat the username. A second copy of a name is a
+    field and its own derivation (api/CLAUDE.md), and the copy that drifts is the one a
+    player reads off a bracket. This test is what makes that safe: it fails if a fixture
+    can reference an entry the page cannot resolve.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    ada = await make_user(db_session, "ada-seeded")
+    grace = await make_user(db_session, "grace-seeded")
+    ada_entry = await _enter(db_session, event["id"], ada)
+    grace_entry = await _enter(db_session, event["id"], grace)
+    await _cut(
+        db_session,
+        event["id"],
+        pool_id="p-a",
+        round=1,
+        position=1,
+        entry_a=ada_entry,
+        entry_b=grace_entry,
+    )
+
+    (read,) = await _events_of(client, tournament_id)
+    (fixture,) = read["fixtures"]
+
+    entrants = {e["id"]: e["username"] for e in read["entrants"]}
+    named = [fixture["entry_a_id"], fixture["entry_b_id"]]
+    assert all(entry_id in entrants for entry_id in named), (named, entrants)
+    assert [entrants[entry_id] for entry_id in named] == ["ada-seeded", "grace-seeded"]
+
+
+async def test_the_list_and_the_detail_agree_about_an_events_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Both reads go through the one batched loader, so the tournaments list cannot show
+    a draw the detail page disagrees with — including its order."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    await _cut(db_session, event["id"], pool_id="p-b", round=1, position=1)
+    await _cut(db_session, event["id"], pool_id="p-a", round=1, position=1)
+
+    rows = (await client.get("/v1/tournaments")).json()
+    listed = next(r for r in rows if r["id"] == tournament_id)
+    (listed_event,) = listed["events"]
+    (detail_event,) = await _events_of(client, tournament_id)
+
+    assert _coords(listed_event) == [("p-a", 1, 1), ("p-b", 1, 1)]
+    assert listed_event["fixtures"] == detail_event["fixtures"]
+
+
+async def test_patching_an_event_answers_with_the_draw_it_still_has(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A PATCH is not a re-cut (ADR-0786): the event's draw survives an edit, so the
+    response carries it. Answering ``[]`` here would tell the director their draw had
+    just been thrown away — and the page, which renders what the mutation returned,
+    would show it that way."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    await _cut(db_session, event["id"], pool_id="p-a", round=1, position=1)
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "Renamed Singles"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _coords(response.json()) == [("p-a", 1, 1)]
+
+
+async def test_a_new_event_is_born_with_an_empty_draw(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """An event one statement old cannot have a draw — fixtures are only ever written by
+    the cut, an explicit act on an event that already exists (ADR-0786) — so create
+    answers ``[]`` without asking the database."""
+    client, _ = authed_client
+    _, (event,) = await _tournament_with_events(client, _event_payload())
+
+    assert event["fixtures"] == []
+
+
+@pytest.mark.parametrize("event_count", [1, 4])
+async def test_detail_statement_count_does_not_grow_with_drawn_events(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event_count: int,
+) -> None:
+    """Every event on the page now carries its draw, and the obvious way to fetch one
+    is ``event.fixtures`` inside the serializer's loop — a SELECT per event, on the
+    page whose whole job is to describe a field of events. That N+1 is invisible in
+    every assertion about the *response*: the draws would all come back, correctly,
+    and in the right order.
+
+    What this pin catches that the two sibling pins cannot: **every event in their**
+    fixtures has an *uncut* draw. So a fetch conditioned on an event actually having
+    fixtures — or a loader that skipped the empty ones — costs them nothing and leaves
+    them green, while the real page pays a query per drawn event. Hence the deliberate
+    cut draw on every event here, and the two ``event_count`` cases: a per-event fetch
+    measures 6 statements at one event and 9 at four, so it fails the pin at four even
+    if it slipped past at one.
+    """
+    client, user = authed_client
+    user_id = user.id  # read outside the counted block
+    tournament_id, events = await _tournament_with_events(
+        client,
+        *(_event_payload(name=f"Event {n}") for n in range(event_count)),
+    )
+    for n, event in enumerate(events):
+        entrant = await make_user(db_session, f"drawn-{n}")
+        entry = await _enter(db_session, event["id"], entrant)
+        # Two fixtures per event, so a loader that read only the first row per event
+        # would show up as missing data rather than as a low count.
+        await _cut(
+            db_session, event["id"], pool_id="p-a", round=1, position=1, entry_a=entry
+        )
+        await _cut(db_session, event["id"], pool_id="p-a", round=1, position=2)
+
+    async with counted_statements(engine) as (session, statements):
+        detail = await get_tournament(
+            tournament_id=uuid.UUID(tournament_id),
+            db=session,
+            current_user=User(id=user_id),
+        )
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_TOURNAMENT_DETAIL_STATEMENTS, statements
+    # And the counted block really did the work: every event came back with its own
+    # two-fixture draw, in order.
+    assert len(detail.events) == event_count
+    assert all(
+        [(f.pool_id, f.round, f.position) for f in e.fixtures]
+        == [("p-a", 1, 1), ("p-a", 1, 2)]
+        for e in detail.events
+    )
+
+
+# ----- cutting and un-cutting the draw (ADR-0786) ---------------------------
+#
+# ``POST …/events/{id}/draw`` cuts (or re-cuts) an event's draw; ``DELETE`` un-cuts it.
+# Owner-only, refused on evidence of play, and never on the tournament's status.
+#
+# The draw itself is planned by ``app.draws``, whose rules (the snake deal, the circle
+# method, byes-as-absence, the ordering) are pinned against literals in
+# ``tests/test_draws.py``. What these tests own is everything the pure module cannot
+# see: that the right FIELD reaches it (active entries, in the right order), that what
+# comes back is PERSISTED (and replaces what was there), who may ask for it, and the
+# guard that stops a played draw from being thrown away.
+
+# The pools a round-robin event is cut across. Two, so the snake has somewhere to snake
+# to and a fixture's ``pool_id`` is a ref that has to resolve against the right one.
+POOL_A: dict[str, Any] = {
+    "id": "p-a",
+    "name": "Pool A",
+    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+    "table_ids": ["t1"],
+}
+POOL_B: dict[str, Any] = {
+    "id": "p-b",
+    "name": "Pool B",
+    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+    "table_ids": ["t2"],
+}
+
+
+def _rr_payload(*pools: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """A **round-robin** event over ``pools`` — the one draw type that has a strategy
+    today (ADR-0786). The shared ``_event_payload`` is deliberately an ``rr-then-ko``,
+    which has none, so a draw test that used it would be testing the 422.
+
+    ``draw_type`` is overridable (the unimplemented-type tests need exactly this event
+    with a different generator on it), so it goes through ``overrides``."""
+    return _event_payload(
+        **{"draw_type": "round-robin", "pools": list(pools), **overrides}
+    )
+
+
+def _draw_url(tournament_id: str, event_id: str) -> str:
+    return f"/v1/tournaments/{tournament_id}/events/{event_id}/draw"
+
+
+async def _seed_field(
+    db_session: AsyncSession,
+    event_id: str,
+    count: int,
+    *,
+    prefix: str = "p",
+    seeded: bool = True,
+) -> list[TournamentEntry]:
+    """``count`` active entries, in a draw order this test *states* rather than races
+    for: seeds 1..N by default, and staggered registration times besides.
+
+    The draw's order is seed-ascending, then registration order (ADR-0786). Both are
+    pinned here so the pool each entrant snakes into is a fact of the fixture, not of
+    how quickly the rows happened to be inserted.
+    """
+    start = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    return [
+        await _enter(
+            db_session,
+            event_id,
+            await make_user(db_session, f"{prefix}{n}"),
+            seed=n if seeded else None,
+            created_at=start + timedelta(minutes=n),
+        )
+        for n in range(1, count + 1)
+    ]
+
+
+async def _fixture_rows(
+    db_session: AsyncSession, event_id: str
+) -> list[TournamentFixture]:
+    """The event's fixtures, straight from the database, in the canonical order.
+
+    Read from the ROW, never from the response: a route that answered with a plan it
+    never persisted would satisfy every assertion made about its body.
+    """
+    return list(
+        (
+            await db_session.execute(
+                select(TournamentFixture)
+                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .order_by(
+                    TournamentFixture.pool_id.asc().nulls_last(),
+                    TournamentFixture.round,
+                    TournamentFixture.position,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _snapshot(fixtures: Sequence[TournamentFixture]) -> list[tuple[Any, ...]]:
+    """Every column of every fixture — the whole row, not a summary of it.
+
+    What "the refusal changed nothing" has to mean: the same rows, with the same ids,
+    holding the same values. A count would pass against a route that deleted the draw
+    and re-cut an identically-shaped one, which is precisely the harm the play guard
+    exists to prevent.
+    """
+    return [
+        (
+            f.id,
+            f.event_id,
+            f.pool_id,
+            f.round,
+            f.position,
+            f.entry_a_id,
+            f.entry_b_id,
+            f.winner_entry_id,
+            f.match_id,
+        )
+        for f in fixtures
+    ]
+
+
+def _pairs(fixtures: Sequence[TournamentFixture]) -> set[frozenset[uuid.UUID | None]]:
+    """The pairings a draw actually contains, ignoring which side is which."""
+    return {frozenset({f.entry_a_id, f.entry_b_id}) for f in fixtures}
+
+
+async def _make_match(db_session: AsyncSession, creator: User, league: League) -> Match:
+    """A bare match row — the thing a fixture *materializes* into (#788).
+
+    Nothing creates one from a fixture yet, which is exactly why this exists: the play
+    guard has to hold before the path that would trip it does, or it lands already
+    broken.
+    """
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        league_id=league.id,
+        created_by_user_id=creator.id,
+    )
+    db_session.add(match)
+    await db_session.commit()
+    return match
+
+
+async def test_cutting_a_draw_persists_the_fixtures_the_strategy_planned(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The owner cuts a two-pool round-robin over five players, and the draw it plans is
+    the draw that lands in the database.
+
+    Five over two pools is the smallest field that exercises the whole substrate at
+    once: the snake deals it unevenly (3 and 2, seeds 1/4/5 against 2/3 — the top two
+    seeds land in different pools, which is what a snake is *for*), the odd pool needs
+    the circle method's phantom, and the bye that phantom produces is an **absent row**
+    rather than a fixture with a NULL side (ADR-0786) — so pool A's three rounds hold
+    one fixture each, not two with a hole in one.
+
+    Asserted against the DATABASE as well as the response, because a route that planned
+    a draw and answered with it without ever writing it would pass every assertion about
+    the body — and the next page load would show no draw at all.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    p1, p2, p3, p4, p5 = await _seed_field(db_session, event["id"], 5)
+    # A withdrawn player, who is not an entrant (ADR-0016) and must be in no fixture:
+    # cutting a draw from a field that includes people who have LEFT the event would
+    # seat somebody who is not playing, and size every pool against a field that does
+    # not exist.
+    await _enter(
+        db_session,
+        event["id"],
+        await make_user(db_session, "gone"),
+        status=TournamentEntryStatus.withdrawn,
+    )
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    rows = await _fixture_rows(db_session, event["id"])
+    # The response IS the persisted draw — same rows, same ids, same order.
+    assert [uuid.UUID(f["id"]) for f in body] == [f.id for f in rows]
+    # Pool A (seeds 1, 4, 5) is the odd one: three rounds, one fixture each, because the
+    # entrant drawn against the phantom that round simply has no fixture. Pool B (seeds
+    # 2, 3) is a single pairing. Ordered pool → round → position.
+    assert [(f.pool_id, f.round, f.position) for f in rows] == [
+        ("p-a", 1, 1),
+        ("p-a", 2, 1),
+        ("p-a", 3, 1),
+        ("p-b", 1, 1),
+    ]
+    # All-play-all *within* each pool, and nobody paired across pools.
+    assert _pairs(rows) == {
+        frozenset({p1.id, p4.id}),
+        frozenset({p1.id, p5.id}),
+        frozenset({p4.id, p5.id}),
+        frozenset({p2.id, p3.id}),
+    }
+    # Both sides of every round-robin fixture are known at the cut, and nothing is
+    # played yet: no TBDs, no winners, no matches.
+    assert all(
+        f.entry_a_id is not None
+        and f.entry_b_id is not None
+        and f.winner_entry_id is None
+        and f.match_id is None
+        for f in rows
+    )
+    # Exactly the five active entrants are seated — so the withdrawn player, who has an
+    # entry row in this very event, is in no fixture at all.
+    seated = {f.entry_a_id for f in rows} | {f.entry_b_id for f in rows}
+    assert seated == {p1.id, p2.id, p3.id, p4.id, p5.id}
+
+
+async def test_an_unseeded_field_is_drawn_in_registration_order(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Nothing sets a seed today (ADR-0786), so the draw a real club night gets is the
+    one ordered by **registration order** — and this is the test that the entry rows'
+    ``created_at`` is what reaches the planner, not the order Postgres felt like
+    returning them in.
+
+    Four unseeded players, registered 1→4 and written in that order, over two pools: the
+    snake puts 1 and 4 together and 2 and 3 together. A cut that read the field in *any*
+    other order (the table's physical order, the id order) would deal them differently,
+    and there is no way to see that from the shape of the draw alone — both pools hold
+    one fixture either way. So the pairings are what is asserted.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    first, second, third, fourth = await _seed_field(
+        db_session, event["id"], 4, seeded=False
+    )
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 201, response.text
+    rows = await _fixture_rows(db_session, event["id"])
+    assert _pairs(rows) == {
+        frozenset({first.id, fourth.id}),  # pool A: the snake's 1 and 4
+        frozenset({second.id, third.id}),  # pool B: its 2 and 3
+    }
+
+
+async def test_a_second_cut_replaces_the_draw_wholesale(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Re-cutting after the field changed **replaces** the draw: the old fixtures are
+    gone — their ids with them — not amended in place, and not merely added to.
+
+    That is the whole promise of the explicit cut (ADR-0786): a draw is a plan made
+    against a field, so when the field changes the plan is re-made. A reconcile that
+    kept the old rows and updated their sides would be the same draw wearing the same
+    ids while seating different people — the fixture a director bookmarked would
+    silently become somebody else's match.
+
+    Asserted by IDENTITY, not by shape: the id sets before and after are disjoint, and
+    every old id is gone from the table. A count would pass against a route that left
+    the two old fixtures alone and appended the new ones, which is exactly the bug.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+
+    first_cut = await client.post(_draw_url(tournament_id, event["id"]))
+    assert first_cut.status_code == 201, first_cut.text
+    before = {f.id for f in await _fixture_rows(db_session, event["id"])}
+    # Two pools of two: one fixture each.
+    assert len(before) == 2
+
+    # A fifth player enters after the cut — the draw is now STALE, which is the whole
+    # reason to re-cut.
+    await _enter(
+        db_session,
+        event["id"],
+        await make_user(db_session, "latecomer"),
+        seed=5,
+        created_at=datetime(2026, 6, 1, 10, 0, tzinfo=UTC),
+    )
+
+    second_cut = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert second_cut.status_code == 201, second_cut.text
+    rows = await _fixture_rows(db_session, event["id"])
+    after = {f.id for f in rows}
+    # Not one row of the old draw survived — disjoint id sets, and the old ids are not
+    # merely displaced, they are DELETED.
+    assert after.isdisjoint(before), (before, after)
+    survivors = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TournamentFixture)
+            .where(TournamentFixture.id.in_(before))
+        )
+    ).scalar_one()
+    assert survivors == 0
+    # And the new draw is the one the new field implies: pool A now holds three players
+    # (three fixtures), pool B two (one).
+    assert [(f.pool_id, f.round, f.position) for f in rows] == [
+        ("p-a", 1, 1),
+        ("p-a", 2, 1),
+        ("p-a", 3, 1),
+        ("p-b", 1, 1),
+    ]
+    assert {uuid.UUID(f["id"]) for f in second_cut.json()} == after
+    # The page shows the same thing the mutation answered with — same rows, same order.
+    (read,) = await _events_of(client, tournament_id)
+    assert read["fixtures"] == second_cut.json()
+
+
+async def test_un_cutting_deletes_the_draw_and_is_idempotent(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """DELETE removes the event's fixtures and leaves everything else standing — and
+    doing it twice is still a 204.
+
+    An event with no draw is already in the state the second DELETE asks for, and this
+    is a DELETE: asking for a state the resource already holds is a success, not a 404
+    (the same reasoning that makes withdrawing an already-withdrawn entry a 204).
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    entries = await _seed_field(db_session, event["id"], 4)
+    await client.post(_draw_url(tournament_id, event["id"]))
+    assert await _fixture_rows(db_session, event["id"]) != []
+
+    response = await client.delete(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 204, response.text
+    assert await _fixture_rows(db_session, event["id"]) == []
+    # The entrants are untouched — un-cutting a draw un-does the DRAW, not the field.
+    (read,) = await _events_of(client, tournament_id)
+    assert read["fixtures"] == []
+    assert {e["id"] for e in read["entrants"]} == {str(e.id) for e in entries}
+
+    # Again: the event has no draw, and that is what was asked for.
+    again = await client.delete(_draw_url(tournament_id, event["id"]))
+    assert again.status_code == 204, again.text
+
+
+# ----- who may cut ----------------------------------------------------------
+
+
+async def test_a_non_owner_cannot_cut_or_un_cut_a_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Cutting a draw is a property of OWNING the tournament — no permission grants it.
+
+    The stranger here holds ``tournament.view`` + ``tournament.create``, so they are a
+    fully-permitted user of the platform; what they are not is the director of this
+    tournament. Both verbs answer 403, and the standing draw is untouched — a refusal
+    that had deleted the fixtures first would be a 403 in name only.
+    """
+    owner_client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        owner_client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    await owner_client.post(_draw_url(tournament_id, event["id"]))
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    async with make_client() as stranger:
+        user = await start_session(stranger, db_session)
+        await _grant_tournament_perms(db_session, user)
+
+        assert (
+            await stranger.post(_draw_url(tournament_id, event["id"]))
+        ).status_code == 403
+        assert (
+            await stranger.delete(_draw_url(tournament_id, event["id"]))
+        ).status_code == 403
+
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+async def test_an_anonymous_caller_cannot_cut_or_un_cut_a_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """No session, no draw: both verbs are 401 before ownership is even a question."""
+    owner_client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        owner_client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    await owner_client.post(_draw_url(tournament_id, event["id"]))
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    async with make_client() as anonymous:  # no ``start_session``: no cookie at all
+        assert (
+            await anonymous.post(_draw_url(tournament_id, event["id"]))
+        ).status_code == 401
+        assert (
+            await anonymous.delete(_draw_url(tournament_id, event["id"]))
+        ).status_code == 401
+
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+@pytest.mark.parametrize("verb", ["post", "delete"])
+async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
+    authed_client: tuple[AsyncClient, User],
+    verb: str,
+) -> None:
+    """404 before 403 before 409 (ADR-0017), and the event must belong to the named
+    tournament: a right event id under the wrong tournament id is not addressable
+    through this URL, so it is a 404 rather than a cut of the event the caller did not
+    name."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    other_id, _ = await _tournament_with_events(client)
+    missing = str(uuid.uuid4())
+    call = getattr(client, verb)
+
+    assert (await call(_draw_url(missing, event["id"]))).status_code == 404
+    assert (await call(_draw_url(tournament_id, missing))).status_code == 404
+    # The event exists, and so does the tournament — but not together.
+    assert (await call(_draw_url(other_id, event["id"]))).status_code == 404
+
+
+# ----- the draws this event cannot produce (422) ----------------------------
+
+
+@pytest.mark.parametrize(
+    "draw_type", ["single-elim", "double-elim", "rr-then-ko", "swiss"]
+)
+async def test_cutting_an_unimplemented_draw_type_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    draw_type: str,
+) -> None:
+    """Only round-robin has a strategy today (ADR-0786). The other four are a designed
+    422 that NAMES the draw type — not a 500 from an unhandled exception, and not an
+    empty draw the director would have to notice was empty.
+
+    422, because the request is well-formed and authorized: it is this event's *content*
+    — the draw type it was configured with — that cannot become a draw. Nothing is
+    written, and the field is left alone.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B, draw_type=draw_type)
+    )
+    await _seed_field(db_session, event["id"], 4)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert draw_type in detail, detail
+    # The sentence is for the director, and it says what to do about it. It is NOT the
+    # exception's own ("… is not implemented yet"), which is written for the developer
+    # who has to go implement it.
+    assert "cannot be cut yet" in detail, detail
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
+@pytest.mark.parametrize(
+    ("pools", "entrants", "expected"),
+    [
+        pytest.param(
+            (),
+            4,
+            "A round-robin draw needs at least one pool.",
+            id="no-pools",
+        ),
+        pytest.param(
+            (POOL_A, POOL_B),
+            3,
+            "3 entrants across 2 pool(s) would leave a pool with fewer than 2 "
+            "entrants, who would have nobody to play.",
+            id="a-pool-of-one",
+        ),
+        pytest.param(
+            (POOL_A,),
+            0,
+            "0 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+            "entrants, who would have nobody to play.",
+            id="no-entrants-at-all",
+        ),
+    ],
+)
+async def test_cutting_a_draw_that_is_not_a_competition_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    pools: tuple[dict[str, Any], ...],
+    entrants: int,
+    expected: str,
+) -> None:
+    """A draw the domain will not produce, because it would not be a competition: an
+    event with no pools to deal into, a field too small for the pools it has (somebody
+    would be alone in a pool, with nobody to play), and the empty field that is both.
+
+    Each is a 422 whose ``detail`` names the numbers the director has to change — the
+    pool count and the size of the field — because "invalid draw" tells them nothing
+    about which of the two to move.
+
+    And each writes NOTHING. That is the property the re-cut path depends on: the plan
+    is made before the old draw is deleted, so a refusal cannot leave an event with the
+    fixtures it had thrown away and none of the ones it could not make.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(*pools))
+    await _seed_field(db_session, event["id"], entrants)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == expected
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
+async def test_a_refused_re_cut_leaves_the_standing_draw_untouched(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The 422 that matters most: an event that HAS a draw, re-cut into a configuration
+    the domain refuses.
+
+    Two players withdraw from a cut two-pool event, leaving a field of two that cannot
+    fill two pools. The re-cut is refused — and the draw the event already had is still
+    there, row for row. A director who mis-clicks into a refusal must not lose the draw
+    they had; the 422 has to be a refusal, not a demolition that failed to rebuild.
+
+    What this test can and cannot see, stated because it was measured: the property has
+    **two** independent protections — ``cut_draw`` plans before it deletes, and the
+    route rolls the transaction back — so removing *either one* leaves this test green
+    (both were mutated; both stayed green). It fails only against a cut that deleted the
+    old draw and **committed** before planning the new one, which is the shape the bug
+    actually takes when somebody makes a service function commit for convenience. Read
+    its green as "the draw survives a 422", not as "the ordering in ``cut_draw`` is
+    pinned" — it isn't, and the comment there says so.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    entries = await _seed_field(db_session, event["id"], 4)
+    await client.post(_draw_url(tournament_id, event["id"]))
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+    assert before != []
+
+    for entry in entries[:2]:
+        entry.status = TournamentEntryStatus.withdrawn
+    await db_session.commit()
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 422, response.text
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+# ----- the play guard (409) -------------------------------------------------
+
+
+@pytest.mark.parametrize("evidence", ["winner", "match"])
+@pytest.mark.parametrize("verb", ["post", "delete"])
+async def test_a_played_draw_can_be_neither_re_cut_nor_un_cut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    evidence: str,
+    verb: str,
+) -> None:
+    """Evidence of play seals the draw — for BOTH verbs, and for both kinds of evidence.
+
+    A cut replaces the draw wholesale and an un-cut destroys it, so either one, run
+    over a fixture that has been played, throws away a result a player actually
+    produced. The refusal is a 409: the caller is the owner and the draw is theirs; it
+    is the draw that is past the point where re-cutting means anything.
+
+    The two kinds of evidence are deliberately not one:
+
+    * a **recorded winner** — the fixture is decided;
+    * a **linked match** — the fixture has materialized, and that match may already
+      carry games on its scratchpad or a proposed result. This half is why the guard is
+      *stricter* than "matches already played" (issue #785's phrasing): the draw must
+      never silently eat entered scores, and a match with a score on it is not
+      something the API can tell apart from one without, from here.
+
+    Nothing can *produce* either state yet — materialization is #788 — so the test
+    writes it directly. That is the point of writing the guard now: it has to be
+    standing before the path that trips it exists, or it lands already broken.
+
+    The refusal must leave the draw **byte-for-byte** unchanged: every id, every side,
+    every column (``_snapshot``). "Still some rows" would pass against a route that
+    deleted the draw and re-cut an identical-looking one, and the ids the results hang
+    off would be gone.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    await client.post(_draw_url(tournament_id, event["id"]))
+
+    played, *_ = await _fixture_rows(db_session, event["id"])
+    if evidence == "winner":
+        played.winner_entry_id = played.entry_a_id
+    else:
+        played.match_id = (await _make_match(db_session, owner, default_league)).id
+    await db_session.commit()
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    response = await getattr(client, verb)(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 409, response.text
+    assert "already under way" in response.json()["detail"]
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+async def test_the_play_guard_is_scoped_to_the_event_being_cut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """One event's play does not seal another's draw.
+
+    A tournament runs several events at once, and the under-13s starting does not mean
+    the open singles' late entrant can no longer be drawn in. A guard that asked "has
+    anything in this tournament been played?" would freeze every draw on the day the
+    first match started — which is exactly when a director still needs to re-cut around
+    the no-shows.
+    """
+    client, _ = authed_client
+    tournament_id, (played_event, other_event) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A, POOL_B, name="Under 13s"),
+        _rr_payload(POOL_A, POOL_B, name="Open Singles"),
+    )
+    await _seed_field(db_session, played_event["id"], 4, prefix="u13-")
+    await _seed_field(db_session, other_event["id"], 4, prefix="open-")
+    await client.post(_draw_url(tournament_id, played_event["id"]))
+    await client.post(_draw_url(tournament_id, other_event["id"]))
+
+    played, *_ = await _fixture_rows(db_session, played_event["id"])
+    played.winner_entry_id = played.entry_a_id
+    await db_session.commit()
+
+    # The played event is sealed…
+    sealed = await client.post(_draw_url(tournament_id, played_event["id"]))
+    assert sealed.status_code == 409, sealed.text
+    # …and its neighbour is not.
+    open_recut = await client.post(_draw_url(tournament_id, other_event["id"]))
+    assert open_recut.status_code == 201, open_recut.text
+
+
+# ----- the row lock behind the cut ------------------------------------------
+
+
+async def test_both_draw_verbs_take_the_tournaments_row_lock(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """A cut reads the event's active field and writes fixtures **derived from it**, so
+    it is a judge-then-write path and it takes the tournament's row lock — the same
+    lock, on the same row, taken first, that entering, withdrawing, transitioning and
+    PATCHing already take (which keeps the five of them free of a deadlock cycle).
+
+    Without it the read and the write sit in different instants (Postgres runs READ
+    COMMITTED), and an entry committing between them leaves a persisted draw that never
+    matched any real field: a pool sized for four players holding five, or an entrant
+    who registered in time and is seated nowhere. Every writer of that field already
+    queues on this row; the lock is what puts the cut in the same queue.
+
+    The un-cut takes it too. It reads the play evidence and then deletes what that
+    evidence protects — the same judge-then-write shape — and taking the one lock in the
+    one order is also what keeps the two draw verbs from racing each other.
+
+    Pinned on the *statement*, as ``test_only_the_mutating_loader_takes_the_row_lock``
+    pins the lifecycle's: a lock that quietly stopped being asked for would reopen the
+    race in silence, and no assertion about a response body would notice.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    owner_id = owner.id
+
+    async with counted_statements(engine) as (session, statements):
+        await cut_event_draw(
+            tournament_id=uuid.UUID(tournament_id),
+            event_id=uuid.UUID(event["id"]),
+            db=session,
+            current_user=User(id=owner_id),
+        )
+    assert any("FOR UPDATE" in s for s in statements), statements
+
+    async with counted_statements(engine) as (session, statements):
+        await uncut_event_draw(
+            tournament_id=uuid.UUID(tournament_id),
+            event_id=uuid.UUID(event["id"]),
+            db=session,
+            current_user=User(id=owner_id),
+        )
+    assert any("FOR UPDATE" in s for s in statements), statements
+
+
+# ----- the pool-set freeze (409) --------------------------------------------
+#
+# A fixture names its pool by a string ref into the event's own ``pools`` JSONB, and
+# there is no pools table to foreign-key (ADR-0786). So the DATABASE cannot refuse the
+# edit that orphans a fixture — the event PATCH must, and these are the tests of it.
+#
+# What freezes once a draw is cut is the pool **id set**, and only that. Everything else
+# about a pool — its tables, its window, its name — stays editable with a draw standing,
+# because venues move under running tournaments. Both halves are load-bearing: a freeze
+# that also froze the tables would force a director to destroy a *correct* draw just to
+# record a broken table, which is worse than the bug it was guarding against.
+
+# A third pool, for the payloads that try to grow the event's pool set.
+POOL_C: dict[str, Any] = {
+    "id": "p-c",
+    "name": "Pool C",
+    "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+    "table_ids": ["t3"],
+}
+
+
+async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, Any]]:
+    """The event's ``pools``, read straight from the JSONB column.
+
+    A column-only ``SELECT``, deliberately: it never touches the identity map, so what
+    comes back is what the *row* holds and not a stale ORM instance the test session
+    happened to be holding from before the request.
+
+    This is what "the refusal changed nothing" has to be asserted against. "The event
+    still has pools" would pass against a guard that 409'd *after* writing them.
+    """
+    pools = (
+        await db_session.execute(
+            select(TournamentEvent.pools).where(
+                TournamentEvent.id == uuid.UUID(event_id)
+            )
+        )
+    ).scalar_one()
+    return list(pools)
+
+
+async def _cut_two_pool_event(
+    client: AsyncClient, db_session: AsyncSession
+) -> tuple[str, dict[str, Any]]:
+    """A two-pool round-robin over four players, with its draw **cut** — the state the
+    freeze applies in. Four fixtures, two in each pool, every one of them holding a
+    ``pool_id`` that resolves against the event's pools."""
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    cut = await client.post(_draw_url(tournament_id, event["id"]))
+    assert cut.status_code == 201, cut.text
+    return tournament_id, event
+
+
+@pytest.mark.parametrize(
+    ("edit", "description"),
+    [
+        pytest.param({"table_ids": ["t7", "t8"]}, "a table breaks", id="tables"),
+        pytest.param(
+            {"slot": {"date": "2026-06-13", "start": "10:30", "end": "14:00"}},
+            "the pool runs late",
+            id="window",
+        ),
+        pytest.param({"name": "Morning Pool"}, "the director renames it", id="name"),
+    ],
+)
+async def test_a_cut_draw_still_lets_a_pools_venue_attributes_be_edited(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    edit: dict[str, Any],
+    description: str,
+) -> None:
+    """The case the freeze exists to **permit**. With the draw cut, the director changes
+    a pool's tables, its time window, or its name — and the PATCH succeeds.
+
+    This is the whole point of freezing the id *set* rather than the pools: venues
+    change under a running tournament. A table breaks and is pulled; another frees up
+    early; a pool slips an hour. A director who could not record that without un-cutting
+    the draw would have to destroy a draw that is *correct* — losing every placement —
+    to move a table, and would simply stop using the app on the day.
+
+    The rename is the subtle one. A name is identity-*adjacent* and it is not identity:
+    "Pool A" becoming "Morning Pool" keeps the ``id`` the fixtures actually hold, so
+    every one of them still resolves. It is a display change, and it is allowed.
+
+    The fixtures are asserted **untouched** (``_snapshot``, every column of every row)
+    and not merely present: an edit that quietly re-cut the draw to "keep it consistent"
+    would satisfy a count and would have thrown away the placements anyway.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+    edited = [{**POOL_A, **edit}, POOL_B]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": edited},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["pools"] == edited
+    assert await _pools_of(db_session, event["id"]) == edited
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+@pytest.mark.parametrize(
+    ("pools", "named"),
+    [
+        pytest.param([POOL_A, POOL_B, POOL_C], ["Pool C"], id="added"),
+        pytest.param([POOL_A], ["Pool B"], id="removed"),
+        pytest.param([], ["Pool A", "Pool B"], id="cleared"),
+        pytest.param(
+            [POOL_A, {**POOL_B, "id": "p-b2"}], ["Pool B"], id="re-identified"
+        ),
+    ],
+)
+async def test_a_cut_draw_refuses_a_pools_patch_that_changes_which_pools_exist(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    pools: list[dict[str, Any]],
+    named: list[str],
+) -> None:
+    """The freeze itself: with a draw standing, a ``pools`` payload must carry exactly
+    the pool ids the event already has.
+
+    Each arm is a different way to break the same reference, and none of them is a thing
+    the database can refuse (``pool_id`` is a string ref into JSONB, not a foreign key):
+
+    * **added** — the new pool arrives with no fixtures, because the draw was dealt
+      across the pools that existed at the cut and nothing re-deals it;
+    * **removed** / **cleared** — every fixture drawn into the departing pool now names
+      a pool that does not exist;
+    * **re-identified** — a pool that keeps its name and changes its ``id`` is *both* of
+      the above at once, and it is the one a director would never see coming. The pools
+      page looks unchanged; the fixtures are all orphaned.
+
+    409, not 403 (ADR-0017): the caller is the owner and the payload is well-formed — it
+    is the event that is in the wrong *state* for it, and the same payload becomes legal
+    the moment the draw is removed.
+
+    The refusal must change **nothing**, and both halves of "nothing" are asserted: the
+    pools JSONB is the same list of dicts it was (not "still non-empty"), and the
+    fixtures are the same rows, column for column. That is not decoration — it was
+    measured. A guard that judged the pools correctly but raised *after* the ``setattr``
+    loop (leaving the rollback to clean up) was mutated in, and it still 409s: only the
+    pools-JSONB assertion reds, because the dirty write is flushed ahead of the read. A
+    status-code-only test passes that guard — which would persist the very edit it
+    refuses the day somebody added a ``commit`` somewhere convenient.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
+    pools_before = await _pools_of(db_session, event["id"])
+    assert pools_before == [POOL_A, POOL_B]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": pools},
+    )
+
+    assert response.status_code == 409, response.text
+    # The copy names the pools that are in the way, by NAME: a director reads names, and
+    # "the pool set is frozen" without saying which pool moved is unactionable.
+    detail = response.json()["detail"]
+    for name in named:
+        assert name in detail, detail
+    assert await _pools_of(db_session, event["id"]) == pools_before
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
+
+
+async def test_a_refused_pools_patch_writes_none_of_the_rest_of_the_payload_either(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The refusal is total, not partial: a PATCH that renames the event *and* removes a
+    pool changes neither.
+
+    The event's other fields are not innocent bystanders that may as well land — the
+    payload is one request and it is refused as one. This is the test that fails against
+    a guard placed *after* the ``setattr`` loop and rescued only by the rollback, and
+    against one that checked the pools while letting the rest through.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "Renamed Event", "pools": [POOL_A]},
+    )
+
+    assert response.status_code == 409, response.text
+    (name,) = (
+        (
+            await db_session.execute(
+                select(TournamentEvent.name).where(
+                    TournamentEvent.id == uuid.UUID(event["id"])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert name == event["name"]
+    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+
+
+async def test_an_event_with_no_draw_replaces_its_pools_wholesale(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """No draw, no freeze: the pools of an un-drawn event are configuration, and they
+    replace wholesale exactly as they always have.
+
+    The pools are swapped for an entirely different set — different ids, different count
+    — which is the payload the freeze refuses on a cut event. There are no fixtures to
+    orphan, so there is nothing to refuse, and a guard that fired on the *pools* rather
+    than on the *draw* would break every director who is still setting the event up.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": [POOL_C]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert await _pools_of(db_session, event["id"]) == [POOL_C]
+
+
+async def test_removing_the_draw_un_freezes_the_pool_set(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The way out, end to end: the PATCH the freeze refused is the PATCH that succeeds
+    once the draw is gone.
+
+    ``DELETE …/draw`` un-freezes the pool set — by construction, since the freeze is a
+    fact about the fixtures existing — and that is what makes the 409 a *conflict*
+    rather than a prohibition: the director has somewhere to go. The refusal's own copy
+    tells them to come this way, so the path it names had better work.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
+    repooled = [POOL_A, POOL_B, POOL_C]
+
+    refused = await client.patch(url, json={"pools": repooled})
+    assert refused.status_code == 409, refused.text
+
+    uncut = await client.delete(_draw_url(tournament_id, event["id"]))
+    assert uncut.status_code == 204, uncut.text
+
+    accepted = await client.patch(url, json={"pools": repooled})
+
+    assert accepted.status_code == 200, accepted.text
+    assert await _pools_of(db_session, event["id"]) == repooled
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
+async def test_a_patch_that_does_not_send_pools_is_untouched_by_the_freeze(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A cut draw does not freeze the *event* — only its set of pools.
+
+    The director may still rename the event, move its entry fee, tighten its rules. A
+    guard that fired on any PATCH of an event with a draw (rather than on a ``pools``
+    payload that changes the id set) would pass every test above and would lock the
+    whole event on the day it was drawn.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "Open Singles (redrawn)"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "Open Singles (redrawn)"
+    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
+async def test_the_pool_freeze_is_scoped_to_the_event_being_patched(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """One event's draw does not freeze another event's pools.
+
+    A tournament runs several events at once and they are drawn on different days. The
+    under-13s being drawn must not stop the director from still building the open
+    singles' pools — which is what a guard that asked "does this *tournament* have any
+    fixtures?" would do.
+    """
+    client, _ = authed_client
+    tournament_id, (drawn, undrawn) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A, POOL_B, name="Under 13s"),
+        _rr_payload(POOL_A, POOL_B, name="Open Singles"),
+    )
+    await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
+    await client.post(_draw_url(tournament_id, drawn["id"]))
+
+    # The drawn event's pool set is frozen…
+    sealed = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{drawn['id']}",
+        json={"pools": [POOL_A, POOL_B, POOL_C]},
+    )
+    assert sealed.status_code == 409, sealed.text
+    # …and its neighbour's, which has no draw, is not.
+    free = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{undrawn['id']}",
+        json={"pools": [POOL_C]},
+    )
+    assert free.status_code == 200, free.text
+    assert await _pools_of(db_session, undrawn["id"]) == [POOL_C]
+
+
+async def test_the_event_patch_takes_the_tournaments_row_lock(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """The event PATCH is a judge-then-write path now, so it takes the tournament's row
+    lock — the same lock, on the same row, taken first, that the draw verbs, the
+    transition, the entry and the withdrawal take (which is what keeps them free of a
+    deadlock cycle).
+
+    The freeze reads whether a draw exists and then writes the pools that draw's
+    fixtures refer to. Postgres runs READ COMMITTED, so without the lock those two sit
+    in different instants: a cut committing between them is a draw cut across pools this
+    request is in the middle of replacing — fixtures orphaned at birth, refused by
+    nothing, and neither request wrong on its own.
+
+    Pinned on the *statement*, like ``test_only_the_mutating_loader_takes_the_row_lock``
+    and ``test_both_draw_verbs_take_the_tournaments_row_lock``: a lock that quietly
+    stopped being taken would reopen the race in silence, and no assertion about a
+    response body would notice.
+    """
+    client, owner = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    owner_id = owner.id
+
+    async with counted_statements(engine) as (session, statements):
+        await update_event(
+            tournament_id=uuid.UUID(tournament_id),
+            event_id=uuid.UUID(event["id"]),
+            payload=TournamentEventUpdate(name="Open Singles (moved)"),
+            db=session,
+            current_user=User(id=owner_id),
+        )
+    assert any("FOR UPDATE" in s for s in statements), statements
+
+
+# ----- a pool id identifies one pool (422) -----------------------------------
+#
+# The freeze above protects the pool ids a draw was cut across. It rests on an
+# assumption nothing enforced: that an id names ONE pool. Pools are JSONB with
+# client-supplied string ids — there is no pools table, so no unique index — and an
+# event with two pools called ``p-a`` was stored verbatim (measured: 201). The bill
+# arrived at the cut, which deals the field across the event's pool ids: two pools with
+# one id deal onto the same ``(event_id, pool_id, round, position)``, and the fixture
+# table's unique constraint answers the director with a **500**.
+#
+# Worse, the freeze itself let the poison in by PATCH, because it compares SETS:
+# ``[A, A, B]`` against a cut event holding ``{A, B}`` is the same set, so the guard
+# that exists to protect the draw waved through the payload that breaks it (measured:
+# 200, then the next cut 500'd). So the rule lives at the BOUNDARY — one validator on
+# the ``pools`` list type both write schemas share, covering create and patch in one
+# place, in every state the event can be in.
+
+
+def _pools_error(response: Response) -> str:
+    """The 422's message for the ``pools`` field, as one string.
+
+    A pydantic 422 is a *list* of errors keyed by ``loc``; the copy the director reads
+    is the ``msg``. Reading it out of the right ``loc`` is what stops this test from
+    passing on some *other* field's refusal.
+    """
+    errors = response.json()["detail"]
+    return " ".join(
+        error["msg"] for error in errors if error["loc"][:2] == ["body", "pools"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("pools", "named"),
+    [
+        pytest.param([POOL_A, POOL_A], ["p-a"], id="the-same-pool-twice"),
+        pytest.param([POOL_A, {**POOL_B, "id": "p-a"}], ["p-a"], id="two-pools-one-id"),
+        pytest.param(
+            [POOL_A, POOL_A, POOL_B, POOL_B], ["p-a", "p-b"], id="two-ids-duplicated"
+        ),
+    ],
+)
+async def test_creating_an_event_with_duplicate_pool_ids_is_refused(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    pools: list[dict[str, Any]],
+    named: list[str],
+) -> None:
+    """An event cannot be **born** holding two pools with the same id.
+
+    ``two-pools-one-id`` is the arm that matters: two genuinely different pools
+    (different names, different tables, different windows) that happen to share an
+    ``id``. The pools page looks perfectly sane, and the draw is undrawable. Duplicating
+    a whole pool is the same fault with an easier tell.
+
+    The refusal names the duplicated **id**, not a pool name: an id is what is
+    duplicated, the two pools sharing it may be named anything, and the id is the thing
+    the director has to go and change.
+
+    422, not 409 — this is a malformed payload in *every* state the event could be in.
+    An event with no draw at all still cannot have two pools called ``p-a``; there is no
+    later moment at which this body becomes legal, which is exactly what separates it
+    from the pool-set freeze's conflict.
+
+    And the refusal creates **nothing**: a 422 that had already written the event would
+    be a 422 in name only.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events", json=_rr_payload(*pools)
+    )
+
+    assert response.status_code == 422, response.text
+    message = _pools_error(response)
+    for pool_id in named:
+        assert f"“{pool_id}”" in message, message
+    assert await _events_of(client, created["id"]) == []
+
+
+async def test_a_pools_patch_that_duplicates_an_id_never_reaches_the_cut_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**The discriminating case**, and the one the set-based freeze cannot see.
+
+    ``[A, A, B]`` against a cut event holding ``{A, B}`` is, as a *set*, exactly the
+    pools the event already has. ``_enforce_pool_set_frozen`` compares sets — because
+    identity is all it is about — so it finds nothing removed and nothing added, and it
+    waved this payload through: measured **200**, the duplicate stored verbatim, and the
+    *next* cut dead on ``uq_tournament_fixtures_event_id_pool_id_round_position`` (a
+    **500**). The guard that exists to protect the draw was admitting the payload that
+    poisons it.
+
+    A boundary rule is what closes it, because the freeze is the wrong instrument: it
+    can only ever compare which pools exist, and this payload does not change that.
+
+    The proof is not the status code. It is the **re-cut afterwards**: the same event,
+    cut again, still answers 201. A guard that 409'd or 422'd and *wrote the pools
+    anyway* would satisfy every assertion about the response and still hand the director
+    the 500 the moment they cut — so the cut is where this test looks.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": [POOL_A, POOL_A, POOL_B]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "“p-a”" in _pools_error(response)
+    # Nothing written: the pools are the two they were, and the fixtures are the same
+    # rows, column for column.
+    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
+    # And the cut the duplicate would have detonated still works.
+    re_cut = await client.post(_draw_url(tournament_id, event["id"]))
+    assert re_cut.status_code == 201, re_cut.text
+
+
+async def test_an_undrawn_event_also_refuses_a_pools_patch_that_duplicates_an_id(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The rule is the **boundary's**, not the freeze's: an event with no draw at all —
+    where the pool set is not frozen and pools replace wholesale — still cannot be given
+    two pools with one id.
+
+    A guard implemented inside ``_enforce_pool_set_frozen`` would pass the test above
+    and fail this one, leaving every un-drawn event free to store the duplicate and 500
+    on its first cut. The event is not yet drawn, and the pools it will be drawn across
+    are already nonsense.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": [POOL_C, POOL_C]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "“p-c”" in _pools_error(response)
+    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+
+
+# ----- the draw-type freeze (409) -------------------------------------------
+#
+# A draw type is not a label on an event: it is the strategy that DEALT the event's
+# fixtures, and the fixtures are the shape that strategy prescribes. Patch it under a
+# standing draw and the event contradicts itself — a ``single-elim`` event holding
+# pooled round-robin fixtures (measured: the PATCH answered 200) — and nothing
+# downstream catches it, because the go-live currency check compares the ENTRANT SET the
+# fixtures seat, which a re-label does not move. So the corrupted event reads as
+# ``current`` and starts.
+#
+# Same doctrine as the pool-set freeze, one field over: what a cut draw freezes is the
+# facts its fixtures were derived from.
+
+
+async def _draw_type_of(db_session: AsyncSession, event_id: str) -> DrawType:
+    """The event's ``draw_type``, read straight from the column — never from a response
+    body, and never from an ORM instance the test session may be holding stale."""
+    return (
+        await db_session.execute(
+            select(TournamentEvent.draw_type).where(
+                TournamentEvent.id == uuid.UUID(event_id)
+            )
+        )
+    ).scalar_one()
+
+
+async def test_a_cut_draw_freezes_the_draw_type(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The freeze itself: with a draw standing, the draw type cannot be changed.
+
+    409, not 403 (ADR-0017): the caller is the owner and the payload is well-formed — it
+    is the *event* that is in the wrong state, and the same request becomes legal the
+    moment the draw is removed. That is what the refusal's copy tells them to do, and it
+    is not decoration: today ``single-elim`` has no strategy, so an event patched into
+    it while holding round-robin fixtures cannot even be re-cut back into agreement with
+    itself (the re-cut 422s), and the director is stuck guessing which draw type to
+    patch it *back* to.
+
+    The refusal must change **nothing**, and both halves are asserted from the database:
+    the stored ``draw_type`` and every column of every fixture. A status-code-only
+    assertion would pass a guard that wrote the value and let the rollback clean up —
+    which persists the very edit it refuses the day somebody adds a convenient
+    ``commit``.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"draw_type": "single-elim"},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "“round-robin”" in detail, detail
+    assert "remove the draw" in detail, detail
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.round_robin
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
+
+
+async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_either(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The refusal is total: a PATCH that renames the event *and* re-types its draw
+    changes neither.
+
+    The payload is one request and it is refused as one. This is the test that fails
+    against a guard placed *after* the ``setattr`` loop and rescued only by the
+    rollback.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "Renamed Event", "draw_type": "single-elim"},
+    )
+
+    assert response.status_code == 409, response.text
+    stored = (
+        await db_session.execute(
+            select(TournamentEvent.name, TournamentEvent.draw_type).where(
+                TournamentEvent.id == uuid.UUID(event["id"])
+            )
+        )
+    ).one()
+    assert stored == (event["name"], DrawType.round_robin)
+
+
+async def test_an_undrawn_event_still_changes_its_draw_type(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """No draw, no freeze. An event nobody has cut yet is *configuration*, and its draw
+    type is the most ordinary thing about it for a director to still be deciding.
+
+    A guard that fired on the field rather than on the draw would lock the draw type at
+    creation — and there would be no way to change it at all, since there are no
+    fixtures to remove.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"draw_type": "single-elim"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["draw_type"] == "single-elim"
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.single_elim
+
+
+async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**Presence is not the rule — the change is.** A PATCH that carries the draw type
+    the event *already has*, alongside a legitimate venue edit, succeeds.
+
+    This is the case a guard written as "``draw_type`` in the payload and a draw exists
+    → 409" would break, and it is not exotic: a client that PATCHes the whole event form
+    back sends every field it rendered, draw type included. Refusing it would make the
+    pool-venue edit — the very thing the freeze above exists to *permit* — unreachable
+    from that page, and a table that broke on the morning of the tournament would cost
+    the director their draw.
+
+    Re-asserting a value that is already there changes nothing, so it is not a conflict.
+    (It differs from the league freeze, which *does* refuse the value it already holds:
+    that field is settled by a status no request of the caller's can move, so the only
+    client that sends it is a stale one. Here the way out — remove the draw — is on the
+    caller's own keyboard.)
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
+    moved = [{**POOL_A, "table_ids": ["t7"]}, POOL_B]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"draw_type": "round-robin", "pools": moved},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["draw_type"] == "round-robin"
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.round_robin
+    assert await _pools_of(db_session, event["id"]) == moved
+    assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
+
+
+async def test_removing_the_draw_un_freezes_the_draw_type(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The way out, end to end: the PATCH the freeze refused is the PATCH that succeeds
+    once the draw is gone.
+
+    That is what makes the 409 a *conflict* rather than a prohibition — the director has
+    somewhere to go, and the refusal's own copy sends them this way, so the path it
+    names had better work.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
+
+    refused = await client.patch(url, json={"draw_type": "single-elim"})
+    assert refused.status_code == 409, refused.text
+
+    uncut = await client.delete(_draw_url(tournament_id, event["id"]))
+    assert uncut.status_code == 204, uncut.text
+
+    accepted = await client.patch(url, json={"draw_type": "single-elim"})
+
+    assert accepted.status_code == 200, accepted.text
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.single_elim
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
+async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """One event's draw does not freeze another event's draw type.
+
+    The under-13s being drawn must not stop the director from still deciding how the
+    open singles will be run — which is what a guard that asked "does this *tournament*
+    have any fixtures?" would do.
+    """
+    client, _ = authed_client
+    tournament_id, (drawn, undrawn) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A, POOL_B, name="Under 13s"),
+        _rr_payload(POOL_A, POOL_B, name="Open Singles"),
+    )
+    await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
+    await _cut_the_draw(client, tournament_id, drawn["id"])
+
+    sealed = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{drawn['id']}",
+        json={"draw_type": "single-elim"},
+    )
+    assert sealed.status_code == 409, sealed.text
+
+    free = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{undrawn['id']}",
+        json={"draw_type": "single-elim"},
+    )
+
+    assert free.status_code == 200, free.text
+    assert await _draw_type_of(db_session, undrawn["id"]) is DrawType.single_elim
+    assert await _draw_type_of(db_session, drawn["id"]) is DrawType.round_robin

@@ -22,11 +22,12 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentFixture,
     User,
     UserLeagueRating,
 )
 from app.ratings.rated import is_rated_member
-from app.schemas.tournament import TournamentEntrantRead
+from app.schemas.tournament import TournamentEntrantRead, TournamentFixtureRead
 
 
 async def active_entrants_by_event(
@@ -118,6 +119,69 @@ async def active_entrants_by_event(
             )
         )
     return entrants
+
+
+async def fixtures_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[TournamentFixtureRead]]:
+    """The draw of every event in ``event_ids`` — its fixtures (ADR-0786) — keyed by
+    event id, each event's in **pool → round → position** order.
+
+    ONE statement for the whole batch (none at all when there are no events), which is
+    the whole reason this is a loader and not a ``selectinload`` of the event's
+    ``fixtures`` relationship or, worse, a read of ``event.fixtures`` inside the
+    serializer's per-event loop. The tournament LIST endpoint returns every tournament
+    with all of its events, so a per-event fetch would be a query per *event on the
+    page*, and it would arrive invisibly: nothing about the response would look wrong.
+    The statement-count tripwires in ``tests/test_tournaments.py`` fail if one appears.
+    Same shape, and the same reasoning, as ``active_entrants_by_event`` above.
+
+    **Every id gets a key**, so an event whose draw has not been cut maps to ``[]``. The
+    caller never has to tell "no draw" apart from "not loaded", and the read model can
+    make empty a designed state rather than a null to branch on — which matters more
+    here than it does for entrants, because an un-cut draw is the *normal* condition of
+    an event (cutting is an explicit act, ADR-0786), not an edge case.
+
+    **The ordering is the query's, not the caller's**, and it is a total order: pool,
+    then round, then position — over columns that ``UNIQUE (event_id, pool_id, round,
+    position)`` already guarantees are unique together, so the sequence is the same on
+    every read and a client can render a bracket without sorting it first. A NULL
+    ``pool_id`` sorts LAST, which puts an rr-then-ko event's KO stage after the pools it
+    is fed from (and costs an un-pooled draw nothing — every row is NULL there, so round
+    and position decide it alone).
+
+    Sorted in Postgres rather than in Python because a NULL is not comparable to a
+    string: ``sorted(key=lambda f: (f.pool_id, ...))`` is a ``TypeError`` the moment an
+    un-pooled fixture meets a pooled one, and the defensive coalesce that usually
+    follows (``f.pool_id or ""``) would quietly sort the KO stage FIRST.
+
+    The rows are validated into read models here, at the loader — the same boundary the
+    entrants cross — so no ORM instance and no lazily-loadable relationship escapes into
+    the serializer.
+    """
+    fixtures: dict[uuid.UUID, list[TournamentFixtureRead]] = {
+        event_id: [] for event_id in event_ids
+    }
+    if not fixtures:
+        return fixtures
+    rows = (
+        (
+            await db.execute(
+                select(TournamentFixture)
+                .where(TournamentFixture.event_id.in_(fixtures.keys()))
+                .order_by(
+                    TournamentFixture.pool_id.asc().nulls_last(),
+                    TournamentFixture.round,
+                    TournamentFixture.position,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fixture in rows:
+        fixtures[fixture.event_id].append(TournamentFixtureRead.model_validate(fixture))
+    return fixtures
 
 
 async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:

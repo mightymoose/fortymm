@@ -7,6 +7,7 @@ import { server } from '@/mocks/server'
 import { screen, waitFor } from '@/test/utilities'
 
 import {
+  buildDrawnEvent,
   buildTournament,
   buildEntrant,
   buildEntrants,
@@ -189,6 +190,50 @@ describe('EventsTab', () => {
         screen.getByText(/Click any event for details\./),
       ).toBeInTheDocument()
       expect(screen.queryByText(/Click any event to edit\./)).toBeNull()
+    })
+  })
+
+  // The draw hangs off the EVENT (ADR-0786) — there is no Draw tab, because a draw
+  // belongs to one event and a tab would have to ask which. Wiring only: the panel's own
+  // quartet pins the pools, the rounds, the refusals and the empty state.
+  describe('the draw on each card', () => {
+    it('gives every event its own draw panel, fed that event’s tournament', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          id: 't-1',
+          events: [buildDrawnEvent(), buildEvent({ id: 'ev-open-singles' })],
+        }),
+      })
+
+      // The drawn event expands into its pools…
+      expect(eventsTabPage.getPoolLines('p-a')).toEqual([
+        'player.1 vs player.4',
+        'player.1 vs player.5',
+        'player.4 vs player.5',
+      ])
+      // …and the undrawn one shows its designed empty state, not a gap.
+      expect(eventsTabPage.queryPanel('ev-open-singles')).toBeInTheDocument()
+      expect(eventsTabPage.getEmptyState()).toHaveTextContent('No draw yet.')
+    })
+
+    it('gates the draw verbs on the tournament’s canEdit, like every other owner action', () => {
+      const tournament = buildTournament({ events: [buildDrawnEvent()] })
+
+      eventsTabPage.render({ tournament, canEdit: false })
+
+      expect(eventsTabPage.queryRecutButton('U1200 Singles')).toBeNull()
+      expect(eventsTabPage.queryDeleteButton('U1200 Singles')).toBeNull()
+      expect(eventsTabPage.getPanelControls('ev-u1200')).toHaveLength(0)
+    })
+
+    it('offers the creator the draw verbs on the card itself', () => {
+      eventsTabPage.render({
+        tournament: buildTournament({ events: [buildDrawnEvent()] }),
+        canEdit: true,
+      })
+
+      expect(eventsTabPage.queryRecutButton('U1200 Singles')).toBeInTheDocument()
+      expect(eventsTabPage.queryDeleteButton('U1200 Singles')).toBeInTheDocument()
     })
   })
 })

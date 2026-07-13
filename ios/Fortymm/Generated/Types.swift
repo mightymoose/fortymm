@@ -554,6 +554,17 @@ internal protocol APIProtocol: Sendable {
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
     ///
+    /// **Going live has a precondition** (ADR-0786): the tournament must have at least
+    /// one event, and every event must have a **draw** whose fixtures seat exactly its
+    /// current entrants. Three things are refused with a `409` that names the events at
+    /// fault — a tournament with **no events** (there is nothing to start), an event with
+    /// **no draw**, and an event whose draw is **stale**, cut before somebody entered or
+    /// withdrew. Cut (or re-cut) the draws it names, then go live. Registration is open
+    /// right up to that moment, which is exactly why a draw can go stale under it.
+    ///
+    /// **Publishing** an empty tournament is unaffected and stays legal: announcing a
+    /// tournament early is fine, starting an empty one is not.
+    ///
     /// Owner-only, like every other tournament mutation.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
@@ -565,6 +576,32 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/post(create_event_v1_tournaments__tournament_id__events_post)`.
     func createEventV1TournamentsTournamentIdEventsPost(_ input: Operations.CreateEventV1TournamentsTournamentIdEventsPost.Input) async throws -> Operations.CreateEventV1TournamentsTournamentIdEventsPost.Output
     /// Update Event
+    ///
+    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
+    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
+    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    ///
+    /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
+    /// fixtures were derived from:
+    ///
+    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
+    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
+    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
+    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
+    ///   the cut.
+    /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
+    ///   so changing it under a standing draw is a `409` too: the event would claim a shape
+    ///   its draw does not have. Re-sending the draw type the event already has is not a
+    ///   change, and is not refused.
+    ///
+    /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
+    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
+    /// venues change under a running tournament, and recording that must never cost a
+    /// director the draw. To change the pools themselves or the draw type, remove the draw
+    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
+    /// are ordinary fields.
+    ///
+    /// Owner-only.
     ///
     /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/patch(update_event_v1_tournaments__tournament_id__events__event_id__patch)`.
@@ -652,6 +689,60 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
     func withdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete(_ input: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input) async throws -> Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output
+    /// Cut Event Draw
+    ///
+    /// Cut this event's draw — generate its **fixtures** from its entrants — and answer
+    /// with them.
+    ///
+    /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
+    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// the seeding. Nothing else creates fixtures, and going live requires every event to
+    /// have one (ADR-0786).
+    ///
+    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
+    /// fresh set is planned from the event's *current* active entrants — the old ones are
+    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
+    /// against a field, and once the field has changed (somebody entered, somebody
+    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    ///
+    /// Entrants are ordered by **seed** ascending where one is set, then by **registration
+    /// order**. Nothing is random, so the same field always cuts the same draw.
+    ///
+    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
+    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// those away, and a draw must never silently eat a score.
+    ///
+    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
+    /// no generator yet (only round-robin does today), it has **no pools** configured for a
+    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
+    /// than two players has nobody to play. The message names what to change.
+    ///
+    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// tournament-detail page carries them.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/post(cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post)`.
+    func cutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost(_ input: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input) async throws -> Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output
+    /// Uncut Event Draw
+    ///
+    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    ///
+    /// The way back from a draw the director does not want. The event, its entrants and the
+    /// rest of the tournament are untouched — only the fixtures go — and the director is
+    /// free to change the pools and cut again.
+    ///
+    /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
+    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
+    /// that has been played would delete the fixtures those results belong to.
+    ///
+    /// An event with **no draw is already in the state this asks for**, so removing a draw
+    /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Owner-only.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)`.
+    func uncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete(_ input: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input) async throws -> Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -1602,6 +1693,17 @@ extension APIProtocol {
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
     ///
+    /// **Going live has a precondition** (ADR-0786): the tournament must have at least
+    /// one event, and every event must have a **draw** whose fixtures seat exactly its
+    /// current entrants. Three things are refused with a `409` that names the events at
+    /// fault — a tournament with **no events** (there is nothing to start), an event with
+    /// **no draw**, and an event whose draw is **stale**, cut before somebody entered or
+    /// withdrew. Cut (or re-cut) the draws it names, then go live. Registration is open
+    /// right up to that moment, which is exactly why a draw can go stale under it.
+    ///
+    /// **Publishing** an empty tournament is unaffected and stays legal: announcing a
+    /// tournament early is fine, starting an empty one is not.
+    ///
     /// Owner-only, like every other tournament mutation.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
@@ -1633,6 +1735,32 @@ extension APIProtocol {
         ))
     }
     /// Update Event
+    ///
+    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
+    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
+    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    ///
+    /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
+    /// fixtures were derived from:
+    ///
+    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
+    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
+    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
+    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
+    ///   the cut.
+    /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
+    ///   so changing it under a standing draw is a `409` too: the event would claim a shape
+    ///   its draw does not have. Re-sending the draw type the event already has is not a
+    ///   change, and is not refused.
+    ///
+    /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
+    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
+    /// venues change under a running tournament, and recording that must never cost a
+    /// director the draw. To change the pools themselves or the draw type, remove the draw
+    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
+    /// are ordinary fields.
+    ///
+    /// Owner-only.
     ///
     /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/patch(update_event_v1_tournaments__tournament_id__events__event_id__patch)`.
@@ -1752,6 +1880,76 @@ extension APIProtocol {
         headers: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input.Headers = .init()
     ) async throws -> Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output {
         try await withdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete(Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Cut Event Draw
+    ///
+    /// Cut this event's draw — generate its **fixtures** from its entrants — and answer
+    /// with them.
+    ///
+    /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
+    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// the seeding. Nothing else creates fixtures, and going live requires every event to
+    /// have one (ADR-0786).
+    ///
+    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
+    /// fresh set is planned from the event's *current* active entrants — the old ones are
+    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
+    /// against a field, and once the field has changed (somebody entered, somebody
+    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    ///
+    /// Entrants are ordered by **seed** ascending where one is set, then by **registration
+    /// order**. Nothing is random, so the same field always cuts the same draw.
+    ///
+    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
+    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// those away, and a draw must never silently eat a score.
+    ///
+    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
+    /// no generator yet (only round-robin does today), it has **no pools** configured for a
+    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
+    /// than two players has nobody to play. The message names what to change.
+    ///
+    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// tournament-detail page carries them.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/post(cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post)`.
+    internal func cutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost(
+        path: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Path,
+        headers: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Headers = .init()
+    ) async throws -> Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output {
+        try await cutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost(Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Uncut Event Draw
+    ///
+    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    ///
+    /// The way back from a draw the director does not want. The event, its entrants and the
+    /// rest of the tournament are untouched — only the fixtures go — and the director is
+    /// free to change the pools and cut again.
+    ///
+    /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
+    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
+    /// that has been played would delete the fixtures those results belong to.
+    ///
+    /// An event with **no draw is already in the state this asks for**, so removing a draw
+    /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Owner-only.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)`.
+    internal func uncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete(
+        path: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Path,
+        headers: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Headers = .init()
+    ) async throws -> Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output {
+        try await uncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete(Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input(
             path: path,
             headers: headers
         ))
@@ -5430,6 +5628,11 @@ internal enum Components {
         }
         /// A slice of tables reserved for a window of time within an event.
         ///
+        /// Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
+        /// by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
+        /// these ids. Which is only a coherent thing to say if an id names one pool — see
+        /// ``EventPools``, the type the event's list of them actually has.
+        ///
         /// - Remark: Generated from `#/components/schemas/Pool`.
         internal struct Pool: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Pool/id`.
@@ -6947,6 +7150,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state`.
             internal var entryState: Components.Schemas.TournamentEventRead.EntryStatePayload
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/fixtures`.
+            internal var fixtures: [Components.Schemas.TournamentFixtureRead]
             /// The registration count. Derived — there is no stored counter (ADR-0016).
             ///
             /// It is ``len(entrants)`` rather than a field of its own precisely so the
@@ -6973,6 +7178,7 @@ internal enum Components {
             ///   - updatedAt:
             ///   - entrants:
             ///   - entryState:
+            ///   - fixtures:
             ///   - entered: The registration count. Derived — there is no stored counter (ADR-0016).
             internal init(
                 id: Swift.String,
@@ -6990,6 +7196,7 @@ internal enum Components {
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
                 entryState: Components.Schemas.TournamentEventRead.EntryStatePayload,
+                fixtures: [Components.Schemas.TournamentFixtureRead],
                 entered: Swift.Int
             ) {
                 self.id = id
@@ -7007,6 +7214,7 @@ internal enum Components {
                 self.updatedAt = updatedAt
                 self.entrants = entrants
                 self.entryState = entryState
+                self.fixtures = fixtures
                 self.entered = entered
             }
             internal enum CodingKeys: String, CodingKey {
@@ -7025,6 +7233,7 @@ internal enum Components {
                 case updatedAt = "updated_at"
                 case entrants
                 case entryState = "entry_state"
+                case fixtures
                 case entered
             }
         }
@@ -7233,6 +7442,92 @@ internal enum Components {
                     "predicates",
                     "pools"
                 ])
+            }
+        }
+        /// One planned pairing of an event's draw (ADR-0786): a round and a position —
+        /// plus a pool, when the draw is pooled — whose sides may still be unknown.
+        ///
+        /// A fixture is **not** a match. It materializes into one later (#788), and until it
+        /// does ``match_id`` is ``null``.
+        ///
+        /// **Every ``null`` on this model is a fact, not a missing field**, and a client that
+        /// dropped them would lose the draw's whole point:
+        ///
+        /// * ``entry_a_id`` / ``entry_b_id`` — ``null`` means **TBD**: the feeding fixture has
+        ///   not been decided yet, and ``advance()`` will fill this side in. It never means a
+        ///   bye — a bye is the *absence of a fixture row*, not a fixture with an empty side
+        ///   (ADR-0786), so there is no ``is_bye`` flag here to tell the two apart.
+        /// * ``winner_entry_id`` — ``null`` while the fixture is undecided.
+        /// * ``match_id`` — ``null`` until the fixture becomes a real match, which only happens
+        ///   once the tournament is ``live``.
+        /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
+        ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+        ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
+        ///   JSONB, not a foreign key, because pools are value-objects with no table.
+        ///
+        /// The entries are carried as **ids only**. The name and username behind
+        /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
+        /// them, keyed by that very id — so a client joins the two. Copying the username onto
+        /// the fixture as well would be carrying a field and its own derivation
+        /// (api/CLAUDE.md), and the copy that drifts is the one a player reads off a bracket.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead`.
+        internal struct TournamentFixtureRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pool_id`.
+            internal var poolId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/round`.
+            internal var round: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/position`.
+            internal var position: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/entry_a_id`.
+            internal var entryAId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/entry_b_id`.
+            internal var entryBId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/winner_entry_id`.
+            internal var winnerEntryId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_id`.
+            internal var matchId: Swift.String?
+            /// Creates a new `TournamentFixtureRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - poolId:
+            ///   - round:
+            ///   - position:
+            ///   - entryAId:
+            ///   - entryBId:
+            ///   - winnerEntryId:
+            ///   - matchId:
+            internal init(
+                id: Swift.String,
+                poolId: Swift.String? = nil,
+                round: Swift.Int,
+                position: Swift.Int,
+                entryAId: Swift.String? = nil,
+                entryBId: Swift.String? = nil,
+                winnerEntryId: Swift.String? = nil,
+                matchId: Swift.String? = nil
+            ) {
+                self.id = id
+                self.poolId = poolId
+                self.round = round
+                self.position = position
+                self.entryAId = entryAId
+                self.entryBId = entryBId
+                self.winnerEntryId = winnerEntryId
+                self.matchId = matchId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case poolId = "pool_id"
+                case round
+                case position
+                case entryAId = "entry_a_id"
+                case entryBId = "entry_b_id"
+                case winnerEntryId = "winner_entry_id"
+                case matchId = "match_id"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
@@ -18312,6 +18607,17 @@ internal enum Operations {
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
     ///
+    /// **Going live has a precondition** (ADR-0786): the tournament must have at least
+    /// one event, and every event must have a **draw** whose fixtures seat exactly its
+    /// current entrants. Three things are refused with a `409` that names the events at
+    /// fault — a tournament with **no events** (there is nothing to start), an event with
+    /// **no draw**, and an event whose draw is **stale**, cut before somebody entered or
+    /// withdrew. Cut (or re-cut) the draws it names, then go live. Registration is open
+    /// right up to that moment, which is exactly why a draw can go stale under it.
+    ///
+    /// **Publishing** an empty tournament is unaffected and stays legal: announcing a
+    /// tournament early is fine, starting an empty one is not.
+    ///
     /// Owner-only, like every other tournament mutation.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
@@ -18689,6 +18995,32 @@ internal enum Operations {
         }
     }
     /// Update Event
+    ///
+    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
+    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
+    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    ///
+    /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
+    /// fixtures were derived from:
+    ///
+    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
+    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
+    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
+    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
+    ///   the cut.
+    /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
+    ///   so changing it under a standing draw is a `409` too: the event would claim a shape
+    ///   its draw does not have. Re-sending the draw type the event already has is not a
+    ///   change, and is not refused.
+    ///
+    /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
+    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
+    /// venues change under a running tournament, and recording that must never cost a
+    /// director the draw. To change the pools themselves or the draw type, remove the draw
+    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
+    /// are ordinary fields.
+    ///
+    /// Owner-only.
     ///
     /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/patch(update_event_v1_tournaments__tournament_id__events__event_id__patch)`.
@@ -19466,6 +19798,406 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.WithdrawFromEventV1TournamentsTournamentIdEventsEventIdEntriesEntryIdDelete.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Cut Event Draw
+    ///
+    /// Cut this event's draw — generate its **fixtures** from its entrants — and answer
+    /// with them.
+    ///
+    /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
+    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// the seeding. Nothing else creates fixtures, and going live requires every event to
+    /// have one (ADR-0786).
+    ///
+    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
+    /// fresh set is planned from the event's *current* active entrants — the old ones are
+    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
+    /// against a field, and once the field has changed (somebody entered, somebody
+    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    ///
+    /// Entrants are ordered by **seed** ascending where one is set, then by **registration
+    /// order**. Nothing is random, so the same field always cuts the same draw.
+    ///
+    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
+    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// those away, and a draw must never silently eat a score.
+    ///
+    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
+    /// no generator yet (only round-robin does today), it has **no pools** configured for a
+    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
+    /// than two players has nobody to play. The message names what to change.
+    ///
+    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// tournament-detail page carries them.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/post(cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post)`.
+    internal enum CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost {
+        internal static let id: Swift.String = "cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/path/event_id`.
+                internal var eventId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - eventId:
+                internal init(
+                    tournamentId: Swift.String,
+                    eventId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.eventId = eventId
+                }
+            }
+            internal var path: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Path,
+                headers: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/responses/201/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/responses/201/content/application\/json`.
+                    case json([Components.Schemas.TournamentFixtureRead])
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: [Components.Schemas.TournamentFixtureRead] {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/post(cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            internal var created: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/post(cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Uncut Event Draw
+    ///
+    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    ///
+    /// The way back from a draw the director does not want. The event, its entrants and the
+    /// rest of the tournament are untouched — only the fixtures go — and the director is
+    /// free to change the pools and cut again.
+    ///
+    /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
+    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
+    /// that has been played would delete the fixtures those results belong to.
+    ///
+    /// An event with **no draw is already in the state this asks for**, so removing a draw
+    /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Owner-only.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)`.
+    internal enum UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete {
+        internal static let id: Swift.String = "uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/path/event_id`.
+                internal var eventId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - eventId:
+                internal init(
+                    tournamentId: Swift.String,
+                    eventId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.eventId = eventId
+                }
+            }
+            internal var path: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Path,
+                headers: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct NoContent: Sendable, Hashable {
+                /// Creates a new `NoContent`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            case noContent(Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.NoContent)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            internal static var noContent: Self {
+                .noContent(.init())
+            }
+            /// The associated value of the enum case if `self` is `.noContent`.
+            ///
+            /// - Throws: An error if `self` is not `.noContent`.
+            /// - SeeAlso: `.noContent`.
+            internal var noContent: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.NoContent {
+                get throws {
+                    switch self {
+                    case let .noContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "noContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/draw/DELETE/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

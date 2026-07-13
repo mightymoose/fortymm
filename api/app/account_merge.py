@@ -38,11 +38,13 @@ from app.models import (
     RatingHistory,
     Tournament,
     TournamentEntryStatus,
+    TournamentEvent,
     User,
     UserLeagueRating,
     UserRole,
     UserToken,
 )
+from app.tournament_draws import uncut_draw
 
 # Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
 # circular import (sessions imports this module). Session tokens are KEPT on the
@@ -167,34 +169,11 @@ async def merge_user(
     # Dedup, then re-point. The uniqueness guard on ``tournament_entries`` is
     # PARTIAL — ``UNIQUE (event_id, user_id) WHERE status = 'entered'``
     # (ADR-0016) — so the ONLY rows that can collide are a guest ACTIVE entry in
-    # an event the survivor is ALSO actively entered in. Drop the guest's losing
-    # row first: the survivor's entry stands, so the event's active-entry count is
-    # unchanged by the merge (it was one person all along).
-    #
-    # The predicate tests ``status``, not the (event, user) pair alone, because
-    # two *withdrawn* rows for the same pair are legal — soft-deleted history the
-    # partial index deliberately permits. Deleting those would destroy withdrawal
-    # history the index exists to keep. "Active" is bound as ``:active`` from
-    # ``_ACTIVE_ENTRY_STATUS`` (see above) so this SQL cannot drift from the enum.
-    await db.execute(
-        text(
-            """
-            DELETE FROM tournament_entries AS te
-            WHERE te.user_id = :from_id
-              AND te.status = :active
-              AND EXISTS (
-                SELECT 1 FROM tournament_entries other
-                WHERE other.user_id = :to_id
-                  AND other.event_id = te.event_id
-                  AND other.status = :active
-              )
-            """
-        ),
-        {
-            "from_id": from_user_id,
-            "to_id": to_user_id,
-            "active": _ACTIVE_ENTRY_STATUS,
-        },
+    # an event the survivor is ALSO actively entered in. Resolving that collision
+    # (drop the guest's losing row, carry its registration order, un-cut the draw
+    # it invalidated) is the whole of ``_resolve_entry_collisions``.
+    await _resolve_entry_collisions(
+        db, from_user_id=from_user_id, to_user_id=to_user_id
     )
     # Nothing left can collide, so the re-point is unconditional and total: every
     # remaining guest entry — active or withdrawn — moves onto the survivor, and
@@ -469,6 +448,155 @@ async def merge_user(
     matches_moved -= matches_voided
 
     return MergeSummary(matches_moved=matches_moved, matches_voided=matches_voided)
+
+
+async def _resolve_entry_collisions(
+    db: AsyncSession,
+    *,
+    from_user_id: uuid.UUID,
+    to_user_id: uuid.UUID,
+) -> None:
+    """Resolve every **entry collision** this merge exposes: an event both
+    identities are ACTIVELY entered in. One human, two registrations — and the
+    merge is the moment we learn it (ADR-0786, "An account merge that
+    double-counted a human invalidates the draw").
+
+    Three things happen, in this order, and each is load-bearing:
+
+    1. **The survivor's entry inherits the earlier registration and any seed.**
+       The survivor's row is the one that stands, but it is not the one whose
+       *facts* are necessarily right: registration order is the draw's ordering
+       tie-break (``app.draws.order_entrants`` — seed ascending where set, then
+       ``created_at``), so keeping the later of the two timestamps would silently
+       move that player down a future draw. ``LEAST`` takes the earlier;
+       ``COALESCE`` keeps the survivor's seed and adopts the guest's only where
+       the survivor has none (a seed the director set on the row we are keeping is
+       not the merge's to overwrite).
+    2. **The guest's losing row is deleted.** The survivor's entry stands, so the
+       event's active-entry count is unchanged by the merge (it was one person all
+       along). The predicate tests ``status``, not the (event, user) pair alone,
+       because two *withdrawn* rows for the same pair are legal — soft-deleted
+       history the partial index deliberately permits, and which the unconditional
+       re-point in ``merge_user`` carries across untouched.
+    3. **The event's draw is un-cut** (its fixtures deleted; the director re-cuts).
+
+    Step 3 is the one that is not obvious. ``tournament_fixtures`` references
+    entries with ``ON DELETE CASCADE``, so step 2 alone would silently take any
+    fixtures seating the guest's entry with it, punching holes in a cut draw. The
+    tempting repair — re-point those fixtures onto the *surviving* entry — is
+    wrong, and dangerously so: it seats one human in two slots of the same pool
+    (everyone else plays them twice; drawn against themselves, the fixture is
+    self-play), and because the go-live currency check compares entrant **sets**,
+    the corrupted draw would satisfy that check and go live. So the draw is
+    regenerated, never patched: it was cut from a field that double-counted a
+    human, so its pool sizes and snake seeding were computed against N+1 entrants
+    and it is wrong throughout. The un-cut is scoped to the colliding events —
+    another event of the same tournament keeps the draw it legitimately holds.
+
+    The merge itself is **never refused** (consistent with the self-play-collision
+    doctrine): nobody is locked out of their own account by a registration.
+
+    *Out of scope, deliberately:* a collision on an event whose play has already
+    begun (a fixture with a ``winner_entry_id`` or a ``match_id`` —
+    ``draw_has_play``). Un-cutting there would eat a recorded result, so that case
+    needs the self-play-collision machinery (transfer the match, then void it)
+    rather than this. It is **unreachable today** — nothing materializes a fixture
+    into a match until #788 — and building it now would mean guessing at machinery
+    that does not exist. When #788 lands, this is the gap to close.
+
+    "Active" is bound as ``:active`` from ``_ACTIVE_ENTRY_STATUS`` (see the module
+    top) in every statement here, so none of them can drift from the enum that the
+    model, the routes and the partial unique index all follow.
+
+    Does not commit — runs inside ``merge_user``'s caller's transaction, which is
+    what makes the delete and the un-cut one atomic act.
+    """
+    params = {
+        "from_id": from_user_id,
+        "to_id": to_user_id,
+        "active": _ACTIVE_ENTRY_STATUS,
+    }
+
+    # The events to un-cut, read BEFORE the delete — afterwards the guest's row is
+    # gone and the collision is no longer visible.
+    collided_event_ids = set(
+        (
+            await db.execute(
+                text(
+                    """
+                    SELECT guest.event_id
+                    FROM tournament_entries AS guest
+                    JOIN tournament_entries AS survivor
+                      ON survivor.event_id = guest.event_id
+                     AND survivor.user_id = :to_id
+                     AND survivor.status = :active
+                    WHERE guest.user_id = :from_id
+                      AND guest.status = :active
+                    """
+                ),
+                params,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not collided_event_ids:
+        return
+
+    # (1) Registration order and seed follow the earlier registration onto the
+    # survivor.
+    await db.execute(
+        text(
+            """
+            UPDATE tournament_entries AS survivor
+            SET created_at = LEAST(survivor.created_at, guest.created_at),
+                seed = COALESCE(survivor.seed, guest.seed)
+            FROM tournament_entries AS guest
+            WHERE survivor.user_id = :to_id
+              AND survivor.status = :active
+              AND guest.user_id = :from_id
+              AND guest.status = :active
+              AND guest.event_id = survivor.event_id
+            """
+        ),
+        params,
+    )
+
+    # (2) Drop the guest's losing row.
+    await db.execute(
+        text(
+            """
+            DELETE FROM tournament_entries AS te
+            WHERE te.user_id = :from_id
+              AND te.status = :active
+              AND EXISTS (
+                SELECT 1 FROM tournament_entries other
+                WHERE other.user_id = :to_id
+                  AND other.event_id = te.event_id
+                  AND other.status = :active
+              )
+            """
+        ),
+        params,
+    )
+
+    # (3) Un-cut the draws the double-counted field invalidated. ``uncut_draw`` is
+    # the one place a draw is deleted (ADR-0786) — a hand-rolled DELETE here would
+    # be a second spelling of "this event has no draw" to keep in step with the
+    # first.
+    events = (
+        (
+            await db.execute(
+                select(TournamentEvent).where(
+                    TournamentEvent.id.in_(collided_event_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for event in events:
+        await uncut_draw(db, event)
 
 
 async def _self_play_collision(
