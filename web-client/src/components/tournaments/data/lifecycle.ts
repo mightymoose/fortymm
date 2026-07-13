@@ -7,10 +7,12 @@
 
 import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 
+import { ApiError } from '@/api/client'
 import { formatRating } from '@/lib/rating'
 
 import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
 import { myEntrant, predicateSentence } from './helpers'
+import { fallbackNotice, type Notice } from './notice'
 import type {
   EventEntryState,
   Tournament,
@@ -97,6 +99,135 @@ export const LIFECYCLE_EDGE: Record<TournamentStatus, LifecycleEdge | null> = {
  * second to a second lookup — two reads of one table, which can disagree. */
 export function lifecycleEdgeFor(tournament: Tournament): LifecycleEdge | null {
   return tournament.canEdit ? LIFECYCLE_EDGE[tournament.status] : null
+}
+
+// ----- when the move is refused (ADR-0786, ADR-0017) -----------------------
+
+/**
+ * Everything a refused transition can be, as a sum type — one case per thing the header
+ * can *render*, so a refusal cannot arrive as a bag of booleans (`isConflict`,
+ * `isForbidden`, `isOffline`) whose combinations are mostly nonsense. Two of them true
+ * at once is unrepresentable here; none of them true — the silent failure — is
+ * unrepresentable too, because `lifecycleRefusalNotice` below is **total** and has no
+ * `null` arm.
+ *
+ * The kinds are the outcomes, not the status codes: `refused` is the tournament saying
+ * *no, not in this state* (a 409 — ADR-0017 chose 409 over 403 precisely because the
+ * caller is allowed to do this, the tournament merely is not ready), while `forbidden`
+ * is the server saying *not yours*. Same "it didn't happen", entirely different news.
+ */
+export type LifecycleRefusalKind =
+  /** **409** — the move is legal for this caller, but not from where the tournament
+   * stands. Two shapes, and the client cannot (and need not) tell them apart: a **stale
+   * view** clicking an edge that no longer exists ("This tournament is already
+   * published."), and go-live's **precondition** — no events, or an event with no draw
+   * or a stale one, *named* (ADR-0786). Both arrive as a sentence written for the
+   * director, and both are shown. */
+  | 'refused'
+  /** **403** — not the owner. The header offers no lifecycle button to anyone else
+   * (ADR-0015), so this means the page is looking at somebody else's tournament. */
+  | 'forbidden'
+  /** **401** — the session is gone. */
+  | 'signed-out'
+  /** **5xx** — our fault, not the director's. */
+  | 'server-error'
+  /** The request never reached the server: no response at all (a dead network, a
+   * `TypeError` from `fetch`). */
+  | 'unreachable'
+  /** Any other status. Reachable — a 404 on a tournament deleted from another tab — and
+   * kept as its own case rather than folded into `server-error`, because "we broke" and
+   * "something else happened" are not the same claim to make to a user. */
+  | 'unexpected'
+
+/** A refused transition, in words the header can render: the case it fell into, plus the
+ * `Notice` (client-owned title, server-authored sentence where that sentence is the
+ * point) — see `./notice`. */
+export interface LifecycleRefusal extends Notice {
+  kind: LifecycleRefusalKind
+}
+
+/**
+ * Turn a failed transition into the copy the director reads, beside the button they
+ * clicked.
+ *
+ * **The 409 carries the server's own sentence, verbatim**, and that is the whole design.
+ * Going live has a precondition (ADR-0786): every event must have a draw, and every draw
+ * must still seat exactly its event's entrants — registration stays open right up to the
+ * moment a tournament starts, so a draw cut on Tuesday can be stale by Wednesday. When
+ * that precondition fails, the server refuses the start with a 409 whose detail **names
+ * the events at fault** ("This tournament cannot start yet: “Open Singles” has no draw
+ * yet…"). That naming is the only actionable half of the refusal: a director with ten
+ * events, told merely "something isn't ready", is left clicking through all ten. So the
+ * client does not paraphrase it — it frames it. The title is ours ("Couldn't start the
+ * tournament", named after the edge they clicked, never after the wire call); the
+ * sentence beneath is the server's.
+ *
+ * It is the same 409 that answers a **stale tab** re-asserting an edge that no longer
+ * exists, and the two are deliberately NOT told apart: the refusal carries no code
+ * (ADR-0968's coded refusals are the entry route's), and string-sniffing the detail to
+ * choose a title would be a client re-deriving a judgement the server already made. Both
+ * shapes are sentences written for the director, and both are shown under a title that is
+ * true of both — the click did not take effect, and here is why.
+ *
+ * The other arms are designed states, not a shrug: 403, 401, 5xx and a dead network each
+ * get words of their own. There is **no `null` arm** — the header surfaces this mutation's
+ * errors inline and carries no toast (`web-client/CLAUDE.md`, ## Forms: never both), so a
+ * `null` here would be the click that did nothing and said nothing.
+ */
+export function lifecycleRefusalNotice(
+  error: unknown,
+  edge: LifecycleEdge,
+): LifecycleRefusal {
+  const fallback = fallbackNotice(error, edge.verb)
+  if (!(error instanceof ApiError)) {
+    return {
+      kind: 'unreachable',
+      title: fallback.title,
+      description:
+        'The request never reached the server, so nothing was changed. Check your ' +
+        'connection and try again.',
+    }
+  }
+
+  if (error.status >= 500) {
+    return {
+      kind: 'server-error',
+      title: 'Something went wrong on our end',
+      // Never the server's sentence here: a 5xx detail is machinery, not copy
+      // (`DEFINITION_OF_COMPLETE`: raw API detail strings never reach the UI).
+      description: `The tournament was not moved. Try again in a moment — nothing was changed.`,
+    }
+  }
+
+  switch (error.status) {
+    case 409:
+      return {
+        kind: 'refused',
+        title: fallback.title,
+        // The server's sentence — it names the events (ADR-0786), or names the status
+        // somebody else already moved this tournament to. The fallback exists only for a
+        // 409 that somehow arrives without one, and it says the one thing that is true of
+        // every shape of it: re-read the page.
+        description:
+          error.detail ??
+          'The tournament is not in a state this move can be made from. Reload the page to see where it stands.',
+      }
+    case 403:
+      return {
+        kind: 'forbidden',
+        title: "You can't move this tournament",
+        description:
+          'Only the tournament’s creator can publish, start or end it. Nothing was changed.',
+      }
+    case 401:
+      return {
+        kind: 'signed-out',
+        title: 'You are signed out',
+        description: `Sign in again, then ${edge.verb}. Nothing was changed.`,
+      }
+    default:
+      return { kind: 'unexpected', ...fallback }
+  }
 }
 
 /**

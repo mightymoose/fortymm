@@ -182,6 +182,49 @@ export const mockEventEnterEndpoint = (
     ),
   )
 
+/** Resolver for the **cut-draw** endpoint (ADR-0786) — the created fixtures (201), or an
+ * error envelope: 403 (not the owner), 409 (the draw shows evidence of play), 422 (this
+ * event cannot be planned: an unsupported draw type, no pools, or a pool that would get
+ * fewer than two entrants), 404.
+ *
+ * The refusals are plain-string `detail`s, not coded ones — deliberately, because that
+ * is what the route sends: the 422's sentence names what the director must CHANGE
+ * ("5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants"), and
+ * those numbers are not derivable from a code. There is no request body: the event is
+ * the whole request. */
+export type EventCutDrawResolver = HttpResponseResolver<
+  { tournamentId: string; eventId: string },
+  never,
+  components['schemas']['TournamentFixtureRead'][] | ErrorBody
+>
+
+/** POST /v1/tournaments/{id}/events/{eventId}/draw — cut (or re-cut) the draw. */
+export const mockEventCutDrawEndpoint = (
+  backend: Backend,
+  resolver: EventCutDrawResolver,
+) =>
+  backend.use(
+    http.post('*/v1/tournaments/:tournamentId/events/:eventId/draw', resolver),
+  )
+
+/** Resolver for the **un-cut-draw** endpoint — a 204 with no body (including when the
+ * event never had a draw: this is a DELETE, and it is idempotent), or an error envelope
+ * on a 403 / 409 (evidence of play) / 404. */
+export type EventUncutDrawResolver = HttpResponseResolver<
+  { tournamentId: string; eventId: string },
+  never,
+  ErrorBody | null
+>
+
+/** DELETE /v1/tournaments/{id}/events/{eventId}/draw — un-cut the draw. */
+export const mockEventUncutDrawEndpoint = (
+  backend: Backend,
+  resolver: EventUncutDrawResolver,
+) =>
+  backend.use(
+    http.delete('*/v1/tournaments/:tournamentId/events/:eventId/draw', resolver),
+  )
+
 /** Resolver for the withdraw endpoint — a 204 with no body (including when the
  * entry was already withdrawn: withdrawal is idempotent), or an error envelope
  * on a 403 (someone else's entry) / 404. */

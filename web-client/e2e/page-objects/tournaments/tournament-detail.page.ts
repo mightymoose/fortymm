@@ -73,6 +73,16 @@ export class TournamentDetailPage {
     })
   }
 
+  /** The header's inline **refusal** — where a rejected transition is reported now
+   * (#786): an `Alert` beside the button that was clicked, not a toast. It carries the
+   * client's title and, beneath it, the server's own sentence — which for a refused
+   * **Start tournament** is the one that *names the events* whose draws are missing or
+   * stale, i.e. the work list the director acts on. A toast would take that away after
+   * four seconds. */
+  get lifecycleNotice(): Locator {
+    return this.page.getByTestId('lifecycle-notice')
+  }
+
   /** Assert the pill reads exactly this status, and that the header offers
    * exactly the button that status has an edge for — the two halves of one claim
    * ("the view moved"), which drift apart if a spec only ever checks the badge. */
@@ -84,6 +94,83 @@ export class TournamentDetailPage {
     }
     await expect(this.lifecycleButton(action)).toBeVisible()
     await expect(this.anyLifecycleButton).toHaveCount(1)
+  }
+
+  // ----- the draw panel (ADR-0786) -----------------------------------------
+  //
+  // Every locator here is scoped to ONE event card, because the tab renders a draw panel
+  // per event and the pools inside them are all called "Pool A": an unscoped
+  // `getByRole('region', { name: 'Pool A' })` would match two different events' pools and
+  // (rightly) throw on the ambiguity — or, worse, assert one event's draw and call it
+  // the other's.
+  //
+  // They are addressed by their **accessible names**, not by test ids, wherever the
+  // component gives them one. That is deliberate: the whole panel is a screen-reader
+  // artefact (a pool's roster is a named list, a round is a named list, a fixture is a
+  // list item that says "vs" out loud), so a locator that went around the accessibility
+  // tree would be testing a draw that a blind director cannot read.
+
+  /** One event's draw panel — the `<section>` headed "Draw" on its card. */
+  drawPanel(eventName: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: 'Draw' })
+  }
+
+  /** The panel's designed EMPTY state: an event with no draw cut. Not a spinner and not
+   * an error — the state every event is born in. */
+  drawEmpty(eventName: string): Locator {
+    return this.eventCard(eventName).getByTestId('draw-empty')
+  }
+
+  /** The draw's three verbs, owner-only and named per event (the tab shows one panel per
+   * card, so a bare "Generate draw" would be four identical buttons). */
+  generateDrawButton(eventName: string): Locator {
+    return this.page.getByRole('button', {
+      name: `Generate draw for ${eventName}`,
+    })
+  }
+
+  recutDrawButton(eventName: string): Locator {
+    return this.page.getByRole('button', { name: `Re-cut draw for ${eventName}` })
+  }
+
+  deleteDrawButton(eventName: string): Locator {
+    return this.page.getByRole('button', { name: `Delete draw for ${eventName}` })
+  }
+
+  /** The panel's inline **refusal** — the `Alert` where the click was, carrying the
+   * server's own sentence (a 422 names what the director must change). Addressed by the
+   * testid prefix because the id carries the event's id, which a spec has no business
+   * knowing. */
+  drawNotice(eventName: string): Locator {
+    return this.eventCard(eventName).locator('[data-testid^="draw-notice-"]')
+  }
+
+  /** One pool of a cut draw, by the name the event gives it ("Pool A"). */
+  poolDraw(eventName: string, poolName: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: poolName })
+  }
+
+  /** The chips naming who the draw dealt into a pool — its membership, which nothing
+   * stores: it is derived from the pool's own fixtures (ADR-0786). */
+  poolEntrants(eventName: string, poolName: string): Locator {
+    return this.poolDraw(eventName, poolName)
+      .getByRole('list', { name: `Entrants in ${poolName}` })
+      .getByRole('listitem')
+  }
+
+  /** One round's fixtures within a pool, in position order. An odd pool's rounds hold
+   * FEWER of them — the player drawn against the phantom seat sits that round out, and
+   * that absence is the entire representation of a bye. */
+  roundFixtures(eventName: string, poolName: string, round: number): Locator {
+    return this.poolDraw(eventName, poolName)
+      .getByRole('list', { name: `Round ${round} fixtures in ${poolName}` })
+      .getByRole('listitem')
+  }
+
+  /** Every fixture line of one event's draw, across all its pools — for counting the
+   * whole draw, and for sweeping it for words that must never appear on one ("bye"). */
+  fixtureLines(eventName: string): Locator {
+    return this.drawPanel(eventName).locator('[data-testid^="fixture-line-"]')
   }
 
   // ----- the event card's entry control ------------------------------------
@@ -112,14 +199,23 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).getByTestId('ineligible-notice')
   }
 
-  /** EVERY button inside one event card — the locator the "no *disabled* Enter"
-   * claim actually needs. `enterButton()` is keyed on the accessible name, so it
-   * proves only that a button *called* "Enter X" is absent; this proves the card
-   * offers no control at all beyond its own open-target overlay (which is a sibling
-   * of the card, not inside it — see `eventCard`). ADR-0015: hide the affordance,
-   * never disable it. */
+  /** Every button inside one event card **except the draw panel's** — the locator the
+   * "no *disabled* Enter" claim actually needs. `enterButton()` is keyed on the
+   * accessible name, so it proves only that a button *called* "Enter X" is absent; this
+   * proves the card offers no ENTRY control at all beyond its own open-target overlay
+   * (which is a sibling of the card, not inside it — see `eventCard`). ADR-0015: hide
+   * the affordance, never disable it.
+   *
+   * The draw's verbs (Generate / Re-cut / Delete, ADR-0786) live inside the same card
+   * and are excluded on purpose: they are a *director's* controls, gated on the
+   * tournament's `can_edit` rather than on anything about entry, and a full or
+   * rating-ineligible event is exactly as drawable as any other. Folding them in would
+   * make this locator quietly assert "an owner may not cut a draw for a full event",
+   * which is not true and is not what any of its callers mean. */
   cardButtons(eventName: string): Locator {
-    return this.eventCard(eventName).getByRole('button')
+    return this.eventCard(eventName).locator(
+      'button:not([data-testid^="draw-panel-"] button)',
+    )
   }
 
   withdrawButton(eventName: string): Locator {
@@ -166,6 +262,24 @@ export class TournamentDetailPage {
    * `Edit {event}` for an owner, `View {event}` otherwise. */
   openEditorOverlay(eventName: string): Locator {
     return this.page.getByRole('button', { name: `Edit ${eventName}` })
+  }
+
+  /**
+   * Open one event's editor by clicking its card — **on the header**, where a director
+   * would.
+   *
+   * Not at the overlay's geometric centre, which is where a bare `.click()` goes: the
+   * open target is a `z-0` sibling stretched under the card, and the card raises its own
+   * *controls* above it (`relative z-10`) — the Enter button, and the whole **draw
+   * panel**, whose Generate / Re-cut / Delete would otherwise never receive a click. So
+   * on a DRAWN card — a tall one — the centre of the overlay lands inside the pools
+   * scaffold, and the click does nothing.
+   *
+   * That is the correct behaviour, not a bug to route around: a fixture line is not a
+   * link to the event editor. It is simply why this click is positioned.
+   */
+  async openEditor(eventName: string) {
+    await this.openEditorOverlay(eventName).click({ position: { x: 30, y: 20 } })
   }
 
   /** The event editor — a Sheet, i.e. a `role="dialog"`. The one thing clicking
@@ -299,6 +413,85 @@ export class TournamentDetailPage {
   async chooseOperator(label: string) {
     await this.ruleOperator.click()
     await this.page.getByRole('option', { name: label }).click()
+  }
+
+  // ----- the editor, with a draw standing (ADR-0786) ------------------------
+  //
+  // Two of the editor's controls freeze once an event's draw is cut — its **draw type**
+  // (the strategy that dealt the fixtures) and its **set of pools** (each fixture names
+  // one by id). They are DISABLED WITH A REASON, never hidden: unlike the viewer's
+  // missing buttons, these are one deleted draw away from working, so hiding them would
+  // hide the way out along with the control (ADR-0015 forbids the *unexplained* dead
+  // end — the reason in text is what makes this one not that).
+
+  /** The Basics tab's draw-type select. Present-but-disabled under a cut draw, so it is
+   * located by role: the state under test is a control that is there, readable, and
+   * dead. */
+  get drawTypeSelect(): Locator {
+    return this.page.getByRole('combobox', { name: 'Draw type' })
+  }
+
+  /** The Table pools tab's one explanation of the freeze — the `Alert` that both the Add
+   * button and every Remove button point at with `aria-describedby`. */
+  get poolsFrozenNotice(): Locator {
+    return this.page.getByTestId('pools-frozen-notice')
+  }
+
+  get addPoolButton(): Locator {
+    return this.page.getByRole('button', { name: 'Add pool' })
+  }
+
+  /** Every pool's trash button. Plural on purpose: "the removes are all dead" is the
+   * claim, and a locator that named one pool could only ever prove it of that one. */
+  get removePoolButtons(): Locator {
+    return this.page.getByRole('button', { name: 'Remove pool' })
+  }
+
+  /** One pool's card in the editor, by position — the pools are a list, and the editor
+   * names them only by an editable text box. */
+  poolCard(index: number): Locator {
+    return this.page.getByTestId('pool-card').nth(index)
+  }
+
+  /** A table chip inside one pool card ("T3"), which toggles that table into the pool.
+   * **Still live with a draw standing** — that is the point of freezing only the pool
+   * *set*: a table breaks mid-event and the director has to be able to record it without
+   * destroying a correct draw. */
+  poolTableChip(poolIndex: number, label: string): Locator {
+    return this.poolCard(poolIndex).getByRole('button', { name: label, exact: true })
+  }
+
+  /** One pool's name box. **The only control on this tab that can author a pool the
+   * server refuses**: the id and the default name are minted, but this box can be
+   * emptied — and `Pool.name` is `min_length=1`. Scoped to the card, because the pools
+   * are a list of identically-labelled boxes. */
+  poolNameInput(index: number): Locator {
+    return this.poolCard(index).getByLabel('Pool name')
+  }
+
+  /** The red messages under the pool name boxes — the Table pools counterpart of
+   * `ruleErrors` and `basicsError`. Plural: which card is red is the claim. */
+  get poolNameErrors(): Locator {
+    return this.page.getByTestId('pool-name-error')
+  }
+
+  /**
+   * The element a control POINTS AT with `aria-describedby` — i.e. the sentence a screen
+   * reader actually reads out when it lands on it, as opposed to whatever text happens
+   * to sit near it on screen.
+   *
+   * It is the only channel a **disabled** control has: it is not focusable, and it holds
+   * no tooltip anyone will ever hear. A reason rendered under a dead trigger and not
+   * pointed at is a reason for sighted directors only — which is exactly what the
+   * draw-type select was doing while the pools section, one tab over, wired the identical
+   * freeze correctly.
+   *
+   * Resolves to a locator that matches NOTHING when the control describes nothing, so an
+   * assertion on it fails loudly rather than passing vacuously.
+   */
+  async describedBy(control: Locator): Promise<Locator> {
+    const id = await control.getAttribute('aria-describedby')
+    return this.page.locator(id ? `[id="${id}"]` : '#describes-nothing')
   }
 
   /** The tournament-level "Entries" hero stat: the sum of every event's derived

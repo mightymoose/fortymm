@@ -319,5 +319,8 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     predicates: [],
     match: { rated: true, lengthGames: 5 },
     pools: [],
+    // No draw (ADR-0786), and there could not be one: a draw is cut from a field, and
+    // an event that does not exist on the server yet has no entrants to cut it from.
+    fixtures: [],
   }
 }

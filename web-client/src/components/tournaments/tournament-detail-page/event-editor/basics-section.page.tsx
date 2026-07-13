@@ -29,6 +29,12 @@ const scoped = (container: Container) => ({
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },
+  /** The draw-type select. Present-but-**disabled** once the event's draw is cut
+   * (ADR-0786) — so it is queried by role, not by "an enabled combobox": the state
+   * under test is a control that is there, readable, and dead. */
+  getDrawTypeTrigger() {
+    return container.getByRole('combobox', { name: 'Draw type' })
+  },
   /** The player-limit helper text — form furniture, and so absent from the
    * read-only view (ADR 0015). It is also the one place the editor says out loud
    * that leaving the box empty is *allowed* (ADR-0935). */

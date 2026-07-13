@@ -1,18 +1,22 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   act,
+  render,
   renderHook as renderHookRaw,
+  screen,
   waitFor as waitForRaw,
 } from '@testing-library/react'
 import { HttpResponse } from 'msw'
 import type { StrictResponse } from 'msw'
 import { toast } from 'sonner'
-import type { ReactNode } from 'react'
+import { Component, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { renderHook, waitFor } from '@/test/utilities'
 import {
+  mockEventCutDrawEndpoint,
   mockEventEnterEndpoint,
+  mockEventUncutDrawEndpoint,
   mockEventWithdrawEndpoint,
   mockTournamentCreateEndpoint,
   mockTournamentDetailEndpoint,
@@ -24,24 +28,32 @@ import {
   buildTournamentDetailRead,
   buildTournamentEntrantRead,
   buildTournamentEventRead,
+  buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import type { CodedErrorBody } from '@/mocks/endpoints/error-body'
 import { server } from '@/mocks/server'
-import { resetTournamentsStore } from '@/mocks/tournaments-store'
+import {
+  cutDraw,
+  markFixturePlayed,
+  resetTournamentsStore,
+} from '@/mocks/tournaments-store'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 import {
   useCreateTournament,
+  useCutDraw,
   useEnterEvent,
   useTournament,
   useTournaments,
   useTransitionTournament,
+  useUncutDraw,
   useUpdateTournament,
   useWithdrawEntry,
 } from './api'
 import { LIFECYCLE_EDGE, type LifecycleEdge } from './lifecycle'
 
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 
 /** The edge OUT of `from` — which is what the transition mutation takes: an edge,
  * not a bare target status. It carries both the `to` for the body and the verb the
@@ -56,15 +68,20 @@ function edgeFrom(from: 'draft' | 'published' | 'live'): LifecycleEdge {
 
 vi.mock('sonner', async () => {
   const actual = await vi.importActual<typeof import('sonner')>('sonner')
-  return { ...actual, toast: { ...actual.toast, error: vi.fn(), info: vi.fn() } }
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: vi.fn(), info: vi.fn(), success: vi.fn() },
+  }
 })
 
-/** Both toast channels start clean: the entry cases assert not just which toast
- * fired, but that the *other* one did not (a benign 409 that also raised a red
- * error toast would satisfy a one-sided assertion). */
+/** Every toast channel starts clean: the entry cases assert not just which toast
+ * fired, but that the *others* did not (a benign 409 that also raised a red error
+ * toast would satisfy a one-sided assertion) — and the lifecycle cases assert that
+ * NONE of them fired at all, since that mutation reports through its caller now. */
 beforeEach(() => {
   vi.mocked(toast.error).mockClear()
   vi.mocked(toast.info).mockClear()
+  vi.mocked(toast.success).mockClear()
 })
 
 describe('useTournaments', () => {
@@ -284,8 +301,13 @@ describe('useTransitionTournament', () => {
   // The stale-tab race (ADR-0017's reason for 409-ing a re-assertion): tab A
   // published; THIS tab still reads `draft`, so it still offers Publish. The
   // refusal has to be VISIBLE — a swallowed 409 is a button that does nothing —
-  // and the verb names the edge the user clicked, not the wire call.
-  it('surfaces an illegal-edge 409 as an error toast naming what they clicked', async () => {
+  // but this mutation is not the thing that shows it. It **hands the error to its
+  // caller**, whole, and stays quiet: `LifecycleActions` renders every refusal inline,
+  // beside the button, so a toast here would say the same thing twice
+  // (`web-client/CLAUDE.md`, ## Forms: never both). The 409 that matters most is
+  // go-live's precondition (ADR-0786), whose sentence *names the events* the director
+  // has to go and fix — a work list belongs on the page, not in a four-second toast.
+  it('hands the 409 to its caller — with the server’s sentence — and does NOT toast', async () => {
     // The server sees `published → published` — a self-transition — so it answers
     // the sentence that says what happened, not the tautology naming both ends.
     mockTournamentTransitionEndpoint(server, () =>
@@ -305,17 +327,18 @@ describe('useTransitionTournament', () => {
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't publish the tournament",
-      expect.objectContaining({
-        // The description is the server's detail, passed through — this is the
-        // sentence the stale tab is there to read.
-        description: 'This tournament is already published.',
-      }),
-    )
-    // A 409 here is a genuine refusal — nothing moved. Unlike the entry 409 (which
-    // means "you are already in"), it must NOT be downgraded to an info note.
+    // The error the component catches: the status it branches on, and the sentence it
+    // shows. Both survive the trip — nothing is flattened into a message string.
+    const error = result.current.error
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(409)
+    expect((error as ApiError).detail).toBe('This tournament is already published.')
+
+    // Silence on every ring of the toaster, not just the error one: a refusal
+    // announced as a cheerful `toast.success` would still be a double-up.
+    expect(toast.error).not.toHaveBeenCalled()
     expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('invalidates on the 409 too, so the stale view catches up to the status it was refused', async () => {
@@ -342,7 +365,11 @@ describe('useTransitionTournament', () => {
     })
   })
 
-  it('names the edge in the failure toast: ending a tournament reads as ending it', async () => {
+  // A 5xx is not a refusal, and it is still not a toast: the same caller reports it, in
+  // its own words (`lifecycleRefusalNotice`'s `server-error` arm — which deliberately
+  // does NOT repeat the server's detail, since a 5xx detail is machinery). What this
+  // mutation owes the caller is the status; what it owes the user is nothing.
+  it('stays quiet on a 5xx too — the error is the caller’s to report', async () => {
     mockTournamentTransitionEndpoint(server, () =>
       HttpResponse.json({ detail: 'Server error.' }, { status: 500 }),
     )
@@ -351,15 +378,13 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    // The edge out of `live` — "End tournament". Its verb is what the toast says.
+    // The edge out of `live` — "End tournament".
     result.current.mutate(edgeFrom('live'))
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't end the tournament",
-      expect.objectContaining({ description: 'Server error.' }),
-    )
+    expect((result.current.error as ApiError).status).toBe(500)
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
 
@@ -928,5 +953,412 @@ describe('entering and withdrawing, against the stateful mock store', () => {
 
     await waitForRaw(() => expect(event().entered).toBe(1))
     expect(event().entrants.map((e) => e.username)).toEqual(['rita.kovac'])
+  })
+})
+
+// ----- the draw (ADR-0786) -------------------------------------------------
+
+/** The 201 body of `POST …/draw`: the fixtures the cut produced. */
+function drawnPair(): TournamentFixtureRead[] {
+  return [
+    buildTournamentFixtureRead({
+      id: 'fx-1',
+      pool_id: 'p-1',
+      round: 1,
+      position: 1,
+      entry_a_id: 'entry-1',
+      entry_b_id: 'entry-2',
+    }),
+  ]
+}
+
+describe('useCutDraw', () => {
+  it('posts to the event’s draw resource with NO body, and resolves the parsed fixtures', async () => {
+    let seen: { url: string; body: string } | null = null
+    mockEventCutDrawEndpoint(server, async ({ request }) => {
+      seen = { url: request.url, body: await request.text() }
+      return HttpResponse.json(drawnPair(), { status: 201 })
+    })
+
+    const { result } = renderHook(() => useCutDraw('t-1'))
+    const fixtures = await result.current.mutateAsync('ev-1')
+
+    expect(seen!.url).toContain('/v1/tournaments/t-1/events/ev-1/draw')
+    // The event IS the request — a cut is planned from the field the server already
+    // holds, so there is nothing for the client to send.
+    expect(seen!.body).toBe('')
+    // …and what comes back is PARSED, in the domain's camelCase — not the wire shape.
+    expect(fixtures).toEqual([
+      {
+        id: 'fx-1',
+        poolId: 'p-1',
+        round: 1,
+        position: 1,
+        entryAId: 'entry-1',
+        entryBId: 'entry-2',
+        winnerEntryId: null,
+        matchId: null,
+      },
+    ])
+  })
+
+  // The response is a payload like any other: untrusted. A cut that answered with a
+  // malformed fixture must reject the mutation, not hand the caller half a draw.
+  it('rejects a malformed fixture in its OWN response', async () => {
+    mockEventCutDrawEndpoint(server, () =>
+      HttpResponse.json(
+        [{ id: 'fx-1', pool_id: 'p-1' } as unknown as TournamentFixtureRead],
+        { status: 201 },
+      ),
+    )
+
+    const { result } = renderHook(() => useCutDraw('t-1'))
+
+    await expect(result.current.mutateAsync('ev-1')).rejects.toThrow()
+  })
+
+  // THE invalidation contract (the map at the top of `./api`): exactly two keys, the
+  // list and this tournament's detail — because the fixtures ride the detail payload and
+  // there is no draw query of their own. `toHaveBeenCalledTimes(2)` is the half that
+  // makes this a contract rather than a wish: an extra invalidation (a phantom
+  // `['tournaments', id, 'draw']` key nothing reads) would sail through the two
+  // `toHaveBeenCalledWith`s.
+  it('invalidates EXACTLY the list and the detail — no draw key of its own', async () => {
+    mockEventCutDrawEndpoint(server, () =>
+      HttpResponse.json(drawnPair(), { status: 201 }),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useCutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // The 409 (evidence of play) is a STALE-VIEW signal, exactly like the entry and
+  // transition 409s: this page offered Re-cut, so as far as it knew nothing had been
+  // played — and the server has just told it otherwise. Reconciling only on success
+  // would leave the director looking at the same button that was refused.
+  it('invalidates on the play-guard 409 too, so the refused view catches up', async () => {
+    mockEventCutDrawEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail:
+            "This event's draw is already under way — at least one fixture has a match or a recorded winner — so it can no longer be cut or removed.",
+        },
+        { status: 409 },
+      ),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useCutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // The 422 is the director's to act on, and its SENTENCE is the answer: it names the
+  // numbers they have to change ("5 entrants across 3 pool(s)…" — no code could carry
+  // that). So the hook does not swallow it and does not decorate it: it REJECTS with the
+  // `ApiError`, sentence intact, and the panel that awaited `mutateAsync` renders it
+  // inline where the button was (`DrawPanel`, `data/draw.ts`).
+  it('rejects a 422 — an event that cannot be planned — with the server’s sentence intact', async () => {
+    mockEventCutDrawEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail:
+            '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to play.',
+        },
+        { status: 422 },
+      ),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useCutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    const error = result.current.error as ApiError
+    expect(error.status).toBe(422)
+    expect(error.detail).toBe(
+      '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to play.',
+    )
+    // …and NO toast. The draw verbs carry no global `onError`, deliberately: their
+    // refusals are surfaced inline by the panel, and a toast would tell the director the
+    // same thing twice (`web-client/CLAUDE.md`, ## Forms). Asserting the absence is what
+    // keeps the toast from creeping back in beside the inline copy.
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('rejects a 403 (not the owner) without a toast — the panel owns the words', async () => {
+    mockEventCutDrawEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'Only the creator can cut this draw.' },
+        { status: 403 },
+      ),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useCutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect((result.current.error as ApiError).status).toBe(403)
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+})
+
+describe('useUncutDraw', () => {
+  it('DELETEs the event’s draw resource and resolves on the bodiless 204', async () => {
+    let seenUrl = ''
+    mockEventUncutDrawEndpoint(server, ({ request }) => {
+      seenUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    })
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUncutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(seenUrl).toContain('/v1/tournaments/t-1/events/ev-1/draw')
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('invalidates on the play-guard 409 too — the same stale-view argument as the cut', async () => {
+    mockEventUncutDrawEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: "This event's draw is already under way." },
+        { status: 409 },
+      ),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUncutDraw('t-1'), { wrapper })
+    result.current.mutate('ev-1')
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    const error = result.current.error as ApiError
+    expect(error.status).toBe(409)
+    expect(error.detail).toBe("This event's draw is already under way.")
+    // No toast here either — the panel renders the play-guard refusal inline, beside the
+    // draw it refused to remove.
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The whole point of the fixtures riding the DETAIL payload (ADR-0786): cutting a draw
+// and reading it back are the same page's business, and there is no draw query to keep
+// in step. Driven through the DEFAULT handlers and the stateful dev store, so what is
+// asserted is the round trip — cut, and the next read of that event carries the draw.
+describe('cutting and un-cutting, against the stateful mock store', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const TOURNAMENT = 'bay-area-open-2026'
+  /** The seed's ONE cuttable event: round-robin (the only draw type with a generator),
+   * two pools, nine entrants — and seeded already drawn. */
+  const DRAWN = 'ev-u1200'
+  /** Seeded `rr-then-ko` with no pools and nobody entered — the event a cut REFUSES. */
+  const UNCUTTABLE = 'ev-u1500'
+
+  it('the seeded draw arrives on the detail read, pooled, with no draw on the other events', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(() => useTournament(TOURNAMENT), { wrapper })
+
+    await waitForRaw(() => expect(result.current.data).toBeTruthy())
+    const events = result.current.data!.events
+    const drawn = events.find((e) => e.id === DRAWN)!
+
+    expect(drawn.fixtures.length).toBeGreaterThan(0)
+    // Every fixture names one of its own event's pools — a `pool_id` is a string ref
+    // into that JSONB, so a draw pointing at a pool the event does not have would be a
+    // draw nothing could render.
+    const poolIds = drawn.pools.map((p) => p.id)
+    expect(poolIds.length).toBe(2)
+    for (const fixture of drawn.fixtures) {
+      expect(poolIds).toContain(fixture.poolId)
+      // Nothing has been played: no winner, no match, both sides known (round-robin
+      // never has a TBD side — every pairing is known the moment the pools are dealt).
+      expect(fixture.winnerEntryId).toBeNull()
+      expect(fixture.matchId).toBeNull()
+      expect(fixture.entryAId).not.toBeNull()
+      expect(fixture.entryBId).not.toBeNull()
+    }
+    // …and every OTHER event has an empty draw — `[]`, the designed uncut state.
+    for (const event of events.filter((e) => e.id !== DRAWN)) {
+      expect(event.fixtures).toEqual([])
+    }
+  })
+
+  it('un-cutting empties the draw on the next read; re-cutting brings it back', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(
+      () => ({
+        detail: useTournament(TOURNAMENT),
+        cut: useCutDraw(TOURNAMENT),
+        uncut: useUncutDraw(TOURNAMENT),
+      }),
+      { wrapper },
+    )
+    const event = () =>
+      result.current.detail.data!.events.find((e) => e.id === DRAWN)!
+
+    await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
+    const cutSize = event().fixtures.length
+    expect(cutSize).toBeGreaterThan(0)
+
+    await act(() => result.current.uncut.mutateAsync(DRAWN))
+    await waitForRaw(() => expect(event().fixtures).toEqual([]))
+
+    await act(() => result.current.cut.mutateAsync(DRAWN))
+    // The same field and the same pools cut the same draw — nothing is random
+    // (ADR-0786), which is what makes a re-cut a reviewable act rather than a gamble.
+    await waitForRaw(() => expect(event().fixtures).toHaveLength(cutSize))
+  })
+
+  it('un-cutting an event that never had a draw is a SUCCESS, not a 404 (DELETE is idempotent)', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(() => useUncutDraw(TOURNAMENT), { wrapper })
+
+    result.current.mutate(UNCUTTABLE)
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+  })
+
+  it('refuses to cut an event that cannot be planned — an unsupported draw type is a 422', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(() => useCutDraw(TOURNAMENT), { wrapper })
+
+    // `ev-u1500` is `rr-then-ko`, which has no generator yet — the refusal a director
+    // meets today, and the one the mock must not be more permissive about than the API.
+    result.current.mutate(UNCUTTABLE)
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+    expect((result.current.error as ApiError).status).toBe(422)
+  })
+
+  // The play guard. Nothing a client can call materializes a fixture yet (#788), so the
+  // store gets there directly — which is the only honest way to reach the state a
+  // director will meet the moment the first match exists.
+  it('refuses to re-cut or un-cut a draw with evidence of play — and the standing draw survives', async () => {
+    const cut = cutDraw(TOURNAMENT, DRAWN)
+    if (!cut.ok) throw new Error('the seed should have cut cleanly')
+    markFixturePlayed(TOURNAMENT, DRAWN, cut.fixtures[0].id, {
+      winner_entry_id: cut.fixtures[0].entry_a_id,
+    })
+
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(
+      () => ({
+        detail: useTournament(TOURNAMENT),
+        cut: useCutDraw(TOURNAMENT),
+        uncut: useUncutDraw(TOURNAMENT),
+      }),
+      { wrapper },
+    )
+    const event = () =>
+      result.current.detail.data!.events.find((e) => e.id === DRAWN)!
+
+    await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
+    const before = event().fixtures.length
+
+    result.current.cut.mutate(DRAWN)
+    await waitForRaw(() => expect(result.current.cut.isError).toBe(true))
+    expect((result.current.cut.error as ApiError).status).toBe(409)
+
+    result.current.uncut.mutate(DRAWN)
+    await waitForRaw(() => expect(result.current.uncut.isError).toBe(true))
+    expect((result.current.uncut.error as ApiError).status).toBe(409)
+
+    // A refused cut destroys nothing — the guard's whole promise. The recorded winner is
+    // still on the fixture it was recorded on.
+    await waitForRaw(() => expect(event().fixtures).toHaveLength(before))
+    expect(event().fixtures.filter((f) => f.winnerEntryId !== null)).toHaveLength(1)
+  })
+})
+
+/** Catches whatever the query throws, so a test can assert that it threw *to a
+ * boundary* rather than quietly turning into an empty page. */
+class CatchBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? <p>the boundary caught it</p> : this.props.children
+  }
+}
+
+// The parse boundary, from the outside: what a COMPONENT experiences when the server
+// sends a draw that is not a draw (`.claude/rules/parse-at-boundaries.md`).
+//
+// This is the case the whole `fixtures` Zod schema exists for, and it is why the mapping
+// moved into the `queryFn`: TanStack Query *catches* a throw from `select`, leaving the
+// raw payload in the cache and an error result the detail route reads as "not found" —
+// so a malformed draw used to be able to render a **"Tournament not found"** page for a
+// tournament the server had just sent. Parsed in the `queryFn`, it is a failed fetch:
+// the boundary gets it, and the cache is never primed with the bad payload.
+describe('a malformed fixture on the detail payload', () => {
+  function brokenDetail() {
+    return buildTournamentDetailRead({
+      id: 't-1',
+      events: [
+        buildTournamentEventRead({
+          id: 'ev-1',
+          // No `round`, no `position` — a shape `schema.d.ts` swears cannot arrive.
+          fixtures: [
+            { id: 'fx-1', pool_id: 'p-1' } as unknown as TournamentFixtureRead,
+          ],
+        }),
+      ],
+    })
+  }
+
+  it('fails the query and reaches the error boundary — it does not render an empty page', async () => {
+    // React logs the caught error; the boundary is the assertion, not the console.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockTournamentDetailEndpoint(server, () => HttpResponse.json(brokenDetail()))
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    function Page() {
+      const { data } = useTournament('t-1')
+      return <p>{data ? data.name : 'no tournament'}</p>
+    }
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CatchBoundary>
+          <Page />
+        </CatchBoundary>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('the boundary caught it')).toBeInTheDocument()
+    // And nothing malformed got into the cache on the way — a bad payload that primed
+    // the cache would be read back as good by the next component to mount.
+    expect(queryClient.getQueryData(['tournaments', 't-1'])).toBeUndefined()
   })
 })

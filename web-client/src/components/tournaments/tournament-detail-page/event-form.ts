@@ -5,6 +5,7 @@ import {
   entryFeeSchema,
   maxPlayersSchema,
   nameSchema,
+  poolNameSchema,
   type EventSection,
 } from '../data/event-validation'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
@@ -72,10 +73,14 @@ const predicateSchema: z.ZodType<Predicate, Predicate> = z.object({
 /** A table pool — its name, its window, and the tables it reserves. Typed as the
  * domain's `Pool` for the same reason `predicateSchema` is: the pool cards hand a
  * form field back as a `Pool`, and a mirror that is merely *similar* would need a
- * cast to cross that seam. */
+ * cast to cross that seam.
+ *
+ * `name` carries the server's floor (`poolNameSchema`, `data/event-validation`) — the
+ * one field of a pool the organizer can *clear*. Its `id` is minted and boxless, so it
+ * is left alone: see the note on `poolNameSchema`. */
 const poolSchema: z.ZodType<Pool, Pool> = z.object({
   id: z.string(),
-  name: z.string(),
+  name: poolNameSchema,
   slot: slotSchema,
   tableIds: z.array(z.string()),
 })
@@ -97,6 +102,9 @@ const poolSchema: z.ZodType<Pool, Pool> = z.object({
  *   no server-side twin to mirror: the API is deliberately MORE permissive about a
  *   half-written rule than the product is (it accepts `Rating < ?`, a restriction on
  *   nobody, and renders it on the card as though it were real).
+ * - `pools` carries the newest of the server's floors: a pool's `name` may not be
+ *   blank (`poolNameSchema`). The pools editor mints the id and the default name, so
+ *   only the *box* could ever author one — and it did.
  */
 export const eventSchema = z.object({
   name: nameSchema,
@@ -186,14 +194,20 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
  * A message on a tab you cannot see is indistinguishable from a button that does
  * nothing, which is exactly what Save looked like before this existed.
  *
- * Basics before Eligibility, deliberately: with both broken, the name is the field
- * they are most likely to have simply not filled in, and landing on the *later* tab
- * would leave the empty name behind them, unseen.
+ * Basics before Eligibility before Table pools, deliberately: that is the order the
+ * tabs are in, and with more than one broken, the name is the field they are most
+ * likely to have simply not filled in — landing on a *later* tab would leave the empty
+ * name behind them, unseen.
  */
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
   if (errors.name || errors.maxPlayers || errors.entryFee) return 'basics'
   if (errors.predicates) return 'eligibility'
+  // A pool with a cleared name (`poolNameSchema`). RHF reports it per row
+  // (`errors.pools[2].name`) *and* sets the array key, so the truthiness of `pools` is
+  // the whole question here — which row it is, the card itself says, in red, under the
+  // box. Match settings has no arm: every control on it is a closed picker.
+  if (errors.pools) return 'pools'
   return null
 }

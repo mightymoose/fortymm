@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
+import type { components } from '@/api/schema'
 import {
   buildTournamentDetailRead,
   buildTournamentEntrantRead,
   buildTournamentEntrantReads,
   buildTournamentEventRead,
+  buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   apiToEntrant,
@@ -17,6 +19,17 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import type { Tournament, TournamentEvent } from './types'
+
+type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
+
+/** A payload the generated types say cannot exist — which is exactly what the runtime
+ * parse is for. The cast is the *point* of these cases, not a shortcut around them:
+ * `schema.d.ts` is a compile-time claim about a server we do not control, and a test
+ * that could only feed `apiToEvent` well-typed fixtures could never prove the boundary
+ * rejects a bad one. */
+function malformedFixture(broken: Record<string, unknown>): TournamentFixtureRead {
+  return broken as unknown as TournamentFixtureRead
+}
 
 describe('apiToEntryState', () => {
   // The tags cross the boundary UNCHANGED, and that is the contract: they are the
@@ -147,6 +160,177 @@ describe('apiToEvent', () => {
   })
 })
 
+// The DRAW (ADR-0786), where it crosses into the app. Every fixture is PARSED here
+// (`./fixtures`), not cast — `apiToEvent` is called from the queries' `queryFn`, so a
+// draw that is not a draw fails the fetch instead of reaching a renderer.
+describe('apiToEvent — the draw', () => {
+  it('maps a cut draw to camelCase fixtures, in the order the wire sent them', () => {
+    const event = apiToEvent(
+      buildTournamentEventRead({
+        fixtures: [
+          buildTournamentFixtureRead({
+            id: 'fx-1',
+            pool_id: 'p-1',
+            round: 1,
+            position: 1,
+            entry_a_id: 'entry-1',
+            entry_b_id: 'entry-2',
+          }),
+          buildTournamentFixtureRead({
+            id: 'fx-2',
+            pool_id: 'p-1',
+            round: 1,
+            position: 2,
+            entry_a_id: 'entry-3',
+            entry_b_id: 'entry-4',
+          }),
+        ],
+      }),
+    )
+
+    expect(event.fixtures).toEqual([
+      {
+        id: 'fx-1',
+        poolId: 'p-1',
+        round: 1,
+        position: 1,
+        entryAId: 'entry-1',
+        entryBId: 'entry-2',
+        winnerEntryId: null,
+        matchId: null,
+      },
+      {
+        id: 'fx-2',
+        poolId: 'p-1',
+        round: 1,
+        position: 2,
+        entryAId: 'entry-3',
+        entryBId: 'entry-4',
+        winnerEntryId: null,
+        matchId: null,
+      },
+    ])
+  })
+
+  // Every null on a fixture is a FACT (ADR-0786), and a mapper that coalesced any of
+  // them would erase the thing the draw exists to say: a null side is TBD, a null
+  // winner is undecided, a null match is un-materialized, a null pool is un-pooled.
+  it('carries every null through — TBD sides, undecided, un-materialized, un-pooled', () => {
+    const event = apiToEvent(
+      buildTournamentEventRead({
+        fixtures: [
+          buildTournamentFixtureRead({
+            id: 'fx-final',
+            pool_id: null,
+            round: 3,
+            position: 1,
+            entry_a_id: null,
+            entry_b_id: null,
+          }),
+        ],
+      }),
+    )
+
+    expect(event.fixtures[0]).toEqual({
+      id: 'fx-final',
+      poolId: null,
+      round: 3,
+      position: 1,
+      entryAId: null,
+      entryBId: null,
+      winnerEntryId: null,
+      matchId: null,
+    })
+  })
+
+  it('maps a decided, materialized fixture — the winner and its match id survive', () => {
+    const event = apiToEvent(
+      buildTournamentEventRead({
+        fixtures: [
+          buildTournamentFixtureRead({
+            winner_entry_id: 'entry-2',
+            match_id: 'm-7',
+          }),
+        ],
+      }),
+    )
+
+    expect(event.fixtures[0].winnerEntryId).toBe('entry-2')
+    expect(event.fixtures[0].matchId).toBe('m-7')
+  })
+
+  // THE empty state. An event nobody has cut a draw for is not an error and not a null —
+  // it has an empty draw, which is a thing a page renders ("no draw yet, cut one").
+  it('maps an event with NO DRAW CUT to an empty fixture list — not null, not an error', () => {
+    const event = apiToEvent(buildTournamentEventRead({ fixtures: [] }))
+
+    expect(event.fixtures).toEqual([])
+  })
+
+  // …and the boundary. A malformed fixture must fail HERE, loudly, rather than travel
+  // inward as an `undefined` that surfaces as a blank bracket cell three components away
+  // (`.claude/rules/parse-at-boundaries.md`). The generated types promise these payloads
+  // cannot arrive; the parse is what makes that promise enforceable at runtime.
+  it.each([
+    {
+      what: 'a fixture missing its round',
+      fixture: malformedFixture({
+        id: 'fx-1',
+        pool_id: 'p-1',
+        position: 1,
+        entry_a_id: 'entry-1',
+        entry_b_id: 'entry-2',
+        winner_entry_id: null,
+        match_id: null,
+      }),
+    },
+    {
+      what: 'a pool_id of the wrong type',
+      fixture: malformedFixture({
+        ...buildTournamentFixtureRead(),
+        pool_id: 7,
+      }),
+    },
+    {
+      what: 'a round that is not a number',
+      fixture: malformedFixture({
+        ...buildTournamentFixtureRead(),
+        round: '1',
+      }),
+    },
+    {
+      // `.nullable()`, not `.optional()`: an ABSENT side is not the same as a null one.
+      // Null means TBD — a fact. Absent means the server sent us something we cannot
+      // read, and reading it as TBD would invent a fixture that is waiting for a player
+      // who will never arrive.
+      what: 'an absent side (absent is not the same as TBD)',
+      fixture: malformedFixture({
+        id: 'fx-1',
+        pool_id: null,
+        round: 1,
+        position: 1,
+        entry_b_id: 'entry-2',
+        winner_entry_id: null,
+        match_id: null,
+      }),
+    },
+  ])('rejects $what at the boundary', ({ fixture }) => {
+    expect(() =>
+      apiToEvent(buildTournamentEventRead({ fixtures: [fixture] })),
+    ).toThrow()
+  })
+
+  it('rejects a draw that is not a list at all — null is not an empty draw', () => {
+    expect(() =>
+      apiToEvent(
+        buildTournamentEventRead({
+          fixtures: null as unknown as TournamentFixtureRead[],
+        }),
+      ),
+    ).toThrow()
+  })
+})
+
 describe('apiToEntrant', () => {
   it('renames user_id and passes an unseeded entrant through', () => {
     expect(
@@ -231,6 +415,49 @@ describe('apiToTournament', () => {
     expect(tournament.events.map((e) => e.id)).toEqual(['ev-1', 'ev-2'])
     expect(tournament.events[0].maxPlayers).toBe(16)
     expect(tournament.events[1].maxPlayers).toBe(48)
+  })
+
+  // The draw arrives INSIDE the detail payload — there is no `GET …/draw` (ADR-0786) —
+  // so this is the mapping every drawn page actually goes through.
+  it('carries each event’s draw through, drawn and undrawn side by side', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({
+        events: [
+          buildTournamentEventRead({
+            id: 'ev-drawn',
+            fixtures: [buildTournamentFixtureRead({ id: 'fx-1', pool_id: 'p-1' })],
+          }),
+          buildTournamentEventRead({ id: 'ev-undrawn', fixtures: [] }),
+        ],
+      }),
+    )
+
+    expect(tournament.events[0].fixtures.map((f) => f.id)).toEqual(['fx-1'])
+    expect(tournament.events[0].fixtures[0].poolId).toBe('p-1')
+    // The undrawn event is not a lesser drawn one: it is empty, and that is a state.
+    expect(tournament.events[1].fixtures).toEqual([])
+  })
+
+  // The whole point of parsing at the boundary rather than validating in a component:
+  // ONE bad fixture on ONE event fails the whole payload, at the edge, before any of it
+  // is trusted. `apiToTournament` runs inside both queries' `queryFn`, so this throw is
+  // a failed fetch — the cache is never primed with the bad draw.
+  it('rejects the whole payload when any event carries a malformed fixture', () => {
+    expect(() =>
+      apiToTournament(
+        buildTournamentDetailRead({
+          events: [
+            buildTournamentEventRead({ id: 'ev-fine' }),
+            buildTournamentEventRead({
+              id: 'ev-broken',
+              fixtures: [
+                malformedFixture({ ...buildTournamentFixtureRead(), round: null }),
+              ],
+            }),
+          ],
+        }),
+      ),
+    ).toThrow()
   })
 })
 
@@ -347,6 +574,9 @@ const event: TournamentEvent = {
       tableIds: ['t1', 't2'],
     },
   ],
+  // No draw cut (ADR-0786). The write bodies below must not carry one either — a draw
+  // is written by the two draw verbs and by nothing else.
+  fixtures: [],
 }
 
 describe('eventToCreateBody', () => {
@@ -412,11 +642,20 @@ describe('eventToCreateBody', () => {
       // entrants are: it is the server's judgement about *the caller*, not a field
       // the editor authors (ADR-0783).
       entry_state: { state: 'open' },
+      // The DRAW is absent from the create body too, and for a third reason: a brand-new
+      // event has no field to cut one from. Cutting is its own verb (ADR-0786).
+      fixtures: [],
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
     })
 
     expect(roundTripped).toEqual(event)
+  })
+
+  it('sends NO fixtures — a draw is cut by POST …/draw, never authored in an event body', () => {
+    const body = eventToCreateBody(event)
+
+    expect('fixtures' in body).toBe(false)
   })
 })
 
@@ -455,5 +694,29 @@ describe('eventToUpdateBody', () => {
   it('omits the entrants too — registrations are written through the entries endpoints, never an event PATCH', () => {
     const body = eventToUpdateBody(event)
     expect('entrants' in body).toBe(false)
+  })
+
+  // The same lost-update argument as `entered` and `entrants`, and with sharper teeth: a
+  // PATCH that echoed the client's last-read `fixtures` back would let a rename throw
+  // away a draw the director cut in another tab — or, worse, re-assert a stale one over
+  // a re-cut. A draw moves only through `POST …/draw` and `DELETE …/draw` (ADR-0786).
+  it('omits the draw — an event PATCH can neither cut, keep, nor clobber fixtures', () => {
+    const body = eventToUpdateBody({
+      ...event,
+      fixtures: [
+        {
+          id: 'fx-1',
+          poolId: 'p-1',
+          round: 1,
+          position: 1,
+          entryAId: 'entry-1',
+          entryBId: 'entry-2',
+          winnerEntryId: null,
+          matchId: null,
+        },
+      ],
+    })
+
+    expect('fixtures' in body).toBe(false)
   })
 })

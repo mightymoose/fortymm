@@ -41,12 +41,14 @@ import { DEMO_SEED } from './rbac-store'
 import {
   createEvent as createTournamentEvent,
   createTournament,
+  cutDraw as cutTournamentDraw,
   deleteEvent as deleteTournamentEvent,
   deleteTournament as deleteTournamentSeed,
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
   transitionTournament,
+  uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
   updateTournament,
   withdrawEntry as withdrawTournamentEntry,
@@ -969,6 +971,34 @@ function validateEventBody(
       return detail('Entry fee can’t be negative.', 422)
     }
   }
+  // A pool id IDENTIFIES a pool, and a fixture names its pool by that string (ADR-0786).
+  // Two pools sharing one id is a payload the interior cannot hold: the cut deals onto
+  // the same `(event_id, pool_id, round, position)` twice and the fixture table's unique
+  // index fires — a **500** (`_pool_ids_are_unique`, `api/app/schemas/tournament.py`).
+  //
+  // It lives HERE, at the mock's boundary rather than in the store's freeze, for the two
+  // reasons the server's validator does:
+  //  • it is a 422 in *every* state the event could be in — an event with no draw at all
+  //    still cannot have two pools called `p-a`;
+  //  • and the PATCH path is the worse of the two, because the pool-set freeze compares
+  //    SETS: `[A, A, B]` against a cut event holding `{A, B}` is the same set, so the
+  //    freeze waves it through and the next cut dies. The guard that protects the draw
+  //    was admitting the payload that poisons it.
+  if (body.pools !== undefined && body.pools !== null) {
+    const seen = new Set<string>()
+    const duplicated = body.pools
+      .map((pool) => pool.id)
+      .filter((id) => (seen.has(id) ? true : (seen.add(id), false)))
+    if (duplicated.length > 0) {
+      return detail(
+        `A pool id identifies one pool: ${[...new Set(duplicated)]
+          .map((id) => `“${id}”`)
+          .join(', ')} is used by more than one pool of this event. Give each pool an ` +
+          'id of its own.',
+        422,
+      )
+    }
+  }
   return null
 }
 
@@ -1688,6 +1718,61 @@ export const handlers = [
       return new HttpResponse(null, { status: 204 })
     },
   ),
+  // The draw (ADR-0786). Registered before the bare `:eventId` routes, like the
+  // entries routes above, so MSW can never mistake a draw path for an event path.
+  //
+  // Cutting is an EXPLICIT act — nothing else in the mock creates a fixture, and no
+  // status change cuts one — and it is refused exactly as the server refuses it: 403
+  // (not the owner), 409 (the draw shows evidence of play: a fixture with a winner or a
+  // linked match), 422 (this event cannot be planned — an unsupported draw type, no
+  // pools, or a pool that would get fewer than two entrants). The refusal SENTENCES come
+  // from the store, because for the 422 the sentence is the answer: it names the numbers
+  // the director has to change.
+  http.post(
+    '*/v1/tournaments/:tournamentId/events/:eventId/draw',
+    async ({ params }) => {
+      await delay(250)
+      const result = cutTournamentDraw(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        if (result.status === 409 || result.status === 422) {
+          return detail(result.detail, result.status)
+        }
+        return detail(
+          result.status === 403
+            ? 'Only the creator can cut this draw.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.fixtures, { status: 201 })
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/events/:eventId/draw',
+    async ({ params }) => {
+      await delay(250)
+      const result = uncutTournamentDraw(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        // The play guard, again: a draw that has been played cannot be removed either.
+        if (result.status === 409) return detail(result.detail, 409)
+        return detail(
+          result.status === 403
+            ? 'Only the creator can remove this draw.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      // 204 whether or not there was a draw to remove — this is a DELETE, and asking
+      // for a state the resource is already in is a success.
+      return new HttpResponse(null, { status: 204 })
+    },
+  ),
   http.patch(
     '*/v1/tournaments/:tournamentId/events/:eventId',
     async ({ params, request }) => {
@@ -1703,6 +1788,10 @@ export const handlers = [
         body ?? {},
       )
       if (!result.ok) {
+        // The pool-set freeze (ADR-0786): this PATCH would add, remove or re-`id` a pool
+        // on an event whose draw is cut, orphaning the fixtures drawn into it. The
+        // store's sentence says so — and says how to get out of it.
+        if (result.status === 409) return detail(result.detail, 409)
         return detail(
           result.status === 403
             ? 'Only the creator can edit this event.'

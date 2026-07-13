@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 
-import { screen } from '@/test/utilities'
+import { fireEvent, screen } from '@/test/utilities'
 
 import { buildPool } from '../../../data/seed.factory'
 import { poolCardPage } from './pool-card.page'
@@ -26,6 +26,125 @@ describe('PoolCard', () => {
     poolCardPage.render({ onRemove })
     await userEvent.click(poolCardPage.getRemoveButton())
     expect(onRemove).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * The name box is the one control on this card that can author a pool the server
+   * refuses (`Pool.name`, `min_length=1`) — the id and the default name are minted. The
+   * card does not *judge* the name (the editor's resolver does, and refuses the save);
+   * what it owes is the verdict, under the box, in red, wired so a screen reader hears
+   * it too.
+   */
+  describe('a name the server would refuse', () => {
+    it('renders the message under the box, and marks the box invalid', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+      })
+
+      expect(poolCardPage.queryNameError()).toHaveTextContent('Name is required.')
+      expect(poolCardPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+    })
+
+    // A `<p>` that merely sits below an input is *beside* it on screen and nowhere at
+    // all to a screen reader.
+    it('points the box at the message', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+      })
+
+      const describedBy = poolCardPage.getNameInput().getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(poolCardPage.queryNameError()).toHaveAttribute('id', describedBy)
+    })
+
+    it('says nothing, and claims nothing, when the name is fine', () => {
+      poolCardPage.render({ pool: buildPool({ name: 'Pool A' }) })
+
+      expect(poolCardPage.queryNameError()).toBeNull()
+      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-invalid', 'true')
+      // No dangling description either — an `aria-describedby` pointing at an element
+      // that is not there is an axe violation of its own.
+      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-describedby')
+    })
+
+    // A viewer has no box to clear, so there is nothing to tell them to fix. (The
+    // editor never hands one down for a read-only card; this is the card refusing to
+    // render one even if it did.)
+    it('tells a viewer nothing about a name they cannot edit', () => {
+      poolCardPage.render({
+        pool: buildPool({ name: '' }),
+        nameError: 'Name is required.',
+        canEdit: false,
+      })
+
+      expect(poolCardPage.queryNameError()).toBeNull()
+      expect(poolCardPage.queryNameInput()).toBeNull()
+    })
+  })
+
+  // The pool-set freeze, at the level of one card (ADR-0786). The *reason* is not the
+  // card's to say — the section says it once, above the cards — so what the card owes is
+  // a dead button that points at it.
+  describe('when the event’s draw is cut', () => {
+    it('disables the remove button and points it at the reason', async () => {
+      const onRemove = vi.fn()
+      poolCardPage.render({
+        removal: { kind: 'frozen', reasonId: 'freeze-notice' },
+        onRemove,
+      })
+
+      const button = poolCardPage.getRemoveButton()
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('aria-describedby', 'freeze-notice')
+      // Disabled means disabled: the click is refused by the DOM, not merely styled away.
+      await userEvent.click(button)
+      expect(onRemove).not.toHaveBeenCalled()
+    })
+
+    // Disabled, not hidden — this is the case a director can get *out* of (delete the
+    // draw), unlike the viewer's, whose buttons never come back. Hiding it would take
+    // the way out with it.
+    it('still renders the remove button', () => {
+      poolCardPage.render({
+        removal: { kind: 'frozen', reasonId: 'freeze-notice' },
+      })
+      expect(poolCardPage.queryRemoveButton()).toBeInTheDocument()
+    })
+
+    // The whole reason the freeze is scoped to identity: a table breaks and is pulled, a
+    // pool slips an hour, a pool is renamed — all of it mid-event, none of it costing
+    // the draw. A card that greyed itself out wholesale would break exactly this.
+    it('leaves the name, the window and the table toggles live', async () => {
+      const onChange = vi.fn()
+      poolCardPage.render({
+        pool: buildPool({ tableIds: ['t1'] }),
+        removal: { kind: 'frozen', reasonId: 'freeze-notice' },
+        onChange,
+      })
+
+      await userEvent.click(poolCardPage.getTableToggle('T5'))
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ tableIds: ['t1', 't5'] }),
+      )
+
+      fireEvent.change(poolCardPage.getNameInput(), {
+        target: { value: 'Morning Pool' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: 'Morning Pool' }),
+      )
+
+      fireEvent.change(screen.getByLabelText('End'), {
+        target: { value: '13:15' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          slot: expect.objectContaining({ end: '13:15' }),
+        }),
+      )
+    })
   })
 
   describe('for a non-owner (read-only)', () => {

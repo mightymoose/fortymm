@@ -19,6 +19,12 @@ const scoped = (container: Container) => ({
   queryNameInput() {
     return container.queryByLabelText('Pool name')
   },
+  /** The red message under the name box — the resolver's verdict on this pool's name
+   * (`poolNameSchema`). Absent until a save is actually attempted, and absent for a
+   * viewer, who has no box to clear. */
+  queryNameError() {
+    return container.queryByTestId('pool-name-error')
+  },
   getTableToggle(label: string) {
     return container.getByRole('button', { name: label, pressed: false })
   },

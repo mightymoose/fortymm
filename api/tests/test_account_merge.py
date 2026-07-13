@@ -2,7 +2,7 @@
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -31,6 +31,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentFixture,
     User,
     UserLeagueRating,
     UserRole,
@@ -38,6 +39,7 @@ from app.models import (
 )
 from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
+from app.tournament_draws import cut_draw
 from tests._helpers import start_session
 
 
@@ -487,16 +489,29 @@ async def _enter(
     *,
     status: TournamentEntryStatus = TournamentEntryStatus.entered,
     added_by: User | None = None,
+    seed: int | None = None,
+    created_at: datetime | None = None,
 ) -> TournamentEntry:
     """``added_by=None`` is not "unspecified" — it is self-registration, the
     default state of every entry (ADR-0784). Pass a user to make it a *director*
-    entry: that user put this player in the event."""
+    entry: that user put this player in the event.
+
+    ``created_at`` is settable because registration order is **load-bearing** — it
+    is the draw's ordering tie-break (``app.draws.order_entrants``) — so the
+    collision tests below need to say which of two entries came first rather than
+    hope the server clock separated two commits."""
     entry = TournamentEntry(
         event_id=event.id,
         user_id=user.id,
         status=status,
         added_by_user_id=added_by.id if added_by is not None else None,
+        seed=seed,
     )
+    if created_at is not None:
+        # Assigned rather than passed to the constructor: ``created_at`` carries a
+        # server default, and handing it an explicit ``None`` would insert NULL into
+        # a NOT NULL column instead of falling back to ``now()``.
+        entry.created_at = created_at
     db.add(entry)
     await db.commit()
     await db.refresh(entry)
@@ -894,6 +909,338 @@ async def test_merge_repoints_active_entry_over_survivors_withdrawn_row(
     assert all(e.user_id == verified.id for e in entries)
     active = [e for e in entries if e.status is TournamentEntryStatus.entered]
     assert [e.id for e in active] == [guest_active.id]
+
+
+# ----- entry collisions vs. a cut draw ------------------------------------
+#
+# The hazard the tests below pin (ADR-0786): ``tournament_fixtures`` references
+# ``tournament_entries`` with ON DELETE CASCADE, and the collision dedup above
+# HARD-DELETES the guest's duplicate active entry. Left alone, that silently
+# cascades away every fixture seating the guest — holes in a cut draw. The merge
+# instead un-cuts the event's draw, because a draw cut from a field that
+# double-counted a human is wrong throughout (its pool sizes and snake seeding
+# were computed against N+1 entrants), and carries the guest's earlier
+# registration onto the surviving entry, because registration order is the draw's
+# ordering tie-break.
+
+
+async def _make_rr_event(
+    db: AsyncSession,
+    owner: User,
+    *,
+    tournament: Tournament | None = None,
+    name: str = "Open Singles",
+) -> TournamentEvent:
+    """A **cuttable** event: round-robin with one pool. ``_make_event`` above is
+    single-elim, whose strategy is not implemented yet (``UnsupportedDrawType``),
+    so a draw cannot be cut from it.
+
+    One pool, not two, so that *every* entrant is seated in a fixture against every
+    other — which is what makes "the guest's entry is in this draw" true by
+    construction rather than by luck of the snake. Pass ``tournament`` to hang a
+    second event off the same tournament (the un-cut must be scoped to the event
+    that collided, not the tournament).
+    """
+    if tournament is None:
+        tournament = Tournament(
+            name="Guest Cup",
+            league_id=await _default_league_id(db),
+            created_by_user_id=owner.id,
+            address={
+                "venue": "Berkeley TT Club",
+                "street": "2727 Milvia St",
+                "city": "Berkeley",
+                "region": "CA",
+                "postal": "94703",
+                "country": "USA",
+            },
+            table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+        )
+    slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
+    event = TournamentEvent(
+        name=name,
+        format=EventFormat.singles,
+        draw_type=DrawType.round_robin,
+        max_players=32,
+        entry_fee=40,
+        slot=slot,
+        match_settings={"rated": True, "length_games": 5},
+        predicates=[],
+        pools=[{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
+    )
+    tournament.events.append(event)
+    db.add(tournament)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+async def _cut(db: AsyncSession, event: TournamentEvent) -> list[TournamentFixture]:
+    """Cut the event's draw and hand back the fixtures it wrote. ``cut_draw`` does
+    not commit (the route owns the transaction), so this does."""
+    await cut_draw(db, event)
+    await db.commit()
+    return await _fixtures_for(db, event)
+
+
+async def _fixtures_for(
+    db: AsyncSession, event: TournamentEvent
+) -> list[TournamentFixture]:
+    # ``populate_existing`` for the same reason ``_entries_for`` uses it: the merge
+    # writes with bulk statements the identity map never sees, and the test
+    # sessionmaker does not expire on commit — a plain SELECT would hand back stale
+    # copies of rows the un-cut deleted.
+    return list(
+        (
+            await db.execute(
+                select(TournamentFixture)
+                .where(TournamentFixture.event_id == event.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _seats(fixtures: list[TournamentFixture]) -> set[tuple]:
+    """The identity + contents of each fixture — what a re-point onto the survivor
+    (or a cascade hole) would change, and a genuinely untouched draw would not."""
+    return {
+        (f.id, f.pool_id, f.round, f.position, f.entry_a_id, f.entry_b_id)
+        for f in fixtures
+    }
+
+
+async def _fixtures_referencing(db: AsyncSession, entry_id: uuid.UUID) -> int:
+    """How many fixtures **anywhere** name this entry, on any of its three entry
+    columns. A merge that re-pointed the guest's fixtures onto the survivor would
+    leave this at zero too — which is why the tests assert it *alongside* the
+    event's fixture count, never instead of it."""
+    return len(
+        (
+            await db.execute(
+                select(TournamentFixture.id).where(
+                    (TournamentFixture.entry_a_id == entry_id)
+                    | (TournamentFixture.entry_b_id == entry_id)
+                    | (TournamentFixture.winner_entry_id == entry_id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_merge_uncuts_the_draw_when_the_collision_double_counted_a_human(
+    db_session: AsyncSession,
+):
+    """The whole point (ADR-0786). Guest and survivor are BOTH actively entered in an
+    event whose draw is already cut — so the cut draw seats one human twice, and every
+    pool size and seeding decision in it was computed against a field of N+1.
+
+    The dedup deletes the guest's duplicate entry, and ``tournament_fixtures`` cascades
+    on that delete — so doing nothing else would leave the draw **holed**: fixtures
+    silently gone from a draw the director still believes is cut. The tempting repair
+    (re-point the guest's fixtures onto the surviving entry) is worse than the holes: it
+    seats one person in two slots of the same pool, and because the go-live currency
+    check compares entrant *sets*, the corrupted draw would satisfy it and go live.
+
+    So the draw is **un-cut**: zero fixtures, and the director re-cuts from the field
+    that actually exists.
+    """
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    earlier = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    guest_entry = await _enter(db_session, event, ephemeral, created_at=earlier)
+    survivor_entry = await _enter(
+        db_session, event, verified, created_at=earlier + timedelta(hours=2)
+    )
+    await _enter(db_session, event, other, created_at=earlier + timedelta(hours=3))
+
+    before = await _cut(db_session, event)
+    assert len(before) == 3, "a one-pool round-robin of three seats three fixtures"
+    assert await _fixtures_referencing(db_session, guest_entry.id) == 2, (
+        "precondition: the guest's entry really is in this draw — without it the "
+        "assertions below would pass against a draw that never seated them"
+    )
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _fixtures_for(db_session, event) == [], (
+        "the draw must be UN-CUT, not holed: a field that double-counted a human is "
+        "wrong throughout, so it is re-cut, never patched"
+    )
+    assert await _fixtures_referencing(db_session, guest_entry.id) == 0
+    assert await _fixtures_referencing(db_session, survivor_entry.id) == 0, (
+        "and the guest's fixtures must not have been re-pointed onto the survivor — "
+        "that seats one human in two slots and would pass the go-live currency check"
+    )
+
+    entries = await _entries_for(db_session, event)
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert {e.id for e in active} == {
+        survivor_entry.id,
+        *(e.id for e in entries if e.user_id == other.id),
+    }
+    mine = [e for e in active if e.user_id == verified.id]
+    assert [e.id for e in mine] == [survivor_entry.id], (
+        "one person, one active entry — the survivor's row is the one that stands"
+    )
+
+
+async def test_merge_carries_the_earlier_registration_onto_the_surviving_entry(
+    db_session: AsyncSession,
+):
+    """Registration order is **load-bearing**: it is the draw's ordering tie-break for
+    the unseeded (``app.draws.order_entrants`` — seed ascending where set, then
+    ``created_at``). The guest registered FIRST and the survivor second, so keeping the
+    survivor's row untouched would silently move that player *down* the next draw — a
+    place they lose by having signed in.
+
+    So the survivor's entry inherits the earlier ``created_at``, and the guest's seed
+    where the survivor has none (a seed is a director's decision about this player, and
+    it does not evaporate because they turned out to already have an account).
+    """
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    earlier = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    later = datetime(2026, 6, 2, 9, 0, tzinfo=UTC)
+    await _enter(db_session, event, ephemeral, created_at=earlier, seed=3)
+    survivor_entry = await _enter(db_session, event, verified, created_at=later)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert [e.id for e in entries] == [survivor_entry.id]
+    assert entries[0].created_at == earlier, (
+        "the surviving entry must carry the EARLIER of the two registrations — "
+        "keeping the survivor's own timestamp demotes them in the next draw"
+    )
+    assert entries[0].seed == 3, (
+        "an unseeded survivor adopts the guest's seed; the seeding is a fact about "
+        "the player, not about which of their two sessions holds the row"
+    )
+
+
+async def test_merge_keeps_the_survivors_seed_when_both_entries_carry_one(
+    db_session: AsyncSession,
+):
+    """The other arm of the seed rule. The survivor's row is the one that stands, so
+    where BOTH entries carry a seed, the survivor's wins — the merge is not licensed to
+    overwrite a seed the director set on the row it is keeping. (The earlier
+    ``created_at`` still carries: the two are independent.)"""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    earlier = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    await _enter(db_session, event, ephemeral, created_at=earlier, seed=7)
+    survivor_entry = await _enter(
+        db_session,
+        event,
+        verified,
+        created_at=earlier + timedelta(days=1),
+        seed=2,
+    )
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert [e.id for e in entries] == [survivor_entry.id]
+    assert entries[0].seed == 2, "the survivor's own seed stands"
+    assert entries[0].created_at == earlier
+
+
+async def test_a_merge_without_a_collision_leaves_a_cut_draw_completely_intact(
+    db_session: AsyncSession,
+):
+    """The other half of the contract, and the one an over-eager fix would break. Only
+    the GUEST was entered — there is no collision, nothing is double-counted, and the
+    merge simply re-points ``tournament_entries.user_id`` onto the survivor. The entry
+    ids do not change, so the draw cut from them still seats exactly the field it always
+    did.
+
+    Un-cutting *this* draw would destroy a perfectly good one every time a director who
+    entered a player signs in. Same fixture ids, same count, same contents.
+    """
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    guest_entry = await _enter(db_session, event, ephemeral)
+    await _enter(db_session, event, other)
+
+    before = await _cut(db_session, event)
+    assert len(before) == 1, "two entrants in one pool meet exactly once"
+    before_seats = _seats(before)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    after = await _fixtures_for(db_session, event)
+    assert _seats(after) == before_seats, (
+        "no collision, no double count — the draw must be untouched: same fixture "
+        "ids, same sides. The entry the guest held simply belongs to the survivor now."
+    )
+    entries = await _entries_for(db_session, event)
+    assert guest_entry.id in {e.id for e in entries}
+    assert {e.user_id for e in entries} == {verified.id, other.id}
+
+
+async def test_the_uncut_is_scoped_to_the_event_that_collided(
+    db_session: AsyncSession,
+):
+    """The un-cut is a fact about one **event**, not about the tournament or the player.
+    A second event of the same tournament, drawn from a field that never double-counted
+    anybody, is a good draw — and losing it would make every merge a tournament-wide
+    demolition.
+    """
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+
+    collided = await _make_rr_event(db_session, verified, name="Open Singles")
+    tournament = (
+        await db_session.execute(
+            select(Tournament)
+            .where(Tournament.id == collided.tournament_id)
+            .options(selectinload(Tournament.events))
+        )
+    ).scalar_one()
+    bystander = await _make_rr_event(
+        db_session, verified, tournament=tournament, name="Over 40s"
+    )
+
+    # The collision, on the first event only.
+    await _enter(db_session, event=collided, user=ephemeral)
+    await _enter(db_session, event=collided, user=verified)
+    await _enter(db_session, event=collided, user=other)
+    # The second event's field is unremarkable: the survivor and a bystander.
+    await _enter(db_session, event=bystander, user=verified)
+    await _enter(db_session, event=bystander, user=other)
+
+    assert len(await _cut(db_session, collided)) == 3
+    bystander_seats = _seats(await _cut(db_session, bystander))
+    assert len(bystander_seats) == 1
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _fixtures_for(db_session, collided) == []
+    assert _seats(await _fixtures_for(db_session, bystander)) == bystander_seats, (
+        "the un-cut must be scoped to the event whose field double-counted a human — "
+        "a sibling event's good draw is not the merge's to throw away"
+    )
 
 
 async def test_merge_repoints_rating_history_created_by(

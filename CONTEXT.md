@@ -299,8 +299,9 @@ _Avoid_: sets won, points won (points are not modelled), game win rate.
 **Meeting**:
 One decided **match** between two named players. The count of meetings and their
 outcomes make up a **head-to-head**.
-_Avoid_: encounter, fixture, matchup (a *head-to-head* is the record; a *meeting*
-is one match in it).
+_Avoid_: encounter, matchup (a *head-to-head* is the record; a *meeting* is one
+match in it), fixture (a **fixture** is a tournament draw's *pre-play* pairing —
+a meeting is a decided match).
 
 **Head-to-head**:
 One player's record of **meetings** against another — how many times they have
@@ -384,6 +385,46 @@ bottom of the list.
 _Avoid_: seed, top seed, position, row number (the roster's leftmost column may
 be *styled* with tournament "seed" flavor, but the underlying concept is a
 rating rank, never the player's index on the current page).
+
+## Tournaments
+
+**Draw**:
+The complete set of **fixtures** an event's draw type prescribes for its
+entrants — a bracket, a set of pools, or (later) rounds of pairings. A draw is
+**cut** (the deliberate, reviewable act of generating it; re-cutting replaces
+it wholesale and is refused once there is any evidence of play), and it is
+**current** when its fixtures cover exactly the event's active entrants —
+an entry landing after the cut makes the draw **stale**. Going live requires
+every event's draw to exist and be current; a draw may be cut and re-cut
+freely before that.
+_Avoid_: bracket (one draw type's shape, not the general concept), schedule
+(when a fixture is *played* is the schedule's concern, not the draw's).
+
+**Fixture**:
+A planned pairing in a **draw**: a round and a position (and a **pool**, when
+the draw is pooled), whose sides may still be unknown. A fixture is not a
+**match** — it *materializes* into one the moment both of its sides are known,
+and the match then runs the normal propose/accept lifecycle. A fixture is
+**pending** (some side still unknown), **ready** (both sides known and **no
+match yet** — the signal to create one), **materialized** (its match exists and
+is being played), or **decided** (its match completed and the winner recorded on
+the fixture). *Ready* is the state that ends the moment the match is created:
+`advance()` is idempotent precisely because a fixture that already has a
+`match_id` is no longer ready, and so is never proposed twice.
+_Avoid_: slot (a *Slot* is a window of time), tournament match (a fixture is
+the pre-play pairing; the match is the contest it becomes), tie.
+
+**Pool**:
+One concept with two faces, deliberately not split: a reserved slice of the
+venue (a set of tables for a window of time) *and*, once a round-robin draw is
+cut, the group of entrants who play all-play-all on that slice. The set of pool
+**identities** an event has is frozen the moment a draw exists — pools can no
+longer be added, removed, or re-identified, because every **fixture** names the
+pool it belongs to — but a pool's venue attributes (its tables, its time window)
+and its display name stay editable mid-event, because the venue changes under a
+running tournament (a table breaks, a table frees up).
+_Avoid_: group (a pool is not a grouping abstraction separate from the venue
+slice), division.
 
 ## Dashboard
 

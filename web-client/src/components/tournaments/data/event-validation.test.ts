@@ -7,6 +7,8 @@ import {
   NAME_MAX,
   nameSchema,
   PLAYERS_MAX,
+  poolNameIssues,
+  poolNameSchema,
 } from './event-validation'
 
 /** Longer than `tournament_events.name` (`VARCHAR(255)`) — the 422 the organizer used
@@ -132,5 +134,56 @@ describe('the entry fee (`EventEntryFee`: required, `ge=0`, whole cents)', () =>
     // Two places is a price. (`45.10` is two places — not the binary tail of 10.1.)
     expect(messageFor(entryFeeSchema, 45.1)).toBeUndefined()
     expect(messageFor(entryFeeSchema, 12.5)).toBeUndefined()
+  })
+})
+
+/**
+ * A **pool's** name — the last field in this editor that could still author a 422 (#786).
+ *
+ * The editor mints a pool's id and its default name ("Pool A"), so the happy path could
+ * never make a blank one. The box, however, is live: an emptied one was a save the form
+ * allowed and the server refused, in Pydantic's words ("String should have at least 1
+ * character"), in a banner naming no field.
+ */
+describe('poolNameSchema', () => {
+  it('requires a name — in the same words the event’s own name uses', () => {
+    // The same sentence, because to the organizer clearing a box it is the same news.
+    expect(messageFor(poolNameSchema, '')).toBe('Name is required.')
+    expect(messageFor(poolNameSchema, '   ')).toBe('Name is required.')
+    expect(messageFor(poolNameSchema, 'Pool A')).toBeUndefined()
+  })
+
+  /** ⚠️ **No ceiling.** `Pool.name` is `min_length=1` with no `max_length`: a pool lives
+   * in JSONB, and there is no column for it to overflow (unlike the event's
+   * `VARCHAR(255)`). A bound here would be a rule the API does not have — and a save
+   * refused by nothing but us. */
+  it('invents no ceiling the server does not have', () => {
+    expect(messageFor(poolNameSchema, 'A'.repeat(NAME_MAX + 1))).toBeUndefined()
+  })
+})
+
+describe('poolNameIssues', () => {
+  const pool = (id: string, name: string) => ({ id, name })
+
+  /** Keyed by pool id, so the red lands under the box that is empty. A director with six
+   * pools and one blank name must not be pointed at all six. */
+  it('blames only the pool that is blank', () => {
+    expect(
+      poolNameIssues([pool('p-a', ''), pool('p-b', 'Pool B'), pool('p-c', '  ')]),
+    ).toEqual({ 'p-a': 'Name is required.', 'p-c': 'Name is required.' })
+  })
+
+  it('says nothing about a list of named pools', () => {
+    expect(poolNameIssues([pool('p-a', 'Pool A')])).toEqual({})
+    expect(poolNameIssues([])).toEqual({})
+  })
+
+  /** The message is the SCHEMA's, read off it rather than re-typed beside it: the
+   * resolver refuses the save and this puts the red under the box, and the two must not
+   * be able to say different things about the same field. */
+  it('speaks the schema’s own words', () => {
+    expect(poolNameIssues([pool('p-a', '')])['p-a']).toBe(
+      messageFor(poolNameSchema, ''),
+    )
   })
 })

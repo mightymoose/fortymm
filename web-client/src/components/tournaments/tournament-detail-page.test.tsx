@@ -128,6 +128,50 @@ describe('TournamentDetailPage', () => {
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
+  /**
+   * The go-live precondition, on the page the director is actually looking at (ADR-0786).
+   *
+   * Two claims, and the second is the one only a page-level test can make: the refusal
+   * reaches the director **with the offending event named**, and the page goes on
+   * telling the truth about where the tournament stands — the pill still reads
+   * **Published**, because nothing here is optimistic. A component that flipped the
+   * status locally and walked it back would pass every assertion in
+   * `lifecycle-actions.test` and fail this one.
+   */
+  it('shows a refused Start — naming the event — and leaves the pill on Published', async () => {
+    const detail =
+      'This tournament cannot start yet: “Open Singles” has no draw yet. A draw is cut ' +
+      'from the field as it stands at the time, and registration stays open right up ' +
+      'to the moment a tournament goes live — so cut the draw for each event named ' +
+      '(again, if somebody entered or withdrew since it was last cut), then start the ' +
+      'tournament.'
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json({ detail }, { status: 409 }),
+    )
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ id: 't-1', status: 'published' }),
+    })
+
+    await userEvent.click(
+      tournamentDetailPagePage.getLifecycleButton(/Start tournament/),
+    )
+
+    const notice = await tournamentDetailPagePage.findLifecycleNoticeText()
+    expect(notice).toContain("Couldn't start the tournament")
+    expect(notice).toContain('“Open Singles” has no draw yet')
+
+    expect(tournamentDetailPagePage.getStatusBadge()).toHaveTextContent('Published')
+    expect(tournamentDetailPagePage.getStatusBadge()).toHaveAttribute(
+      'data-status',
+      'published',
+    )
+    // …and the button they were refused is still the button on offer, not "End
+    // tournament" — the tournament did not move.
+    expect(
+      tournamentDetailPagePage.getLifecycleButton(/Start tournament/),
+    ).toBeInTheDocument()
+  })
+
   it('opens the event editor and creates a new event', async () => {
     const onCreateEvent = vi.fn().mockResolvedValue(undefined)
     tournamentDetailPagePage.render({

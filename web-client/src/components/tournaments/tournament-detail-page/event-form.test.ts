@@ -1,4 +1,4 @@
-import { buildEvent, buildPredicate } from '../data/seed.factory'
+import { buildEvent, buildPool, buildPredicate } from '../data/seed.factory'
 import {
   eventSchema,
   eventToFormValues,
@@ -61,6 +61,41 @@ describe('eventSchema', () => {
       rejectedFields(formFor({ predicates: [buildPredicate({ op: '<', value: 1500 })] })),
     ).toEqual([])
   })
+
+  /** A pool is *called* something — the server says so (`Pool.name`, `min_length=1`),
+   * and so, now, does the resolver. The editor mints the id and the default name, so
+   * the only way to author a blank one is to clear the box; this is what stops the
+   * result being sent. */
+  it('refuses a pool with no name — blank, or a space', () => {
+    expect(rejectedFields(formFor({ pools: [buildPool({ name: '' })] }))).toEqual([
+      'pools',
+    ])
+    expect(rejectedFields(formFor({ pools: [buildPool({ name: '   ' })] }))).toEqual([
+      'pools',
+    ])
+    expect(rejectedFields(formFor({ pools: [buildPool({ name: 'Pool A' })] }))).toEqual(
+      [],
+    )
+  })
+
+  /** ⚠️ No ceiling: `Pool.name` has `min_length=1` and **no** `max_length` (a pool lives
+   * in JSONB — there is no column to overflow, unlike the event's `VARCHAR(255)`).
+   * Mirroring a bound the API does not have would refuse a save nothing on the server
+   * would ever have refused. */
+  it('does NOT invent a ceiling the server has no column for', () => {
+    expect(
+      rejectedFields(formFor({ pools: [buildPool({ name: 'A'.repeat(300) })] })),
+    ).toEqual([])
+  })
+
+  /** The name that is *sent* is the name that was judged: trimmed, so the server's
+   * `min_length` counts the same characters this schema did. */
+  it('trims the pool name it lets through', () => {
+    const parsed = eventSchema.parse(
+      formFor({ pools: [buildPool({ name: '  Championship  ' })] }),
+    )
+    expect(parsed.pools[0].name).toBe('Championship')
+  })
 })
 
 describe('eventToFormValues', () => {
@@ -94,6 +129,12 @@ describe('firstInvalidSection', () => {
     expect(
       firstInvalidSection({ predicates: { type: 'custom', message: 'x' } }),
     ).toBe('eligibility')
+  })
+
+  it('sends a broken pool name to Table pools', () => {
+    expect(firstInvalidSection({ pools: { type: 'custom', message: 'x' } })).toBe(
+      'pools',
+    )
   })
 
   // With both broken, the name is the field they are most likely to have simply not

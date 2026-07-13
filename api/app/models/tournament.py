@@ -24,6 +24,7 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
+    from app.models.tournament_fixture import TournamentFixture
 
 
 class TournamentStatus(enum.Enum):
@@ -205,4 +206,30 @@ class TournamentEvent(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="TournamentEntry.created_at",
+    )
+
+    # The event's draw: every fixture the cut produced (ADR-0786). Empty until the
+    # draw is cut; a re-cut replaces the set wholesale, which is what
+    # ``delete-orphan`` buys.
+    #
+    # Ordered pool → round → position — the SAME total order the read path's
+    # ``fixtures_by_event`` loader applies, and the one the fixtures' own
+    # ``UNIQUE (event_id, pool_id, round, position)`` makes a total order at all. The
+    # ``pool_id`` used to be missing from this list, which left the relationship
+    # ordering a *pooled* draw by round and position alone: pool A's round 1 and pool
+    # B's round 1 would interleave, so the same draw would come back in two different
+    # sequences depending on which of the two ways a caller happened to read it. A
+    # bracket has one order, and there is no reader that wants the other one.
+    #
+    # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
+    # ``pool_id`` is a real value here ("this fixture belongs to no pool" — an
+    # rr-then-ko event's KO stage), and it belongs after the pools that feed it.
+    fixtures: Mapped[list["TournamentFixture"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by=(
+            "TournamentFixture.pool_id.asc().nulls_last(), "
+            "TournamentFixture.round, TournamentFixture.position"
+        ),
     )

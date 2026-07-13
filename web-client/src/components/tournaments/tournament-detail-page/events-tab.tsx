@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import type { Tournament, TournamentEvent } from '../data/types'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
+import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
 
@@ -84,6 +85,18 @@ export const EventsTab = ({
               // tournament, not just its id, because whether registration is open
               // at all is a property of the tournament's STATUS (ADR-0017).
               action={<EnterEventControl tournament={tournament} event={ev} />}
+              // The event's draw (ADR-0786): its pools and fixtures for everyone, its
+              // three verbs for the director alone. It hangs off the EVENT, not off a
+              // tab of its own — a draw belongs to one event, and a "Draw" tab would
+              // have to ask which one it meant. `canEdit` is the tournament's, the same
+              // flag every other owner-only affordance on this page is gated on.
+              draw={
+                <DrawPanel
+                  tournamentId={tournament.id}
+                  event={ev}
+                  canEdit={canEdit}
+                />
+              }
             />
           ))}
         </div>

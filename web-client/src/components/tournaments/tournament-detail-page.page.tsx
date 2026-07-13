@@ -17,6 +17,18 @@ const scoped = (container: Container) => ({
   getLifecycleButton(name: RegExp) {
     return container.getByRole('button', { name })
   },
+  /** The hero's status pill (`StatusBadge`) — the page's one claim about where the
+   * tournament stands. Read it after a refused transition: nothing here is optimistic,
+   * so a refused **Start tournament** must leave it saying **Published**. */
+  getStatusBadge() {
+    return container.getByTestId('tournament-status-badge')
+  },
+  /** The header's inline lifecycle refusal, as one normalised string — title and the
+   * server's sentence beneath it. */
+  async findLifecycleNoticeText() {
+    const notice = await container.findByTestId('lifecycle-notice')
+    return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
   /** The Days stat's figure and its unit, read as one string. The unit is a
    * styled `<span>` sitting beside the figure, so the DOM text carries no space
    * ("2days") even though a CSS margin renders one — assert against the DOM, not

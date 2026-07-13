@@ -38,8 +38,11 @@ type FieldReadable = {
   valueClassName?: string
   /** The control, for an editor. Not called in the read-only branch — and a row
    * that is *only* ever a view (one inside a subtree the editor never renders,
-   * like a read-only pool card) has no control to give. */
-  children?: (controlId: string) => ReactNode
+   * like a read-only pool card) has no control to give.
+   *
+   * The second argument is the **hint's id** (`undefined` when the row shows no
+   * hint) — see `FieldControl`. */
+  children?: FieldControl
 }
 
 /** A row that is always an editor (a create form, say) needs no reader's value. */
@@ -47,8 +50,33 @@ type FieldEditorOnly = {
   readOnly?: undefined
   value?: undefined
   valueClassName?: undefined
-  children: (controlId: string) => ReactNode
+  children: FieldControl
 }
+
+/**
+ * A row's control, given the ids it must wire itself with:
+ *
+ * - `controlId` — the id the label's `htmlFor` targets (a real input sets it as `id`;
+ *   a non-input control points `aria-labelledby` at `${controlId}-label` instead).
+ * - `hintId` — the id of the row's **hint**, or `undefined` when the row is showing
+ *   none. A control with a hint must point `aria-describedby` at it: the hint is the
+ *   sentence that explains the control (a validation message, or — for the draw type
+ *   under a cut draw, ADR-0786 — the reason it is disabled and the way out of it), and
+ *   a `<p>` that merely sits *below* a control is next to it on screen and nowhere at
+ *   all to a screen reader. A **disabled** control is the case that bites: it is not
+ *   focusable, holds no tooltip anyone will hear, and so has literally no other channel
+ *   to say why it is dead — which is the unexplained dead end ADR-0015 forbids.
+ *
+ * It is passed rather than applied because `children` is a render prop returning an
+ * opaque `ReactNode`: `Field` cannot reach into it and set an attribute. What `Field`
+ * *can* guarantee is that the id it hands out is the id it rendered — and that it hands
+ * out `undefined` when there is no hint, so no control can describe itself by an element
+ * that isn't there (a dangling `aria-describedby` is an axe violation of its own).
+ */
+export type FieldControl = (
+  controlId: string,
+  hintId: string | undefined,
+) => ReactNode
 
 export type FieldProps = FieldBase & (FieldReadable | FieldEditorOnly)
 
@@ -93,6 +121,10 @@ export const Field = ({
 }: FieldProps) => {
   const id = useId()
   const showHint = hint && !readOnly
+  // Handed to the control ONLY while the hint is really on screen: a control that
+  // described itself by an id nothing renders would be pointing at nothing, which is
+  // both useless to a screen reader and an `aria-valid-attr-value` violation.
+  const hintId = showHint ? `${id}-hint` : undefined
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       <Label
@@ -110,10 +142,11 @@ export const Field = ({
       {readOnly ? (
         <ReadOnlyValue className={valueClassName}>{value}</ReadOnlyValue>
       ) : (
-        children?.(id)
+        children?.(id, hintId)
       )}
       {showHint && (
         <p
+          id={hintId}
           className={cn(
             'text-[11px]',
             error ? 'text-[color:var(--loss)]' : 'text-[color:var(--fg-3)]',

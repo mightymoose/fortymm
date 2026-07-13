@@ -4,6 +4,7 @@ import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.facto
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
+type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
 
 /** A single physical table, `T1` on court 1. */
@@ -52,6 +53,104 @@ export function buildTournamentEntrantReads(
   )
 }
 
+/** One fixture of a cut draw (ADR-0786) — round 1, position 1 of an un-pooled draw,
+ * both sides known, undecided and not yet materialized.
+ *
+ * Every `null` here is a **fact**, and a fixture asks for each one explicitly: a null
+ * side is **TBD** (never a bye — a bye is the absence of a fixture row), a null
+ * `winner_entry_id` is undecided, a null `match_id` is un-materialized, and a null
+ * `pool_id` is an un-pooled draw. The defaults are the ordinary case a director sees
+ * the morning of: a planned pairing, both players known, nothing played. */
+export function buildTournamentFixtureRead(
+  overrides: Partial<TournamentFixtureRead> = {},
+): TournamentFixtureRead {
+  return {
+    id: 'fx-1',
+    pool_id: null,
+    round: 1,
+    position: 1,
+    entry_a_id: 'entry-1',
+    entry_b_id: 'entry-2',
+    winner_entry_id: null,
+    match_id: null,
+    ...overrides,
+  }
+}
+
+/**
+ * Plan a **round-robin** draw the way the API plans one (`api/app/draws.py`): snake the
+ * ordered entrants across the pools, then pair each pool by the circle method — every
+ * pair meets once, nobody plays twice in a round.
+ *
+ * The mock's planner is faithful rather than convenient on purpose. A stub that dealt
+ * the field into pools any old way would still *look* like a draw on screen, and the
+ * page built against it would be a page built against a shape the server never sends —
+ * the fixture count, the rounds, and which two names share a row would all be fiction.
+ * The rules it mirrors, each of which is visible on the card:
+ *
+ * - **Snake, not blocks** — pool A takes seeds 1, 2P, 2P+1, …; pool B takes 2, 2P−1, …
+ *   — so the top seeds land one per pool and pool sizes differ by at most one.
+ * - **A bye is the ABSENCE of a fixture.** An odd pool gets a phantom seat; whoever
+ *   draws it that round simply has no fixture. There is no `is_bye`, and no null side.
+ * - **`position` is contiguous within a (pool, round)** — 1..k — because the phantom's
+ *   pairing is never emitted.
+ *
+ * Returns fixtures in pool → round → position order, as the wire does.
+ *
+ * ⚠️ It does **not** enforce the API's refusals (no pools, a pool of fewer than two).
+ * Those are the *store's* to refuse (`cutDraw`, `tournaments-store.ts`), because they
+ * are answers to a request, not shapes of a payload. Handed a degenerate field this
+ * plans what it is asked for — which is why nothing but the store should call it.
+ */
+export function planRoundRobinFixtures(
+  entryIds: readonly string[],
+  poolIds: readonly string[],
+): TournamentFixtureRead[] {
+  const fixtures: TournamentFixtureRead[] = []
+  let counter = 0
+
+  for (const [poolIndex, poolId] of poolIds.entries()) {
+    // The snake: row-by-row across the pools, reversing every other row.
+    const members = entryIds.filter((_, index) => {
+      const row = Math.floor(index / poolIds.length)
+      const offset = index % poolIds.length
+      const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
+      return column === poolIndex
+    })
+
+    // The circle method: pin the first seat, rotate the rest one step per round, and
+    // pair across the circle. An odd pool gets a phantom (`null`) seat — the entrant
+    // drawn against it sits that round out, and no fixture is emitted for them.
+    const circle: (string | null)[] = [...members]
+    if (circle.length % 2 === 1) circle.push(null)
+    const seats = circle.length
+
+    for (let round = 1; round < seats; round += 1) {
+      let position = 0
+      for (let seat = 0; seat < seats / 2; seat += 1) {
+        const home = circle[seat]
+        const away = circle[seats - 1 - seat]
+        if (home === null || away === null) continue
+        position += 1
+        counter += 1
+        fixtures.push(
+          buildTournamentFixtureRead({
+            id: `fx-${poolId}-${counter}`,
+            pool_id: poolId,
+            round,
+            position,
+            entry_a_id: home,
+            entry_b_id: away,
+          }),
+        )
+      }
+      circle.splice(1, 0, circle.pop() as string | null)
+    }
+  }
+
+  return fixtures
+}
+
 /**
  * What the event says about the CALLER entering it (ADR-0783), derived the way the
  * server derives the half of it that is derivable: an event holding `max_players`
@@ -93,6 +192,14 @@ export function entryStateFor(
  * `rating_ineligible` cannot be derived from an event's own fields — but it
  * **defaults to `entryStateFor`**, so an event filled to `max_players` reports
  * itself full without anybody remembering to say so.
+ *
+ * `fixtures` defaults to **`[]` — an event with NO DRAW CUT** (ADR-0786), which is the
+ * state every event is born in and stays in until a director cuts one. It is an
+ * override, not a derivation: a draw is an explicit act against a field, not a function
+ * of the entrants (the same 9 players make a different draw across 2 pools than across
+ * 3), so a factory that quietly cut one would be inventing a decision nobody made.
+ * `planRoundRobinFixtures` above builds a real one for the fixtures that want a *drawn*
+ * event.
  */
 export function buildTournamentEventRead(
   overrides: Partial<Omit<TournamentEventRead, 'entered'>> = {},
@@ -107,6 +214,7 @@ export function buildTournamentEventRead(
     entry_fee: 45,
     entrants: [],
     entry_state: { state: 'open' },
+    fixtures: [],
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     match_settings: { rated: true, length_games: 5 },
     predicates: [],

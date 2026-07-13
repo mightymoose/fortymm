@@ -20,7 +20,10 @@
 
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
-import { entryStateFor } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  entryStateFor,
+  planRoundRobinFixtures,
+} from '@/mocks/factories/tournaments/tournament.factory'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -30,8 +33,10 @@ type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
+type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
+type Pool = components['schemas']['Pool']
 
 /** What the store actually holds for an event: everything the wire shape has
  * *except* the two fields the server DERIVES at read time — the `entered` count
@@ -44,7 +49,14 @@ type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
  * fails one of this event's rules is a fact about a player's rating on the
  * tournament's ladder (ADR-0783), and no mock payload carries a ladder — so it is
  * seeded rather than computed, and `readEvent` turns it into the wire's
- * `rating_ineligible`. */
+ * `rating_ineligible`.
+ *
+ * `fixtures` — the event's DRAW (ADR-0786) — *is* stored, and is not derived from
+ * anything: a draw is an explicit act (`POST …/draw`), not a function of the entrants,
+ * so `[]` is the real state of an event nobody has cut a draw for, and the only things
+ * that ever change it are the two draw verbs (`cutDraw` / `uncutDraw` below). An event
+ * PATCH deliberately leaves it alone — a director editing an event's name has not
+ * thrown their draw away. */
 type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
@@ -100,6 +112,45 @@ function otherEntrants(eventId: string, count: number): TournamentEntrantRead[] 
   }))
 }
 
+/** The two pools the seed's ONE drawn event is cut across (`ev-u1200` below). Pulled
+ * out of the seed so the fixtures it is seeded with can be planned across the very same
+ * pool ids: a fixture's `pool_id` is a string ref into its event's own `pools`
+ * (ADR-0786 — not a foreign key, because pools are JSONB value-objects), so a seed that
+ * spelled the ids twice could spell them differently, and every fixture would point at
+ * a pool that does not exist. */
+const U1200_POOLS: Pool[] = [
+  {
+    id: 'p-u1200-a',
+    name: 'Pool A',
+    slot: { date: '2026-06-14', start: '09:00', end: '10:30' },
+    table_ids: ['t1', 't2'],
+  },
+  {
+    id: 'p-u1200-b',
+    name: 'Pool B',
+    slot: { date: '2026-06-14', start: '10:30', end: '12:00' },
+    table_ids: ['t3', 't4'],
+  },
+]
+
+/** The pools of Summer Slam's one event — the seed's **ready-to-start** tournament (see
+ * below). Pulled out for the same reason `U1200_POOLS` is: the fixtures are planned
+ * against these very ids, so they cannot be spelled twice and spelled differently. */
+const SLAM_POOLS: Pool[] = [
+  {
+    id: 'p-slam-a',
+    name: 'Pool A',
+    slot: { date: '2026-08-22', start: '09:00', end: '11:00' },
+    table_ids: ['t1', 't2'],
+  },
+  {
+    id: 'p-slam-b',
+    name: 'Pool B',
+    slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
+    table_ids: ['t3', 't4'],
+  },
+]
+
 function seed(): StoredTournament[] {
   return [
     {
@@ -151,6 +202,9 @@ function seed(): StoredTournament[] {
               table_ids: ['t1', 't2', 't3', 't4', 't5', 't6'],
             },
           ],
+          // NO DRAW CUT (ADR-0786) — the state every event starts in, and the state
+          // all but one of this seed's events stay in. `[]`, never null.
+          fixtures: [],
           created_at: '2026-06-01T09:05:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -169,6 +223,7 @@ function seed(): StoredTournament[] {
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
           pools: [],
+          fixtures: [],
           created_at: '2026-06-01T09:06:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -189,6 +244,7 @@ function seed(): StoredTournament[] {
           match_settings: { rated: true, length_games: 7 },
           predicates: [],
           pools: [],
+          fixtures: [],
           created_at: '2026-06-01T09:06:30Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -198,6 +254,14 @@ function seed(): StoredTournament[] {
           // refuses them — naming the rule that did it (`predicate_id`), which the
           // card reads back out of the event's own `predicates`. Not derivable from
           // the event alone (there is no ladder in a mock), so it is seeded.
+          //
+          // It is ALSO the seed's one **drawn** event (ADR-0786), and it is the only
+          // event that could be: round-robin is the one draw type with a generator
+          // today, so every other seeded event's draw type would be refused with a 422
+          // by the very endpoint this store mirrors. Nine entrants across two pools
+          // (5 + 4 by the snake) — an ODD pool, so Pool A's rounds have a player
+          // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
+          // not a fixture with an empty side.
           id: 'ev-u1200',
           tournament_id: 'bay-area-open-2026',
           name: 'U1200 Singles',
@@ -210,7 +274,14 @@ function seed(): StoredTournament[] {
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-u1200', field: 'rating', op: '<', value: 1200 }],
           ineligible: { predicate_id: 'pr-u1200', rating: DEV_USER_RATING },
-          pools: [],
+          pools: U1200_POOLS,
+          // Planned by the same function the store's `cutDraw` uses, from the same
+          // entrants and the same pools — so the seeded draw is one this store could
+          // have cut, rather than a hand-written list that no cut would ever produce.
+          fixtures: planRoundRobinFixtures(
+            otherEntrants('ev-u1200', 9).map((e) => e.id),
+            U1200_POOLS.map((p) => p.id),
+          ),
           created_at: '2026-06-01T09:06:45Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -230,6 +301,7 @@ function seed(): StoredTournament[] {
           match_settings: { rated: false, length_games: 3 },
           predicates: [],
           pools: [],
+          fixtures: [],
           created_at: '2026-06-01T09:07:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -257,7 +329,39 @@ function seed(): StoredTournament[] {
       can_edit: true,
       created_at: '2026-06-05T15:30:00Z',
       updated_at: '2026-06-05T15:30:00Z',
-      events: [],
+      events: [
+        {
+          // The seed's one **ready-to-start** event, and the reason this tournament has
+          // one at all (it used to have none): going live now has a precondition
+          // (ADR-0786) — at least one event, every event drawn, every draw still seating
+          // exactly its entrants — so a seed in which *nothing* satisfied it would make
+          // `live` and `archived` unreachable in `npm run dev` and in the store's own
+          // tests, and would leave the whole precondition unexercised on its happy path.
+          //
+          // Round-robin with pools and a draw cut from its own entrants, so it is
+          // `current` by the same set-comparison the server makes. Publish this
+          // tournament and Start works; publish the Bay Area Open — four of whose five
+          // events have no draw — and Start is refused, by name. The seed holds both.
+          id: 'ev-slam-open',
+          tournament_id: 'summer-slam-2026',
+          name: 'Slam Open Singles',
+          format: 'singles',
+          draw_type: 'round-robin',
+          max_players: 16,
+          entry_fee: 20,
+          entrants: otherEntrants('ev-slam-open', 8),
+          slot: { date: '2026-08-22', start: '09:00', end: '13:00' },
+          match_settings: { rated: true, length_games: 5 },
+          predicates: [],
+          pools: SLAM_POOLS,
+          fixtures: planRoundRobinFixtures(
+            otherEntrants('ev-slam-open', 8).map((e) => e.id),
+            SLAM_POOLS.map((p) => p.id),
+          ),
+          created_at: '2026-06-05T15:31:00Z',
+          updated_at: '2026-06-05T15:31:00Z',
+        },
+      ],
     },
     {
       id: 'club-champs-2026',
@@ -340,6 +444,9 @@ function seed(): StoredTournament[] {
               table_ids: ['t1', 't2'],
             },
           ],
+          // Un-drawn, and it stays that way through the UI: the dev user does not own
+          // this tournament, and cutting a draw is owner-only (`cutDraw` 403s them).
+          fixtures: [],
           created_at: '2026-05-20T10:05:00Z',
           updated_at: '2026-06-12T08:00:00Z',
         },
@@ -546,9 +653,14 @@ export type StoreResult =
   | { ok: true; tournament: TournamentRead }
   | { ok: false; status: 403 | 404 }
 
+/** An event write fails four ways: 404 (no such tournament/event), 403 (not the
+ * creator), and — on a PATCH that would move the pools out from under a cut draw — a
+ * **409** carrying the server's sentence (ADR-0786's pool-set freeze; see
+ * `poolSetFrozenDetail`). A create can never hit that 409: a new event has no draw. */
 export type EventResult =
   | { ok: true; event: TournamentEventRead }
   | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
@@ -682,12 +794,110 @@ const LEGAL_TRANSITIONS: ReadonlySet<string> = new Set([
 ])
 
 /** A transition can fail three ways, in the API's order: 404 (no such
- * tournament), 403 (not the owner), 409 (not a legal edge). The 409 carries the
- * server's `detail` verbatim, because the copy is what a stale tab is told. */
+ * tournament), 403 (not the owner), 409 (not a legal edge — or, for go-live, a
+ * tournament whose draws are not ready). The 409 carries the server's `detail`
+ * verbatim, because the copy is what the director is told. */
 export type TransitionResult =
   | { ok: true; tournament: TournamentRead }
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
+
+// ----- the go-live precondition (ADR-0786) ---------------------------------
+//
+// `published → live` is the one edge with a precondition, and this store enforces it
+// exactly as the server does (`_enforce_ready_to_go_live`, `api/app/tournaments.py`).
+// A mock that let an empty tournament — or one whose draws were never cut — go live
+// would be a mock we could build a *lying UI* against: the button would work in
+// `npm run dev` and in vitest, and 409 in front of a director on the morning of their
+// tournament. The copy is the server's, verbatim, because the client shows it verbatim.
+
+/** The server's sentence for a tournament with nothing to run. Publishing one is fine —
+ * announcing a tournament before its events are written up is ordinary — but starting
+ * one is not. Checked FIRST, because "every event has a current draw" is vacuously true
+ * of a tournament with no events. */
+const NOTHING_TO_START =
+  'This tournament has no events, so there is nothing to start. Add an event and cut ' +
+  'its draw, then start the tournament.'
+
+/** The things a refusal is about, as a human would say them: `“Pool B”`, or
+ * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
+function namedList(names: string[]): string {
+  const quoted = names.map((name) => `“${name}”`)
+  if (quoted.length === 1) return quoted[0]
+  return `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`
+}
+
+/** Where one event's draw stands (`DrawCurrency`, `api/app/tournament_draws.py`).
+ *
+ * A **set comparison, never a count**: currency is "these fixtures seat exactly these
+ * entrants". Comparing sizes would pass the same happy-path test and wave through the
+ * case that matters most — one player withdraws and another enters between the cut and
+ * go-live, leaving the same count, a different field, and a draw that seats somebody who
+ * has left while their replacement is seated nowhere.
+ *
+ * `uncut` is decided on the fixtures EXISTING, not on the seated set being empty: an
+ * event nobody has entered has neither, and ∅ == ∅ would call it `current` — an event
+ * with no draw at all, certified ready to start. */
+function drawCurrency(event: StoredEvent): 'current' | 'uncut' | 'stale' {
+  if (event.fixtures.length === 0) return 'uncut'
+  const seated = new Set<string>()
+  for (const fixture of event.fixtures) {
+    // A `null` side is TBD (a KO round whose feeder is undecided), never a bye and never
+    // an absent player — so it seats nobody.
+    if (fixture.entry_a_id !== null) seated.add(fixture.entry_a_id)
+    if (fixture.entry_b_id !== null) seated.add(fixture.entry_b_id)
+  }
+  const active = event.entrants.map((e) => e.id)
+  const same =
+    active.length === seated.size && active.every((id) => seated.has(id))
+  return same ? 'current' : 'stale'
+}
+
+/** Why this tournament cannot start yet, in the server's own words — or `null` when it
+ * can. **It names the events**, because a refusal a director cannot act on is barely
+ * better than a 500: "some event has no draw" leaves them clicking through a ten-event
+ * tournament looking for it.
+ *
+ * The two failures are kept apart in the sentence, because they are two different jobs:
+ * an **uncut** event needs a first cut, while a **stale** one has a draw the director may
+ * well have reviewed and approved — it is merely older than the field — and needs
+ * re-cutting. */
+function goLiveRefusal(tournament: StoredTournament): string | null {
+  if (tournament.events.length === 0) return NOTHING_TO_START
+
+  const uncut: string[] = []
+  const stale: string[] = []
+  for (const event of tournament.events) {
+    const currency = drawCurrency(event)
+    if (currency === 'uncut') uncut.push(event.name)
+    else if (currency === 'stale') stale.push(event.name)
+  }
+  if (uncut.length === 0 && stale.length === 0) return null
+
+  const clauses: string[] = []
+  if (uncut.length > 0) {
+    clauses.push(
+      `${namedList(uncut)} ${uncut.length === 1 ? 'has' : 'have'} no draw yet`,
+    )
+  }
+  if (stale.length > 0) {
+    clauses.push(
+      `${namedList(stale)} ${
+        stale.length === 1
+          ? 'has a draw that no longer matches its entrants'
+          : 'have draws that no longer match their entrants'
+      }`,
+    )
+  }
+  return (
+    'This tournament cannot start yet: ' +
+    clauses.join('; and ') +
+    '. A draw is cut from the field as it stands at the time, and registration stays ' +
+    'open right up to the moment a tournament goes live — so cut the draw for each ' +
+    'event named (again, if somebody entered or withdrew since it was last cut), then ' +
+    'start the tournament.'
+  )
+}
 
 /** `POST /v1/tournaments/{id}/transitions` — move a tournament along its
  * lifecycle. Owner-only, like every other tournament mutation, and the ONLY way
@@ -720,6 +930,15 @@ export function transitionTournament(
           : `This tournament is ${existing.status}; it cannot be moved to ${to}.`,
     }
   }
+  // THE per-target precondition (ADR-0786), judged after the edge and only for `live`:
+  // publishing an empty, undrawn tournament is legal (announcing early is fine), and
+  // archiving asks nothing of the draws it is putting away. Refused BEFORE the write, so
+  // a refused start leaves the tournament exactly where it was — `published`, which is
+  // what the header goes on rendering.
+  if (to === 'live') {
+    const detail = goLiveRefusal(existing)
+    if (detail) return { ok: false, status: 409, detail }
+  }
   const next: StoredTournament = {
     ...existing,
     status: to,
@@ -727,6 +946,24 @@ export function transitionTournament(
   }
   replace(next)
   return { ok: true, tournament: readOf(next) }
+}
+
+/** Put a tournament directly in `status` — a **test-and-dev seam**, not a route.
+ *
+ * The route is `transitionTournament` above, and it enforces the server's edge table AND
+ * the go-live precondition. This is the door a *fixture* comes through: a test that needs
+ * a tournament which IS live (to prove entries are locked, say) is not a test of the
+ * transition, and driving it through the guarded edges would make it depend on every one
+ * of that edge's preconditions — so a seeded row moves here, exactly as a server-side
+ * test creates its row in the status it wants rather than POSTing its way to it.
+ *
+ * Nothing in `handlers.ts` calls this, and nothing should: a handler that did would be
+ * the mock quietly being more permissive than the server, which is the one thing this
+ * store exists not to be. */
+export function placeInStatus(id: string, status: TournamentStatus): void {
+  const existing = tournaments.find((t) => t.id === id)
+  if (!existing) return
+  replace({ ...existing, status, updated_at: new Date().toISOString() })
 }
 
 /** Delete a tournament. Same gating as update. */
@@ -765,6 +1002,9 @@ export function createEvent(
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],
     pools: body.pools ?? [],
+    // A brand-new event has NO DRAW (ADR-0786). Cutting one is an explicit act against
+    // a field that does not exist yet — there is nobody entered to draw.
+    fixtures: [],
     created_at: now,
     updated_at: now,
   }
@@ -772,7 +1012,18 @@ export function createEvent(
   return { ok: true, event: readEvent(event) }
 }
 
-/** Patch an event (full replace of the provided fields). Creator-only. */
+/** Patch an event (full replace of the provided fields). Creator-only.
+ *
+ * **The pool SET freezes while a draw exists** (ADR-0786): a `pools` payload that would
+ * add, remove or re-`id` a pool on an event whose draw is cut is refused with a 409,
+ * because a fixture's `pool_id` is a string ref into this very JSONB and nothing in the
+ * database stops the edit from orphaning it. Everything ELSE about a pool — its tables,
+ * its window, its name — stays editable with a draw standing, because venues change
+ * under running tournaments and recording that must not cost a director their draw.
+ *
+ * The mock enforces it because a mock that is more permissive than the server it stands
+ * in for is a trap: a pools editor that silently orphans a draw would look perfect in
+ * `npm run dev` and 409 in production. */
 export function updateEvent(
   tournamentId: string,
   eventId: string,
@@ -783,6 +1034,11 @@ export function updateEvent(
   const existing = owned.tournament
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
+  // 404 → 403 → 409, the server's ordering: the state of an event's draw is never the
+  // reason a stranger's request is refused. (The 422s come before all of it — they are
+  // the schema's, and the handler asks them at the boundary; see `validateEventBody`.)
+  const frozen = poolSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
+  if (frozen !== null) return { ok: false, status: 409, detail: frozen }
   const next: StoredEvent = {
     ...event,
     name: patch.name ?? event.name,
@@ -801,6 +1057,10 @@ export function updateEvent(
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,
     pools: patch.pools ?? event.pools,
+    // The DRAW survives an edit (ADR-0786): a PATCH is not a re-cut. `fixtures` is not
+    // in the write body at all, and answering `[]` here would tell the director their
+    // draw had just been thrown away by a rename.
+    fixtures: event.fixtures,
     updated_at: new Date().toISOString(),
   }
   replace({
@@ -808,6 +1068,242 @@ export function updateEvent(
     events: existing.events.map((e) => (e.id === eventId ? next : e)),
   })
   return { ok: true, event: readEvent(next) }
+}
+
+// ----- the draw (ADR-0786) -------------------------------------------------
+//
+// Cutting a draw is an EXPLICIT act, and the mock models it as one: nothing else in this
+// store creates a fixture, and no status change cuts one. The two verbs are refused for
+// exactly the reasons the server refuses them, because a mock that is more permissive
+// than the server it stands in for is a trap — a Generate button that "worked" in
+// `npm run dev` and 422'd in production would look like a server bug rather than the
+// missing generator it is.
+
+/** Cutting a draw fails four ways, in the API's order: 404 (no such tournament or
+ * event), 403 (not the owner), 409 (the draw shows evidence of play), 422 (this event
+ * cannot be planned as it stands). The 409 and the 422 carry the server's own sentence,
+ * because for these two the sentence is the *point*: it names what the director has to
+ * change. */
+export type CutDrawResult =
+  | { ok: true; fixtures: TournamentFixtureRead[] }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409 | 422; detail: string }
+
+/** Un-cutting fails the same ways minus the 422 — there is nothing to plan. Removing a
+ * draw that was never cut is a SUCCESS (idempotent DELETE), never a 404. */
+export type UncutDrawResult =
+  | { ok: true }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
+
+/** The server's sentence for a draw that can no longer be touched, verbatim
+ * (`_enforce_draw_unplayed`, `api/app/tournaments.py`). One sentence for both verbs,
+ * because it is one fact: the fixtures a re-cut would replace and the fixtures an un-cut
+ * would delete are the same fixtures, and they have been played. */
+const DRAW_UNDER_WAY_DETAIL =
+  "This event's draw is already under way — at least one fixture has a match " +
+  'or a recorded winner — so it can no longer be cut or removed.'
+
+/** Evidence of play, in the server's terms: a fixture with a recorded winner, or one
+ * that has become a real match. Deliberately stricter than "somebody has played" — a
+ * merely *linked* match blocks a re-cut, because the scores already on its scratchpad
+ * would go with the fixtures the re-cut replaced, and a draw must never silently eat a
+ * score. */
+function drawHasPlay(event: StoredEvent): boolean {
+  return event.fixtures.some(
+    (f) => f.winner_entry_id !== null || f.match_id !== null,
+  )
+}
+
+/** Why this event's pool SET may not be replaced right now, or `null` when it may be
+ * (`_enforce_pool_set_frozen`, ADR-0786). Frozen only while a draw EXISTS — not while it
+ * has been *played*: the two are different questions, and the morning of a tournament
+ * (a draw cut, nothing played yet) is exactly when a blunt play-guard would wave through
+ * an edit that orphans every fixture.
+ *
+ * Identity is all that is frozen. A `pools` payload carrying the same ids in a different
+ * order, with different tables, different windows or different names, is fine. */
+function poolSetFrozenDetail(
+  event: StoredEvent,
+  patch: TournamentEventUpdate,
+): string | null {
+  if (patch.pools === undefined || patch.pools === null) return null
+  if (event.fixtures.length === 0) return null
+  const before = new Set(event.pools.map((p) => p.id))
+  const after = new Set(patch.pools.map((p) => p.id))
+  const same =
+    before.size === after.size && [...before].every((id) => after.has(id))
+  if (same) return null
+  return (
+    "This event's draw is already cut, so its set of pools is frozen: " +
+    'a pool cannot be added, removed or re-identified while fixtures refer to it. ' +
+    'To add, remove or re-identify a pool, remove the draw first, then cut it again.'
+  )
+}
+
+/** Why this event's `draw_type` may not be replaced right now, or `null` when it may be
+ * (`_enforce_draw_type_frozen`, ADR-0786). The pool-set freeze's sibling, one field over:
+ * a draw type is not a label on an event, it is the strategy that DEALT its fixtures, and
+ * re-labelling it under a standing draw leaves the event claiming a shape its draw does
+ * not have (a `single-elim` event holding pooled round-robin fixtures — the PATCH the
+ * server used to answer **200**).
+ *
+ * **Presence is not enough — the CHANGE is what is refused.** The editor PATCHes the
+ * whole form back, `draw_type` included, to move a pool's tables; a mock that fired on
+ * the mere presence of the key would refuse the very edit the freeze exists to permit,
+ * and the pools editor would look broken in `npm run dev` against a server that allows
+ * it. */
+function drawTypeFrozenDetail(
+  event: StoredEvent,
+  patch: TournamentEventUpdate,
+): string | null {
+  if (patch.draw_type === undefined || patch.draw_type === null) return null
+  if (patch.draw_type === event.draw_type) return null
+  if (event.fixtures.length === 0) return null
+  return (
+    "This event's draw is already cut, so its draw type is frozen: its fixtures were " +
+    `dealt as a “${event.draw_type}” draw, and changing the type would leave the event ` +
+    'claiming a shape its draw does not have. To change the draw type, remove the draw ' +
+    'first, then cut it again.'
+  )
+}
+
+/** `POST …/events/{event_id}/draw` — cut (or re-cut) an event's draw.
+ *
+ * **A re-cut replaces the draw wholesale**: the old fixtures are dropped and a fresh set
+ * is planned from the event's *current* active entrants, so their ids do not survive.
+ * That is the point — a draw is a plan made against a field, and once the field has
+ * changed the whole plan is re-made, pool sizes and seeding included.
+ *
+ * The 422s are the planner's, and they are the ones a director actually meets:
+ * - **an unsupported draw type.** Round-robin is the only type with a generator today
+ *   (single-elim is #785), so every other type is refused — *before* the field is even
+ *   looked at, exactly as the server refuses it, because no arrangement of entrants
+ *   would make a swiss draw cuttable.
+ * - **no pools**, on a pooled draw type. There is nowhere to deal the field.
+ * - **a pool that would get fewer than two entrants** — a lone entrant has nobody to
+ *   play, so the draw is refused rather than silently emitting a pool of one. */
+export function cutDraw(tournamentId: string, eventId: string): CutDrawResult {
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
+  const event = existing.events.find((e) => e.id === eventId)
+  if (!event) return { ok: false, status: 404 }
+  // The one gate on the write, asked BEFORE anything is planned or dropped — so a
+  // refused re-cut leaves the standing draw exactly as it was.
+  if (drawHasPlay(event)) {
+    return { ok: false, status: 409, detail: DRAW_UNDER_WAY_DETAIL }
+  }
+  if (event.draw_type !== 'round-robin') {
+    return {
+      ok: false,
+      status: 422,
+      detail:
+        `A ${event.draw_type} draw cannot be cut yet. ` +
+        "Change the event's draw type to one that can, or wait for support.",
+    }
+  }
+  if (event.pools.length === 0) {
+    return {
+      ok: false,
+      status: 422,
+      detail: 'A round-robin draw needs at least one pool.',
+    }
+  }
+  // Entrants are ordered by SEED ascending where one is set, then by registration order
+  // (ADR-0786) — the store lists them in registration order already, so this is a stable
+  // sort that floats the seeded ones to the front. Nothing is random, so the same field
+  // always cuts the same draw, and a re-cut of an unchanged field is a no-op in effect.
+  const ordered = [...event.entrants].sort(
+    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
+  )
+  const poolIds = event.pools.map((p) => p.id)
+  const sizes = poolIds.map(
+    (_, poolIndex) =>
+      ordered.filter((_entrant, index) => {
+        const row = Math.floor(index / poolIds.length)
+        const offset = index % poolIds.length
+        const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
+        return column === poolIndex
+      }).length,
+  )
+  // Asked of the DEALT pools, not of arithmetic on N and P — the refusal is about the
+  // pools the snake actually produced, and it names the numbers the director must change.
+  if (sizes.some((size) => size < 2)) {
+    return {
+      ok: false,
+      status: 422,
+      detail:
+        `${ordered.length} entrants across ${poolIds.length} pool(s) would leave ` +
+        'a pool with fewer than 2 entrants, who would have nobody to play.',
+    }
+  }
+  const fixtures = planRoundRobinFixtures(
+    ordered.map((e) => e.id),
+    poolIds,
+  )
+  const next: StoredEvent = { ...event, fixtures }
+  replace({
+    ...existing,
+    events: existing.events.map((e) => (e.id === eventId ? next : e)),
+  })
+  return { ok: true, fixtures }
+}
+
+/** `DELETE …/events/{event_id}/draw` — un-cut an event's draw.
+ *
+ * Idempotent: an event with no draw is already in the state this asks for, so it is a
+ * success (a 204 on the wire), never a 404. The one refusal is the play guard the cut
+ * has — undoing a draw that has been played would delete the fixtures those results
+ * belong to. */
+export function uncutDraw(
+  tournamentId: string,
+  eventId: string,
+): UncutDrawResult {
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
+  const event = existing.events.find((e) => e.id === eventId)
+  if (!event) return { ok: false, status: 404 }
+  if (drawHasPlay(event)) {
+    return { ok: false, status: 409, detail: DRAW_UNDER_WAY_DETAIL }
+  }
+  const next: StoredEvent = { ...event, fixtures: [] }
+  replace({
+    ...existing,
+    events: existing.events.map((e) => (e.id === eventId ? next : e)),
+  })
+  return { ok: true }
+}
+
+/** Record a played fixture on an event, **behind the API's back** — the state no client
+ * call can reach yet (materializing a fixture into a match is #788, and recording a
+ * winner is #789), and the only way to reach the 409 both draw verbs are guarded by.
+ *
+ * Test-and-dev seam, exactly like the seeded `ineligible` verdict above: without it the
+ * play guard would be unreachable from this store, and a guard nothing can exercise is a
+ * guard that quietly rots into a no-op. */
+export function markFixturePlayed(
+  tournamentId: string,
+  eventId: string,
+  fixtureId: string,
+  played: Partial<Pick<TournamentFixtureRead, 'winner_entry_id' | 'match_id'>>,
+): void {
+  const existing = tournaments.find((t) => t.id === tournamentId)
+  if (!existing) return
+  replace({
+    ...existing,
+    events: existing.events.map((e) =>
+      e.id === eventId
+        ? {
+            ...e,
+            fixtures: e.fixtures.map((f) =>
+              f.id === fixtureId ? { ...f, ...played } : f,
+            ),
+          }
+        : e,
+    ),
+  })
 }
 
 /** Delete an event. Creator-only. */

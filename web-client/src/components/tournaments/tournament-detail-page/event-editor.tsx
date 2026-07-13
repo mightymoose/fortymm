@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
+import { drawTypeFreeze, poolSetFreeze, type EditFreeze } from '../data/draw'
+import { poolNameIssues } from '../data/event-validation'
 import { eligibilityIssues } from '../data/predicate-validation'
 import {
   EVENT_SAVE_TARGET,
@@ -74,9 +76,9 @@ const SECTIONS = [
  * - It *checks the draft first* (`eventSchema`, `./event-form`) and refuses to send
  *   one the server would 422 — a blank or 256-character name, a cap of `0` or of ten
  *   billion, a missing entry fee, a rule with no value, a `between` with one bound or
- *   an inverted pair — pointing the organizer at the tab holding the offending field
- *   instead. That is a Zod schema mirroring the server's constraints, which is the
- *   house rule for a form (`CLAUDE.md`, `## Forms`).
+ *   an inverted pair, **a pool whose name has been cleared** — pointing the organizer
+ *   at the tab holding the offending field instead. That is a Zod schema mirroring the
+ *   server's constraints, which is the house rule for a form (`CLAUDE.md`, `## Forms`).
  *
  *   What it does **not** refuse is a *blank player limit*: that is an uncapped event
  *   (ADR-0935), it is a real answer, and it saves as `null`.
@@ -158,6 +160,17 @@ export const EventEditor = ({
   const watchedPredicates = useWatch({ control: form.control, name: 'predicates' })
   const ruleIssues = eligibilityIssues(watchedPredicates ?? [])
 
+  // …and the same arrangement for the POOLS, for the same two reasons and one more of
+  // its own. The resolver refuses the save (`poolNameSchema` inside `eventSchema`); this
+  // is what puts the red under the box that is empty. It is computed from live form
+  // values rather than read off `errors.pools` because a pool card writes its edits back
+  // through `useFieldArray`'s `update()`, which — unlike append/remove — does NOT re-run
+  // the resolver (RHF 7.81). Read off the errors, the red would outlive the fix: it
+  // would sit under a name the organizer had already re-typed, until they pressed Save
+  // again to find out they were done.
+  const watchedPools = useWatch({ control: form.control, name: 'pools' })
+  const poolIssues = poolNameIssues(watchedPools ?? [])
+
   const applyChange = (next: TournamentEvent) => {
     // Don't validate until the user has tried to save once — otherwise a new
     // event (whose name starts empty) would flash "required" on the first
@@ -205,6 +218,20 @@ export const EventEditor = ({
     entryFee: errors.entryFee?.message,
   }
 
+  // **What a cut draw freezes** (ADR-0786), derived from the SAVED event and never from
+  // the draft: `fixtures` is not a form field — nothing on this sheet can cut a draw or
+  // remove one — so the draft's copy of it is the server's answer, unedited. An event
+  // still being created (`event === null`) has no draw, and cannot: there is nobody
+  // entered to deal.
+  //
+  // Two freezes, two controls, two different tabs — so they are two values, not one
+  // `frozen: boolean` handed to both. The pools section may not add or remove a pool;
+  // the Basics tab may not re-label the draw type. Everything else on both tabs stays
+  // live, including — pointedly — a pool's tables, window and name.
+  const OPEN: EditFreeze = { kind: 'open' }
+  const poolsFreeze = event ? poolSetFreeze(event) : OPEN
+  const drawTypeLock = event ? drawTypeFreeze(event) : OPEN
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -248,6 +275,7 @@ export const EventEditor = ({
                   event={draft}
                   canEdit={canEdit}
                   errors={basicsErrors}
+                  drawTypeFreeze={drawTypeLock}
                   onChange={applyChange}
                 />
               </TabsContent>
@@ -270,6 +298,8 @@ export const EventEditor = ({
                   control={form.control}
                   tables={tables}
                   canEdit={canEdit}
+                  freeze={poolsFreeze}
+                  nameIssues={isSubmitted ? poolIssues : undefined}
                 />
               </TabsContent>
             </Tabs>
