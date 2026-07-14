@@ -104,7 +104,11 @@ const PlacementControl = ({
   const submit = () =>
     run({
       table_id: tableId,
-      scheduled_start: composeScheduledStart(match.window.date, time),
+      // A placement's time is a *prediction*: an empty time is a valid table-only
+      // placement (`scheduled_start: null`, ADR-0790), not a reason to compose a
+      // malformed `YYYY-MM-DDT:00` the server would reject and swallow (leaving Save a
+      // silent no-op). Only compose when there is a time to compose.
+      scheduled_start: time ? composeScheduledStart(match.window.date, time) : null,
     })
   const clear = () => run({ table_id: null, scheduled_start: null })
 

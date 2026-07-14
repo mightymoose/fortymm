@@ -109,6 +109,38 @@ describe('ScheduleTab', () => {
     expect(sent).toMatchObject({ scheduled_start: '2026-06-13T10:30:00' })
   })
 
+  it('places a match with no predicted time as a table-only placement (scheduled_start: null)', async () => {
+    let sent: unknown = null
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      sent = await request.json()
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-a-2',
+          table_id: 't1',
+          scheduled_start: null,
+        }),
+      )
+    })
+
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-a-2')
+    // Clear the predicted-start time, then Save — this must NOT be a silent no-op.
+    page.setPlaceTime('fx-a-2', '')
+    page.savePlacement('fx-a-2')
+
+    // The editor closes on success — an empty time is a valid table-only placement,
+    // not a malformed timestamp the server rejects and the panel silently swallows.
+    await waitFor(() => expect(page.queryPlaceEditor('fx-a-2')).not.toBeInTheDocument())
+    // The mutation carries an explicit null time — the fixture is placed on the table
+    // (its pool's first suggested table, `t1`) with no prediction, never a composed
+    // `YYYY-MM-DDT:00`.
+    expect(sent).toMatchObject({ table_id: 't1', scheduled_start: null })
+  })
+
   it('does not offer to move a finished match (its placement is frozen)', () => {
     page.render({
       tournament: buildTournament({
