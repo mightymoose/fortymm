@@ -47,6 +47,7 @@ import {
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
+  placeFixture as placeTournamentFixture,
   transitionTournament,
   uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
@@ -1771,6 +1772,35 @@ export const handlers = [
       // 204 whether or not there was a draw to remove — this is a DELETE, and asking
       // for a state the resource is already in is a success.
       return new HttpResponse(null, { status: 204 })
+    },
+  ),
+  // The placement (ADR-0790). Registered before the bare `:tournamentId` routes, like the
+  // draw routes above, so MSW never mistakes a fixtures path for a tournament path. Soft
+  // by design: an out-of-window time or an unknown table id is STORED, not refused — the
+  // one refusal is a 409 on a finished match, whose placement is frozen. 403 (not the
+  // owner), 404 (no such fixture).
+  http.patch(
+    '*/v1/tournaments/:tournamentId/fixtures/:fixtureId/placement',
+    async ({ params, request }) => {
+      await delay(250)
+      const body = (await readJson(request)) as
+        | components['schemas']['TournamentFixturePlacementUpdate']
+        | undefined
+      const result = placeTournamentFixture(
+        String(params.tournamentId),
+        String(params.fixtureId),
+        body ?? { table_id: null, scheduled_start: null },
+      )
+      if (!result.ok) {
+        if (result.status === 409) return detail(result.detail, 409)
+        return detail(
+          result.status === 403
+            ? 'Only the creator can place a match.'
+            : 'Fixture not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.fixture)
     },
   ),
   http.patch(

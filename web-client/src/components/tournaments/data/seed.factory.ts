@@ -233,7 +233,8 @@ export function buildIneligibleEvent(
  *
  * Every `null` is a fact, so none of them is a default worth having *silently*: pass
  * `entryBId: null` for a **TBD** side (never a bye — a bye is the ABSENCE of a fixture),
- * `poolId: null` for an un-pooled (knockout) fixture. */
+ * `poolId: null` for an un-pooled (knockout) fixture. Placement (ADR-0790) defaults
+ * empty: `tableId: null` unassigned, `scheduledStart: null` unscheduled. */
 export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
   return {
     id: 'fx-1',
@@ -245,6 +246,8 @@ export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
     winnerEntryId: null,
     matchId: null,
     matchStatus: null,
+    tableId: null,
+    scheduledStart: null,
     ...overrides,
   }
 }

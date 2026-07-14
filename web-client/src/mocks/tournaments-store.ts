@@ -1382,6 +1382,60 @@ export function markFixturePlayed(
   })
 }
 
+export type PlaceFixtureResult =
+  | { ok: true; fixture: TournamentFixtureRead }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
+
+/** The server's sentence for a placement that can no longer be changed, verbatim in
+ * spirit (`api/app/tournaments.py`): a `completed`/`voided` match's table and time are
+ * history. */
+const PLACEMENT_FROZEN_DETAIL =
+  "This match is finished, so its placement can no longer be changed."
+
+/** `PATCH /v1/tournaments/{id}/fixtures/{fixtureId}/placement` — set (or clear) a
+ * fixture's placement (ADR-0790). Creator-only (403), 404 for a fixture that is not on
+ * any of the tournament's events.
+ *
+ * **Soft, deliberately**: an out-of-window time or a `table_id` that names no catalogue
+ * table is *stored*, not refused — those are flags-on-read, a later scheduler slice. The
+ * one refusal is a **409** on a fixture whose match is `completed`/`voided`; everything
+ * else — no match yet, or `in_progress` — is freely (re)placeable. */
+export function placeFixture(
+  tournamentId: string,
+  fixtureId: string,
+  body: components['schemas']['TournamentFixturePlacementUpdate'],
+): PlaceFixtureResult {
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
+  const event = existing.events.find((e) =>
+    e.fixtures.some((f) => f.id === fixtureId),
+  )
+  if (!event) return { ok: false, status: 404 }
+  const fixture = event.fixtures.find((f) => f.id === fixtureId)!
+  if (fixture.match_status === 'completed' || fixture.match_status === 'voided') {
+    return { ok: false, status: 409, detail: PLACEMENT_FROZEN_DETAIL }
+  }
+  const placed: TournamentFixtureRead = {
+    ...fixture,
+    table_id: body.table_id,
+    scheduled_start: body.scheduled_start,
+  }
+  replace({
+    ...existing,
+    events: existing.events.map((e) =>
+      e.id === event.id
+        ? {
+            ...e,
+            fixtures: e.fixtures.map((f) => (f.id === fixtureId ? placed : f)),
+          }
+        : e,
+    ),
+  })
+  return { ok: true, fixture: placed }
+}
+
 /** Delete an event. Creator-only. */
 export function deleteEvent(
   tournamentId: string,

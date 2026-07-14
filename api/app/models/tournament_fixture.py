@@ -144,6 +144,21 @@ class TournamentFixture(Base):
         ForeignKey("matches.id", ondelete="SET NULL"),
         nullable=True,
     )
+    #: A **placement**'s table: a *string ref* into the tournament's
+    #: ``table_catalogue`` JSONB (names a ``TournamentTable.id``), the same string-ref
+    #: pattern as ``pool_id`` — deliberately not a foreign key, there is no tables
+    #: table. ``NULL`` = unassigned. ``(table_id, scheduled_start) = (NULL, NULL)``
+    #: means the fixture is unplaced (ADR-0790).
+    table_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: A **placement**'s predicted start — a **naive** wall-clock timestamp
+    #: (``TIMESTAMP WITHOUT TIME ZONE``), a *deliberate* exemption from the "datetimes
+    #: are always timezone-aware" rule (ADR-0790). It is checked against a pool's
+    #: ``Slot`` window, which is itself stored as naive wall-clock; matching that frame
+    #: is the whole point, so do NOT "fix" this to ``timezone=True``. ``NULL`` =
+    #: unassigned.
+    scheduled_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

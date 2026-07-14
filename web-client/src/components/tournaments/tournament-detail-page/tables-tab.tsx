@@ -59,7 +59,7 @@ export const TablesTab = ({
   }
 
   return (
-    <div>
+    <div data-testid="tables-tab">
       <SectionHeader
         title="Tables"
         // "Add them to pools when configuring events" is an imperative only the

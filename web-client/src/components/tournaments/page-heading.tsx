@@ -23,7 +23,7 @@ export const PageHeading = ({
   action,
 }: PageHeadingProps) => {
   return (
-    <div className="mb-8 flex items-start gap-6">
+    <div className="mb-8 flex flex-col gap-6 sm:flex-row sm:items-start">
       <div className="min-w-0 flex-1">
         {breadcrumb.length > 0 && (
           <nav
@@ -73,7 +73,7 @@ export const PageHeading = ({
           </p>
         )}
       </div>
-      {action && <div className="shrink-0 pt-7">{action}</div>}
+      {action && <div className="shrink-0 sm:pt-7">{action}</div>}
     </div>
   )
 }

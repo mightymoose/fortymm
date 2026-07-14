@@ -21,6 +21,24 @@ export class ScoreEntryPage {
     return new ScoreEntryPage(page)
   }
 
+  /** Open a game's *new* screen (no score yet) — how the winner of a freshly
+   * materialized tournament match records its result. */
+  static async navigateToNew(
+    page: Page,
+    matchId: string,
+    gameNumber: number,
+  ): Promise<ScoreEntryPage> {
+    await page.goto(`/matches/${matchId}/games/${gameNumber}/scores/new`)
+    return new ScoreEntryPage(page)
+  }
+
+  /** The submit button once the typed board decides the match: it swaps to
+   * finalize. On an **unrated** match this is "Finalize result" (an immediate
+   * self-accept), on a rated one "Post result" — matched loosely to cover both. */
+  get finalizeButton(): Locator {
+    return this.page.getByRole('button', { name: /Finalize result|Post result/ })
+  }
+
   /** A participant's numeric score input, by their username (its accessible
    * label is `"<username> score"`, see `score-pad-side.tsx`). */
   scoreInput(username: string): Locator {

@@ -225,6 +225,29 @@ export const mockEventUncutDrawEndpoint = (
     http.delete('*/v1/tournaments/:tournamentId/events/:eventId/draw', resolver),
   )
 
+/** Resolver for the **placement** endpoint (ADR-0790) — the updated
+ * `TournamentFixtureRead` (200), or an error envelope: 403 (not the owner), 404 (no such
+ * fixture), 409 (the match is finished, so its placement is frozen). The body is the
+ * placement whole — `table_id` + `scheduled_start`, `null` to clear. */
+export type FixturePlacementResolver = HttpResponseResolver<
+  { tournamentId: string; fixtureId: string },
+  components['schemas']['TournamentFixturePlacementUpdate'],
+  components['schemas']['TournamentFixtureRead'] | ErrorBody
+>
+
+/** PATCH /v1/tournaments/{id}/fixtures/{fixtureId}/placement — place (or clear) a
+ * fixture's table + predicted start. */
+export const mockFixturePlacementEndpoint = (
+  backend: Backend,
+  resolver: FixturePlacementResolver,
+) =>
+  backend.use(
+    http.patch(
+      '*/v1/tournaments/:tournamentId/fixtures/:fixtureId/placement',
+      resolver,
+    ),
+  )
+
 /** Resolver for the withdraw endpoint — a 204 with no body (including when the
  * entry was already withdrawn: withdrawal is idempotent), or an error envelope
  * on a 403 (someone else's entry) / 404. */

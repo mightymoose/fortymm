@@ -1273,6 +1273,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Place Fixture
+         * @description Set (or clear) a fixture's **placement** — its table and its predicted start
+         *     (ADR-0790) — and answer with the updated fixture.
+         *
+         *     The body is the placement in full: `table_id` (a string ref into the tournament's
+         *     `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+         *     venue's local frame — an offset-aware value is a `422`). `null` on either clears
+         *     that half; `(null, null)` unassigns the fixture.
+         *
+         *     **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
+         *     constraints — the table belongs to the fixture's pool, the time falls inside the
+         *     pool's window, nothing is double-booked — are flags derived on read, **not**
+         *     invariants. So an out-of-window time, or a `table_id` that names no table in the
+         *     catalogue, is **stored, not rejected**. There is no conflict detection here; that is
+         *     a future scheduler slice.
+         *
+         *     **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
+         *     history, so its placement can no longer be changed — a `409`. A fixture with no
+         *     match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
+         *     is `in_progress` from go-live, so that is not the freeze trigger).
+         *
+         *     Owner-only, like every other tournament mutation: an absent tournament, or a fixture
+         *     that is not part of it, is a `404`; a non-owner is a `403`.
+         */
+        patch: operations["place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch"];
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -3446,6 +3487,36 @@ export interface components {
             pools?: components["schemas"]["Pool"][] | null;
         };
         /**
+         * TournamentFixturePlacementUpdate
+         * @description A fixture's **placement** (ADR-0790): the table it sits at and its predicted
+         *     start.
+         *
+         *     The body is the placement in full — both fields are stated together. ``null`` on
+         *     either clears that half, and ``(null, null)`` unassigns the fixture entirely.
+         *
+         *     **Soft, deliberately.** ``scheduled_start`` is a *prediction*, not a commitment,
+         *     and the placement's constraints — the table belongs to the fixture's pool, the time
+         *     falls inside the pool's window, nothing is double-booked — are **flags derived on
+         *     read, not invariants** (ADR-0790). So this write does **not** reject an
+         *     out-of-window time, nor a ``table_id`` that names no table in the tournament's
+         *     ``table_catalogue`` (a later pool/catalogue edit can dangle the ref; that is a
+         *     flag-on-read concern). They save. Conflict detection is a future scheduler slice.
+         *
+         *     ``table_id`` is a **string ref** into the tournament's ``table_catalogue`` (names a
+         *     ``TournamentTable.id``) — the same pattern as a fixture's ``pool_id``, not a
+         *     foreign key — and per the soft rule above an unknown id is stored, not refused.
+         *
+         *     The one thing the *route* refuses is moving a fixture whose linked match is
+         *     ``completed`` or ``voided``: its placement is history (409). A fixture with no match
+         *     yet, or an ``in_progress`` one, is freely (re)placeable.
+         */
+        TournamentFixturePlacementUpdate: {
+            /** Table Id */
+            table_id: string | null;
+            /** Scheduled Start */
+            scheduled_start: string | null;
+        };
+        /**
          * TournamentFixtureRead
          * @description One planned pairing of an event's draw (ADR-0786): a round and a position —
          *     plus a pool, when the draw is pooled — whose sides may still be unknown.
@@ -3474,6 +3545,14 @@ export interface components {
          *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
          *       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
          *       JSONB, not a foreign key, because pools are value-objects with no table.
+         *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
+         *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
+         *       tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
+         *       the same pattern as ``pool_id``.
+         *     * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
+         *       means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
+         *       venue's frame, a prediction rather than a commitment — a match starting
+         *       off-prediction is normal, not an error.
          *
          *     The entries are carried as **ids only**. The name and username behind
          *     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -3502,6 +3581,10 @@ export interface components {
             /** Match Id */
             match_id: string | null;
             match_status: components["schemas"]["MatchStatus"] | null;
+            /** Table Id */
+            table_id: string | null;
+            /** Scheduled Start */
+            scheduled_start: string | null;
         };
         /** TournamentRead */
         TournamentRead: {
@@ -5950,6 +6033,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                fixture_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentFixturePlacementUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentFixtureRead"];
+                };
             };
             /** @description Validation Error */
             422: {

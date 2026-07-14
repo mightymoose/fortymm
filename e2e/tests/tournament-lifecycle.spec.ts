@@ -1,0 +1,141 @@
+import { test, expect } from '@playwright/test'
+import { faker } from '@faker-js/faker'
+
+import { ScoreEntryPage } from '../page-objects/score-entry.page'
+import { TournamentDetailPage } from '../page-objects/tournament-detail.page'
+import { findUserId, guestFromContext, mintGuest } from '../support/match-api'
+import { grantBetaTester } from '../support/rbac-grant'
+import {
+  enterPlayer,
+  firstFixtureMatchId,
+  seedTournament,
+} from '../support/tournament-api'
+
+const EVENT_NAME = 'Open Singles'
+
+/**
+ * End-to-end coverage for the round-robin tournament lifecycle (the C1/C2
+ * orchestration), against the REAL composed stack — no stubs.
+ *
+ * A director creates a tournament with one singles, round-robin, **unrated**,
+ * best-of-1 event drawn across a single pool → publishes → enters two players →
+ * cuts the draw → goes live (materializing the one fixture into a real
+ * `in_progress` match) → records the result → the standings crown the winner
+ * champion at rank #1.
+ *
+ * ## Why unrated is load-bearing
+ *
+ * An unrated tournament match takes the **immediate self-accept** completion path:
+ * proposing the result COMPLETES it with no second party accepting. So one browser
+ * session (the director, who is also a participant) drives the whole thing — there
+ * is no opponent tab to run.
+ *
+ * ## Seed vs UI split
+ *
+ * The inert scaffolding — the tournament, its event, its pool, and the second
+ * entrant (director-entry, which has no web UI) — is provisioned over the API
+ * (`support/tournament-api.ts`). The load-bearing lifecycle steps are driven
+ * through the browser: publishing, the director's own Enter, cutting the draw,
+ * going live, recording the result, and reading the standings.
+ *
+ * ## RBAC
+ *
+ * A minted user holds only the default `User` role, which carries no permissions.
+ * `grantBetaTester` hands the director the `tournament.view`/`create`/`enter`
+ * bundle over the stack's own `postgres` container before any tournament write —
+ * without it every one of them 403s. On an external `E2E_BASE_URL` stack the grant
+ * is skipped (the caller must arrange it), and the API seed's 403 is the honest
+ * signal if they did not.
+ */
+test.describe('Tournament — round-robin lifecycle', () => {
+  test('a 2-player unrated round-robin goes live, is played, and crowns its champion', async ({
+    page,
+    baseURL,
+  }) => {
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+
+    // The director IS the browser's own session (`page.request` shares the page
+    // context's cookie jar), so page navigations run authenticated as them.
+    const director = await guestFromContext(page.request)
+    // Grant the tournament permissions the flow needs; a no-op against a stack
+    // this suite does not own (E2E_BASE_URL), where the caller provisions it.
+    grantBetaTester(director.username)
+
+    // The inert scaffolding, over the API, as the director (so it comes back
+    // `can_edit: true` and the browser sees the owner controls).
+    const name = `RR ${faker.string.alphanumeric(8)}`
+    const { tournamentId, eventId, poolId } = await seedTournament(director, name)
+
+    // The second entrant — a wholly separate guest, searchable as an opponent.
+    const opponent = await mintGuest(baseURL!)
+    const opponentId = await findUserId(director, opponent.username)
+
+    const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
+
+    // ----- publish: draft → published (opens registration) ------------------
+    await detail.publishButton.click()
+    await expect(detail.startButton).toBeVisible()
+
+    // ----- enter the director themselves, through the UI --------------------
+    await detail.enterButton(EVENT_NAME).click()
+    // The control flips to Withdraw once the entry lands — the entry took.
+    await expect(detail.withdrawButton(EVENT_NAME)).toBeVisible()
+    await expect(detail.entrantsList(EVENT_NAME)).toContainText(director.username)
+
+    // ----- enter the second player by director-entry (no web UI) ------------
+    await enterPlayer(director, tournamentId, eventId, opponentId)
+    await detail.reload(tournamentId)
+    await expect(detail.entrantsList(EVENT_NAME)).toContainText(director.username)
+    await expect(detail.entrantsList(EVENT_NAME)).toContainText(opponent.username)
+
+    // ----- cut the draw: 2 entrants in 1 pool = exactly 1 fixture -----------
+    await detail.generateDrawButton(EVENT_NAME).click()
+    // The one fixture pairs the two entrants. It is not yet a match — no link.
+    await expect(detail.drawPanel(eventId)).toContainText(director.username)
+    await expect(detail.drawPanel(eventId)).toContainText(opponent.username)
+    await expect(detail.viewMatchLink(eventId)).toBeHidden()
+
+    // ----- go live: published → live (materializes the fixture) -------------
+    await detail.startButton.click()
+    // Now live: the only edge left is End, and the fixture is a real, in-progress
+    // match with a deep-link.
+    await expect(detail.endButton).toBeVisible()
+    await expect(detail.fixtureMatchStatus(eventId)).toHaveText('In progress')
+    await expect(detail.viewMatchLink(eventId)).toBeVisible()
+
+    // ----- record the result, through the score-entry UI --------------------
+    // Learn the materialized match's id over the API, then drive its score entry
+    // in the browser (the pattern score-conflict.spec.ts uses).
+    const matchId = await firstFixtureMatchId(director, tournamentId, eventId)
+    const score = await ScoreEntryPage.navigateToNew(page, matchId, 1)
+    // The director wins 11–5, so they are the sole pool winner → champion. Inputs
+    // are labelled by username, so this is correct whichever side each was drawn on.
+    await score.scoreInput(director.username).fill('11')
+    await score.scoreInput(opponent.username).fill('5')
+    // On an unrated match "Finalize result" proposes AND self-accepts in one POST,
+    // completing the match with no opponent tab. Wait for that 201 to settle.
+    const resultsPost = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/matches/${matchId}/results`) &&
+        r.request().method() === 'POST',
+    )
+    await score.finalizeButton.click()
+    expect((await resultsPost).status()).toBe(201)
+
+    // ----- the standings crown the champion ---------------------------------
+    const played = await TournamentDetailPage.navigateTo(page, tournamentId)
+    // The champion callout renders ONLY for the rank-#1 leader of a complete,
+    // single-pool round-robin, so its presence with the director's name is the
+    // "winner ranked #1 as champion" fact itself.
+    await expect(played.standingsChampion(eventId)).toBeVisible()
+    await expect(played.standingsChampion(eventId)).toContainText(director.username)
+    // And the pool table shows both entrants, with the director in the top row.
+    const standings = played.poolStandings(poolId)
+    await expect(standings).toContainText(director.username)
+    await expect(standings).toContainText(opponent.username)
+    // Row 0 is the header; row 1 is rank 1 — the director, the champion.
+    await expect(standings.getByRole('row').nth(1)).toContainText(director.username)
+
+    await opponent.ctx.dispose()
+  })
+})

@@ -44,6 +44,8 @@ type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type ApiPool = components['schemas']['Pool']
 type ApiPredicate = components['schemas']['Predicate']
 type ApiEntryState = TournamentEventRead['entry_state']
+type TournamentFixturePlacementUpdate =
+  components['schemas']['TournamentFixturePlacementUpdate']
 
 /** The API types a `between` predicate's value as a variable-length
  * `(number | null)[]`; the prototype narrows it to a `[min, max]` tuple. Coerce
@@ -385,6 +387,7 @@ export function useTables(id: string): TournamentTable[] {
 // | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useCutDraw              | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useUncutDraw            | ['tournaments'], ['tournaments', id]     | onSettled |
+// | usePlaceFixture         | ['tournaments'], ['tournaments', id]     | onSettled |
 //
 // There are only two keys, because there are only two queries: the list and one
 // tournament's detail (events, entrants, the table catalogue AND every event's draw all
@@ -776,5 +779,54 @@ export function useUncutDraw(tournamentId: string) {
     },
     // Reconcile on BOTH paths — see the note above.
     onSettled: () => invalidateTournament(qc, tournamentId),
+  })
+}
+
+// ----- the schedule (ADR-0790) ---------------------------------------------
+//
+// A **placement** is a fixture's table + predicted start (ADR-0790). Like the draw
+// verbs, it has NO query of its own — the fixture's `table_id` / `scheduled_start` ride
+// the tournament detail payload the Schedule tab already reads (`event.fixtures`), so a
+// placement invalidates the tournament (list + detail) and the refetched fixture carries
+// the new table/time. That is the whole invalidation set: the same two keys
+// `invalidateTournament` covers, no schedule query to add.
+
+/** Set (or clear) a fixture's **placement**: `PATCH …/fixtures/{fixture_id}/placement`
+ * with the table and predicted start in full (ADR-0790). Owner-only.
+ *
+ * The body is the placement whole — `table_id` + `scheduled_start`, both required, and
+ * **`null` on either clears that half** (`(null, null)` unassigns the fixture). The
+ * server stores it soft: an out-of-window time or a `table_id` that names no catalogue
+ * table is saved, not refused (those are flags-on-read, a later scheduler slice). The one
+ * refusal is a **409** on a fixture whose match is `completed`/`voided` — its placement is
+ * history. The Schedule tab does not offer the control for a finished match, so the 409
+ * only surfaces on a lost race; the toast carries the server's word for it.
+ *
+ * Reconciles **`onSettled`** — the placement re-renders from the refetched tournament,
+ * never from an optimistic local write, so what the grid shows is always the server's. */
+export function usePlaceFixture(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: {
+      fixtureId: string
+      body: TournamentFixturePlacementUpdate
+    }): Promise<Fixture> => {
+      const fixture = unwrap(
+        'place the match',
+        await api.PATCH(
+          '/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement',
+          {
+            params: {
+              path: { tournament_id: tournamentId, fixture_id: input.fixtureId },
+            },
+            body: input.body,
+          },
+        ),
+      )
+      // The response is untrusted like every other payload — parse it, don't cast it.
+      return parseFixtures([fixture])[0]
+    },
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    onError: notifyError('place the match'),
   })
 }

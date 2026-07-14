@@ -1,3 +1,5 @@
+import { interactiveElementsIn } from '@/test/read-only'
+import { SessionProbe } from '@/test/session-probe'
 import { render, screen, type Container } from '@/test/utilities'
 
 import {
@@ -8,8 +10,27 @@ import { buildTournamentDetailPageProps } from './tournament-detail-page.factory
 import { eventsTabPage } from './tournament-detail-page/events-tab.page'
 
 const scoped = (container: Container) => ({
-  getTab(name: string) {
+  getTab(name: string | RegExp) {
     return container.getByRole('tab', { name })
+  },
+  /** The currently-active tab panel — Radix unmounts the inactive ones, so there
+   * is exactly one in the DOM. The scope a per-tab read-only sweep runs over: the
+   * tab STRIP (its triggers) sits outside it, so it is never miscounted as a
+   * control. */
+  getActiveTabPanel() {
+    return container.getByRole('tabpanel')
+  },
+  /** Every interactive control in the active tab panel, swept over the DOM
+   * (ADR-0015 rule 6 — never an ARIA-role sweep, which under-proves). The guard a
+   * "this tab is a read-only view for a non-owner" assertion needs. */
+  getActiveTabControls() {
+    return interactiveElementsIn(container.getByRole('tabpanel'))
+  },
+  /** Resolves once `/v1/session` has landed (`SessionProbe`). Gate a non-owner
+   * *absence* assertion on this: permission-gated controls read as absent while the
+   * session is still in flight, so an un-gated assertion passes vacuously. */
+  findSessionReady() {
+    return container.findByTestId('session-ready')
   },
   getBackCrumb() {
     return container.getByRole('button', { name: 'Tournaments' })
@@ -52,7 +73,15 @@ const scoped = (container: Container) => ({
 /** Test page-object for `TournamentDetailPage`. */
 export const tournamentDetailPagePage = {
   render(overrides: Partial<TournamentDetailPageProps> = {}) {
-    render(<TournamentDetailPage {...buildTournamentDetailPageProps(overrides)} />)
+    render(
+      <>
+        {/* Inert marker so a test can `await findSessionReady()` before asserting a
+            permission-gated control is absent (the page already fetches the session
+            itself — this only exposes when it lands). */}
+        <SessionProbe />
+        <TournamentDetailPage {...buildTournamentDetailPageProps(overrides)} />
+      </>,
+    )
   },
   /** The event editor's save button (the sheet portals to the body). */
   getEditorSaveButton() {

@@ -52,9 +52,10 @@ from app.schemas.tournament import (
     EventEntryFull,
     EventEntryRatingIneligible,
     TournamentEventUpdate,
+    TournamentFixturePlacementUpdate,
     TournamentTransitionCreate,
 )
-from app.tournament_draws import DrawCurrency, draw_currency_by_event
+from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
 from app.tournament_materialization import materialize_live_draw
 from app.tournaments import (
@@ -66,6 +67,7 @@ from app.tournaments import (
     cut_event_draw,
     get_tournament,
     list_tournaments,
+    place_fixture,
     uncut_event_draw,
     update_event,
 )
@@ -3692,7 +3694,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     same fact.
 
     ``winner_entry_id``, ``match_id`` and ``match_status`` are the same story —
-    undecided, not yet a match, so no live match status. The exact key set is asserted,
+    undecided, not yet a match, so no live match status. ``table_id`` and
+    ``scheduled_start`` are the fixture's **placement** (ADR-0790), both ``null`` on a
+    freshly-cut draw: unassigned to a table, unscheduled. The exact key set is asserted,
     so a field silently dropped (or a username silently *added*) fails here.
     """
     client, _ = authed_client
@@ -3716,6 +3720,8 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
         "winner_entry_id",
         "match_id",
         "match_status",
+        "table_id",
+        "scheduled_start",
     }
     assert fixture["entry_a_id"] == str(entry.id)
     # The facts that are not known yet — each present, each null.
@@ -3723,6 +3729,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     assert fixture["winner_entry_id"] is None
     assert fixture["match_id"] is None
     assert fixture["match_status"] is None
+    # A freshly-cut draw carries an unassigned placement: no table, no predicted start.
+    assert fixture["table_id"] is None
+    assert fixture["scheduled_start"] is None
 
 
 async def test_a_fixtures_sides_are_entry_ids_the_events_entrants_list_resolves(
@@ -4815,6 +4824,87 @@ async def test_both_draw_verbs_take_the_tournaments_row_lock(
             current_user=User(id=owner_id),
         )
     assert any("FOR UPDATE" in s for s in statements), statements
+
+
+async def test_place_fixture_blocks_on_a_concurrent_uncut_then_404s_the_gone_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """Placing a fixture takes the tournament's row lock **before** it reads the
+    fixture, so a concurrent un-cut of the same event that deletes it cannot slip
+    between the read and the ``UPDATE`` — the caller gets a clean 404, never a 500.
+
+    ``place_fixture`` *writes* a ``TournamentFixture`` row, and ``uncut_draw`` (the
+    account-merge un-cut, and every re-cut) delete-and-replaces an event's fixtures
+    wholesale under that same lock. A gatekeeper holds the tournament's row lock, its
+    DELETE of the event's fixtures already issued but **uncommitted** — the instant the
+    race lives in. The owner presses *place*, and it *blocks*, because the route reads
+    that row ``FOR UPDATE`` before it looks at the fixture (the ``done()`` check catches
+    it if it does not). When the un-cut commits, place's lock is granted, it re-reads
+    against the committed state, finds the fixture gone, and answers 404.
+
+    Without the lock (the reintroduced ``9692872``/#782 bug) place would read the
+    fixture from its own snapshot — still there — set the placement, and then block on
+    the *fixture* row lock the uncommitted DELETE holds. When the DELETE commits its
+    ``UPDATE`` would match zero rows, and SQLAlchemy would raise ``StaleDataError`` — an
+    unhandled 500 rather than a 404. That path raises straight out of ``place`` here (it
+    catches only ``HTTPException``), reddening the test. The lock is the whole
+    mechanism, and this is the test that says so.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    ada = await make_user(db_session, "ada-placed")
+    entry = await _enter(db_session, event["id"], ada)
+    fixture = await _cut(
+        db_session, event["id"], pool_id="p-a", round=1, position=1, entry_a=entry
+    )
+
+    tournament_uuid = uuid.UUID(tournament_id)
+    event_uuid = uuid.UUID(event["id"])
+    fixture_id, owner_id = fixture.id, owner.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def place() -> int:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == owner_id))
+            ).scalar_one()
+            payload = TournamentFixturePlacementUpdate(
+                table_id="t1", scheduled_start=None
+            )
+            try:
+                await place_fixture(
+                    tournament_uuid, fixture_id, payload, session, actor
+                )
+                return 200
+            except HTTPException as exc:
+                return exc.status_code
+
+    async with make_session() as gatekeeper:
+        # The un-cut's own shape: the tournament's row lock first, then the bulk DELETE
+        # of the event's fixtures — held open, uncommitted, exactly as a re-cut or an
+        # account-merge un-cut holds it mid-transaction.
+        await gatekeeper.execute(
+            select(Tournament).where(Tournament.id == tournament_uuid).with_for_update()
+        )
+        await uncut_draw(gatekeeper, [event_uuid])
+        placing = asyncio.create_task(place())
+        # Every chance to finish — and it cannot, because it is parked on the
+        # tournament's row lock, in the handler, before it has read the fixture at all.
+        await asyncio.sleep(0.25)
+        if placing.done():
+            pytest.fail(
+                "place_fixture did not block on the tournament's row lock: it ran to "
+                f"completion against an in-flight un-cut ({placing.result()!r})"
+            )
+        await gatekeeper.commit()
+        outcome = await placing
+
+    # A clean 404 for the now-deleted fixture — not a StaleDataError/500.
+    assert outcome == 404, outcome
+    async with make_session() as verify:
+        assert await _fixture_rows(verify, event["id"]) == []
 
 
 # ----- the pool-set freeze (409) --------------------------------------------
@@ -6340,3 +6430,264 @@ async def test_the_list_endpoint_does_not_ship_standings(
     (listed,) = [t for t in listing if t["id"] == tournament_id]
     (listed_event,) = listed["events"]
     assert listed_event["results"] is None
+
+
+# ----- fixture placement (ADR-0790) -----------------------------------------
+
+
+def _placement_url(tournament_id: str, fixture_id: str) -> str:
+    return f"/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement"
+
+
+async def _fixture_in_detail(
+    client: AsyncClient, tournament_id: str, fixture_id: str
+) -> dict[str, Any]:
+    """The one fixture, as the tournament-detail BFF carries it — the surface a client
+    reads a placement off (ADR-0790 adds no ``GET …/placement``), so an assertion made
+    here proves the placement is on the page a client actually loads."""
+    detail = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    for event in detail["events"]:
+        for fixture in event["fixtures"]:
+            if fixture["id"] == fixture_id:
+                return fixture
+    raise AssertionError(f"fixture {fixture_id} is not on the detail payload")
+
+
+async def _drawn_fixture(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    *,
+    prefix: str = "pl",
+    **tournament: Any,
+) -> tuple[str, str, TournamentFixture]:
+    """A one-pool round-robin over three players, cut through the real route, and the
+    first of the fixtures it produced — the smallest field that gives a placeable slot.
+
+    ``prefix`` names the seeded players, so two draws in one test don't collide on
+    usernames (``make_user`` mints one real ``User`` per name)."""
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A), **tournament
+    )
+    await _seed_field(db_session, event["id"], 3, prefix=prefix)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    return tournament_id, event["id"], fixture
+
+
+async def test_owner_sets_a_fixture_placement_and_the_detail_reflects_it(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The owner assigns a fixture a table and a predicted start; the PATCH echoes them,
+    and re-reading the tournament detail shows them on the fixture (ADR-0790 — placement
+    rides the detail BFF, so this is where a client sees it)."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == str(fixture.id)
+    assert body["table_id"] == "t1"
+    assert body["scheduled_start"] == "2026-06-13T10:00:00"
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] == "t1"
+    assert placed["scheduled_start"] == "2026-06-13T10:00:00"
+
+
+async def test_owner_clears_a_fixture_placement_back_to_null(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``(null, null)`` unassigns a fixture (ADR-0790). The owner places it, then clears
+    both halves; the detail shows an unplaced fixture again."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    url = _placement_url(tournament_id, str(fixture.id))
+    await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+
+    response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["table_id"] is None
+    assert body["scheduled_start"] is None
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] is None
+    assert placed["scheduled_start"] is None
+
+
+async def test_a_non_owner_cannot_place_a_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Placement is a property of OWNING the tournament, like every other tournament
+    mutation — no permission grants it. A fully-permitted stranger gets a 403, and the
+    fixture is left unplaced."""
+    owner_client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(owner_client, db_session)
+
+    async with make_client() as stranger:
+        user = await start_session(stranger, db_session)
+        await _grant_tournament_perms(db_session, user)
+        response = await stranger.patch(
+            _placement_url(tournament_id, str(fixture.id)),
+            json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        )
+        assert response.status_code == 403
+
+    placed = await _fixture_in_detail(owner_client, tournament_id, str(fixture.id))
+    assert placed["table_id"] is None
+    assert placed["scheduled_start"] is None
+
+
+@pytest.mark.parametrize(
+    "table_id",
+    [
+        pytest.param("t2", id="off-pool"),  # in the catalogue, but not in Pool A
+        pytest.param("ghost-table", id="not-in-catalogue"),  # names no table at all
+    ],
+)
+async def test_an_out_of_window_or_off_pool_placement_still_saves(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    table_id: str,
+) -> None:
+    """The placement is **soft** (ADR-0790): ``scheduled_start`` is a prediction, and
+    the constraints (table-in-pool, time-in-window, no double-booking) are flags on
+    read, not invariants — so the write does not reject them. Pool A reserves ``t1`` for
+    09:00–12:30; a table off the pool (or naming nothing in the catalogue at all) and a
+    23:00 start both **save** rather than 4xx. Conflict detection is a later slice."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_id, "scheduled_start": "2026-06-13T23:00:00"},
+    )
+
+    assert 200 <= response.status_code < 300, response.text
+    body = response.json()
+    assert body["table_id"] == table_id
+    assert body["scheduled_start"] == "2026-06-13T23:00:00"
+
+
+@pytest.mark.parametrize("frozen_status", [MatchStatus.completed, MatchStatus.voided])
+async def test_a_played_out_fixture_refuses_a_placement_move(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    frozen_status: MatchStatus,
+) -> None:
+    """The ONE hard rule (ADR-0790): a fixture whose linked match is ``completed`` or
+    ``voided`` is history, so its placement can no longer be changed — a 409, and the
+    existing placement is left exactly as it was.
+
+    The fixture is placed while it is still just a plan, its match then becomes
+    history, and an attempt to move it to a different table/time is refused — proving
+    both the 409 and that the historical placement survives the refusal."""
+    client, owner = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    url = _placement_url(tournament_id, str(fixture.id))
+    await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+
+    match = await _make_match(db_session, owner, default_league)
+    match.status = frozen_status
+    fixture.match_id = match.id
+    await db_session.commit()
+
+    response = await client.patch(
+        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T14:00:00"}
+    )
+
+    assert response.status_code == 409, response.text
+    assert frozen_status.value in response.json()["detail"]
+    # The move changed nothing: the placement recorded before the match went to history
+    # is the placement the fixture still carries.
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] == "t1"
+    assert placed["scheduled_start"] == "2026-06-13T10:00:00"
+
+
+async def test_an_in_progress_fixture_is_freely_placeable(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """``in_progress`` is NOT the freeze trigger (ADR-0790): every round-robin match is
+    ``in_progress`` from go-live, and its plan is exactly what a scheduler moves. Only
+    ``completed``/``voided`` freezes, so a live-match fixture still (re)places."""
+    client, owner = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    match = await _make_match(db_session, owner, default_league)
+    match.status = MatchStatus.in_progress
+    fixture.match_id = match.id
+    await db_session.commit()
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["table_id"] == "t1"
+
+
+async def test_an_offset_aware_start_is_a_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``scheduled_start`` is a naive wall-clock time (ADR-0790). An offset-aware value
+    carries a timezone the domain does not model and the ``TIMESTAMP WITHOUT TIME
+    ZONE`` column cannot hold, so it is refused at the boundary (422) rather than
+    500-ing in the driver — the same discipline the fee/player-limit bounds keep."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00Z"},
+    )
+
+    assert response.status_code == 422, response.text
+
+
+async def test_placement_404s_for_a_fixture_not_under_the_named_tournament(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The fixture is scoped by BOTH ids: a fixture that names nothing, or one belonging
+    to a *different* tournament, is a 404 — not a cross-tournament placement — the same
+    way an event or an entry is scoped to its parent."""
+    client, _ = authed_client
+    tournament_id, _event_id, _fixture = await _drawn_fixture(client, db_session)
+    other_id, _other_event, foreign = await _drawn_fixture(
+        client, db_session, prefix="ot", name="Other Open"
+    )
+
+    # A fixture id that names nothing at all.
+    assert (
+        await client.patch(
+            _placement_url(tournament_id, str(uuid.uuid4())),
+            json={"table_id": None, "scheduled_start": None},
+        )
+    ).status_code == 404
+    # A real fixture, but of the OTHER tournament, addressed through this one.
+    assert (
+        await client.patch(
+            _placement_url(tournament_id, str(foreign.id)),
+            json={"table_id": None, "scheduled_start": None},
+        )
+    ).status_code == 404
+    # The foreign fixture is untouched under its own tournament.
+    assert other_id != tournament_id

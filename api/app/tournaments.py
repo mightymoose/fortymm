@@ -20,11 +20,13 @@ from app.leagues import resolve_league
 from app.models import (
     DrawType,
     EventFormat,
+    Match,
     MatchStatus,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentFixture,
     TournamentStatus,
     User,
 )
@@ -45,6 +47,7 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
+    TournamentFixturePlacementUpdate,
     TournamentFixtureRead,
     TournamentRead,
     TournamentTransitionCreate,
@@ -2433,3 +2436,161 @@ async def uncut_event_draw(
     await uncut_draw(db, [event.id])
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ----- fixture placement (ADR-0790) -----------------------------------------
+#
+# A placement is two nullable columns on a fixture — ``table_id`` (a string ref into
+# the tournament's ``table_catalogue``) and ``scheduled_start`` (a naive, predicted
+# wall-clock time). A human PATCHes them here; a future scheduler slice writes the same
+# two fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
+# on ``TournamentFixtureRead``), so there is deliberately no ``GET …/placement``.
+#
+# The write is **soft**: the placement's constraints (table-in-pool, time-in-window, no
+# double-booking) are flags derived on read, NOT invariants (ADR-0790), so this route
+# stores an out-of-window time and an unknown ``table_id`` without complaint. Its one
+# hard rule is the freeze below.
+
+
+async def _get_fixture_or_404(
+    db: AsyncSession, tournament_id: uuid.UUID, fixture_id: uuid.UUID
+) -> tuple[TournamentFixture, MatchStatus | None]:
+    """The fixture named in the URL, scoped to the tournament, plus its linked match's
+    live status (``None`` when the fixture has not materialized).
+
+    Scoped by BOTH ids — fixture → event → tournament — so a fixture that exists but
+    hangs off a *different* tournament is a 404, not a cross-tournament placement,
+    exactly the way ``_get_event_or_404`` scopes an event by its tournament and
+    ``_get_entry_or_404`` an entry by its event. A well-formed id that names no
+    addressable fixture is a 404.
+
+    The match status rides on the same statement (a LEFT join on ``match_id``, one row
+    per fixture) because it is the single fact the freeze rule judges (ADR-0790): a
+    fixture whose match is ``completed``/``voided`` is history and can no longer be
+    moved. Reading it here, at the load, keeps the judgment on the same read as the row
+    it judges.
+    """
+    row = (
+        await db.execute(
+            select(TournamentFixture, Match.status)
+            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            .outerjoin(Match, Match.id == TournamentFixture.match_id)
+            .where(
+                TournamentFixture.id == fixture_id,
+                TournamentEvent.tournament_id == tournament_id,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Fixture not found.")
+    fixture, match_status = row
+    return fixture, match_status
+
+
+def _enforce_fixture_placeable(match_status: MatchStatus | None) -> None:
+    """Raise the 409 unless this fixture may still be (re)placed — the ONE hard rule of
+    an otherwise-soft endpoint (ADR-0790).
+
+    A fixture whose linked match is ``completed`` or ``voided`` is **history**: its
+    placement records where and when the match actually happened, so the move is
+    refused. A fixture with no match yet (``None``) or a ``pending``/``in_progress`` one
+    is freely (re)placeable — every round-robin match is ``in_progress`` from go-live,
+    so ``in_progress`` is emphatically **not** the freeze trigger; the plan for an
+    unplayed-but-live match is exactly the thing a scheduler moves. Only
+    ``completed``/``voided`` freezes.
+
+    409, not 403 (this module's refusal-code doctrine, ADR-0017): the caller is the
+    owner and the request is well-formed — it is the *fixture* that is past the point
+    where a placement means anything. "Not you" would be a lie; the truth is "not any
+    more".
+
+    A ``match`` with ``assert_never``, not an ``in {completed, voided}`` test: a new
+    ``MatchStatus`` is a type error here until somebody decides whether a fixture in it
+    may be moved, rather than falling through to placeable — a freeze must never fail in
+    the permissive direction.
+    """
+    match match_status:
+        case MatchStatus.completed | MatchStatus.voided:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This fixture's match is already {match_status.value}, so its "
+                    "placement can no longer be changed."
+                ),
+            )
+        case MatchStatus.pending | MatchStatus.in_progress | None:
+            return
+        case _:
+            assert_never(match_status)
+
+
+@router.patch(
+    "/tournaments/{tournament_id}/fixtures/{fixture_id}/placement",
+    response_model=TournamentFixtureRead,
+)
+async def place_fixture(
+    tournament_id: uuid.UUID,
+    fixture_id: uuid.UUID,
+    payload: TournamentFixturePlacementUpdate,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentFixtureRead:
+    """Set (or clear) a fixture's **placement** — its table and its predicted start
+    (ADR-0790) — and answer with the updated fixture.
+
+    The body is the placement in full: `table_id` (a string ref into the tournament's
+    `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+    venue's local frame — an offset-aware value is a `422`). `null` on either clears
+    that half; `(null, null)` unassigns the fixture.
+
+    **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
+    constraints — the table belongs to the fixture's pool, the time falls inside the
+    pool's window, nothing is double-booked — are flags derived on read, **not**
+    invariants. So an out-of-window time, or a `table_id` that names no table in the
+    catalogue, is **stored, not rejected**. There is no conflict detection here; that is
+    a future scheduler slice.
+
+    **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
+    history, so its placement can no longer be changed — a `409`. A fixture with no
+    match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
+    is `in_progress` from go-live, so that is not the freeze trigger).
+
+    Owner-only, like every other tournament mutation: an absent tournament, or a fixture
+    that is not part of it, is a `404`; a non-owner is a `403`.
+    """
+    # 404 → 403 → 409, the ordering ADR-0017 fixed for this whole module. The locked
+    # loader welds the 404 (tournament absent) to the row lock; ``_require_owner`` then
+    # adds the 403 (not the caller's), before the fixture — let alone its placement
+    # state — is looked at, so a stranger probing ids learns nothing.
+    #
+    # It takes the row lock, like the other fixture-writers, because this route WRITES
+    # ``TournamentFixture`` rows, and ``cut_draw``/``uncut_draw`` delete-and-replace an
+    # event's fixtures wholesale under this same tournament lock (``uncut_draw`` also
+    # runs cross-actor from ``account_merge``'s un-cut of a collided entrant's events).
+    # Without the lock, that DELETE can commit between this route's fixture SELECT and
+    # its flush, so the UPDATE matches zero rows and SQLAlchemy raises a
+    # ``StaleDataError`` — an unhandled 500. Holding the lock first serializes the whole
+    # read-judge-write against a concurrent cut/uncut of the same event. It does NOT
+    # save the placement from a re-cut that wins the lock: that placement is discarded,
+    # the accepted ADR-0790 consequence. What the lock buys is a *clean* outcome — the
+    # placement is made and then discarded by the re-cut, or the fixture is already gone
+    # and this answers a 404 — never a 500. Same lock, same row, taken first, as the
+    # transition, entry, and draw routes: one lock, one order, so no pair can deadlock.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+    # The fixture, scoped to this tournament (a mismatched pair is a 404), and its
+    # match's live status — the single fact the freeze judges.
+    fixture, match_status = await _get_fixture_or_404(db, tournament_id, fixture_id)
+    # The one hard rule, before anything is written: a played-out fixture keeps its
+    # placement. Everything else — an odd time, a dangling table ref — saves.
+    _enforce_fixture_placeable(match_status)
+    fixture.table_id = payload.table_id
+    fixture.scheduled_start = payload.scheduled_start
+    await db.commit()
+    # Read back through the SAME loader the detail page reads fixtures through, so the
+    # placed fixture this answers with is byte-for-byte the one the page will show —
+    # ``match_status`` live (not the value the freeze just judged, which was a means to
+    # an end), same read model. The fixture is in the batch we just committed, so the
+    # lookup always finds it.
+    fixtures = (await fixtures_by_event(db, [fixture.event_id]))[fixture.event_id]
+    return next(f for f in fixtures if f.id == fixture.id)
