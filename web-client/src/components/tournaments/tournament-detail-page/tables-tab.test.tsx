@@ -55,6 +55,23 @@ describe('TablesTab', () => {
     expect(document.body).toHaveTextContent('T1')
   })
 
+  // ADR-0015 rule 6: a non-owner gets a rendering, never controls — and the DOM
+  // sweep (not a role query) is the discriminating guard. The catalogue's whole
+  // editor — the add-table inputs and every per-row Remove — is gone, not disabled.
+  it('renders no interactive controls for a non-creator', () => {
+    tablesTabPage.render({ catalogue: buildTables(3), canEdit: false })
+
+    expect(tablesTabPage.getControls()).toHaveLength(0)
+  })
+
+  // The other half, so the guard above cannot be satisfied by deleting the form for
+  // everyone: the creator still gets the full catalogue editor.
+  it('gives the creator the catalogue editor', () => {
+    tablesTabPage.render({ catalogue: buildTables(3), canEdit: true })
+
+    expect(tablesTabPage.getControls().length).toBeGreaterThan(0)
+  })
+
   // The subtitle's second sentence is an instruction only the organizer can
   // follow (ADR 0015, rule 5: copy addresses the reader). Both halves of this
   // pair matter: dropping the sentence for *everyone* would satisfy the

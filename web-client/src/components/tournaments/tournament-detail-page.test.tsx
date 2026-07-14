@@ -2,12 +2,22 @@ import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 
 import { ApiError } from '@/api/client'
+import { mockSessionEndpoint } from '@/mocks/endpoints/session/session.endpoint'
 import { mockTournamentTransitionEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
+import { PERM } from '@/lib/permissions'
+import { sessionResponse } from '@/test/factories'
 import { waitFor } from '@/test/utilities'
 
-import { buildAddress, buildEvent, buildTournament } from './data/seed.factory'
+import {
+  buildAddress,
+  buildDrawnEvent,
+  buildEvent,
+  buildFixture,
+  buildTables,
+  buildTournament,
+} from './data/seed.factory'
 import { tournamentDetailPagePage } from './tournament-detail-page.page'
 
 describe('TournamentDetailPage', () => {
@@ -327,5 +337,160 @@ describe('TournamentDetailPage', () => {
     })
     await userEvent.click(tournamentDetailPagePage.getBackCrumb())
     expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * Slice 3 (#791): a **permissioned non-owner viewer** — a beta user who holds
+   * `tournament.view` but is neither the creator nor entitled to enter — opening a
+   * published tournament gets it **fully read-only on every tab** (ADR-0015). This
+   * is the page-level integration proof that `can_edit === false` reaches every tab:
+   * the per-tab quartets each guard their own surface, but only this walks all four
+   * of one page and sweeps each for the controls that must have leaked nowhere —
+   * the edit forms, the cut/re-cut/delete draw verbs, the lifecycle transitions, the
+   * table-catalogue editor, the placement control, and any Enter/Withdraw the viewer
+   * was never granted.
+   *
+   * The tournament carries a **cut, partly-scheduled draw** so every tab has real
+   * content to be read-only *about*: the Events tab shows the draw, the Schedule tab
+   * shows a placed match and an awaiting one — the exact surfaces the owner's verbs
+   * would hang off.
+   */
+  describe('a permissioned non-owner viewer gets a read-only page (#791, ADR-0015)', () => {
+    /** A drawn event with one fixture PLACED on `t1` and one still awaiting a table
+     * — the two groups the Schedule tab renders. The placed fixture carries a
+     * `tableId` + time but NO `matchId`: a published tournament's fixtures are placed
+     * before go-live, and only materialize into real matches when the tournament
+     * starts (ADR-0790), so no match-link renders here. */
+    const buildScheduledEvent = () =>
+      buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-a-1',
+            poolId: 'p-a',
+            round: 1,
+            position: 1,
+            entryAId: 'entry-1',
+            entryBId: 'entry-4',
+            tableId: 't1',
+            scheduledStart: '2026-06-13T09:00:00',
+          }),
+          buildFixture({
+            id: 'fx-a-2',
+            poolId: 'p-a',
+            round: 2,
+            position: 1,
+            entryAId: 'entry-1',
+            entryBId: 'entry-5',
+          }),
+        ],
+      })
+
+    /** A published tournament (a non-owner can see it — a draft would 404, #967)
+     * with the scheduled draw, seen by a spectator who holds `tournament.view` only
+     * (no `tournament.enter`, and `can_edit: false`). */
+    const renderAsSpectator = () => {
+      mockSessionEndpoint(server, () =>
+        HttpResponse.json(
+          sessionResponse({
+            user: { username: 'spectator', permissions: [PERM.TOURNAMENT_VIEW] },
+          }),
+        ),
+      )
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          status: 'published',
+          canEdit: false,
+          events: [buildScheduledEvent()],
+        }),
+        allTables: buildTables(6),
+      })
+    }
+
+    it('renders the Details tab as values, with no edit controls', async () => {
+      renderAsSpectator()
+      await tournamentDetailPagePage.findSessionReady()
+
+      await userEvent.click(tournamentDetailPagePage.getTab(/^Details/))
+      expect(tournamentDetailPagePage.getActiveTabControls()).toHaveLength(0)
+    })
+
+    it('renders the Tables tab as a list, with no catalogue editor', async () => {
+      renderAsSpectator()
+      await tournamentDetailPagePage.findSessionReady()
+
+      await userEvent.click(tournamentDetailPagePage.getTab(/^Tables/))
+      // The list is still there to read…
+      expect(tournamentDetailPagePage.getActiveTabPanel()).toHaveTextContent('T1')
+      // …but the add-table form and the per-row Remove buttons are gone.
+      expect(tournamentDetailPagePage.getActiveTabControls()).toHaveLength(0)
+    })
+
+    it('renders the Schedule tab as a view, with no placement control', async () => {
+      renderAsSpectator()
+      await tournamentDetailPagePage.findSessionReady()
+
+      await userEvent.click(tournamentDetailPagePage.getTab(/^Schedule/))
+      // The schedule renders (the placed match sits in its table column)…
+      expect(tournamentDetailPagePage.getActiveTabPanel()).toHaveTextContent(
+        'player.1 vs player.4',
+      )
+      // …with no Place / Move trigger anywhere.
+      expect(tournamentDetailPagePage.getActiveTabControls()).toHaveLength(0)
+    })
+
+    it('renders the Events tab with only the read-only "View" open target — no owner or entry affordance', async () => {
+      renderAsSpectator()
+      await tournamentDetailPagePage.findSessionReady()
+
+      // Events is the default tab; select it explicitly so the assertion is uniform.
+      await userEvent.click(tournamentDetailPagePage.getTab(/^Events/))
+
+      const controls = tournamentDetailPagePage.getActiveTabControls()
+      // The card is openable — into a read-only view (ADR 0015). That open target is
+      // the ONLY interactive control the tab offers a viewer: no "New event", no
+      // Generate/Re-cut/Delete draw verbs, and no Enter/Withdraw (the spectator holds
+      // no `tournament.enter`).
+      expect(controls.length).toBeGreaterThan(0)
+      expect(
+        controls.every((el) => /^View /.test(el.getAttribute('aria-label') ?? '')),
+      ).toBe(true)
+      expect(tournamentDetailPagePage.queryNewEventButtons()).toHaveLength(0)
+    })
+
+    it('offers no lifecycle transition in the header', async () => {
+      renderAsSpectator()
+      await tournamentDetailPagePage.findSessionReady()
+
+      // Published → the OWNER would be offered "Start tournament"; a viewer is not.
+      expect(
+        tournamentDetailPagePage.queryLifecycleButton(/Start tournament/),
+      ).toBeNull()
+    })
+
+    // The other half of ADR-0015: the gating must not be over-broad. The owner of the
+    // very same tournament still gets the full controls on every tab — so a "hide it
+    // from everyone" regression that satisfied the sweeps above is caught here.
+    it('still gives the OWNER interactive controls on every tab', async () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          status: 'published',
+          canEdit: true,
+          events: [buildScheduledEvent()],
+        }),
+        allTables: buildTables(6),
+      })
+
+      // The header lifecycle action (Publish/Start/End) is the owner's alone.
+      expect(
+        tournamentDetailPagePage.getLifecycleButton(/Start tournament/),
+      ).toBeInTheDocument()
+
+      for (const tab of [/^Events/, /^Tables/, /^Schedule/, /^Details/]) {
+        await userEvent.click(tournamentDetailPagePage.getTab(tab))
+        expect(
+          tournamentDetailPagePage.getActiveTabControls().length,
+        ).toBeGreaterThan(0)
+      }
+    })
   })
 })
