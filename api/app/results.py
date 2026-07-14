@@ -82,8 +82,11 @@ class PoolInput:
 
     ``entrants`` is the full seated field — not just the entries that have played — so a
     player who has not played yet still appears in the table with a row of zeros
-    (partial, live standings). ``fixture_count`` is the pool's total number of pairings,
-    against which ``len(outcomes)`` decides whether the pool is **complete**.
+    (partial, live standings). ``fixture_count`` is the number of the pool's pairings
+    that can still yield a result — every pairing except any whose match was **voided**
+    (which never will) — against which ``len(outcomes)`` decides whether the pool is
+    **complete**. Counting voided pairings would leave a pool that hit one (e.g. a
+    self-play match voided by an account merge) unable to ever reach ``complete``.
     """
 
     pool_id: PoolId

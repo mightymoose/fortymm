@@ -343,7 +343,16 @@ def _event_results(
             PoolInput(
                 pool_id=PoolId(pool_id),
                 entrants=tuple(EntryId(entry_id) for entry_id in entrants),
-                fixture_count=len(pool_fixtures),
+                # Count only the pairings that can still produce a result. A **voided**
+                # fixture never will — its match is terminal and ``ready_fixtures`` will
+                # not re-materialize it — so it is excluded, not counted-but-missing.
+                # Without this, a played-event account-merge collision (which voids the
+                # guest-vs-survivor self-play match) would hold the pool one outcome
+                # short of ``fixture_count`` forever: permanently un-``complete``, no
+                # champion — the opposite of ADR-0788's live-standings guarantee.
+                fixture_count=sum(
+                    1 for f in pool_fixtures if f.match_status is not MatchStatus.voided
+                ),
                 outcomes=tuple(outcomes),
             )
         )
@@ -382,7 +391,7 @@ def _serialize_event(
     entrants: list[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
-    game_counts: dict[uuid.UUID, tuple[int, int]],
+    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
     # needs the entrant's username, and only the *active* entries), so the fields
@@ -425,7 +434,17 @@ def _serialize_event(
             # the page's one batched game load — ``None`` for an uncut or
             # non-round-robin event (ADR-0788). Computed in the serializer, not fetched
             # per event, for the same reason ``fixtures`` is: no read may become an N+1.
-            "results": _event_results(e, fixtures=fixtures, game_counts=game_counts),
+            #
+            # ``game_counts is None`` is the tournaments *list*'s signal to skip the
+            # projection entirely: its cards render no standings (only event and table
+            # counts), so the list neither runs the game-count query nor tabulates a
+            # results object nobody reads — standings are a detail-BFF concern. A
+            # detail surface passes a real map (``{}`` when nothing is played).
+            "results": (
+                None
+                if game_counts is None
+                else _event_results(e, fixtures=fixtures, game_counts=game_counts)
+            ),
         }
     )
 
@@ -438,7 +457,7 @@ def _serialize_detail(
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
-    game_counts: dict[uuid.UUID, tuple[int, int]],
+    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
@@ -786,11 +805,11 @@ async def list_tournaments(
     # event. Uncut draws come back as ``[]``, so an event nobody has cut a draw for
     # costs nothing and answers with an empty list rather than a null.
     event_fixtures = await fixtures_by_event(db, event_ids)
-    # And ONE batch for the games of every completed tournament match on the page — the
-    # raw material each event's standings are projected from (ADR-0788). One statement,
-    # not one per event, and none at all when nothing has been played yet (an uncut or
-    # unplayed page collects no completed match ids), so the statement-count pin holds.
-    game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
+    # The list deliberately does NOT project standings: its cards render only event and
+    # table counts, never a results table, so it skips the game-count query and the
+    # per-event tabulation a results object would need (``game_counts=None`` below).
+    # Standings are a detail-BFF concern (ADR-0788); computing them here would be work a
+    # page throws away — the same shape as #1051 for fixtures/entrants.
     # ONE batch for the caller's ratings, keyed by league — deduplicated, because
     # every tournament on the default league shares the one number, and because the
     # ladders a page happens to list is not a reason to ask the same question twice.
@@ -805,7 +824,7 @@ async def list_tournaments(
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
             fixtures_by_event=event_fixtures,
-            game_counts=game_counts,
+            game_counts=None,
             rating=ratings[tournament.league_id],
         )
         for tournament, username in rows

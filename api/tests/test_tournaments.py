@@ -5990,6 +5990,14 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     active = await _active_entries(db_session, event["id"])
     assert [e.user_id for e in active] == [survivor.id]
 
+    # And the standings are not frozen by the void. A voided fixture never yields an
+    # outcome, so it is excluded from the pool's completeness count (ADR-0788). The
+    # event reports ``complete`` rather than hanging one short of its count forever —
+    # before this fix it stuck at incomplete permanently, with no champion. (The pool
+    # is degenerate after the merge, one human on an N+1 draw; a director re-cuts it.)
+    (read,) = await _events_of(client, tournament_id)
+    assert read["results"]["complete"] is True
+
 
 # ----- Slice 2: completion advances the draw; results/standings render live (#789) ----
 # The seam (``on_match_completed`` via ``finalize_match``) writes the fixture's winner
@@ -6307,3 +6315,28 @@ async def test_an_uncut_event_carries_no_results(
     (read,) = await _events_of(client, tournament_id)
     assert read["fixtures"] == [], "no draw cut yet"
     assert read["results"] is None
+
+
+async def test_the_list_endpoint_does_not_ship_standings(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Standings are a detail-BFF concern. The tournaments *list* renders only event and
+    table counts — never a results table — so it must not compute or ship a ``results``
+    object (ADR-0788): doing so would run a game-count query and the tiebreak tabulation
+    per event for data a card throws away. A cut event proves the split — the detail
+    carries its standings, the list carries ``None`` for the same event."""
+    client, _owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+
+    # Detail: a cut round-robin event carries its (here, unplayed) standings.
+    (detail_event,) = await _events_of(client, tournament_id)
+    assert detail_event["results"] is not None
+
+    # List: the very same event carries no results — the projection is skipped whole.
+    listing = (await client.get("/v1/tournaments")).json()
+    (listed,) = [t for t in listing if t["id"] == tournament_id]
+    (listed_event,) = listed["events"]
+    assert listed_event["results"] is None
