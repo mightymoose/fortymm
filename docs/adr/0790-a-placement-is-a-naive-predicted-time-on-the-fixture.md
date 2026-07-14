@@ -7,8 +7,10 @@ concurrent worktrees, as the duplicate 0008s in this directory attest)
 
 Accepted — design for slice D1 of epic #780 (#790), decided before
 implementation. The auto-packing **scheduler** it anticipates is a separate,
-later slice; this ADR fixes only the data model and the read-only surface D1
-ships.
+later slice; this ADR fixes only the data model, the owner-only manual
+placement path (the PATCH + control), and the tournament-scoped Schedule grid
+D1 ships — the grid is read-only for a non-owner viewer, and the *solver* is
+deferred, but D1 is not itself read-only.
 
 ## Context
 
@@ -77,7 +79,9 @@ hard-blocks on them.
 
 ### Scope boundaries
 
-- **D1 is model + a read-only, tournament-scoped Schedule grid.** The schedule is
+- **D1 is model + the owner-only manual placement path + a tournament-scoped
+  Schedule grid** (read-only for a non-owner viewer; the owner gets the placement
+  control). The schedule is
   tournament-scoped, not per-event, because tables are shared across events — a
   same-table collision is a cross-event fact.
 - **Deferred to the scheduler slice:** the CP-SAT auto-packer, the **pinned/free**

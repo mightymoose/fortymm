@@ -52,9 +52,10 @@ from app.schemas.tournament import (
     EventEntryFull,
     EventEntryRatingIneligible,
     TournamentEventUpdate,
+    TournamentFixturePlacementUpdate,
     TournamentTransitionCreate,
 )
-from app.tournament_draws import DrawCurrency, draw_currency_by_event
+from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
 from app.tournament_materialization import materialize_live_draw
 from app.tournaments import (
@@ -66,6 +67,7 @@ from app.tournaments import (
     cut_event_draw,
     get_tournament,
     list_tournaments,
+    place_fixture,
     uncut_event_draw,
     update_event,
 )
@@ -4822,6 +4824,87 @@ async def test_both_draw_verbs_take_the_tournaments_row_lock(
             current_user=User(id=owner_id),
         )
     assert any("FOR UPDATE" in s for s in statements), statements
+
+
+async def test_place_fixture_blocks_on_a_concurrent_uncut_then_404s_the_gone_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """Placing a fixture takes the tournament's row lock **before** it reads the
+    fixture, so a concurrent un-cut of the same event that deletes it cannot slip
+    between the read and the ``UPDATE`` — the caller gets a clean 404, never a 500.
+
+    ``place_fixture`` *writes* a ``TournamentFixture`` row, and ``uncut_draw`` (the
+    account-merge un-cut, and every re-cut) delete-and-replaces an event's fixtures
+    wholesale under that same lock. A gatekeeper holds the tournament's row lock, its
+    DELETE of the event's fixtures already issued but **uncommitted** — the instant the
+    race lives in. The owner presses *place*, and it *blocks*, because the route reads
+    that row ``FOR UPDATE`` before it looks at the fixture (the ``done()`` check catches
+    it if it does not). When the un-cut commits, place's lock is granted, it re-reads
+    against the committed state, finds the fixture gone, and answers 404.
+
+    Without the lock (the reintroduced ``9692872``/#782 bug) place would read the
+    fixture from its own snapshot — still there — set the placement, and then block on
+    the *fixture* row lock the uncommitted DELETE holds. When the DELETE commits its
+    ``UPDATE`` would match zero rows, and SQLAlchemy would raise ``StaleDataError`` — an
+    unhandled 500 rather than a 404. That path raises straight out of ``place`` here (it
+    catches only ``HTTPException``), reddening the test. The lock is the whole
+    mechanism, and this is the test that says so.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    ada = await make_user(db_session, "ada-placed")
+    entry = await _enter(db_session, event["id"], ada)
+    fixture = await _cut(
+        db_session, event["id"], pool_id="p-a", round=1, position=1, entry_a=entry
+    )
+
+    tournament_uuid = uuid.UUID(tournament_id)
+    event_uuid = uuid.UUID(event["id"])
+    fixture_id, owner_id = fixture.id, owner.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def place() -> int:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == owner_id))
+            ).scalar_one()
+            payload = TournamentFixturePlacementUpdate(
+                table_id="t1", scheduled_start=None
+            )
+            try:
+                await place_fixture(
+                    tournament_uuid, fixture_id, payload, session, actor
+                )
+                return 200
+            except HTTPException as exc:
+                return exc.status_code
+
+    async with make_session() as gatekeeper:
+        # The un-cut's own shape: the tournament's row lock first, then the bulk DELETE
+        # of the event's fixtures — held open, uncommitted, exactly as a re-cut or an
+        # account-merge un-cut holds it mid-transaction.
+        await gatekeeper.execute(
+            select(Tournament).where(Tournament.id == tournament_uuid).with_for_update()
+        )
+        await uncut_draw(gatekeeper, [event_uuid])
+        placing = asyncio.create_task(place())
+        # Every chance to finish — and it cannot, because it is parked on the
+        # tournament's row lock, in the handler, before it has read the fixture at all.
+        await asyncio.sleep(0.25)
+        if placing.done():
+            pytest.fail(
+                "place_fixture did not block on the tournament's row lock: it ran to "
+                f"completion against an in-flight un-cut ({placing.result()!r})"
+            )
+        await gatekeeper.commit()
+        outcome = await placing
+
+    # A clean 404 for the now-deleted fixture — not a StaleDataError/500.
+    assert outcome == 404, outcome
+    async with make_session() as verify:
+        assert await _fixture_rows(verify, event["id"]) == []
 
 
 # ----- the pool-set freeze (409) --------------------------------------------

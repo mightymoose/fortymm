@@ -2558,15 +2558,26 @@ async def place_fixture(
     Owner-only, like every other tournament mutation: an absent tournament, or a fixture
     that is not part of it, is a `404`; a non-owner is a `403`.
     """
-    # 404 → 403 → 409, the ordering ADR-0017 fixed for this whole module. The
-    # owner-scoped loader welds the 404 (tournament absent) to the 403 (not the
-    # caller's), before the fixture — let alone its placement state — is looked at, so a
-    # stranger probing ids learns nothing. No row lock: this route reads no tournament
-    # *status*, and the one state it judges (is the fixture's match history?) is a fact
-    # about the MATCH row, which the tournament lock would not serialize anyway — so
-    # locking here would queue writers for no protection. The non-locking owner loader
-    # is the right one, as for ``delete_tournament`` and ``create_event``.
-    await _get_owned_tournament_or_404(db, tournament_id, current_user)
+    # 404 → 403 → 409, the ordering ADR-0017 fixed for this whole module. The locked
+    # loader welds the 404 (tournament absent) to the row lock; ``_require_owner`` then
+    # adds the 403 (not the caller's), before the fixture — let alone its placement
+    # state — is looked at, so a stranger probing ids learns nothing.
+    #
+    # It takes the row lock, like the other fixture-writers, because this route WRITES
+    # ``TournamentFixture`` rows, and ``cut_draw``/``uncut_draw`` delete-and-replace an
+    # event's fixtures wholesale under this same tournament lock (``uncut_draw`` also
+    # runs cross-actor from ``account_merge``'s un-cut of a collided entrant's events).
+    # Without the lock, that DELETE can commit between this route's fixture SELECT and
+    # its flush, so the UPDATE matches zero rows and SQLAlchemy raises a
+    # ``StaleDataError`` — an unhandled 500. Holding the lock first serializes the whole
+    # read-judge-write against a concurrent cut/uncut of the same event. It does NOT
+    # save the placement from a re-cut that wins the lock: that placement is discarded,
+    # the accepted ADR-0790 consequence. What the lock buys is a *clean* outcome — the
+    # placement is made and then discarded by the re-cut, or the fixture is already gone
+    # and this answers a 404 — never a 500. Same lock, same row, taken first, as the
+    # transition, entry, and draw routes: one lock, one order, so no pair can deadlock.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
     # The fixture, scoped to this tournament (a mismatched pair is a 404), and its
     # match's live status — the single fact the freeze judges.
     fixture, match_status = await _get_fixture_or_404(db, tournament_id, fixture_id)
