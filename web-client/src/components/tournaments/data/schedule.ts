@@ -20,7 +20,7 @@
 
 import type { MatchStatus } from '@/api/matches'
 
-import type { FixtureMatch, FixtureSide } from './draw'
+import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
 import type {
   Entrant,
   Fixture,
@@ -235,9 +235,9 @@ export function sideLabel(side: FixtureSide): string {
     case 'entrant':
       return side.name
     case 'tbd':
-      return 'TBD'
+      return TBD_LABEL
     case 'withdrawn':
-      return 'Withdrawn'
+      return WITHDRAWN_LABEL
     default: {
       const exhaustive: never = side
       return exhaustive

@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
 import { usePlaceFixture } from '../data/api'
-import type { FixtureSide } from '../data/draw'
+import { type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from '../data/draw'
 import { EM_DASH, fmtDateShort, fmtTimeWindow } from '../data/helpers'
 import {
   buildSchedule,
@@ -40,9 +40,9 @@ const Side = ({ side }: { side: FixtureSide }) => {
     case 'entrant':
       return <span className="text-[color:var(--fg-1)]">{side.name}</span>
     case 'tbd':
-      return <span className="text-[color:var(--fg-3)] italic">TBD</span>
+      return <span className="text-[color:var(--fg-3)] italic">{TBD_LABEL}</span>
     case 'withdrawn':
-      return <span className="text-[color:var(--warn)]">Withdrawn</span>
+      return <span className="text-[color:var(--warn)]">{WITHDRAWN_LABEL}</span>
     default: {
       const exhaustive: never = side
       return exhaustive
@@ -92,25 +92,21 @@ const PlacementControl = ({
 
   const label = matchLabel(match)
 
-  const submit = async () => {
+  // The mutation toasts its own failure; on error keep the panel open so the work survives.
+  const run = async (body: PlacementBody) => {
     try {
-      await onSubmit({
-        table_id: tableId,
-        scheduled_start: composeScheduledStart(match.window.date, time),
-      })
+      await onSubmit(body)
       setEditing(false)
     } catch {
-      // The mutation toasts its own failure; keep the panel open so the work survives.
+      /* keep the panel open */
     }
   }
-  const clear = async () => {
-    try {
-      await onSubmit({ table_id: null, scheduled_start: null })
-      setEditing(false)
-    } catch {
-      // As above.
-    }
-  }
+  const submit = () =>
+    run({
+      table_id: tableId,
+      scheduled_start: composeScheduledStart(match.window.date, time),
+    })
+  const clear = () => run({ table_id: null, scheduled_start: null })
 
   if (!editing) {
     return (
