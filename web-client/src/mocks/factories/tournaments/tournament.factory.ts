@@ -64,7 +64,9 @@ export function buildTournamentEntrantReads(
  * `winner_entry_id` is undecided, a null `match_id` is un-materialized, and a null
  * `pool_id` is an un-pooled draw. The defaults are the ordinary case a director sees
  * the morning of: a planned pairing, both players known, nothing played — so
- * `match_status` is `null` too, moving in lockstep with `match_id`. */
+ * `match_status` is `null` too, moving in lockstep with `match_id`. Its **placement**
+ * (ADR-0790) starts empty: `table_id` null is unassigned, `scheduled_start` null is
+ * unscheduled. */
 export function buildTournamentFixtureRead(
   overrides: Partial<TournamentFixtureRead> = {},
 ): TournamentFixtureRead {
@@ -78,6 +80,8 @@ export function buildTournamentFixtureRead(
     winner_entry_id: null,
     match_id: null,
     match_status: null,
+    table_id: null,
+    scheduled_start: null,
     ...overrides,
   }
 }

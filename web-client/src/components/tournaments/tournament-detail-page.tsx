@@ -218,7 +218,7 @@ export const TournamentDetailPage = ({
             />
           </TabsContent>
           <TabsContent value="schedule">
-            <ScheduleTab tournament={tournament} />
+            <ScheduleTab tournament={tournament} tables={allTables} />
           </TabsContent>
           <TabsContent value="details">
             <DetailsTab

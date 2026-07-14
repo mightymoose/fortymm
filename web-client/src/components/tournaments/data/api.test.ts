@@ -199,6 +199,8 @@ describe('apiToEvent — the draw', () => {
         winnerEntryId: null,
         matchId: null,
         matchStatus: null,
+        tableId: null,
+        scheduledStart: null,
       },
       {
         id: 'fx-2',
@@ -210,6 +212,8 @@ describe('apiToEvent — the draw', () => {
         winnerEntryId: null,
         matchId: null,
         matchStatus: null,
+        tableId: null,
+        scheduledStart: null,
       },
     ])
   })
@@ -244,6 +248,8 @@ describe('apiToEvent — the draw', () => {
       winnerEntryId: null,
       matchId: null,
       matchStatus: null,
+      tableId: null,
+      scheduledStart: null,
     })
   })
 
@@ -723,6 +729,8 @@ describe('eventToUpdateBody', () => {
           winnerEntryId: null,
           matchId: null,
           matchStatus: null,
+          tableId: null,
+          scheduledStart: null,
         },
       ],
     })

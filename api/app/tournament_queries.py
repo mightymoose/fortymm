@@ -197,6 +197,8 @@ async def fixtures_by_event(
                 winner_entry_id=fixture.winner_entry_id,
                 match_id=fixture.match_id,
                 match_status=match_status,
+                table_id=fixture.table_id,
+                scheduled_start=fixture.scheduled_start,
             )
         )
     return fixtures

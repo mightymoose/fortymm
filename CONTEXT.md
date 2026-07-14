@@ -468,6 +468,43 @@ the champion is always read from the current results.
 _Avoid_: winner (a **winner** is one side of one match; the champion is the whole
 event's), first place.
 
+**Schedule**:
+Where and when a tournament's **matches** are played: the assignment of each
+**match** to a **table** and a **wall-clock time**, within the reserved window of its
+**pool** (or, for an un-pooled draw, its event). It is **tournament-scoped, not
+per-event** — the venue's tables are shared across events, so "two matches on one
+table at once" is a cross-event fact — which is why it is its own surface rather than
+a panel inside a single event's draw. A **placement** is written two ways that touch
+the same fields: a director **places** a match by hand, and (a later slice) a
+**scheduler** auto-packs the unplayed remainder and **recomputes it repeatedly** as
+the tournament runs. A match with no table/time is **unassigned**.
+_Avoid_: draw (the *pairings* are the draw; the schedule is *when they are played*),
+slot (a **Slot** is a pool's reserved time window — an input to the schedule, not the
+schedule itself), bracket.
+
+**Placement**:
+One match's spot in the **schedule**: a **table** and a **predicted start time**. It
+lives on the **fixture** (not the match), so it can be set before the match even
+exists and survives **materialization**. The time is a real moment but a **prediction,
+not a promise** — a match beginning earlier or later than its placement is normal, not
+an error. It is stored as a **naive local timestamp** in the venue's wall-clock frame —
+the *same* frame as a pool's **Slot** window (also naive), so "is this placement inside
+its window" is a plain comparison; matching Slot's frame is why it is not `timestamptz`
+(that would need a venue timezone this domain does not model, and a Slot migration to
+match). Its constraints (table belongs to the pool, time inside the window, no table or
+player double-booked) are **not invariants** and never hard-block: a pool's tables and
+window even stay editable under a standing draw, stranding placements a later edit
+outranges. They are judged as **flags derived on read**, never silently rewritten.
+_Avoid_: schedule slot, booking, appointment, start time (it is a *predicted* start).
+
+**Pinned / free** (scheduler-era):
+Once the **scheduler** exists, a **placement** is **free** — the solver may move it —
+unless **pinned**: **started** (`in_progress`/`completed`, its table and time now
+history) or **manually placed** by a director. The solver holds pinned placements fixed
+and packs the free ones around them. Before the scheduler, every placement is a manual
+one and the distinction is dormant.
+_Avoid_: locked (reserve for other domains), fixed (ambiguous with a *fixture*).
+
 ## Dashboard
 
 **First-match**:

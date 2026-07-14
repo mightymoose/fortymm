@@ -110,6 +110,13 @@ export interface Pool {
  * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
  *   this is the KO stage of an rr-then-ko. When set, it names a `Pool` in this same
  *   event's `pools`.
+ * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
+ *   to a table**. When set, it names a `TournamentTable` in the tournament's table
+ *   catalogue — a string ref, the same pattern as `poolId`.
+ * - `scheduledStart` — the placement's **predicted** start (ADR-0790): `null` means
+ *   **unscheduled**. A *naive* wall-clock timestamp string (no timezone), in the venue's
+ *   frame — a prediction, not a commitment, so an off-prediction start is normal, not an
+ *   error. Carried as the string it arrives as (like the slot's `date`/`start`/`end`).
  *
  * Parsed at the boundary by `./fixtures` — this interface is what comes out.
  */
@@ -125,6 +132,12 @@ export interface Fixture {
   /** The materialized match's live status, or `null` until go-live (#788). Moves in
    * lockstep with `matchId`. */
   matchStatus: MatchStatus | null
+  /** The placement table this fixture is assigned to (ADR-0790), or `null` when
+   * **unassigned**. A string ref into the tournament's table catalogue, like `poolId`. */
+  tableId: string | null
+  /** The placement's predicted start (ADR-0790): a naive wall-clock timestamp string, or
+   * `null` when **unscheduled**. A prediction, not a commitment. */
+  scheduledStart: string | null
 }
 
 /**

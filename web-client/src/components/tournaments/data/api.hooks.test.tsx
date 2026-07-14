@@ -16,6 +16,7 @@ import { renderHook, waitFor } from '@/test/utilities'
 import {
   mockEventCutDrawEndpoint,
   mockEventEnterEndpoint,
+  mockFixturePlacementEndpoint,
   mockEventUncutDrawEndpoint,
   mockEventWithdrawEndpoint,
   mockTournamentCreateEndpoint,
@@ -43,6 +44,7 @@ import {
   useCreateTournament,
   useCutDraw,
   useEnterEvent,
+  usePlaceFixture,
   useTournament,
   useTournaments,
   useTransitionTournament,
@@ -999,6 +1001,8 @@ describe('useCutDraw', () => {
         winnerEntryId: null,
         matchId: null,
         matchStatus: null,
+        tableId: null,
+        scheduledStart: null,
       },
     ])
   })
@@ -1159,6 +1163,82 @@ describe('useUncutDraw', () => {
     // No toast here either — the panel renders the play-guard refusal inline, beside the
     // draw it refused to remove.
     expect(toast.error).not.toHaveBeenCalled()
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('usePlaceFixture', () => {
+  it('PATCHes the placement to the fixture resource and resolves the parsed fixture', async () => {
+    let seen: { url: string; body: unknown } | null = null
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      seen = { url: request.url, body: await request.json() }
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-1',
+          table_id: 't2',
+          scheduled_start: '2026-06-13T10:30:00',
+        }),
+      )
+    })
+
+    const { result } = renderHook(() => usePlaceFixture('t-1'))
+    const fixture = await result.current.mutateAsync({
+      fixtureId: 'fx-1',
+      body: { table_id: 't2', scheduled_start: '2026-06-13T10:30:00' },
+    })
+
+    expect(seen!.url).toContain('/v1/tournaments/t-1/fixtures/fx-1/placement')
+    expect(seen!.body).toEqual({ table_id: 't2', scheduled_start: '2026-06-13T10:30:00' })
+    // Parsed into the domain's camelCase, like every other fixture the layer returns.
+    expect(fixture).toMatchObject({
+      id: 'fx-1',
+      tableId: 't2',
+      scheduledStart: '2026-06-13T10:30:00',
+    })
+  })
+
+  // THE invalidation contract (the map at the top of `./api`): exactly the two keys, the
+  // list and this tournament's detail — the placement rides the detail payload, so it
+  // re-renders from the refetch, with no schedule query of its own.
+  it('invalidates EXACTLY the list and the detail — the placement re-renders from the server', async () => {
+    mockFixturePlacementEndpoint(server, () =>
+      HttpResponse.json(buildTournamentFixtureRead({ id: 'fx-1', table_id: 't2' })),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => usePlaceFixture('t-1'), { wrapper })
+    result.current.mutate({
+      fixtureId: 'fx-1',
+      body: { table_id: 't2', scheduled_start: '2026-06-13T10:30:00' },
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // Reconciles on FAILURE too (`onSettled`), and toasts — a lost race against a match
+  // that finished is a 409, and the refetch corrects the view while the toast reports it.
+  it('invalidates on a 409 too, and surfaces it as a toast', async () => {
+    mockFixturePlacementEndpoint(server, () =>
+      HttpResponse.json({ detail: 'This match is finished.' }, { status: 409 }),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => usePlaceFixture('t-1'), { wrapper })
+
+    await expect(
+      result.current.mutateAsync({
+        fixtureId: 'fx-1',
+        body: { table_id: null, scheduled_start: null },
+      }),
+    ).rejects.toBeInstanceOf(ApiError)
+
+    await waitForRaw(() => expect(toast.error).toHaveBeenCalled())
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
     expect(invalidateSpy).toHaveBeenCalledTimes(2)

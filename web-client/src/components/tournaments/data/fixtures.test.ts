@@ -33,6 +33,8 @@ describe('parseFixtures — the happy path', () => {
         winnerEntryId: null,
         matchId: null,
         matchStatus: null,
+        tableId: null,
+        scheduledStart: null,
       },
     ])
   })
@@ -77,6 +79,21 @@ describe('parseFixtures — the happy path', () => {
     expect(fixture.matchId).toBe('m-7')
     expect(fixture.matchStatus).toBe('completed')
   })
+
+  // A placed fixture (ADR-0790): assigned a table and a predicted start. Both are
+  // carried through as-is — the naive wall-clock start stays the string it arrives as,
+  // never coerced to a `Date` at this boundary.
+  it('carries a placed fixture through — table id and predicted start', () => {
+    const [fixture] = parseFixtures([
+      wire({
+        table_id: 'table-3',
+        scheduled_start: '2026-06-09T14:30:00',
+      }),
+    ])
+
+    expect(fixture.tableId).toBe('table-3')
+    expect(fixture.scheduledStart).toBe('2026-06-09T14:30:00')
+  })
 })
 
 // THE point of this module. `schema.d.ts` is a compile-time claim about a server we do
@@ -103,6 +120,12 @@ describe('parseFixtures — the boundary', () => {
     // value outside the closed `MatchStatus` set is a status this client cannot render.
     { what: 'an absent match_status', payload: [{ ...(wire() as object), match_status: undefined }] },
     { what: 'a match_status outside the enum', payload: [wire({ match_status: 'archived' })] },
+    // Placement (ADR-0790): every null is a fact — unassigned / unscheduled — so an
+    // absent key is not a null, and a wrong-typed one is a placement this client cannot read.
+    { what: 'an absent table_id', payload: [{ ...(wire() as object), table_id: undefined }] },
+    { what: 'a table_id of the wrong type', payload: [wire({ table_id: 7 })] },
+    { what: 'an absent scheduled_start', payload: [{ ...(wire() as object), scheduled_start: undefined }] },
+    { what: 'a scheduled_start of the wrong type', payload: [wire({ scheduled_start: 7 })] },
     // A draw is a LIST. `null` is not an empty draw: an event with no draw sends `[]`,
     // and a server that sent null would be sending something this client cannot read.
     { what: 'null instead of a list', payload: null },

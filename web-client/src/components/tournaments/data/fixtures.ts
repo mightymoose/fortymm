@@ -64,6 +64,16 @@ const fixtureWireSchema = z.object({
   /** The materialized match's live status, or `null` when the fixture has not
    * materialized. Moves in lockstep with `match_id`. */
   match_status: matchStatusSchema.nullable(),
+  /** The fixture's **placement** table (ADR-0790): `null` = **unassigned**. When
+   * set it is a **string ref** into the tournament's `table_catalogue` — not a
+   * foreign key, the same pattern as `pool_id`. */
+  table_id: z.string().nullable(),
+  /** The placement's **predicted** start (ADR-0790): `null` = **unscheduled**. A
+   * *naive* wall-clock timestamp string (no timezone), in the venue's frame — a
+   * prediction, not a commitment. Kept as the string it arrives as, exactly as the
+   * slot's `date`/`start`/`end` and the event's `created_at` are: this surface does
+   * not coerce wire datetimes to `Date` at the boundary. */
+  scheduled_start: z.string().nullable(),
 })
 
 /** The parser: one wire fixture → one domain `Fixture`.
@@ -83,6 +93,8 @@ export const fixtureSchema = fixtureWireSchema.transform(
     winnerEntryId: f.winner_entry_id,
     matchId: f.match_id,
     matchStatus: f.match_status,
+    tableId: f.table_id,
+    scheduledStart: f.scheduled_start,
   }),
 )
 

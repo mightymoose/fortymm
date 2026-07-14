@@ -743,6 +743,34 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/draw/delete(uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete)`.
     func uncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete(_ input: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input) async throws -> Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output
+    /// Place Fixture
+    ///
+    /// Set (or clear) a fixture's **placement** — its table and its predicted start
+    /// (ADR-0790) — and answer with the updated fixture.
+    ///
+    /// The body is the placement in full: `table_id` (a string ref into the tournament's
+    /// `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+    /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
+    /// that half; `(null, null)` unassigns the fixture.
+    ///
+    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
+    /// constraints — the table belongs to the fixture's pool, the time falls inside the
+    /// pool's window, nothing is double-booked — are flags derived on read, **not**
+    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
+    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
+    /// a future scheduler slice.
+    ///
+    /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
+    /// history, so its placement can no longer be changed — a `409`. A fixture with no
+    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
+    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
+    /// that is not part of it, is a `404`; a non-owner is a `403`.
+    ///
+    /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)`.
+    func placeFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch(_ input: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input) async throws -> Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -1952,6 +1980,44 @@ extension APIProtocol {
         try await uncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete(Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// Place Fixture
+    ///
+    /// Set (or clear) a fixture's **placement** — its table and its predicted start
+    /// (ADR-0790) — and answer with the updated fixture.
+    ///
+    /// The body is the placement in full: `table_id` (a string ref into the tournament's
+    /// `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+    /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
+    /// that half; `(null, null)` unassigns the fixture.
+    ///
+    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
+    /// constraints — the table belongs to the fixture's pool, the time falls inside the
+    /// pool's window, nothing is double-booked — are flags derived on read, **not**
+    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
+    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
+    /// a future scheduler slice.
+    ///
+    /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
+    /// history, so its placement can no longer be changed — a `409`. A fixture with no
+    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
+    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
+    /// that is not part of it, is a `404`; a non-owner is a `403`.
+    ///
+    /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)`.
+    internal func placeFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch(
+        path: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Path,
+        headers: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Headers = .init(),
+        body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Body
+    ) async throws -> Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output {
+        try await placeFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch(Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// Health
@@ -7633,6 +7699,66 @@ internal enum Components {
                 ])
             }
         }
+        /// A fixture's **placement** (ADR-0790): the table it sits at and its predicted
+        /// start.
+        ///
+        /// The body is the placement in full — both fields are stated together. ``null`` on
+        /// either clears that half, and ``(null, null)`` unassigns the fixture entirely.
+        ///
+        /// **Soft, deliberately.** ``scheduled_start`` is a *prediction*, not a commitment,
+        /// and the placement's constraints — the table belongs to the fixture's pool, the time
+        /// falls inside the pool's window, nothing is double-booked — are **flags derived on
+        /// read, not invariants** (ADR-0790). So this write does **not** reject an
+        /// out-of-window time, nor a ``table_id`` that names no table in the tournament's
+        /// ``table_catalogue`` (a later pool/catalogue edit can dangle the ref; that is a
+        /// flag-on-read concern). They save. Conflict detection is a future scheduler slice.
+        ///
+        /// ``table_id`` is a **string ref** into the tournament's ``table_catalogue`` (names a
+        /// ``TournamentTable.id``) — the same pattern as a fixture's ``pool_id``, not a
+        /// foreign key — and per the soft rule above an unknown id is stored, not refused.
+        ///
+        /// The one thing the *route* refuses is moving a fixture whose linked match is
+        /// ``completed`` or ``voided``: its placement is history (409). A fixture with no match
+        /// yet, or an ``in_progress`` one, is freely (re)placeable.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentFixturePlacementUpdate`.
+        internal struct TournamentFixturePlacementUpdate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentFixturePlacementUpdate/table_id`.
+            internal var tableId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixturePlacementUpdate/scheduled_start`.
+            internal var scheduledStart: Foundation.Date?
+            /// Creates a new `TournamentFixturePlacementUpdate`.
+            ///
+            /// - Parameters:
+            ///   - tableId:
+            ///   - scheduledStart:
+            internal init(
+                tableId: Swift.String? = nil,
+                scheduledStart: Foundation.Date? = nil
+            ) {
+                self.tableId = tableId
+                self.scheduledStart = scheduledStart
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case tableId = "table_id"
+                case scheduledStart = "scheduled_start"
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.tableId = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .tableId
+                )
+                self.scheduledStart = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .scheduledStart
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "table_id",
+                    "scheduled_start"
+                ])
+            }
+        }
         /// One planned pairing of an event's draw (ADR-0786): a round and a position —
         /// plus a pool, when the draw is pooled — whose sides may still be unknown.
         ///
@@ -7660,6 +7786,14 @@ internal enum Components {
         ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
         ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
         ///   JSONB, not a foreign key, because pools are value-objects with no table.
+        /// * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
+        ///   **unassigned to a table**. When set, it names a ``TournamentTable`` in the
+        ///   tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
+        ///   the same pattern as ``pool_id``.
+        /// * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
+        ///   means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
+        ///   venue's frame, a prediction rather than a commitment — a match starting
+        ///   off-prediction is normal, not an error.
         ///
         /// The entries are carried as **ids only**. The name and username behind
         /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -7705,6 +7839,10 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_status`.
             internal var matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/table_id`.
+            internal var tableId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start`.
+            internal var scheduledStart: Foundation.Date?
             /// Creates a new `TournamentFixtureRead`.
             ///
             /// - Parameters:
@@ -7717,6 +7855,8 @@ internal enum Components {
             ///   - winnerEntryId:
             ///   - matchId:
             ///   - matchStatus:
+            ///   - tableId:
+            ///   - scheduledStart:
             internal init(
                 id: Swift.String,
                 poolId: Swift.String? = nil,
@@ -7726,7 +7866,9 @@ internal enum Components {
                 entryBId: Swift.String? = nil,
                 winnerEntryId: Swift.String? = nil,
                 matchId: Swift.String? = nil,
-                matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil
+                matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil,
+                tableId: Swift.String? = nil,
+                scheduledStart: Foundation.Date? = nil
             ) {
                 self.id = id
                 self.poolId = poolId
@@ -7737,6 +7879,8 @@ internal enum Components {
                 self.winnerEntryId = winnerEntryId
                 self.matchId = matchId
                 self.matchStatus = matchStatus
+                self.tableId = tableId
+                self.scheduledStart = scheduledStart
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7748,6 +7892,8 @@ internal enum Components {
                 case winnerEntryId = "winner_entry_id"
                 case matchId = "match_id"
                 case matchStatus = "match_status"
+                case tableId = "table_id"
+                case scheduledStart = "scheduled_start"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
@@ -20425,6 +20571,224 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.UncutEventDrawV1TournamentsTournamentIdEventsEventIdDrawDelete.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Place Fixture
+    ///
+    /// Set (or clear) a fixture's **placement** — its table and its predicted start
+    /// (ADR-0790) — and answer with the updated fixture.
+    ///
+    /// The body is the placement in full: `table_id` (a string ref into the tournament's
+    /// `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+    /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
+    /// that half; `(null, null)` unassigns the fixture.
+    ///
+    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
+    /// constraints — the table belongs to the fixture's pool, the time falls inside the
+    /// pool's window, nothing is double-booked — are flags derived on read, **not**
+    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
+    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
+    /// a future scheduler slice.
+    ///
+    /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
+    /// history, so its placement can no longer be changed — a `409`. A fixture with no
+    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
+    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
+    /// that is not part of it, is a `404`; a non-owner is a `403`.
+    ///
+    /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)`.
+    internal enum PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch {
+        internal static let id: Swift.String = "place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/path/fixture_id`.
+                internal var fixtureId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - fixtureId:
+                internal init(
+                    tournamentId: Swift.String,
+                    fixtureId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.fixtureId = fixtureId
+                }
+            }
+            internal var path: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/requestBody`.
+            internal enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/requestBody/content/application\/json`.
+                case json(Components.Schemas.TournamentFixturePlacementUpdate)
+            }
+            internal var body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            internal init(
+                path: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Path,
+                headers: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Headers = .init(),
+                body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TournamentFixtureRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentFixtureRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/PATCH/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

@@ -508,6 +508,14 @@ class TournamentFixtureRead(BaseModel):
       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
       JSONB, not a foreign key, because pools are value-objects with no table.
+    * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
+      **unassigned to a table**. When set, it names a ``TournamentTable`` in the
+      tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
+      the same pattern as ``pool_id``.
+    * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
+      means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
+      venue's frame, a prediction rather than a commitment — a match starting
+      off-prediction is normal, not an error.
 
     The entries are carried as **ids only**. The name and username behind
     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -530,6 +538,10 @@ class TournamentFixtureRead(BaseModel):
     # Read from the match row on every load (never snapshotted), so it tracks the match
     # as it is played rather than freezing at go-live. See ``match_id`` above.
     match_status: MatchStatus | None
+    # A placement (ADR-0790). ``table_id`` string-refs the tournament's table_catalogue;
+    # ``scheduled_start`` is a naive wall-clock prediction. Both ``null`` = unassigned.
+    table_id: str | None
+    scheduled_start: datetime | None
 
 
 class StandingRowRead(BaseModel):
@@ -907,3 +919,63 @@ class TournamentEventUpdate(BaseModel):
         if value is None:
             raise ValueError("must not be null")
         return value
+
+
+def _naive_wall_clock(value: datetime) -> datetime:
+    """A placement's ``scheduled_start`` is a **naive** wall-clock timestamp, in the
+    venue's local frame (ADR-0790), stored in a ``TIMESTAMP WITHOUT TIME ZONE`` column
+    — a deliberate exemption from the "datetimes are always timezone-aware" rule,
+    because it is checked against a pool's ``Slot`` window, which is itself naive
+    wall-clock.
+
+    An offset-**aware** datetime carries a timezone this domain does not model, and
+    asyncpg cannot bind one to a ``timestamp without time zone`` parameter — so it is
+    refused *here*, at the boundary (422), rather than reaching the driver as a 500.
+    Same reasoning as the fee/player-limit bounds above: a boundary that admits what
+    the column cannot hold is not a boundary. This is a representational floor, not one
+    of the *soft* placement constraints (table-in-pool, time-in-window, no
+    double-booking) ADR-0790 keeps off the write path — those still save.
+    """
+    if value.tzinfo is not None:
+        raise ValueError(
+            "scheduled_start is a naive wall-clock time (no timezone), in the venue's "
+            "local frame."
+        )
+    return value
+
+
+PlacementStart = Annotated[datetime, AfterValidator(_naive_wall_clock)]
+"""A placement's predicted start: a naive wall-clock ``datetime`` (ADR-0790). The
+``AfterValidator`` refuses an offset-aware value (422) rather than let it 500 in the
+driver against the naive column; it contributes nothing to the JSON schema, exactly like
+``_fits_the_fee_column``."""
+
+
+class TournamentFixturePlacementUpdate(BaseModel):
+    """A fixture's **placement** (ADR-0790): the table it sits at and its predicted
+    start.
+
+    The body is the placement in full — both fields are stated together. ``null`` on
+    either clears that half, and ``(null, null)`` unassigns the fixture entirely.
+
+    **Soft, deliberately.** ``scheduled_start`` is a *prediction*, not a commitment,
+    and the placement's constraints — the table belongs to the fixture's pool, the time
+    falls inside the pool's window, nothing is double-booked — are **flags derived on
+    read, not invariants** (ADR-0790). So this write does **not** reject an
+    out-of-window time, nor a ``table_id`` that names no table in the tournament's
+    ``table_catalogue`` (a later pool/catalogue edit can dangle the ref; that is a
+    flag-on-read concern). They save. Conflict detection is a future scheduler slice.
+
+    ``table_id`` is a **string ref** into the tournament's ``table_catalogue`` (names a
+    ``TournamentTable.id``) — the same pattern as a fixture's ``pool_id``, not a
+    foreign key — and per the soft rule above an unknown id is stored, not refused.
+
+    The one thing the *route* refuses is moving a fixture whose linked match is
+    ``completed`` or ``voided``: its placement is history (409). A fixture with no match
+    yet, or an ``in_progress`` one, is freely (re)placeable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    table_id: str | None
+    scheduled_start: PlacementStart | None
