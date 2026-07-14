@@ -35,11 +35,16 @@ from app.draws import (
     DrawConfig,
     Entrant,
     EntryId,
+    FixtureId,
+    FixtureState,
+    MatchId,
+    NonSinglesDraw,
     PoolId,
     order_entrants,
     strategy_for,
 )
 from app.models import (
+    EventFormat,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
@@ -80,6 +85,36 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
         Entrant(entry_id=EntryId(entry_id), seed=seed, created_at=created_at)
         for entry_id, seed, created_at in rows
     ]
+
+
+def fixture_state(fixture: TournamentFixture) -> FixtureState:
+    """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
+    into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
+
+    The ORM↔domain bridge, kept here rather than in ``app.draws`` so that module stays
+    constructible from literals and free of any SQLAlchemy import — the same split that
+    lets every rule about the *shape* of a draw be tested without a database. Shared by
+    every path that advances a draw (materialization at go-live #788, completion #789),
+    so the projection is written once.
+    """
+    return FixtureState(
+        fixture_id=FixtureId(fixture.id),
+        pool_id=PoolId(fixture.pool_id) if fixture.pool_id is not None else None,
+        round=fixture.round,
+        position=fixture.position,
+        entry_a_id=(
+            EntryId(fixture.entry_a_id) if fixture.entry_a_id is not None else None
+        ),
+        entry_b_id=(
+            EntryId(fixture.entry_b_id) if fixture.entry_b_id is not None else None
+        ),
+        winner_entry_id=(
+            EntryId(fixture.winner_entry_id)
+            if fixture.winner_entry_id is not None
+            else None
+        ),
+        match_id=MatchId(fixture.match_id) if fixture.match_id is not None else None,
+    )
 
 
 def draw_config(event: TournamentEvent) -> DrawConfig:
@@ -356,7 +391,18 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     **The caller must hold the tournament's row lock**, and must commit. The field this
     reads is the field the fixtures are derived from, and an entry that lands between
     the two would produce a draw that never matched any real field of players.
+
+    Refuses a **non-singles** event with :class:`~app.draws.NonSinglesDraw` (the route
+    turns it into a 422), *before* the field is read or anything is deleted. A doubles
+    or teams event cannot be materialized — a fixture seats one entry per side, a match
+    seats that entry's single user (ADR-0788) — so a draw that could never become
+    playable is refused at the cut, the earliest and clearest point, rather than at
+    go-live. Checked here beside ``strategy_for`` so the two "this event cannot be cut"
+    refusals sit together and neither reads the field of an event that has no business
+    being cut.
     """
+    if event.format is not EventFormat.singles:
+        raise NonSinglesDraw(event.format)
     strategy = strategy_for(event.draw_type)
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))

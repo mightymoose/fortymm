@@ -2873,6 +2873,54 @@ internal enum Components {
             case doubles = "doubles"
             case teams = "teams"
         }
+        /// A round-robin event's results (ADR-0788): a standings table per pool, whether the
+        /// whole event is decided, and its champion when there is one.
+        ///
+        /// It rides on the tournament-detail payload (one endpoint per page) and is **derived
+        /// live** from the fixtures' currently-completed matches — never a snapshot — so a
+        /// corrected or voided match re-orders the standings the instant it leaves
+        /// ``completed``.
+        ///
+        /// ``champion`` is the leader of a **complete, single-pool** event — a pure
+        /// round-robin's winner. A multi-pool round-robin has no single champion without a
+        /// knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+        /// ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
+        /// played.
+        ///
+        /// ``results`` on the event is ``null`` for an event that has **no draw** (nothing to
+        /// stand) or one whose draw type has no results strategy yet (only round-robin does
+        /// today) — an honest "no results here", not an empty table that would read as a played
+        /// event with nobody in it.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventResultsRead`.
+        internal struct EventResultsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventResultsRead/pools`.
+            internal var pools: [Components.Schemas.PoolStandingsRead]
+            /// - Remark: Generated from `#/components/schemas/EventResultsRead/complete`.
+            internal var complete: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/EventResultsRead/champion`.
+            internal var champion: Swift.String?
+            /// Creates a new `EventResultsRead`.
+            ///
+            /// - Parameters:
+            ///   - pools:
+            ///   - complete:
+            ///   - champion:
+            internal init(
+                pools: [Components.Schemas.PoolStandingsRead],
+                complete: Swift.Bool,
+                champion: Swift.String? = nil
+            ) {
+                self.pools = pools
+                self.complete = complete
+                self.champion = champion
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case pools
+                case complete
+                case champion
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/HTTPValidationError`.
         internal struct HTTPValidationError: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/HTTPValidationError/detail`.
@@ -5700,6 +5748,42 @@ internal enum Components {
                 ])
             }
         }
+        /// One pool's standings: its rows in finishing order, and whether every one of its
+        /// fixtures has been decided.
+        ///
+        /// ``pool_id`` names a ``Pool`` in this same event's ``pools`` — the string ref a
+        /// fixture also carries — so a client titles the table from the pool it already
+        /// holds.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PoolStandingsRead`.
+        internal struct PoolStandingsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/pool_id`.
+            internal var poolId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/rows`.
+            internal var rows: [Components.Schemas.StandingRowRead]
+            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/complete`.
+            internal var complete: Swift.Bool
+            /// Creates a new `PoolStandingsRead`.
+            ///
+            /// - Parameters:
+            ///   - poolId:
+            ///   - rows:
+            ///   - complete:
+            internal init(
+                poolId: Swift.String,
+                rows: [Components.Schemas.StandingRowRead],
+                complete: Swift.Bool
+            ) {
+                self.poolId = poolId
+                self.rows = rows
+                self.complete = complete
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case poolId = "pool_id"
+                case rows
+                case complete
+            }
+        }
         /// An eligibility rule. ``field`` names the one fact we actually hold about a
         /// player — their rating on the tournament's league (ADR-0783) — so ``value`` is a
         /// number, or a ``[min, max]`` pair for the ``between`` operator (either bound may
@@ -6616,6 +6700,80 @@ internal enum Components {
                 ])
             }
         }
+        /// One entry's line in a pool's standings (ADR-0788), at its settled rank.
+        ///
+        /// The entry is carried as an **id only**, exactly as a fixture carries its sides: the
+        /// username behind ``entry_id`` is on the event's ``entrants`` list already, keyed by
+        /// that same id, so a client joins the two rather than reading a copy that could drift.
+        ///
+        /// ``rank`` is 1-based and distinct per row — the pool's order is total (wins → two-way
+        /// head-to-head → game difference → games won → id), so position 1 is the leader.
+        /// ``game_difference`` (``games_won - games_lost``) rides along because it is the third
+        /// tiebreaker and a client shows it in the table; it is a pure function of the two game
+        /// counts beside it, computed once on the server so the two cannot disagree.
+        ///
+        /// - Remark: Generated from `#/components/schemas/StandingRowRead`.
+        internal struct StandingRowRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/entry_id`.
+            internal var entryId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/rank`.
+            internal var rank: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/played`.
+            internal var played: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/wins`.
+            internal var wins: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/losses`.
+            internal var losses: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/games_won`.
+            internal var gamesWon: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/games_lost`.
+            internal var gamesLost: Swift.Int
+            /// ``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+            /// to show but derived here so it cannot disagree with the two counts beside it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StandingRowRead/game_difference`.
+            internal var gameDifference: Swift.Int
+            /// Creates a new `StandingRowRead`.
+            ///
+            /// - Parameters:
+            ///   - entryId:
+            ///   - rank:
+            ///   - played:
+            ///   - wins:
+            ///   - losses:
+            ///   - gamesWon:
+            ///   - gamesLost:
+            ///   - gameDifference: ``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+            internal init(
+                entryId: Swift.String,
+                rank: Swift.Int,
+                played: Swift.Int,
+                wins: Swift.Int,
+                losses: Swift.Int,
+                gamesWon: Swift.Int,
+                gamesLost: Swift.Int,
+                gameDifference: Swift.Int
+            ) {
+                self.entryId = entryId
+                self.rank = rank
+                self.played = played
+                self.wins = wins
+                self.losses = losses
+                self.gamesWon = gamesWon
+                self.gamesLost = gamesLost
+                self.gameDifference = gameDifference
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case entryId = "entry_id"
+                case rank
+                case played
+                case wins
+                case losses
+                case gamesWon = "games_won"
+                case gamesLost = "games_lost"
+                case gameDifference = "game_difference"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Status`.
         internal enum Status: String, Codable, Hashable, Sendable, CaseIterable {
             case scheduled = "scheduled"
@@ -7159,6 +7317,26 @@ internal enum Components {
             internal var entryState: Components.Schemas.TournamentEventRead.EntryStatePayload
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/fixtures`.
             internal var fixtures: [Components.Schemas.TournamentFixtureRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results`.
+            internal struct ResultsPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/value1`.
+                internal var value1: Components.Schemas.EventResultsRead
+                /// Creates a new `ResultsPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.EventResultsRead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results`.
+            internal var results: Components.Schemas.TournamentEventRead.ResultsPayload?
             /// The registration count. Derived — there is no stored counter (ADR-0016).
             ///
             /// It is ``len(entrants)`` rather than a field of its own precisely so the
@@ -7186,6 +7364,7 @@ internal enum Components {
             ///   - entrants:
             ///   - entryState:
             ///   - fixtures:
+            ///   - results:
             ///   - entered: The registration count. Derived — there is no stored counter (ADR-0016).
             internal init(
                 id: Swift.String,
@@ -7204,6 +7383,7 @@ internal enum Components {
                 entrants: [Components.Schemas.TournamentEntrantRead],
                 entryState: Components.Schemas.TournamentEventRead.EntryStatePayload,
                 fixtures: [Components.Schemas.TournamentFixtureRead],
+                results: Components.Schemas.TournamentEventRead.ResultsPayload? = nil,
                 entered: Swift.Int
             ) {
                 self.id = id
@@ -7222,6 +7402,7 @@ internal enum Components {
                 self.entrants = entrants
                 self.entryState = entryState
                 self.fixtures = fixtures
+                self.results = results
                 self.entered = entered
             }
             internal enum CodingKeys: String, CodingKey {
@@ -7241,6 +7422,7 @@ internal enum Components {
                 case entrants
                 case entryState = "entry_state"
                 case fixtures
+                case results
                 case entered
             }
         }
@@ -7454,8 +7636,9 @@ internal enum Components {
         /// One planned pairing of an event's draw (ADR-0786): a round and a position —
         /// plus a pool, when the draw is pooled — whose sides may still be unknown.
         ///
-        /// A fixture is **not** a match. It materializes into one later (#788), and until it
-        /// does ``match_id`` is ``null``.
+        /// A fixture is **not** a match. It materializes into one at go-live (#788): once the
+        /// tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
+        /// gains a ``match_id``. Until then ``match_id`` (and ``match_status``) is ``null``.
         ///
         /// **Every ``null`` on this model is a fact, not a missing field**, and a client that
         /// dropped them would lose the draw's whole point:
@@ -7466,7 +7649,13 @@ internal enum Components {
         ///   (ADR-0786), so there is no ``is_bye`` flag here to tell the two apart.
         /// * ``winner_entry_id`` — ``null`` while the fixture is undecided.
         /// * ``match_id`` — ``null`` until the fixture becomes a real match, which only happens
-        ///   once the tournament is ``live``.
+        ///   once the tournament is ``live``. When set, it is the id of the match the slot
+        ///   links to (``GET /v1/matches/{match_id}``), so a client can deep-link a slot.
+        /// * ``match_status`` — the live status of that match (``in_progress`` at go-live,
+        ///   moving to ``completed`` / ``voided`` as it is played), or ``null`` when the
+        ///   fixture has not materialized. It rides on the fixture so a bracket shows a slot's
+        ///   state without a per-slot round-trip; it is the match's *current* status, read
+        ///   live, not a copy frozen at go-live.
         /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
         ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
         ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
@@ -7496,6 +7685,26 @@ internal enum Components {
             internal var winnerEntryId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_id`.
             internal var matchId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_status`.
+            internal struct MatchStatusPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_status/value1`.
+                internal var value1: Components.Schemas.MatchStatus
+                /// Creates a new `MatchStatusPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.MatchStatus) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/match_status`.
+            internal var matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload?
             /// Creates a new `TournamentFixtureRead`.
             ///
             /// - Parameters:
@@ -7507,6 +7716,7 @@ internal enum Components {
             ///   - entryBId:
             ///   - winnerEntryId:
             ///   - matchId:
+            ///   - matchStatus:
             internal init(
                 id: Swift.String,
                 poolId: Swift.String? = nil,
@@ -7515,7 +7725,8 @@ internal enum Components {
                 entryAId: Swift.String? = nil,
                 entryBId: Swift.String? = nil,
                 winnerEntryId: Swift.String? = nil,
-                matchId: Swift.String? = nil
+                matchId: Swift.String? = nil,
+                matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil
             ) {
                 self.id = id
                 self.poolId = poolId
@@ -7525,6 +7736,7 @@ internal enum Components {
                 self.entryBId = entryBId
                 self.winnerEntryId = winnerEntryId
                 self.matchId = matchId
+                self.matchStatus = matchStatus
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7535,6 +7747,7 @@ internal enum Components {
                 case entryBId = "entry_b_id"
                 case winnerEntryId = "winner_entry_id"
                 case matchId = "match_id"
+                case matchStatus = "match_status"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.

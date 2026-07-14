@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
 
-from app.models.tournament import DrawType
+from app.models.tournament import DrawType, EventFormat
 
 # Distinct id types, so the checker rejects handing a fixture id to something that
 # wants an entry id. They are plain ``uuid.UUID`` at runtime.
@@ -86,6 +86,30 @@ class DegenerateDraw(DrawError):
     ghost), so we refuse the cut rather than silently emit a pool of one. The director
     fixes the input — fewer pools, or more entrants — and re-cuts.
     """
+
+
+class NonSinglesDraw(DrawError):
+    """The event is not **singles**, so it cannot be given a draw (ADR-0788).
+
+    Every draw this module cuts is over :class:`Entrant`\\ s that are **one entry per
+    person** — a fixture seats one entry on each side, and a materialized match seats
+    that entry's single user (side 1 ← ``entry_a``, side 2 ← ``entry_b``). A doubles or
+    teams event has no way to say *which two people* form one side: ``TournamentEntry``
+    is a single ``user_id``, there is no partner or roster model. So a round-robin over
+    such an event would be meaningless, and it is refused at the **cut** — the earliest,
+    clearest point — rather than left to fail obscurely at go-live.
+
+    Carries the offending :class:`~app.models.tournament.EventFormat` **structurally**,
+    so the HTTP layer composes the director-facing sentence from the fact rather than
+    parsing it out of a message (the same shape as :class:`UnsupportedDrawType`).
+    """
+
+    def __init__(self, event_format: EventFormat) -> None:
+        self.event_format = event_format
+        super().__init__(
+            f"A {event_format.value} event cannot be given a draw — draws are "
+            "singles-only."
+        )
 
 
 class Side(enum.Enum):

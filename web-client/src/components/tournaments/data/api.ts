@@ -19,6 +19,7 @@ import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { entryRefusalNotice } from './entry-refusal'
 import { parseFixtures } from './fixtures'
+import { parseResults } from './results'
 import type { LifecycleEdge } from './lifecycle'
 import type {
   Entrant,
@@ -142,6 +143,13 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     // primed with the bad payload, and the boundary renders. An event whose draw has
     // not been cut parses to `[]` — the designed empty state, not an error.
     fixtures: parseFixtures(e.fixtures),
+    // PARSED, not cast — the same boundary the draw crosses (`./results`,
+    // `.claude/rules/parse-at-boundaries.md`). Standings are the one other structure on
+    // this payload a renderer walks by shape (a table of numbers, joined to names), so a
+    // malformed row must fail HERE, inside the fetch, rather than surface as a `NaN` in a
+    // cell. `null` is the designed "no results" state (an uncut or non-round-robin event),
+    // and parses straight through to `null`.
+    results: parseResults(e.results),
   }
 }
 

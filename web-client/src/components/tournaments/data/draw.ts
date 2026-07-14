@@ -21,6 +21,7 @@
 // rather than asserted through a DOM.
 
 import { ApiError } from '@/api/client'
+import type { MatchStatus } from '@/api/matches'
 
 import { fallbackNotice, type Notice } from './notice'
 import { DRAW_TYPE_OPTIONS, labelFor } from './options'
@@ -56,12 +57,31 @@ export type FixtureSide =
    * (`WITHDRAWN_LABEL`). */
   | { kind: 'withdrawn' }
 
+/** The **materialized match** behind a fixture — the real, playable match a fixture
+ * became at go-live (#788). Present exactly when the fixture has one; `null` while the
+ * slot is still a planned pairing (see `FixtureLine.match`).
+ *
+ * A single object rather than a loose `matchId`/`matchStatus` pair, because the two are
+ * one fact: on the wire they move in lockstep (both `null`, then both set), so pairing
+ * them here makes "an id with no status" — the half-materialized slot the renderer would
+ * have to guess at — unrepresentable. */
+export interface FixtureMatch {
+  /** The match this slot links to (`GET /v1/matches/{id}`). */
+  id: string
+  /** The match's live status, read fresh off the fixture each load. */
+  status: MatchStatus
+}
+
 /** One fixture, ready to render as a named "A vs B" line. */
 export interface FixtureLine {
   id: string
   position: number
   a: FixtureSide
   b: FixtureSide
+  /** The real match this slot became at go-live, or `null` while it is still a *planned*
+   * pairing. When set, the line links to that match and shows its status; when `null` the
+   * line is inert (#788). */
+  match: FixtureMatch | null
 }
 
 /** The fixtures of one round, in position order. An odd round-robin pool has *fewer*
@@ -130,6 +150,16 @@ function sideOf(entryId: string | null, byId: Map<string, Entrant>): FixtureSide
   return entrant ? { kind: 'entrant', name: entrant.username } : { kind: 'withdrawn' }
 }
 
+/** The materialized match of a fixture, or `null` while it is un-materialized.
+ *
+ * `matchId` and `matchStatus` move in lockstep on the wire, so the `&&` is a belt: a
+ * fixture carrying an id but no status (a shape the server never sends) is treated as
+ * un-materialized rather than rendered as a link to a match whose state we cannot show. */
+function matchOf(fixture: Fixture): FixtureMatch | null {
+  if (fixture.matchId === null || fixture.matchStatus === null) return null
+  return { id: fixture.matchId, status: fixture.matchStatus }
+}
+
 /** Group a flat fixture list into rounds, ascending, each in position order.
  *
  * It **sorts**, rather than trusting the payload's order (the server sends pool → round
@@ -155,6 +185,7 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
           position: f.position,
           a: sideOf(f.entryAId, byId),
           b: sideOf(f.entryBId, byId),
+          match: matchOf(f),
         })),
     }))
 }

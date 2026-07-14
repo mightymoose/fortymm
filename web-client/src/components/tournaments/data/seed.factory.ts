@@ -7,9 +7,12 @@ import type {
   Address,
   Entrant,
   EventEntryState,
+  EventResults,
   Fixture,
   Pool,
+  PoolStandings,
   Predicate,
+  StandingRow,
   Tournament,
   TournamentEvent,
   TournamentTable,
@@ -133,6 +136,11 @@ export function buildEvent(
     // derivation: the same field makes a different draw across two pools than across
     // three, so a fixture that quietly cut one would be inventing a decision.
     fixtures: [],
+    // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and
+    // of any non-round-robin event): there is nothing to stand. Standings only appear once
+    // a draw is cut, so a bare event carries `null` and the tests that want a table pass a
+    // `buildEventResults` override (or use `buildStandingsEvent`).
+    results: null,
     ...overrides,
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
@@ -236,6 +244,7 @@ export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
     entryBId: 'entry-2',
     winnerEntryId: null,
     matchId: null,
+    matchStatus: null,
     ...overrides,
   }
 }
@@ -312,6 +321,102 @@ export function buildDrawnEvent(
         entryBId: 'entry-3',
       }),
     ],
+    ...overrides,
+  })
+}
+
+/** One line of a pool's standings (ADR-0788): entry `entry-1`, sitting 1st with a clean
+ * 2–0 record and a +3 game difference. `gameDifference` is `gamesWon - gamesLost`; the
+ * factory keeps them consistent by default, but a test that wants an inconsistent wire
+ * (to prove the client SHOWS the server's figure rather than recomputing it) overrides it
+ * on its own. */
+export function buildStandingRow(overrides: Partial<StandingRow> = {}): StandingRow {
+  return {
+    entryId: 'entry-1',
+    rank: 1,
+    played: 2,
+    wins: 2,
+    losses: 0,
+    gamesWon: 4,
+    gamesLost: 1,
+    gameDifference: 3,
+    ...overrides,
+  }
+}
+
+/** One pool's standings — a **complete** three-player pool in finishing order:
+ * `entry-1` (2–0) over `entry-4` (1–1) over `entry-5` (0–2). In the server's order, which
+ * the view renders untouched (ADR-0788 — the order *is* the result), so a factory that
+ * returned them sorted would let a re-sorting bug pass. */
+export function buildPoolStandings(
+  overrides: Partial<PoolStandings> = {},
+): PoolStandings {
+  return {
+    poolId: 'p-a',
+    complete: true,
+    rows: [
+      buildStandingRow({
+        entryId: 'entry-1',
+        rank: 1,
+        wins: 2,
+        losses: 0,
+        gamesWon: 4,
+        gamesLost: 1,
+        gameDifference: 3,
+      }),
+      buildStandingRow({
+        entryId: 'entry-4',
+        rank: 2,
+        wins: 1,
+        losses: 1,
+        gamesWon: 3,
+        gamesLost: 3,
+        gameDifference: 0,
+      }),
+      buildStandingRow({
+        entryId: 'entry-5',
+        rank: 3,
+        wins: 0,
+        losses: 2,
+        gamesWon: 1,
+        gamesLost: 4,
+        gameDifference: -3,
+      }),
+    ],
+    ...overrides,
+  }
+}
+
+/** An event's results (ADR-0788): one **complete single pool** with a champion —
+ * `entry-1`, who won it. Single-pool so `champion` is meaningful (a multi-pool event has
+ * no single champion without a knockout stage yet — pass `pools` + `champion: null` for
+ * that case). */
+export function buildEventResults(
+  overrides: Partial<EventResults> = {},
+): EventResults {
+  return {
+    pools: [buildPoolStandings()],
+    complete: true,
+    champion: 'entry-1',
+    ...overrides,
+  }
+}
+
+/** A round-robin event **with results**: the drawn U1200 pool play (`buildDrawnEvent`)
+ * projected forward to a finished single pool whose standings and champion the panel
+ * renders. The entrant ids the results name (`entry-1`, `entry-4`, `entry-5`) are the ones
+ * the drawn event lists, so the name join lands. */
+export function buildStandingsEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-u1200',
+    name: 'U1200 Singles',
+    drawType: 'round-robin',
+    maxPlayers: 24,
+    entrants: buildEntrants(5),
+    pools: [buildPool({ id: 'p-a', name: 'Pool A' })],
+    results: buildEventResults(),
     ...overrides,
   })
 }

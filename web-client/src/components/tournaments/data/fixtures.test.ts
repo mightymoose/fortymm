@@ -32,6 +32,7 @@ describe('parseFixtures — the happy path', () => {
         entryBId: 'entry-6',
         winnerEntryId: null,
         matchId: null,
+        matchStatus: null,
       },
     ])
   })
@@ -63,13 +64,18 @@ describe('parseFixtures — the happy path', () => {
     expect(fixture.entryBId).toBeNull()
   })
 
-  it('carries a decided, materialized fixture through — winner and match id both', () => {
+  it('carries a decided, materialized fixture through — winner, match id, and live status', () => {
     const [fixture] = parseFixtures([
-      wire({ winner_entry_id: 'entry-2', match_id: 'm-7' }),
+      wire({
+        winner_entry_id: 'entry-2',
+        match_id: 'm-7',
+        match_status: 'completed',
+      }),
     ])
 
     expect(fixture.winnerEntryId).toBe('entry-2')
     expect(fixture.matchId).toBe('m-7')
+    expect(fixture.matchStatus).toBe('completed')
   })
 })
 
@@ -93,6 +99,10 @@ describe('parseFixtures — the boundary', () => {
     // would invent a fixture waiting for a player who is never coming.
     { what: 'an absent side', payload: [{ ...(wire() as object), entry_a_id: undefined }] },
     { what: 'an absent match_id', payload: [{ ...(wire() as object), match_id: undefined }] },
+    // `match_status` is a fact that moves with `match_id`; absent is not `null`, and a
+    // value outside the closed `MatchStatus` set is a status this client cannot render.
+    { what: 'an absent match_status', payload: [{ ...(wire() as object), match_status: undefined }] },
+    { what: 'a match_status outside the enum', payload: [wire({ match_status: 'archived' })] },
     // A draw is a LIST. `null` is not an empty draw: an event with no draw sends `[]`,
     // and a server that sent null would be sending something this client cannot read.
     { what: 'null instead of a list', payload: null },

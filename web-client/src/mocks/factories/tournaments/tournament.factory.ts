@@ -6,6 +6,9 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
+type EventResultsRead = components['schemas']['EventResultsRead']
+type PoolStandingsRead = components['schemas']['PoolStandingsRead']
+type StandingRowRead = components['schemas']['StandingRowRead']
 
 /** A single physical table, `T1` on court 1. */
 export function buildTournamentTable(
@@ -60,7 +63,8 @@ export function buildTournamentEntrantReads(
  * side is **TBD** (never a bye — a bye is the absence of a fixture row), a null
  * `winner_entry_id` is undecided, a null `match_id` is un-materialized, and a null
  * `pool_id` is an un-pooled draw. The defaults are the ordinary case a director sees
- * the morning of: a planned pairing, both players known, nothing played. */
+ * the morning of: a planned pairing, both players known, nothing played — so
+ * `match_status` is `null` too, moving in lockstep with `match_id`. */
 export function buildTournamentFixtureRead(
   overrides: Partial<TournamentFixtureRead> = {},
 ): TournamentFixtureRead {
@@ -73,6 +77,7 @@ export function buildTournamentFixtureRead(
     entry_b_id: 'entry-2',
     winner_entry_id: null,
     match_id: null,
+    match_status: null,
     ...overrides,
   }
 }
@@ -151,6 +156,82 @@ export function planRoundRobinFixtures(
   return fixtures
 }
 
+/** One wire standings row (`StandingRowRead`, ADR-0788): entry `entry-1`, 1st, a clean
+ * 2–0 with a +3 game difference. `game_difference` is the server's own figure
+ * (`games_won - games_lost`), carried as-is; the factory keeps it consistent by default. */
+export function buildStandingRowRead(
+  overrides: Partial<StandingRowRead> = {},
+): StandingRowRead {
+  return {
+    entry_id: 'entry-1',
+    rank: 1,
+    played: 2,
+    wins: 2,
+    losses: 0,
+    games_won: 4,
+    games_lost: 1,
+    game_difference: 3,
+    ...overrides,
+  }
+}
+
+/** One wire pool's standings (`PoolStandingsRead`): a complete three-player pool in the
+ * server's finishing order — `entry-1` (2–0) over `entry-4` (1–1) over `entry-5` (0–2). In
+ * order, which the client renders untouched (ADR-0788). */
+export function buildPoolStandingsRead(
+  overrides: Partial<PoolStandingsRead> = {},
+): PoolStandingsRead {
+  return {
+    pool_id: 'p-a',
+    complete: true,
+    rows: [
+      buildStandingRowRead({
+        entry_id: 'entry-1',
+        rank: 1,
+        wins: 2,
+        losses: 0,
+        games_won: 4,
+        games_lost: 1,
+        game_difference: 3,
+      }),
+      buildStandingRowRead({
+        entry_id: 'entry-4',
+        rank: 2,
+        wins: 1,
+        losses: 1,
+        games_won: 3,
+        games_lost: 3,
+        game_difference: 0,
+      }),
+      buildStandingRowRead({
+        entry_id: 'entry-5',
+        rank: 3,
+        wins: 0,
+        losses: 2,
+        games_won: 1,
+        games_lost: 4,
+        game_difference: -3,
+      }),
+    ],
+    ...overrides,
+  }
+}
+
+/** A wire event's results (`EventResultsRead`, ADR-0788): one complete single pool with a
+ * champion (`entry-1`, who won it). Single-pool so `champion` is meaningful — a multi-pool
+ * event has no single champion without a knockout stage yet (pass extra `pools` +
+ * `champion: null` for that). */
+export function buildEventResultsRead(
+  overrides: Partial<EventResultsRead> = {},
+): EventResultsRead {
+  return {
+    pools: [buildPoolStandingsRead()],
+    complete: true,
+    champion: 'entry-1',
+    ...overrides,
+  }
+}
+
 /**
  * What the event says about the CALLER entering it (ADR-0783), derived the way the
  * server derives the half of it that is derivable: an event holding `max_players`
@@ -226,6 +307,10 @@ export function buildTournamentEventRead(
         table_ids: ['t1', 't2', 't3', 't4'],
       },
     ],
+    // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and of
+    // any non-round-robin event); standings only appear once a draw is cut and matches
+    // land. A fixture that wants a table passes a `buildEventResultsRead()` override.
+    results: null,
     created_at: '2026-06-01T09:05:00Z',
     updated_at: '2026-06-09T12:00:00Z',
     ...overrides,

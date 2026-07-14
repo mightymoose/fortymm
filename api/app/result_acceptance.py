@@ -52,6 +52,7 @@ from app.ratings import (
     validate_state,
 )
 from app.result_chain import standing_result
+from app.tournament_advancement import on_match_completed
 
 
 class StandingResultConflictError(Exception):
@@ -358,6 +359,26 @@ async def accept_standing_result(
 
     standing.accepted_by_user_id = accepted_by_user_id
     standing.accepted_at = datetime.now(UTC)
+    await finalize_match(db, match, _posted_decided_side(match))
+
+
+async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> None:
+    """Complete a match: stamp it done, record the W/L, run the rating update, and
+    advance any tournament draw it belongs to (ADR-0788).
+
+    **The one place a match becomes ``completed``.** Both completion sites funnel
+    through here — the rated accept/retire path (:func:`accept_standing_result`) and the
+    unrated immediate-self-accept path (``app.matches``) — so the four things a
+    completion must do happen together and in one order, and a future third completion
+    path cannot do three of them and forget the fourth. ``decided_side`` is the winning
+    side number, computed by the caller from the agreed board (``_posted_decided_side``
+    on accept, the finalize validator's ``decided_side`` on the unrated post).
+
+    The tournament hook runs **last and unconditionally**: :func:`on_match_completed`
+    early-returns on a non-tournament match (the overwhelmingly common case), so a plain
+    ladder match pays only an indexed lookup that misses. Runs in the caller's
+    transaction under the match row lock; does **not** commit."""
     match.mark_completed()
-    _set_side_won(match, _posted_decided_side(match))
+    _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
+    await on_match_completed(db, match)

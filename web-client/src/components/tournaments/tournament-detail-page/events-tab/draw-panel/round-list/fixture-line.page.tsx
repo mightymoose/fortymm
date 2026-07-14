@@ -1,5 +1,6 @@
+import { renderWithRoutes } from '@/test/router'
 import { interactiveElementsIn } from '@/test/read-only'
-import { render, screen, within, type Container } from '@/test/utilities'
+import { screen, within, type Container } from '@/test/utilities'
 
 import { FixtureLine, type FixtureLineProps } from './fixture-line'
 import { buildFixtureLineProps } from './fixture-line.factory'
@@ -38,27 +39,57 @@ const scoped = (container: Container) => ({
       .queryAllByTestId(FIXTURE_LINE_TESTID)
       .map((el: HTMLElement) => lineText(el))
   },
-  /** Everything interactive in a line. Must always be empty: a fixture is a *planned*
-   * pairing, not a match — there is nothing to click yet (#788). */
+  /** Everything interactive in a line. Empty for a *planned* pairing — there is nothing
+   * to click on it until it materializes (#788) — and exactly the "View match" link once
+   * it has. */
   getControls(fixtureId: string) {
     return interactiveElementsIn(container.getByTestId(`fixture-line-${fixtureId}`))
+  },
+  /** The "View match" link a materialized slot carries, scoped to its line. */
+  getMatchLink(fixtureId: string) {
+    return within(container.getByTestId(`fixture-line-${fixtureId}`)).getByRole(
+      'link',
+    )
+  },
+  queryMatchLink(fixtureId: string) {
+    return within(container.getByTestId(`fixture-line-${fixtureId}`)).queryByRole(
+      'link',
+    )
+  },
+  /** The slot's match-status text (`In progress`, `Completed`, …). */
+  getMatchStatus(fixtureId: string) {
+    return within(container.getByTestId(`fixture-line-${fixtureId}`)).getByTestId(
+      'fixture-match-status',
+    )
   },
 })
 
 /**
  * Test page-object for `FixtureLine`.
  *
- * `render` wraps the component in a `<ul>`: it renders an `<li>`, which is only valid
- * inside a list, and a page object that dropped it into a bare `<div>` would be
- * asserting against markup the app never produces.
+ * A materialized fixture line renders a typed `<Link>` to its match, which needs a
+ * `RouterProvider` whose route tree registers `/matches/$matchId` — so `render` mounts
+ * the line under `renderWithRoutes`. That router resolves asynchronously, so tests start
+ * with `await fixtureLinePage.findLine(id)` before reading the synchronous accessors.
+ *
+ * The line is an `<li>`, valid only inside a list, so it renders wrapped in a `<ul>`: a
+ * page object that dropped it into a bare `<div>` would be asserting against markup the
+ * app never produces.
  */
 export const fixtureLinePage = {
   render(overrides: Partial<FixtureLineProps> = {}) {
-    render(
+    renderWithRoutes(
       <ul>
         <FixtureLine {...buildFixtureLineProps(overrides)} />
       </ul>,
+      { linkTargets: ['/matches/$matchId'] },
     )
+  },
+
+  /** Async-first: the router resolves the route tree on the first paint, so tests await
+   * this before reading the synchronous accessors. */
+  findLine(fixtureId: string) {
+    return screen.findByTestId(`fixture-line-${fixtureId}`)
   },
 
   within(container: Container = screen) {

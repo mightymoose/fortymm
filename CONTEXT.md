@@ -426,6 +426,48 @@ running tournament (a table breaks, a table frees up).
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 
+**Materialize**:
+Turning a **ready** **fixture** into a real **match**: the fixture's two known
+sides become the match's two sides, the event's `match_settings` (rated flag,
+game count) become the match's rules, and it runs the normal propose/accept
+lifecycle. Materialization happens **only once the tournament is `live`** — never
+while registration is open — and going live materializes every ready fixture in
+one stroke (for a round-robin, the whole pool). A fixture materializes **at most
+once**: its `match_id` is what makes creating the match idempotent, so an
+`advance()` re-run never proposes the same match twice. Today only **singles**
+events materialize (one player per side); other formats are refused.
+_Avoid_: schedule, start (materializing *creates* the match; *when it is played*
+is the schedule's concern).
+
+**Results**:
+How an event turned out, computed for display — a concept **universal across draw
+types but shaped differently by each**: a round-robin's results are its
+**standings**; a single-elimination's (later) are its final placement and
+**champion**. Computed **live from the fixtures' completed matches**, so a
+**correction** or **voided match** is reflected at once — never stored, never a
+snapshot. An event is **complete** when every fixture is **decided**; only then
+are its results final. Each draw type computes its own results shape; the display
+renders each its own way.
+_Avoid_: standings (the round-robin *shape* of results, not the general concept),
+score, summary.
+
+**Standings**:
+The round-robin **shape** of an event's **results**: the pool's entrants ordered
+by an extensible chain of tiebreakers — **wins**, then **head-to-head** when
+exactly two are tied, then **game difference** (games won minus games lost), then
+**games won**. Renders **live** as matches complete, not only at the end. Ordered
+server-side.
+_Avoid_: ranking (a **rank** is a league rating position; standings live inside one
+pool), league table, points diff (points are not modelled — the finest
+granularity is a **game**, so it is *game* difference).
+
+**Champion**:
+The entrant atop a **complete** event's **results** — for a round-robin, first in
+the **standings**. **Derived, never stored**: a **correction** can re-crown, so
+the champion is always read from the current results.
+_Avoid_: winner (a **winner** is one side of one match; the champion is the whole
+event's), first place.
+
 ## Dashboard
 
 **First-match**:

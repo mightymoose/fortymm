@@ -198,6 +198,7 @@ describe('apiToEvent — the draw', () => {
         entryBId: 'entry-2',
         winnerEntryId: null,
         matchId: null,
+        matchStatus: null,
       },
       {
         id: 'fx-2',
@@ -208,13 +209,15 @@ describe('apiToEvent — the draw', () => {
         entryBId: 'entry-4',
         winnerEntryId: null,
         matchId: null,
+        matchStatus: null,
       },
     ])
   })
 
   // Every null on a fixture is a FACT (ADR-0786), and a mapper that coalesced any of
   // them would erase the thing the draw exists to say: a null side is TBD, a null
-  // winner is undecided, a null match is un-materialized, a null pool is un-pooled.
+  // winner is undecided, a null match (and null status) is un-materialized, a null pool
+  // is un-pooled.
   it('carries every null through — TBD sides, undecided, un-materialized, un-pooled', () => {
     const event = apiToEvent(
       buildTournamentEventRead({
@@ -240,6 +243,7 @@ describe('apiToEvent — the draw', () => {
       entryBId: null,
       winnerEntryId: null,
       matchId: null,
+      matchStatus: null,
     })
   })
 
@@ -577,6 +581,8 @@ const event: TournamentEvent = {
   // No draw cut (ADR-0786). The write bodies below must not carry one either — a draw
   // is written by the two draw verbs and by nothing else.
   fixtures: [],
+  // No results (ADR-0788): no draw, nothing to stand.
+  results: null,
 }
 
 describe('eventToCreateBody', () => {
@@ -645,6 +651,9 @@ describe('eventToCreateBody', () => {
       // The DRAW is absent from the create body too, and for a third reason: a brand-new
       // event has no field to cut one from. Cutting is its own verb (ADR-0786).
       fixtures: [],
+      // Results are absent from the create body for the same reason the draw is — nothing
+      // to stand. Supplied as `null` so the round-trip reproduces the read shape.
+      results: null,
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
     })
@@ -713,6 +722,7 @@ describe('eventToUpdateBody', () => {
           entryBId: 'entry-2',
           winnerEntryId: null,
           matchId: null,
+          matchStatus: null,
         },
       ],
     })

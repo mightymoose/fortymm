@@ -3,6 +3,9 @@ import type { Page, Route } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { PERM } from '../../../src/lib/permissions'
 import {
+  buildEventResultsRead,
+  buildPoolStandingsRead,
+  buildStandingRowRead,
   buildTournamentDetailRead,
   buildTournamentEventRead,
   buildTournamentEntrantRead,
@@ -16,6 +19,7 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
+type EventResultsRead = components['schemas']['EventResultsRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
  * generated schema's, not a re-typed union of four strings. */
 export type TournamentStatus = TournamentDetailRead['status']
@@ -250,6 +254,44 @@ const PLAY_POOLS: Pool[] = [
  * across two pools snakes to 3 + 2 — see `EVENT.POOLS`. */
 const PLAY_FIELD = 5
 
+/** The played-out result for `EVENT.JOURNEY` (`standings: true`): its one pool
+ * (`p-journey-a`) decided, `player.1` over `player.2`, so it is complete with a champion.
+ * The row entry ids are the JOURNEY event's own (`entry-1`, `entry-2`), so the FE's join to
+ * a username lands — a table of raw ids would render, and prove nothing. Built through the
+ * generated-schema-typed factory, so a change to the results contract reds this file. */
+const JOURNEY_RESULTS: EventResultsRead = buildEventResultsRead({
+  complete: true,
+  champion: 'entry-1',
+  pools: [
+    buildPoolStandingsRead({
+      pool_id: 'p-journey-a',
+      complete: true,
+      rows: [
+        buildStandingRowRead({
+          entry_id: 'entry-1',
+          rank: 1,
+          played: 1,
+          wins: 1,
+          losses: 0,
+          games_won: 2,
+          games_lost: 0,
+          game_difference: 2,
+        }),
+        buildStandingRowRead({
+          entry_id: 'entry-2',
+          rank: 2,
+          played: 1,
+          wins: 0,
+          losses: 1,
+          games_won: 0,
+          games_lost: 2,
+          game_difference: -2,
+        }),
+      ],
+    }),
+  ],
+})
+
 /** The round-robin tournament: two events, both cuttable, nothing cut yet. `drawn`
  * decides which of them arrive with a draw already standing.
  *
@@ -454,6 +496,12 @@ export interface TournamentsStoreOptions {
    * pools, so a seeded draw is one this stub could have dealt — never a hand-written
    * list of fixtures no cut would ever produce. */
   drawn?: string[]
+  /** Attach a **played-out** result to `EVENT.JOURNEY` (ADR-0788): its one pool decided,
+   * with a champion — the standings the tournament detail renders once matches complete.
+   * Opt-in, and only meaningful with `drawable`, because standings ride on a round-robin
+   * event's draw. Its rows name the drawable JOURNEY's own two entrants (`entry-1`,
+   * `entry-2`), so the FE's name join lands. */
+  standings?: boolean
 }
 
 /** The options for a tournament that can actually be **started**: every event drawable,
@@ -752,6 +800,12 @@ export class TournamentsStore {
       const refusal = cutRefusal(event)
       if (refusal) throw new Error(`cannot seed a draw for ${name}: ${refusal}`)
       this.mutateEvent(event.id, (e) => ({ ...e, fixtures: planDraw(e) }))
+    }
+    // The played-out result (ADR-0788), last: standings are derived from a decided draw, so
+    // this rides on the seeded JOURNEY draw above rather than inventing one.
+    if (options.standings ?? false) {
+      const event = this.eventNamed(EVENT.JOURNEY)
+      this.mutateEvent(event.id, (e) => ({ ...e, results: JOURNEY_RESULTS }))
     }
   }
 
