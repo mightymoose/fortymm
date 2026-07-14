@@ -67,11 +67,10 @@ from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
     PostedGamesNotDecisiveError,
     StandingResultConflictError,
-    _apply_rating_update,
     _game_winner_side,
     _games_to_win,
-    _set_side_won,
     accept_standing_result,
+    finalize_match,
     side_win_counts,
 )
 from app.result_chain import accepted_result, standing_result
@@ -1781,9 +1780,12 @@ async def post_match_result(
         # proposer's own id is recorded as the acceptor.
         result.accepted_by_user_id = current_user.id
         result.accepted_at = datetime.now(UTC)
-        match.mark_completed()
-        _set_side_won(match, decided_side)
-        await _apply_rating_update(db, match)
+        # The one completion path shared with the rated accept (``finalize_match``):
+        # mark completed, stamp ``side.won``, run the rating update, and advance any
+        # tournament draw this match belongs to (#789). Funnelling both sites through
+        # it is what keeps a tournament match's draw from being left un-advanced when
+        # its unrated result self-accepts here instead of at acceptance.
+        await finalize_match(db, match, decided_side)
     else:
         # Rated path: the result stays standing (unaccepted) and ``side.won``
         # stays unset until the opposing side accepts. Status is (re)set to

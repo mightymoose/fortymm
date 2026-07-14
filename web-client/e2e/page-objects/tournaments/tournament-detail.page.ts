@@ -173,6 +173,45 @@ export class TournamentDetailPage {
     return this.drawPanel(eventName).locator('[data-testid^="fixture-line-"]')
   }
 
+  // ----- the standings (ADR-0788) ------------------------------------------
+  //
+  // The results block below the fixtures on a round-robin card: a table per pool (in the
+  // server's finishing order — never re-sorted here), and a champion once the event is
+  // decided. Scoped to one event card, like the draw, because the tab renders one per
+  // event and every "Standings" region / "Pool A" table would otherwise be ambiguous.
+
+  /** One event's results block — the `<section>` headed "Standings" on its card. Absent
+   * (count 0) for an event with no results: an uncut or non-round-robin event stands
+   * nothing. */
+  standingsPanel(eventName: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: 'Standings' })
+  }
+
+  /** One pool's standings table, by the pool name in its accessible label — the whole
+   * point being that a screen reader reads a real `<table>` by column, so this goes
+   * through the accessibility tree, not a test id. */
+  standingsTable(eventName: string, poolName: string): Locator {
+    return this.eventCard(eventName).getByRole('table', {
+      name: `Standings for ${poolName}`,
+    })
+  }
+
+  /** The player names down one pool's table, top to bottom — the ORDER the server settled
+   * and the FE renders untouched (ADR-0788). The Player cell is the second cell of each
+   * body row (`<th scope=col>`s are `columnheader`s, not rows here). */
+  standingsRowNames(eventName: string, poolName: string): Locator {
+    return this.standingsTable(eventName, poolName)
+      .locator('tbody tr')
+      .locator('td:nth-child(2)')
+  }
+
+  /** The champion callout on one card — shown only for a complete, single-champion event.
+   * Addressed by the testid prefix (the id carries the event's id, which a spec has no
+   * business knowing), scoped to the card. Absent when there is no single champion. */
+  standingsChampion(eventName: string): Locator {
+    return this.eventCard(eventName).locator('[data-testid^="standings-champion-"]')
+  }
+
   // ----- the event card's entry control ------------------------------------
 
   enterButton(eventName: string): Locator {

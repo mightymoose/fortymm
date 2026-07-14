@@ -13,7 +13,6 @@ from sqlalchemy.exc import IntegrityError, MissingGreenlet
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.matches import (
-    _apply_rating_update,
     _load_match,
     match_eager_options,
     match_rating_eager_options,
@@ -39,6 +38,7 @@ from app.ratings import (
     validate_state,
 )
 from app.ratings.glicko2 import CALCULATOR as GLICKO2
+from app.result_acceptance import _apply_rating_update
 from tests._helpers import (
     accept_standing_result,
     make_user,

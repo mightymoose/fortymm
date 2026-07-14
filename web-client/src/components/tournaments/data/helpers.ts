@@ -322,5 +322,8 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // No draw (ADR-0786), and there could not be one: a draw is cut from a field, and
     // an event that does not exist on the server yet has no entrants to cut it from.
     fixtures: [],
+    // No results (ADR-0788): with no draw there is nothing to stand. The server sends the
+    // real thing once the event exists and its draw is cut.
+    results: null,
   }
 }

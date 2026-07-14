@@ -37,13 +37,14 @@ from app.models import (
     NotificationPreference,
     RatingHistory,
     Tournament,
+    TournamentEntry,
     TournamentEntryStatus,
     User,
     UserLeagueRating,
     UserRole,
     UserToken,
 )
-from app.tournament_draws import uncut_draw
+from app.tournament_draws import draw_has_play, uncut_draw
 
 # Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
 # circular import (sessions imports this module). Session tokens are KEPT on the
@@ -492,16 +493,24 @@ async def _resolve_entry_collisions(
     and it is wrong throughout. The un-cut is scoped to the colliding events —
     another event of the same tournament keeps the draw it legitimately holds.
 
+    **The played-event case (ADR-0786 parked it for #788, now closed).** Steps 2–3
+    apply only to a collided event whose draw is **unplayed**. Once an event's draw
+    has begun — a fixture has a ``match_id`` (it materialized at go-live, #788) or a
+    ``winner_entry_id`` (``draw_has_play``) — it can be neither deleted (the guest's
+    entry seats played fixtures, and a hard delete would cascade those matches and
+    their results away) nor un-cut (the play guard forbids it). So the guest's
+    colliding entry is **withdrawn** (soft-deleted) rather than deleted: the row —
+    and every fixture and match hanging off it — survives, and the entry leaves the
+    ``entered`` state so the unconditional ``user_id`` re-point in ``merge_user``
+    cannot collide with the survivor's own active row. The self-play *matches* this
+    exposes (the guest and survivor drawn against each other, now one human on both
+    sides) are transferred to the survivor and voided by ``merge_user``'s existing
+    ADR-0013 machinery (``_self_play_collision`` + ``void_match``) — the "transfer
+    then void" ADR-0786 pointed at. The draw itself is left exactly as it was played:
+    a field that double-counted a human and then *ran* cannot be un-run.
+
     The merge itself is **never refused** (consistent with the self-play-collision
     doctrine): nobody is locked out of their own account by a registration.
-
-    *Out of scope, deliberately:* a collision on an event whose play has already
-    begun (a fixture with a ``winner_entry_id`` or a ``match_id`` —
-    ``draw_has_play``). Un-cutting there would eat a recorded result, so that case
-    needs the self-play-collision machinery (transfer the match, then void it)
-    rather than this. It is **unreachable today** — nothing materializes a fixture
-    into a match until #788 — and building it now would mean guessing at machinery
-    that does not exist. When #788 lands, this is the gap to close.
 
     "Active" is bound as ``:active`` from ``_ACTIVE_ENTRY_STATUS`` (see the module
     top) in every statement here, so none of them can drift from the enum that the
@@ -542,6 +551,35 @@ async def _resolve_entry_collisions(
     if not collided_event_ids:
         return
 
+    # Partition the collided events by evidence of play (a fixture with a ``match_id``
+    # or a ``winner_entry_id`` — the ``draw_has_play`` the cut/un-cut verbs gate on).
+    # An **unplayed** event's draw is regenerated (steps 1–3 below); a **played** one's
+    # cannot be — its matches exist and may carry scores — so its guest entry is
+    # withdrawn instead, and its self-play matches ride ``merge_user``'s ADR-0013 path.
+    played_event_ids = {
+        event_id for event_id in collided_event_ids if await draw_has_play(db, event_id)
+    }
+    unplayed_event_ids = collided_event_ids - played_event_ids
+
+    if played_event_ids:
+        # Withdraw (soft-delete), never delete: the guest's entry seats fixtures that
+        # materialized into played matches, and a hard delete would cascade those away.
+        # Withdrawing preserves them AND takes the entry out of ``entered``, so the
+        # unconditional re-point in ``merge_user`` moves a *withdrawn* duplicate onto
+        # the survivor (legal — the partial unique index only covers active entries)
+        # rather than a second active row that would trip it. It also removes the
+        # guest's active entry from the self-joins in steps 1–2, which is what scopes
+        # those to the unplayed events without a second event filter on their SQL.
+        await db.execute(
+            update(TournamentEntry)
+            .where(
+                TournamentEntry.user_id == from_user_id,
+                TournamentEntry.status == TournamentEntryStatus.entered,
+                TournamentEntry.event_id.in_(played_event_ids),
+            )
+            .values(status=TournamentEntryStatus.withdrawn)
+        )
+
     # (1) Registration order and seed follow the earlier registration onto the
     # survivor.
     await db.execute(
@@ -579,12 +617,15 @@ async def _resolve_entry_collisions(
         params,
     )
 
-    # (3) Un-cut the draws the double-counted field invalidated. ``uncut_draw`` is
-    # the one place a draw is deleted (ADR-0786) — a hand-rolled DELETE here would
-    # be a second spelling of "this event has no draw" to keep in step with the
-    # first. It takes the ids straight: the events themselves are never needed, so
+    # (3) Un-cut the draws the double-counted field invalidated — the **unplayed** ones
+    # only. A played event's draw cannot be un-cut (the play guard, and it would delete
+    # the fixtures its matches hang off); its guest entry was withdrawn above instead.
+    # ``uncut_draw`` is the one place a draw is deleted (ADR-0786) — a hand-rolled
+    # DELETE here would be a second spelling of "this event has no draw" to keep in step
+    # with the first — and it no-ops on an empty set, so an all-played collision deletes
+    # nothing. It takes the ids straight: the events themselves are never needed, so
     # loading them would be a SELECT run purely to read back the ids we already hold.
-    await uncut_draw(db, collided_event_ids)
+    await uncut_draw(db, unplayed_event_ids)
 
 
 async def _self_play_collision(

@@ -18,6 +18,9 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    Match,
+    MatchGame,
+    MatchGameScore,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -155,6 +158,12 @@ async def fixtures_by_event(
     un-pooled fixture meets a pooled one, and the defensive coalesce that usually
     follows (``f.pool_id or ""``) would quietly sort the KO stage FIRST.
 
+    A materialized fixture carries its match's **live status** (``match_status``), read
+    by LEFT-joining ``matches`` on ``fixture.match_id`` (#788) — still ONE statement,
+    still one row per fixture (a fixture links to at most one match). It is read on
+    every load rather than snapshotted, so a slot reflects its match as played; an
+    un-materialized fixture joins to ``NULL`` and reports a ``None`` status.
+
     The rows are validated into read models here, at the loader — the same boundary the
     entrants cross — so no ORM instance and no lazily-loadable relationship escapes into
     the serializer.
@@ -165,23 +174,83 @@ async def fixtures_by_event(
     if not fixtures:
         return fixtures
     rows = (
-        (
-            await db.execute(
-                select(TournamentFixture)
-                .where(TournamentFixture.event_id.in_(fixtures.keys()))
-                .order_by(
-                    TournamentFixture.pool_id.asc().nulls_last(),
-                    TournamentFixture.round,
-                    TournamentFixture.position,
-                )
+        await db.execute(
+            select(TournamentFixture, Match.status)
+            .outerjoin(Match, Match.id == TournamentFixture.match_id)
+            .where(TournamentFixture.event_id.in_(fixtures.keys()))
+            .order_by(
+                TournamentFixture.pool_id.asc().nulls_last(),
+                TournamentFixture.round,
+                TournamentFixture.position,
             )
         )
-        .scalars()
-        .all()
-    )
-    for fixture in rows:
-        fixtures[fixture.event_id].append(TournamentFixtureRead.model_validate(fixture))
+    ).all()
+    for fixture, match_status in rows:
+        fixtures[fixture.event_id].append(
+            TournamentFixtureRead(
+                id=fixture.id,
+                pool_id=fixture.pool_id,
+                round=fixture.round,
+                position=fixture.position,
+                entry_a_id=fixture.entry_a_id,
+                entry_b_id=fixture.entry_b_id,
+                winner_entry_id=fixture.winner_entry_id,
+                match_id=fixture.match_id,
+                match_status=match_status,
+            )
+        )
     return fixtures
+
+
+async def game_counts_by_match(
+    db: AsyncSession, match_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """For each match in ``match_ids``, the games each **side** won — ``(side_1_games,
+    side_2_games)`` — read off its scored games. Keyed by match id.
+
+    The raw material the round-robin standings are projected from (ADR-0788): a fixture
+    seats ``entry_a`` on side 1 and ``entry_b`` on side 2 (#788), so a side's game count
+    *is* that entry's, and the winner is the side that took more. Derived live from the
+    match's games rather than the fixture's ``winner_entry_id``, so a correction to a
+    completed match re-shapes the standings the instant it lands (ADR-0788 —
+    round-robin reads never read the written-back winner).
+
+    ONE statement for the whole batch (none at all when there are no matches to count),
+    and every id gets a key — a completed match whose games somehow carry no scores maps
+    to ``(0, 0)`` rather than dropping out, so the caller never tells "no scores" apart
+    from "not loaded". Batched over **every** completed tournament match on the page for
+    the same reason the entrants and fixtures are: a per-match count would be an N+1
+    that grows with the field the page describes.
+
+    Only **completed** matches should be passed — an in-progress match's part-scored
+    board is not a result and must not reach the standings; the caller filters on
+    ``match_status`` before it collects the ids.
+
+    A tie in a single game cannot happen (``MatchGameScoreWrite`` forbids it), so a
+    scored game always moves exactly one side's counter; the ``==`` arm is unreachable
+    and simply counts nothing, keeping the projection total rather than guessing a
+    winner.
+    """
+    counts: dict[uuid.UUID, list[int]] = {match_id: [0, 0] for match_id in match_ids}
+    if not counts:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                MatchGame.match_id,
+                MatchGameScore.side_1_points,
+                MatchGameScore.side_2_points,
+            )
+            .join(MatchGameScore, MatchGameScore.match_game_id == MatchGame.id)
+            .where(MatchGame.match_id.in_(counts.keys()))
+        )
+    ).all()
+    for match_id, side_1_points, side_2_points in rows:
+        if side_1_points > side_2_points:
+            counts[match_id][0] += 1
+        elif side_2_points > side_1_points:
+            counts[match_id][1] += 1
+    return {match_id: (side_1, side_2) for match_id, (side_1, side_2) in counts.items()}
 
 
 async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:

@@ -1,4 +1,5 @@
 import uuid
+from collections import defaultdict
 from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -7,11 +8,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.draws import DegenerateDraw, DrawError, PoolId, UnsupportedDrawType
+from app.draws import (
+    DegenerateDraw,
+    DrawError,
+    EntryId,
+    NonSinglesDraw,
+    PoolId,
+    UnsupportedDrawType,
+)
 from app.leagues import resolve_league
 from app.models import (
     DrawType,
     EventFormat,
+    MatchStatus,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -20,11 +29,15 @@ from app.models import (
     User,
 )
 from app.rbac import require_permission, user_has_permission
+from app.results import EventResults, MatchOutcome, PoolInput, results_for
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
     EventEntryRatingIneligible,
     EventEntryState,
+    EventResultsRead,
+    PoolStandingsRead,
+    StandingRowRead,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -55,12 +68,14 @@ from app.tournament_eligibility import (
     event_is_full,
 )
 from app.tournament_entry_refusals import EntryRefusal, entry_refused
+from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import (
     active_entrants_by_event,
     active_entry_count,
     entrant_rating,
     entrant_ratings_by_league,
     fixtures_by_event,
+    game_counts_by_match,
 )
 
 # Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
@@ -234,12 +249,149 @@ def _entry_state(
             assert_never(decision)
 
 
+def _completed_match_ids(
+    fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
+) -> list[uuid.UUID]:
+    """The ids of the matches of every **completed** fixture across the page.
+
+    The one list ``game_counts_by_match`` is batched over, gathered before any event is
+    serialized so the standings of every event are projected from a single game load
+    (ADR-0788) rather than a query per event. Only ``completed`` fixtures contribute: an
+    in-progress match's part-scored board is not a result and must not reach a standings
+    table."""
+    return [
+        f.match_id
+        for fixtures in fixtures_by_event.values()
+        for f in fixtures
+        if f.match_status is MatchStatus.completed and f.match_id is not None
+    ]
+
+
+def _event_results(
+    e: TournamentEvent,
+    *,
+    fixtures: list[TournamentFixtureRead],
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> EventResultsRead | None:
+    """The event's results (ADR-0788), projected from its fixtures' completed matches,
+    or ``None`` when there are none to compute.
+
+    ``None`` in two cases, both meaning "no results here" rather than an empty table: a
+    draw type with no results strategy yet (``results_for`` raises for it — only
+    round-robin has one today), and an event whose draw has not been cut (no fixtures to
+    stand). Everything else is a real :class:`EventResultsRead`, whose standings are
+    empty of *decided* rows but full of *seated* ones while the pool is still played.
+
+    The projection is the fixed materialization convention read backwards (#788): side 1
+    is ``entry_a`` and side 2 is ``entry_b``, so the ``(side_1, side_2)`` game counts
+    are the ``(entry_a, entry_b)`` game counts, and the winner is whichever took more
+    games — derived from the live match, never from the fixture's written-back
+    ``winner_entry_id`` (which no round-robin read reads, for correction-safety)."""
+    match e.draw_type:
+        case DrawType.round_robin:
+            pass  # the projection below is round-robin-shaped
+        case (
+            DrawType.single_elim
+            | DrawType.double_elim
+            | DrawType.rr_then_ko
+            | DrawType.swiss
+        ):
+            # No results projection for these yet (``results_for`` has no strategy for
+            # them either). Spelled as a checked dispatch with an ``assert_never``
+            # catch-all rather than a bare ``is not round_robin``, so a new ``DrawType``
+            # is a type error here until its projection is written — the same guarantee
+            # ``strategy_for``/``results_for`` give (ADR-0788).
+            return None
+        case _:
+            assert_never(e.draw_type)
+    if not fixtures:
+        return None
+    by_pool: dict[str, list[TournamentFixtureRead]] = defaultdict(list)
+    for f in fixtures:
+        # A round-robin fixture is always pooled; a NULL pool would be a different draw
+        # type's fixture and has no pool table to stand in. Skip it rather than key a
+        # pool on ``None``.
+        if f.pool_id is not None:
+            by_pool[f.pool_id].append(f)
+    pool_inputs: list[PoolInput] = []
+    for pool_id, pool_fixtures in by_pool.items():
+        entrants = {
+            entry_id
+            for f in pool_fixtures
+            for entry_id in (f.entry_a_id, f.entry_b_id)
+            if entry_id is not None
+        }
+        outcomes: list[MatchOutcome] = []
+        for f in pool_fixtures:
+            if (
+                f.match_status is not MatchStatus.completed
+                or f.match_id is None
+                or f.entry_a_id is None
+                or f.entry_b_id is None
+            ):
+                continue
+            side_1_games, side_2_games = game_counts[f.match_id]
+            outcomes.append(
+                MatchOutcome(
+                    entry_a_id=EntryId(f.entry_a_id),
+                    entry_b_id=EntryId(f.entry_b_id),
+                    entry_a_games=side_1_games,
+                    entry_b_games=side_2_games,
+                )
+            )
+        pool_inputs.append(
+            PoolInput(
+                pool_id=PoolId(pool_id),
+                entrants=tuple(EntryId(entry_id) for entry_id in entrants),
+                # Count only the pairings that can still produce a result. A **voided**
+                # fixture never will — its match is terminal and ``ready_fixtures`` will
+                # not re-materialize it — so it is excluded, not counted-but-missing.
+                # Without this, a played-event account-merge collision (which voids the
+                # guest-vs-survivor self-play match) would hold the pool one outcome
+                # short of ``fixture_count`` forever: permanently un-``complete``, no
+                # champion — the opposite of ADR-0788's live-standings guarantee.
+                fixture_count=sum(
+                    1 for f in pool_fixtures if f.match_status is not MatchStatus.voided
+                ),
+                outcomes=tuple(outcomes),
+            )
+        )
+    return _serialize_results(results_for(e.draw_type).tabulate(pool_inputs))
+
+
+def _serialize_results(results: EventResults) -> EventResultsRead:
+    return EventResultsRead(
+        pools=[
+            PoolStandingsRead(
+                pool_id=pool.pool_id,
+                rows=[
+                    StandingRowRead(
+                        entry_id=row.entry_id,
+                        rank=row.rank,
+                        played=row.played,
+                        wins=row.wins,
+                        losses=row.losses,
+                        games_won=row.games_won,
+                        games_lost=row.games_lost,
+                    )
+                    for row in pool.rows
+                ],
+                complete=pool.complete,
+            )
+            for pool in results.pools
+        ],
+        complete=results.complete,
+        champion=results.champion,
+    )
+
+
 def _serialize_event(
     e: TournamentEvent,
     *,
     entrants: list[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
+    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
     # needs the entrant's username, and only the *active* entries), so the fields
@@ -278,6 +430,21 @@ def _serialize_event(
             "entrants": entrants,
             "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
             "fixtures": fixtures,
+            # The standings, projected here from the fixtures' completed matches plus
+            # the page's one batched game load — ``None`` for an uncut or
+            # non-round-robin event (ADR-0788). Computed in the serializer, not fetched
+            # per event, for the same reason ``fixtures`` is: no read may become an N+1.
+            #
+            # ``game_counts is None`` is the tournaments *list*'s signal to skip the
+            # projection entirely: its cards render no standings (only event and table
+            # counts), so the list neither runs the game-count query nor tabulates a
+            # results object nobody reads — standings are a detail-BFF concern. A
+            # detail surface passes a real map (``{}`` when nothing is played).
+            "results": (
+                None
+                if game_counts is None
+                else _event_results(e, fixtures=fixtures, game_counts=game_counts)
+            ),
         }
     )
 
@@ -290,6 +457,7 @@ def _serialize_detail(
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
+    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
@@ -312,6 +480,7 @@ def _serialize_detail(
                     entrants=entrants_by_event[e.id],
                     fixtures=fixtures_by_event[e.id],
                     rating=rating,
+                    game_counts=game_counts,
                 )
                 for e in events
             ],
@@ -636,6 +805,11 @@ async def list_tournaments(
     # event. Uncut draws come back as ``[]``, so an event nobody has cut a draw for
     # costs nothing and answers with an empty list rather than a null.
     event_fixtures = await fixtures_by_event(db, event_ids)
+    # The list deliberately does NOT project standings: its cards render only event and
+    # table counts, never a results table, so it skips the game-count query and the
+    # per-event tabulation a results object would need (``game_counts=None`` below).
+    # Standings are a detail-BFF concern (ADR-0788); computing them here would be work a
+    # page throws away — the same shape as #1051 for fixtures/entrants.
     # ONE batch for the caller's ratings, keyed by league — deduplicated, because
     # every tournament on the default league shares the one number, and because the
     # ladders a page happens to list is not a reason to ask the same question twice.
@@ -650,6 +824,7 @@ async def list_tournaments(
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
             fixtures_by_event=event_fixtures,
+            game_counts=None,
             rating=ratings[tournament.league_id],
         )
         for tournament, username in rows
@@ -760,11 +935,18 @@ async def get_tournament(
     # route, that orders them (pool → round → position) and answers ``[]`` for an
     # event whose draw has not been cut.
     event_fixtures = await fixtures_by_event(db, event_ids)
-    # A FIFTH and last query: the caller's rating on the tournament's league, read
-    # ONCE for the whole page. It is what every event's ``entry_state`` is judged
-    # against (ADR-0783), and a tournament has exactly one ladder — so a rating read
-    # inside the per-event loop would issue a query per event to learn the same
-    # number, on the page whose whole job is to describe a field of events.
+    # ONE more query batches the games of every completed tournament match on the page
+    # — what each event's standings are projected from (ADR-0788). One statement for the
+    # whole page, and **none at all** until something has been played (an unplayed
+    # detail collects no completed match ids), so an unplayed tournament still costs
+    # five and the statement-count pin holds; a played one costs the one extra.
+    game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
+    # The FIFTH query (and last on an unplayed page): the caller's rating on the
+    # tournament's league, read ONCE for the whole page. It is what every event's
+    # ``entry_state`` is judged against (ADR-0783), and a tournament has exactly one
+    # ladder — so a rating read inside the per-event loop would issue a query per event
+    # to learn the same number, on the page whose whole job is to describe a field of
+    # events.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
     return _serialize_detail(
         tournament,
@@ -773,6 +955,7 @@ async def get_tournament(
         events=events,
         entrants_by_event=entrants_by_event,
         fixtures_by_event=event_fixtures,
+        game_counts=game_counts,
         rating=rating,
     )
 
@@ -1069,11 +1252,16 @@ async def create_tournament_transition(
         await _enforce_ready_to_go_live(db, tournament)
 
     tournament.status = payload.to
-    # #788 (materialization) hangs HERE, as the transition's final act: once the status
-    # is ``live``, the first ``advance()`` turns every ready fixture into a real match,
-    # in the same transaction as the status write. Nothing creates matches yet —
-    # fixtures are the whole of a draw today — and the precondition above is what
-    # guarantees that when it does, it will have a complete, current draw to work from.
+    # Materialization (#788), as the transition's final act: once the status is
+    # ``live``, the first ``advance()`` turns every ready fixture into a real
+    # ``in_progress`` match — for round-robin, the whole pool — in the SAME transaction
+    # as the status write, so a tournament is never seen ``live`` without the matches
+    # its go-live created. Run only on the ``published → live`` edge (nothing else
+    # materializes), and only after the precondition above, which is what guarantees a
+    # complete, current draw to work from. It is idempotent on ``fixture.match_id``, so
+    # it can never double-create.
+    if payload.to is TournamentStatus.live:
+        await materialize_live_draw(db, tournament)
     await db.commit()
     await db.refresh(tournament)
     # The owner is the current user (``_require_owner`` just said so), so the
@@ -1127,7 +1315,12 @@ async def create_event(
     # tournament's league: answering with a state the endpoint had guessed rather
     # than computed is how the read and the guard come apart.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    return _serialize_event(event, entrants=[], fixtures=[], rating=rating)
+    # No fixtures on a one-statement-old event, so no results either —
+    # ``_event_results`` answers ``None`` for an uncut draw whatever the game counts, so
+    # an empty map is all this needs.
+    return _serialize_event(
+        event, entrants=[], fixtures=[], rating=rating, game_counts={}
+    )
 
 
 def _pool_set_refusal(removed: list[str], added: list[str]) -> HTTPException:
@@ -1383,12 +1576,23 @@ async def update_event(
     # answering ``[]`` here would tell the director their draw had just been thrown
     # away, and the page would render it that way.
     entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
-    fixtures = (await fixtures_by_event(db, [event.id]))[event.id]
+    event_fixtures = await fixtures_by_event(db, [event.id])
+    fixtures = event_fixtures[event.id]
+    # Its RESULTS survive the edit too (a PATCH is not a re-cut), so they are
+    # reprojected from the same completed-match games as the read paths — one game load,
+    # so an edit to a played event still answers its live standings, not drops them.
+    game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
     # And its ``entry_state`` is recomputed from the event as it now stands: an owner
     # who has just tightened a rule or lowered ``max_players`` is answered with what
     # the event says NOW, not with what it said before their edit.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    return _serialize_event(event, entrants=entrants, fixtures=fixtures, rating=rating)
+    return _serialize_event(
+        event,
+        entrants=entrants,
+        fixtures=fixtures,
+        rating=rating,
+        game_counts=game_counts,
+    )
 
 
 @router.delete(
@@ -2034,6 +2238,18 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             detail = (
                 f"A {error.draw_type.value} draw cannot be cut yet. "
                 "Change the event's draw type to one that can, or wait for support."
+            )
+        case NonSinglesDraw():
+            # Composed from the structural ``event_format``, like
+            # ``UnsupportedDrawType`` above: a doubles/teams event can never be cut in
+            # any state (an entry is
+            # one row per player, with nowhere to record a partner or a team, ADR-0788),
+            # so a director is told which event is un-drawable and why — a permanent
+            # fact, not a retryable one.
+            detail = (
+                f"A {error.event_format.value} event cannot be given a draw — only "
+                "singles events can. A fixture seats one entrant on each side, and "
+                "there is nowhere to record a doubles pairing or a team."
             )
         case DegenerateDraw():
             detail = str(error)

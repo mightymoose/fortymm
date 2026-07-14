@@ -113,8 +113,13 @@ class TournamentFixture(Base):
     #: corrupted draw would silently satisfy it and go live. The merge instead **un-cuts
     #: the event's draw** (a draw cut from a field that double-counted a human is wrong
     #: throughout — its pool sizes and seeding were computed against N+1 entrants), and
-    #: the director re-cuts. See ADR-786; ``_resolve_entry_collisions`` is where it is
-    #: done.
+    #: the director re-cuts. That un-cut path is only for an **unplayed** draw. Once
+    #: play has begun (a fixture here has a ``match_id`` or a ``winner_entry_id`` —
+    #: ``draw_has_play``), the draw cannot be un-cut, so instead the guest's colliding
+    #: entry is **withdrawn** (soft-deleted, not hard-deleted — these rows survive) and
+    #: the exposed guest-vs-survivor self-play match is transferred then voided
+    #: (ADR-0788). See ADR-786 and ADR-788; ``_resolve_entry_collisions`` holds both
+    #: paths.
     entry_a_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_entries.id", ondelete="CASCADE"),

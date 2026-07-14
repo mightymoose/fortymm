@@ -10,6 +10,7 @@ import type { TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
 import { PoolDraw } from './draw-panel/pool-draw'
 import { RoundList } from './draw-panel/round-list'
+import { StandingsPanel } from './draw-panel/standings/standings-panel'
 
 export interface DrawPanelProps {
   tournamentId: string
@@ -165,6 +166,15 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
       )}
 
       <DrawBody state={state} canEdit={canEdit} />
+
+      {/* The results (ADR-0788): pool standings, and the champion once the event is
+          decided. Dropped in unconditionally — it renders NOTHING for an event with no
+          results (`event.results === null`: uncut, or a non-round-robin draw type), which
+          is the designed data state, so there is no branch to keep in sync here. It sits
+          below the fixtures because a director reads the pairings first and the table they
+          fill in second; it is live BFF data, so it updates on the same refetch the rest
+          of the card does, with no wiring of its own. */}
+      <StandingsPanel event={event} />
     </section>
   )
 }

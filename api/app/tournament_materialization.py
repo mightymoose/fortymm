@@ -1,0 +1,206 @@
+"""Materializing ready fixtures into real matches (ADR-0788).
+
+A **fixture** is a planned pairing; a **match** is the real, playable thing it becomes.
+Materialization is the crossing: at go-live, every *ready* round-robin fixture — both
+sides known, no match yet — is turned into an ordinary ``in_progress`` match and linked
+back to its fixture by ``fixture.match_id``.
+
+The pure planning half lives in ``app.draws`` (which fixtures are ready), the fixture
+persistence in ``app.tournament_draws`` (the rows, and the ORM↔domain ``fixture_state``
+bridge); this module owns only the one thing neither does — building a ``Match`` +
+``MatchSettings`` + two ``MatchSide``\\ s out of a fixture and the event's rules.
+
+The dependency points **one way**: this imports the match models and the draw layer,
+and is imported by the tournament transition (``app.tournaments``). Nothing in the match
+domain imports it, so the completion seam (#789) can import *this* without a cycle.
+"""
+
+import uuid
+from collections.abc import Sequence
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.draws import strategy_for
+from app.models import (
+    Match,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
+    Tournament,
+    TournamentEntry,
+    TournamentEvent,
+    TournamentFixture,
+)
+from app.schemas.tournament import MatchSettings as EventMatchSettings
+from app.tournament_draws import fixture_state
+
+
+async def materialize_live_draw(db: AsyncSession, tournament: Tournament) -> None:
+    """The go-live transition's final act (ADR-0788): consume the first ``advance()``
+    of every event's draw, turning each **ready** fixture into an ``in_progress`` match.
+
+    For round-robin this is the whole pool at once — every pairing is known at the cut,
+    so a freshly-cut draw's ``advance()`` reports every fixture ready — and it is a
+    one-time crossing: a fixture that already has a ``match_id`` is never ready again
+    (``app.draws.ready_fixtures`` excludes it), so materialization is **idempotent** on
+    ``match_id``, and re-running it materializes nothing.
+
+    Runs inside the transition's row lock and transaction — the go-live precondition
+    (``_enforce_ready_to_go_live``) has already guaranteed every event has a current
+    draw, so the fixtures read here seat exactly the field the matches are created for.
+    Does **not** commit: the caller (the transition) owns the transaction, so the status
+    write and the matches it creates land together or not at all.
+    """
+    events = (
+        (
+            await db.execute(
+                select(TournamentEvent).where(
+                    TournamentEvent.tournament_id == tournament.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for event in events:
+        await materialize_event(db, tournament, event)
+
+
+async def materialize_event(
+    db: AsyncSession, tournament: Tournament, event: TournamentEvent
+) -> None:
+    """Materialize the ready fixtures of one event.
+
+    ``advance()`` — not a hand-rolled "both sides known?" — decides what is ready, so
+    the one definition of readiness (both sides known, no match yet, not decided) is
+    honoured here exactly as everywhere else. Shared by the two paths that advance a
+    draw: go-live materialization (#788) and the completion seam
+    (``app.tournament_advancement``, #789), which re-runs it after every result so a
+    fixture made ready by a decided one becomes a match at once.
+
+    It consumes only ``ready_fixture_ids``, never ``advance()``'s ``side_fills``. For
+    round-robin — the only strategy today — the plan carries no side-fills at all (every
+    pairing is known at the cut), so there is nothing to drop. Applying the side-fills a
+    *future* strategy would emit (single-elim seating a winner into the next round,
+    #785) is that strategy's slice to add here; it is deferred with the strategy it
+    belongs to.
+    """
+    fixtures = (
+        (
+            await db.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not fixtures:
+        # An event with no draw materializes nothing — but go-live's precondition means
+        # this is unreachable on that path (every event has a current draw). Guarding it
+        # keeps the function honest for a future caller that has no such precondition.
+        return
+    plan = strategy_for(event.draw_type).advance([fixture_state(f) for f in fixtures])
+    ready = set(plan.ready_fixture_ids)
+    ready_fixtures = [f for f in fixtures if f.id in ready]
+    if not ready_fixtures:
+        return
+
+    entry_users = await _entry_user_ids(db, ready_fixtures)
+    settings = EventMatchSettings.model_validate(event.match_settings)
+    built: list[tuple[TournamentFixture, Match]] = []
+    for fixture in ready_fixtures:
+        # A ready fixture always has both sides known (that is what "ready" means); the
+        # guard narrows the Optional for the type checker and can never actually skip a
+        # fixture ``advance()`` reported ready.
+        if fixture.entry_a_id is None or fixture.entry_b_id is None:
+            continue
+        match = _build_match(
+            tournament,
+            settings,
+            side_1_user_id=entry_users[fixture.entry_a_id],
+            side_2_user_id=entry_users[fixture.entry_b_id],
+        )
+        db.add(match)
+        built.append((fixture, match))
+
+    # Insert the matches BEFORE writing ``fixture.match_id``: the fixture's FK
+    # (``ON DELETE SET NULL``) points at ``matches``, and there is no ORM relationship
+    # on the fixture for the unit-of-work to infer that ordering from — so without an
+    # explicit flush the fixture UPDATE can race ahead of the match INSERT and trip the
+    # foreign key. One flush for the whole event's matches, then the links.
+    await db.flush()
+    for fixture, match in built:
+        fixture.match_id = match.id
+
+
+async def _entry_user_ids(
+    db: AsyncSession, fixtures: Sequence[TournamentFixture]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Map each seated entry id to the user behind it — the user a materialized match
+    seats on the corresponding side. One batched read for every entry in the ready set.
+    """
+    entry_ids: set[uuid.UUID] = set()
+    for fixture in fixtures:
+        if fixture.entry_a_id is not None:
+            entry_ids.add(fixture.entry_a_id)
+        if fixture.entry_b_id is not None:
+            entry_ids.add(fixture.entry_b_id)
+    rows = (
+        await db.execute(
+            select(TournamentEntry.id, TournamentEntry.user_id).where(
+                TournamentEntry.id.in_(entry_ids)
+            )
+        )
+    ).all()
+    return {entry_id: user_id for entry_id, user_id in rows}
+
+
+def _build_match(
+    tournament: Tournament,
+    settings: EventMatchSettings,
+    *,
+    side_1_user_id: uuid.UUID,
+    side_2_user_id: uuid.UUID,
+) -> Match:
+    """The real match one ready fixture becomes (ADR-0788) — built, not yet persisted.
+
+    The match is born ``in_progress``: both players are known and committed, and
+    propose/accept is about the *result*, not about starting. It carries the
+    **tournament's** league and is created by the tournament **owner** (a tournament
+    match has no player-initiator — the director's go-live created it; the field grants
+    no scoring rights, which are by side participation). Its ``MatchSettings`` copy the
+    only two things the event holds — ``best_of ← length_games``, ``affects_rating ←
+    rated`` — with ``team_size = 1`` and the model's default verification policy and
+    retirement window (the event has nothing else to copy).
+
+    **side 1 ← ``entry_a``, side 2 ← ``entry_b``** is a fixed convention, not a detail:
+    it is what lets a completed match's winning ``side_number`` map back to the winning
+    entry (1 → ``entry_a``, 2 → ``entry_b``) with no extra column (#789).
+    """
+    match = Match(
+        match_settings=MatchSettings(
+            team_size=1,
+            best_of=settings.length_games,
+            affects_rating=settings.rated,
+        ),
+        league_id=tournament.league_id,
+        created_by_user_id=tournament.created_by_user_id,
+        status=MatchStatus.in_progress,
+    )
+    _add_side(match, side_number=1, user_id=side_1_user_id)
+    _add_side(match, side_number=2, user_id=side_2_user_id)
+    return match
+
+
+def _add_side(match: Match, *, side_number: int, user_id: uuid.UUID) -> None:
+    """Attach one populated side to ``match`` (mirrors ``app.matches._add_side``).
+
+    A tournament match always has two real players — there is no opponent-less sentinel
+    side here — so every side carries exactly one ``MatchSidePlayer``. Wiring the
+    ``match`` relationship on both the side and the side-player is what populates their
+    denormalized ``match_id`` columns on flush.
+    """
+    side = MatchSide(match=match, side_number=side_number)
+    side.players.append(MatchSidePlayer(match=match, user_id=user_id))

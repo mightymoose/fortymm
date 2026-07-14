@@ -24,6 +24,7 @@ import {
   entryStateFor,
   planRoundRobinFixtures,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import { mockUuid } from '@/mocks/mock-uuid'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -205,6 +206,8 @@ function seed(): StoredTournament[] {
           // NO DRAW CUT (ADR-0786) — the state every event starts in, and the state
           // all but one of this seed's events stay in. `[]`, never null.
           fixtures: [],
+          // NO RESULTS (ADR-0788) — no draw, so nothing to stand.
+          results: null,
           created_at: '2026-06-01T09:05:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -224,6 +227,7 @@ function seed(): StoredTournament[] {
           predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
           pools: [],
           fixtures: [],
+          results: null,
           created_at: '2026-06-01T09:06:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -245,6 +249,7 @@ function seed(): StoredTournament[] {
           predicates: [],
           pools: [],
           fixtures: [],
+          results: null,
           created_at: '2026-06-01T09:06:30Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -282,6 +287,40 @@ function seed(): StoredTournament[] {
             otherEntrants('ev-u1200', 9).map((e) => e.id),
             U1200_POOLS.map((p) => p.id),
           ),
+          // Representative RESULTS (ADR-0788) so `npm run dev` shows standings live: Pool
+          // A still being played (`complete: false` — the table fills in as matches land),
+          // Pool B decided. Multi-pool, so there is no single champion without a knockout
+          // stage (a later slice) — `champion: null` even where a pool is done. The entry
+          // ids match this event's entrants (`entry-ev-u1200-N`) and its pool ids
+          // (`p-u1200-a/b`), so the name and pool joins land; the rows are in finishing
+          // order, which the client renders untouched.
+          results: {
+            complete: false,
+            champion: null,
+            pools: [
+              {
+                pool_id: 'p-u1200-a',
+                complete: false,
+                rows: [
+                  { entry_id: 'entry-ev-u1200-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
+                  { entry_id: 'entry-ev-u1200-5', rank: 2, played: 1, wins: 1, losses: 0, games_won: 2, games_lost: 0, game_difference: 2 },
+                  { entry_id: 'entry-ev-u1200-4', rank: 3, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 3, game_difference: 0 },
+                  { entry_id: 'entry-ev-u1200-8', rank: 4, played: 1, wins: 0, losses: 1, games_won: 1, games_lost: 2, game_difference: -1 },
+                  { entry_id: 'entry-ev-u1200-9', rank: 5, played: 2, wins: 0, losses: 2, games_won: 1, games_lost: 4, game_difference: -3 },
+                ],
+              },
+              {
+                pool_id: 'p-u1200-b',
+                complete: true,
+                rows: [
+                  { entry_id: 'entry-ev-u1200-2', rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 2, game_difference: 4 },
+                  { entry_id: 'entry-ev-u1200-3', rank: 2, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 4, game_difference: 1 },
+                  { entry_id: 'entry-ev-u1200-6', rank: 3, played: 3, wins: 1, losses: 2, games_won: 4, games_lost: 5, game_difference: -1 },
+                  { entry_id: 'entry-ev-u1200-7', rank: 4, played: 3, wins: 0, losses: 3, games_won: 2, games_lost: 6, game_difference: -4 },
+                ],
+              },
+            ],
+          },
           created_at: '2026-06-01T09:06:45Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -302,6 +341,7 @@ function seed(): StoredTournament[] {
           predicates: [],
           pools: [],
           fixtures: [],
+          results: null,
           created_at: '2026-06-01T09:07:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -358,6 +398,9 @@ function seed(): StoredTournament[] {
             otherEntrants('ev-slam-open', 8).map((e) => e.id),
             SLAM_POOLS.map((p) => p.id),
           ),
+          // Drawn but unplayed — go-live materializes its fixtures into matches, but no
+          // result has landed, so there is nothing to stand yet (ADR-0788).
+          results: null,
           created_at: '2026-06-05T15:31:00Z',
           updated_at: '2026-06-05T15:31:00Z',
         },
@@ -447,6 +490,7 @@ function seed(): StoredTournament[] {
           // Un-drawn, and it stays that way through the UI: the dev user does not own
           // this tournament, and cutting a draw is owner-only (`cutDraw` 403s them).
           fixtures: [],
+          results: null,
           created_at: '2026-05-20T10:05:00Z',
           updated_at: '2026-06-12T08:00:00Z',
         },
@@ -899,6 +943,29 @@ function goLiveRefusal(tournament: StoredTournament): string | null {
   )
 }
 
+/** Materialize an event's ready fixtures into real matches — the go-live step (#788,
+ * `api/app/tournaments.py`). A fixture is **ready** when both its sides are known; a TBD
+ * fixture (a null side — a KO round whose feeder is undecided) is not, and is left to be
+ * materialized later. Idempotent on `match_id`: a fixture that already has a match keeps
+ * it, so a re-run (or a store that somehow re-enters go-live) never mints a second match.
+ *
+ * The mint mirrors the server: each ready fixture becomes an `in_progress` match, and the
+ * fixture records its id + live status. The id is a deterministic v4 (`mockUuid`) keyed
+ * off the fixture, so the same draw materializes to the same match every time — a stable
+ * deep-link a page can be built against. */
+function materializeFixtures(event: StoredEvent): StoredEvent {
+  const fixtures = event.fixtures.map((fixture) => {
+    const ready = fixture.entry_a_id !== null && fixture.entry_b_id !== null
+    if (!ready || fixture.match_id !== null) return fixture
+    return {
+      ...fixture,
+      match_id: mockUuid(`match:fixture:${fixture.id}`),
+      match_status: 'in_progress' as const,
+    }
+  })
+  return { ...event, fixtures }
+}
+
 /** `POST /v1/tournaments/{id}/transitions` — move a tournament along its
  * lifecycle. Owner-only, like every other tournament mutation, and the ONLY way
  * a status changes: `updateTournament` above leaves `status` alone by design. */
@@ -939,8 +1006,15 @@ export function transitionTournament(
     const detail = goLiveRefusal(existing)
     if (detail) return { ok: false, status: 409, detail }
   }
+  // Go-live materializes every event's ready fixtures into real `in_progress` matches
+  // (#788) — the same act that makes each pool pairing playable and gives the draw panel
+  // its "View match" links. Only on `published → live`; publishing and archiving touch no
+  // fixtures.
+  const events =
+    to === 'live' ? existing.events.map(materializeFixtures) : existing.events
   const next: StoredTournament = {
     ...existing,
+    events,
     status: to,
     updated_at: new Date().toISOString(),
   }
@@ -1005,6 +1079,8 @@ export function createEvent(
     // A brand-new event has NO DRAW (ADR-0786). Cutting one is an explicit act against
     // a field that does not exist yet — there is nobody entered to draw.
     fixtures: [],
+    // …and NO RESULTS (ADR-0788): with no draw, there is nothing to stand.
+    results: null,
     created_at: now,
     updated_at: now,
   }

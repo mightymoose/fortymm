@@ -774,6 +774,27 @@ describe('transitionTournament', () => {
     expect(findTournament(id)!.status).toBe('live')
   })
 
+  it('MATERIALIZES every ready fixture into an in_progress match at go-live (#788)', () => {
+    // Go-live is the act that turns a draw's planned pairings into real, playable
+    // matches: after it, every ready fixture (both sides known) carries a match id and a
+    // live status, which is what gives the draw panel its "View match" links. Before it,
+    // the same fixtures are inert — `match_id` null.
+    const id = at('published')
+    const before = findTournament(id)!.events.flatMap((e) => e.fixtures)
+    expect(before.length).toBeGreaterThan(0)
+    expect(before.every((f) => f.match_id === null)).toBe(true)
+
+    const result = transitionTournament(id, 'live')
+    expect(result.ok).toBe(true)
+
+    const after = findTournament(id)!.events.flatMap((e) => e.fixtures)
+    // A round-robin draw has both sides known on every fixture, so every one is ready.
+    for (const fixture of after) {
+      expect(fixture.match_id).not.toBeNull()
+      expect(fixture.match_status).toBe('in_progress')
+    }
+  })
+
   it('refuses to start on a STALE draw — somebody entered after it was cut', () => {
     // Registration stays open right up to go-live, which is exactly how a draw goes
     // stale: the field the fixtures were dealt from is not the field that would play.

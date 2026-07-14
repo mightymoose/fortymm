@@ -25,7 +25,9 @@ from httpx import AsyncClient, Response
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 
+from app.account_merge import merge_user
 from app.draws import DrawError
 from app.leagues import seed_user_league_rating
 from app.models import (
@@ -33,6 +35,8 @@ from app.models import (
     LeagueVisibility,
     Match,
     MatchSettings,
+    MatchSide,
+    MatchStatus,
     RatingStrategy,
     Tournament,
     TournamentEntry,
@@ -52,6 +56,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draws import DrawCurrency, draw_currency_by_event
 from app.tournament_entry_refusals import EntryRefusal
+from app.tournament_materialization import materialize_live_draw
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
@@ -65,10 +70,12 @@ from app.tournaments import (
     update_event,
 )
 from tests._helpers import (
+    accept_standing_result,
     counted_statements,
     grant_permissions,
     make_client,
     make_user,
+    opponent_session,
     rate_player,
     start_session,
 )
@@ -3684,9 +3691,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     was never told about, and "the key is missing" and "the side is unknown" are not the
     same fact.
 
-    ``winner_entry_id`` and ``match_id`` are the same story — undecided, and not yet a
-    match. The exact key set is asserted, so a field silently dropped (or a username
-    silently *added*) fails here.
+    ``winner_entry_id``, ``match_id`` and ``match_status`` are the same story —
+    undecided, not yet a match, so no live match status. The exact key set is asserted,
+    so a field silently dropped (or a username silently *added*) fails here.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
@@ -3708,12 +3715,14 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
         "entry_b_id",
         "winner_entry_id",
         "match_id",
+        "match_status",
     }
     assert fixture["entry_a_id"] == str(entry.id)
-    # The three facts that are not known yet — each present, each null.
+    # The facts that are not known yet — each present, each null.
     assert fixture["entry_b_id"] is None
     assert fixture["winner_entry_id"] is None
     assert fixture["match_id"] is None
+    assert fixture["match_status"] is None
 
 
 async def test_a_fixtures_sides_are_entry_ids_the_events_entrants_list_resolves(
@@ -4463,6 +4472,55 @@ async def test_cutting_an_unimplemented_draw_type_is_422(
     # who has to go implement it.
     assert "cannot be cut yet" in detail, detail
     assert await _fixture_rows(db_session, event["id"]) == []
+
+
+@pytest.mark.parametrize("event_format", ["doubles", "teams"])
+async def test_cutting_a_non_singles_event_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event_format: str,
+) -> None:
+    """A draw is **singles-only** (ADR-0788), refused at the cut with a 422 naming the
+    format. A ``TournamentEntry`` is one ``user_id``, so a round-robin over a doubles or
+    teams event could never say which two people form one side — and could never
+    materialize into a match. So it is refused at the earliest, clearest point (the
+    cut), not left to fail obscurely at go-live.
+
+    The refusal is about the FORMAT, and to prove it the field is a full, legal one —
+    four entrants over one pool, which a *singles* event cuts into six fixtures (the
+    next test). Nothing is written, as with the unimplemented-type and degenerate
+    refusals.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, format=event_format)
+    )
+    await _seed_field(db_session, event["id"], 4)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert event_format in detail and "singles" in detail, detail
+    assert await _fixture_rows(db_session, event["id"]) == []
+
+
+async def test_cutting_a_singles_event_is_allowed(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The mirror of the guard above: the *same* four-entrant, one-pool field on a
+    **singles** event cuts cleanly into its six round-robin fixtures. So the 422 next
+    door refuses the doubles/teams format, not the round-robin or the field.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 4)
+
+    response = await client.post(_draw_url(tournament_id, event["id"]))
+
+    assert response.status_code == 201, response.text
+    assert len(await _fixture_rows(db_session, event["id"])) == 6
 
 
 @pytest.mark.parametrize(
@@ -5676,3 +5734,609 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
     assert free.status_code == 200, free.text
     assert await _draw_type_of(db_session, undrawn["id"]) is DrawType.single_elim
     assert await _draw_type_of(db_session, drawn["id"]) is DrawType.round_robin
+
+
+# ----- materialization at go-live (#788) ------------------------------------
+#
+# Going live consumes the first ``advance()``: every ready round-robin fixture becomes a
+# real ``in_progress`` match, seated **side 1 ← entry_a, side 2 ← entry_b**, linked back
+# by ``fixture.match_id``. It is idempotent on ``match_id`` — a second advance sees the
+# link and materializes nothing — and it happens in the same transaction as the status
+# write, so a tournament is never seen ``live`` without the matches its go-live created.
+
+
+async def _load_match(db_session: AsyncSession, match_id: uuid.UUID) -> Match:
+    """One materialized match with its settings and sides+players, read fresh (the
+    go-live route wrote it on its own session, so ``populate_existing`` steps past any
+    stale copy this test session may hold)."""
+    return (
+        await db_session.execute(
+            select(Match)
+            .where(Match.id == match_id)
+            .options(
+                selectinload(Match.match_settings),
+                selectinload(Match.sides).selectinload(MatchSide.players),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+
+async def _match_count(db_session: AsyncSession) -> int:
+    """Every match row in the database. The suite truncates between tests, so within one
+    test this counts exactly the matches this tournament's go-live created — which
+    catches a re-materialization that spawns a second, fixture-less match."""
+    return (
+        await db_session.execute(select(func.count()).select_from(Match))
+    ).scalar_one()
+
+
+async def _active_entries(
+    db_session: AsyncSession, event_id: str
+) -> list[TournamentEntry]:
+    return list(
+        (
+            await db_session.execute(
+                select(TournamentEntry)
+                .where(
+                    TournamentEntry.event_id == uuid.UUID(event_id),
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                )
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@pytest.mark.parametrize(("rated", "length_games"), [(True, 5), (False, 3)])
+async def test_going_live_materializes_the_whole_pool(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    rated: bool,
+    length_games: int,
+) -> None:
+    """Going live turns **every** ready fixture of a round-robin pool into a real
+    ``in_progress`` match in one stroke (ADR-0788), and each match is exactly the
+    fixture made real:
+
+    * ``status`` is ``in_progress`` — both players are known and committed;
+    * ``league_id`` is the tournament's, ``created_by_user_id`` is its owner (the
+      director whose go-live created it);
+    * its ``MatchSettings`` copy the only two things the event holds — ``best_of`` from
+      ``length_games`` and ``affects_rating`` from ``rated`` — with ``team_size = 1``;
+    * **side 1 seats ``entry_a``'s user, side 2 seats ``entry_b``'s** — the fixed
+      convention that lets a completed match's winning side map back to the winning
+      entry (#789).
+
+    Parametrized over a rated best-of-5 and an unrated best-of-3 so the settings mapping
+    is pinned in both directions, not just the default.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            POOL_A, match_settings={"rated": rated, "length_games": length_games}
+        ),
+    )
+    # One pool of three → three fixtures, each a distinct pairing — enough to see the
+    # whole pool materialize and to check the side↔entry mapping on every one of them.
+    entries = await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    response = await _go_live(client, tournament_id)
+    assert response.status_code == 201, response.text
+
+    tournament = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+
+    fixtures = await _fixture_rows(db_session, event["id"])
+    assert len(fixtures) == 3
+    assert all(f.match_id is not None for f in fixtures), (
+        "every ready fixture must have materialized into a match at go-live"
+    )
+    assert await _match_count(db_session) == 3, "the whole pool, and nothing more"
+
+    entry_user = {e.id: e.user_id for e in entries}
+    for fixture in fixtures:
+        assert fixture.match_id is not None
+        match = await _load_match(db_session, fixture.match_id)
+        assert match.status == MatchStatus.in_progress
+        assert match.league_id == tournament.league_id
+        assert match.created_by_user_id == owner.id
+        assert match.match_settings.team_size == 1
+        assert match.match_settings.best_of == length_games
+        assert match.match_settings.affects_rating is rated
+        by_number = {side.side_number: side for side in match.sides}
+        assert [p.user_id for p in by_number[1].players] == [
+            entry_user[fixture.entry_a_id]
+        ], "side 1 seats entry_a's user"
+        assert [p.user_id for p in by_number[2].players] == [
+            entry_user[fixture.entry_b_id]
+        ], "side 2 seats entry_b's user"
+
+
+async def test_the_detail_bff_links_a_materialized_fixture_to_its_live_match(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The tournament-detail BFF carries each fixture's ``match_id`` and the live
+    ``match_status`` (#788), so the front-end can link a bracket slot to its match and
+    show its state — one endpoint per page, no per-slot round-trip.
+
+    Read through the real detail route (not the database), because the field the wire
+    carries is the point: an un-materialized fixture answers ``null`` on both, and a
+    materialized one answers its match's id and its *current* status (``in_progress``
+    the moment it is created).
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+
+    # Before go-live: cut but not materialized — the slot links to nothing yet.
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    (read,) = await _events_of(client, tournament_id)
+    assert read["fixtures"], "the draw is cut, so there are fixtures to look at"
+    assert all(f["match_id"] is None for f in read["fixtures"])
+    assert all(f["match_status"] is None for f in read["fixtures"])
+
+    # After go-live: every slot links to its live, in-progress match.
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    (read,) = await _events_of(client, tournament_id)
+    fixtures = read["fixtures"]
+    assert len(fixtures) == 3
+    assert all(f["match_id"] is not None for f in fixtures), (
+        "a materialized slot carries the id of the match it links to"
+    )
+    assert all(f["match_status"] == "in_progress" for f in fixtures), (
+        "and the match's live status, read fresh — in_progress the moment it is created"
+    )
+
+
+async def test_go_live_materialization_is_idempotent(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Materialization is idempotent on ``fixture.match_id`` (ADR-0786's readiness
+    definition): a fixture that already has a match is never ready again, so re-running
+    the first ``advance()`` after go-live creates no second match.
+
+    Proven by running the real ``materialize_live_draw`` primitive a *second* time,
+    after the go-live route already ran it once, and asserting the match count does not
+    move — if readiness ignored ``match_id`` this would double every fixture's match.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    before = await _match_count(db_session)
+    assert before == 3
+
+    tournament = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    await materialize_live_draw(db_session, tournament)
+    await db_session.commit()
+
+    assert await _match_count(db_session) == before, (
+        "a second advance over already-materialized fixtures must create nothing"
+    )
+
+
+async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The one #788 case ADR-0786 explicitly deferred: a merge collision on an event
+    whose draw has already **materialized into matches**.
+
+    An unplayed collision un-cuts the draw (a field that double-counted a human is wrong
+    throughout). But a *played* draw cannot be un-cut — its fixtures hang real matches
+    off, and deleting them would eat the results. So the guest's colliding entry is
+    **withdrawn** rather than deleted (its fixture, and the match, survive), the draw is
+    left cut, and the self-play match the collision exposes — one human now on both
+    sides — is transferred to the survivor and **voided** by the ADR-0013 machinery.
+    """
+    client, _owner = authed_client
+    # A rated round-robin, so its materialized match is rated and the self-play
+    # collision takes the void path (an unrated collision would not be voided).
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    guest = await make_user(db_session, "guest-ghost-collision")
+    survivor = await make_user(db_session, "survivor-collision")
+    # Both actively entered in the one event — the collision. Two players in a single
+    # pool is exactly one fixture, drawing the guest against the survivor, so it seats
+    # one human on each side and the merge turns that match into self-play.
+    await _enter(db_session, event["id"], guest)
+    await _enter(db_session, event["id"], survivor)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    before = await _fixture_rows(db_session, event["id"])
+    assert len(before) == 1
+    match_id = before[0].match_id
+    assert match_id is not None, "the fixture materialized into a real match at go-live"
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    # The draw is NOT un-cut: the fixture survives with the same id, still linked to its
+    # match. A played draw is never thrown away — that would eat the recorded match.
+    after = await _fixture_rows(db_session, event["id"])
+    assert [f.id for f in after] == [before[0].id], (
+        "the played draw's fixture must survive the merge, not be un-cut"
+    )
+    assert after[0].match_id == match_id, "and stay linked to its match"
+
+    # The self-play match the collision exposed is voided (ADR-0013), not left standing
+    # as one human playing themselves.
+    match = await _load_match(db_session, match_id)
+    assert match.status == MatchStatus.voided
+
+    # One human, one active entry: the guest's colliding entry was withdrawn (which is
+    # why its fixture survived above), and the survivor's is the one that stands.
+    active = await _active_entries(db_session, event["id"])
+    assert [e.user_id for e in active] == [survivor.id]
+
+    # And the standings are not frozen by the void. A voided fixture never yields an
+    # outcome, so it is excluded from the pool's completeness count (ADR-0788). The
+    # event reports ``complete`` rather than hanging one short of its count forever —
+    # before this fix it stuck at incomplete permanently, with no champion. (The pool
+    # is degenerate after the merge, one human on an N+1 draw; a director re-cuts it.)
+    (read,) = await _events_of(client, tournament_id)
+    assert read["results"]["complete"] is True
+
+
+# ----- Slice 2: completion advances the draw; results/standings render live (#789) ----
+# The seam (``on_match_completed`` via ``finalize_match``) writes the fixture's winner
+# on BOTH completion paths — rated (accept) and unrated (immediate self-accept) — and
+# the detail BFF projects live standings from the fixtures' completed matches
+# (ADR-0788). The ordering rules themselves live in the pure ``tests/test_results.py``;
+# these prove the wiring end-to-end through the real score endpoints.
+
+
+async def _win_fixture_match(
+    fixture: TournamentFixture,
+    *,
+    clients_by_entry: dict[uuid.UUID, AsyncClient],
+    winner_entry_id: uuid.UUID,
+    rated: bool,
+    best_of: int = 3,
+) -> None:
+    """Play a materialized fixture's match to completion through the real score
+    endpoints, with ``winner_entry_id`` taking it.
+
+    The winner's own client proposes a decided board (their side clinches), and — on a
+    rated match — the loser's client accepts, which is the second verb that actually
+    completes it. An unrated match self-accepts on the proposal, so no acceptance is
+    posted. Side 1 is ``entry_a`` and side 2 is ``entry_b`` (#788), so which side must
+    win the board is read off the fixture."""
+    assert fixture.match_id is not None
+    match_id = str(fixture.match_id)
+    side_1_wins = winner_entry_id == fixture.entry_a_id
+    side_1_points, side_2_points = (11, 5) if side_1_wins else (5, 11)
+    needed = best_of // 2 + 1
+    post = await clients_by_entry[winner_entry_id].post(
+        f"/v1/matches/{match_id}/results",
+        json={
+            "games": [
+                {
+                    "game_number": n,
+                    "side_1_points": side_1_points,
+                    "side_2_points": side_2_points,
+                }
+                for n in range(1, needed + 1)
+            ]
+        },
+    )
+    assert post.status_code == 201, post.text
+    if rated:
+        loser_entry = fixture.entry_b_id if side_1_wins else fixture.entry_a_id
+        assert loser_entry is not None
+        await accept_standing_result(clients_by_entry[loser_entry], match_id)
+
+
+async def _live_two_player_pool(
+    client: AsyncClient,
+    owner: User,
+    opponent: User,
+    db_session: AsyncSession,
+    *,
+    rated: bool,
+) -> tuple[str, dict[str, Any], TournamentEntry, TournamentEntry, TournamentFixture]:
+    """A round-robin event of two seeded players, taken all the way to ``live`` so its
+    one fixture has materialized into a real match. ``owner`` is seed 1, so the draw
+    seats them as ``entry_a`` (side 1)."""
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            POOL_A,
+            match_settings={"rated": rated, "length_games": 3},
+            predicates=[],
+        ),
+    )
+    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    e_owner = await _enter(
+        db_session, event["id"], owner, seed=1, created_at=base + timedelta(minutes=1)
+    )
+    e_opp = await _enter(
+        db_session,
+        event["id"],
+        opponent,
+        seed=2,
+        created_at=base + timedelta(minutes=2),
+    )
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    (fixture,) = await _fixture_rows(db_session, event["id"])
+    return tournament_id, event, e_owner, e_opp, fixture
+
+
+async def _live_three_player_pool(
+    client: AsyncClient,
+    owner: User,
+    second: User,
+    third: User,
+    db_session: AsyncSession,
+    *,
+    rated: bool,
+) -> tuple[
+    str,
+    dict[str, Any],
+    tuple[TournamentEntry, TournamentEntry, TournamentEntry],
+    list[TournamentFixture],
+]:
+    """A round-robin pool of three seeded players (seeds 1, 2, 3), live, so its three
+    fixtures have all materialized into matches."""
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            POOL_A,
+            match_settings={"rated": rated, "length_games": 3},
+            predicates=[],
+        ),
+    )
+    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    seated: list[TournamentEntry] = []
+    for seed, user in ((1, owner), (2, second), (3, third)):
+        seated.append(
+            await _enter(
+                db_session,
+                event["id"],
+                user,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+        )
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    fixtures = await _fixture_rows(db_session, event["id"])
+    entries = (seated[0], seated[1], seated[2])
+    return tournament_id, event, entries, fixtures
+
+
+async def test_a_completed_rated_tournament_match_writes_the_winner_to_its_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The rated completion path (propose → accept) drives the seam: the draw does not
+    move on a bare proposal, only once the opponent accepts. After acceptance the
+    fixture's ``winner_entry_id`` is the winning side's entry (side 1 → ``entry_a``)."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "rr-rated-opp") as (opp_client, opp):
+        _tid, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+
+        # Propose a decided board but do not accept it: the match stays in_progress, so
+        # the seam has not run and the fixture is still undecided.
+        post = await client.post(
+            f"/v1/matches/{fixture.match_id}/results",
+            json={
+                "games": [
+                    {"game_number": n, "side_1_points": 11, "side_2_points": 5}
+                    for n in range(1, 3)
+                ]
+            },
+        )
+        assert post.status_code == 201, post.text
+        (still_pending,) = await _fixture_rows(db_session, event["id"])
+        assert still_pending.winner_entry_id is None, (
+            "an unaccepted proposal must not move the draw"
+        )
+
+        # Accept: now the match completes and the seam writes the winner.
+        await accept_standing_result(opp_client, str(fixture.match_id))
+
+    (decided,) = await _fixture_rows(db_session, event["id"])
+    assert decided.winner_entry_id == e_owner.id, (
+        "acceptance completes the match, and the seam records side 1's entry as winner"
+    )
+    assert e_opp.id != e_owner.id
+
+
+async def test_a_completed_unrated_tournament_match_writes_the_winner_to_its_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The unrated completion path self-accepts on the proposal — no second verb — and
+    the same seam runs: posting the result completes the match immediately, and the
+    fixture's winner is written the instant it lands."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "rr-unrated-opp") as (opp_client, opp):
+        _tid, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=False
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=False,
+        )
+
+    (decided,) = await _fixture_rows(db_session, event["id"])
+    assert decided.winner_entry_id == e_owner.id
+
+
+async def test_completing_a_round_robin_match_materializes_nothing_new(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Round-robin's ``advance()`` is empty after go-live — the whole pool is already
+    materialized — so the completion seam records the one winner and creates no new
+    match. Proven by completing one match of a three-fixture pool and pinning the
+    match count."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "rr-empty-2") as (c2, u2),
+        opponent_session(db_session, "rr-empty-3") as (c3, u3),
+    ):
+        _tid, event, entries, fixtures = await _live_three_player_pool(
+            client, owner, u2, u3, db_session, rated=True
+        )
+        e1, e2, e3 = entries
+        before = await _match_count(db_session)
+        assert before == 3, "the pool materialized into three matches at go-live"
+
+        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in fixtures}
+        clients = {e1.id: client, e2.id: c2, e3.id: c3}
+        await _win_fixture_match(
+            by_pair[frozenset({e2.id, e3.id})],
+            clients_by_entry=clients,
+            winner_entry_id=e2.id,
+            rated=True,
+        )
+
+    assert await _match_count(db_session) == 3, (
+        "completing a round-robin match materializes no new match — advance() is empty"
+    )
+    fixtures_after = await _fixture_rows(db_session, event["id"])
+    decided = [f for f in fixtures_after if f.winner_entry_id is not None]
+    assert [f.winner_entry_id for f in decided] == [e2.id], (
+        "exactly the one completed fixture is decided; the seam touched no other"
+    )
+
+
+async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The tournament-detail BFF carries each round-robin event's standings, derived
+    live from its fixtures' completed matches (ADR-0788):
+
+    * mid-pool it is present but **incomplete**, with every seated entrant already on
+      the table (even one who has not played) and no champion;
+    * once every fixture is decided it is **complete**, ordered by wins, and its leader
+      is the champion.
+
+    Player 1 wins both their matches; player 2 beats player 3. Final table: p1 (2 wins),
+    p2 (1), p3 (0), champion p1."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "rr-bff-2") as (c2, u2),
+        opponent_session(db_session, "rr-bff-3") as (c3, u3),
+    ):
+        tournament_id, event, entries, fixtures = await _live_three_player_pool(
+            client, owner, u2, u3, db_session, rated=True
+        )
+        e1, e2, e3 = entries
+        clients = {e1.id: client, e2.id: c2, e3.id: c3}
+        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in fixtures}
+
+        # One match in: standings are live but incomplete, and everyone is seated.
+        await _win_fixture_match(
+            by_pair[frozenset({e2.id, e3.id})],
+            clients_by_entry=clients,
+            winner_entry_id=e2.id,
+            rated=True,
+        )
+        (read,) = await _events_of(client, tournament_id)
+        partial = read["results"]
+        assert partial is not None, "a cut round-robin event carries a results object"
+        assert partial["complete"] is False
+        assert partial["champion"] is None
+        (pool,) = partial["pools"]
+        assert {row["entry_id"] for row in pool["rows"]} == {
+            str(e1.id),
+            str(e2.id),
+            str(e3.id),
+        }, "every seated entrant is on the table, even before they've played"
+
+        # Finish the pool: p1 wins both of their matches.
+        await _win_fixture_match(
+            by_pair[frozenset({e1.id, e3.id})],
+            clients_by_entry=clients,
+            winner_entry_id=e1.id,
+            rated=True,
+        )
+        await _win_fixture_match(
+            by_pair[frozenset({e1.id, e2.id})],
+            clients_by_entry=clients,
+            winner_entry_id=e1.id,
+            rated=True,
+        )
+        (read,) = await _events_of(client, tournament_id)
+
+    results = read["results"]
+    assert results["complete"] is True
+    assert results["champion"] == str(e1.id)
+    (pool,) = results["pools"]
+    assert [(row["entry_id"], row["wins"], row["rank"]) for row in pool["rows"]] == [
+        (str(e1.id), 2, 1),
+        (str(e2.id), 1, 2),
+        (str(e3.id), 0, 3),
+    ]
+
+
+async def test_an_uncut_event_carries_no_results(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An event whose draw has not been cut has nothing to stand, so ``results`` is
+    ``null`` — not an empty table, which would read as a played event with nobody
+    in it."""
+    client, _owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    (read,) = await _events_of(client, tournament_id)
+    assert read["fixtures"] == [], "no draw cut yet"
+    assert read["results"] is None
+
+
+async def test_the_list_endpoint_does_not_ship_standings(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Standings are a detail-BFF concern. The tournaments *list* renders only event and
+    table counts — never a results table — so it must not compute or ship a ``results``
+    object (ADR-0788): doing so would run a game-count query and the tiebreak tabulation
+    per event for data a card throws away. A cut event proves the split — the detail
+    carries its standings, the list carries ``None`` for the same event."""
+    client, _owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+
+    # Detail: a cut round-robin event carries its (here, unplayed) standings.
+    (detail_event,) = await _events_of(client, tournament_id)
+    assert detail_event["results"] is not None
+
+    # List: the very same event carries no results — the projection is skipped whole.
+    listing = (await client.get("/v1/tournaments")).json()
+    (listed,) = [t for t in listing if t["id"] == tournament_id]
+    (listed_event,) = listed["events"]
+    assert listed_event["results"] is None

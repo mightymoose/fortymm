@@ -4,6 +4,8 @@
 
 // Type-only, and so fully erased: `./options` imports its domain types from
 // here, but nothing crosses back at runtime.
+import type { MatchStatus } from '@/api/matches'
+
 import type { PredicateOp } from './options'
 
 export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
@@ -101,6 +103,10 @@ export interface Pool {
  *   bye; a bye is the *absence of a fixture*, not a fixture with an empty side.
  * - `winnerEntryId` — undecided.
  * - `matchId` — not yet materialized.
+ * - `matchStatus` — the live status of the materialized match, or `null` when there is
+ *   no match yet. It moves in lockstep with `matchId` (both `null` before go-live, both
+ *   set after), and it is the match's *current* status read live, never a copy frozen at
+ *   go-live.
  * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
  *   this is the KO stage of an rr-then-ko. When set, it names a `Pool` in this same
  *   event's `pools`.
@@ -116,6 +122,73 @@ export interface Fixture {
   entryBId: string | null
   winnerEntryId: string | null
   matchId: string | null
+  /** The materialized match's live status, or `null` until go-live (#788). Moves in
+   * lockstep with `matchId`. */
+  matchStatus: MatchStatus | null
+}
+
+/**
+ * One entry's line in a pool's standings (ADR-0788), at the rank the **server**
+ * settled it at.
+ *
+ * The entry is an **id only** — exactly as a fixture carries its sides — and the
+ * username behind it is joined on at render from the event's `entrants` (the same
+ * argument the draw makes: copying the username here would carry a field and its own
+ * derivation, and the two would drift the moment a player is renamed). A row can name an
+ * entry the event no longer lists — a player who withdrew after playing, whose completed
+ * matches still count toward the numbers — so the join must have a word for that, never a
+ * blank or a raw id.
+ *
+ * Every number is the **server's**, computed once on it and read straight through: the FE
+ * neither re-sorts the rows nor recomputes a figure (ADR-0788 — "the order *is* the
+ * result"). `gameDifference` (= `gamesWon - gamesLost`) rides along already reduced,
+ * because it is the third tiebreaker and a client shows it, and computing it here as well
+ * would be a second copy that could disagree with the two counts beside it.
+ */
+export interface StandingRow {
+  entryId: string
+  /** 1-based and distinct per row — position 1 is the pool leader. */
+  rank: number
+  played: number
+  wins: number
+  losses: number
+  gamesWon: number
+  gamesLost: number
+  gameDifference: number
+}
+
+/** One pool's standings: its rows in the server's finishing order (**never re-sorted on
+ * the client**), and whether every one of the pool's fixtures is decided. `poolId` names
+ * a `Pool` in this same event's `pools`, so the table titles itself from the pool the
+ * page already holds. */
+export interface PoolStandings {
+  poolId: string
+  rows: StandingRow[]
+  complete: boolean
+}
+
+/**
+ * A round-robin event's **results** (ADR-0788): a standings table per pool, whether the
+ * whole event is decided, and its champion when there is one.
+ *
+ * Derived **live** on the server from the fixtures' currently-`completed` matches — never
+ * a snapshot — so a corrected or voided match re-orders the standings the instant it
+ * leaves `completed`. On the FE it is just BFF data, so TanStack Query invalidation drives
+ * the live update; nothing here polls or recomputes.
+ *
+ * On the event it is `null` for an event with **no draw** (nothing to stand) or one whose
+ * draw type has no results strategy yet (only round-robin does today) — an honest "no
+ * results", never an empty table that would read as a played event with nobody in it.
+ */
+export interface EventResults {
+  pools: PoolStandings[]
+  /** True when every fixture of every pool is decided. */
+  complete: boolean
+  /** The winning **entry id** of a complete, single-pool event — a pure round-robin's
+   * winner. `null` while any fixture is unplayed, and `null` for a multi-pool event,
+   * which has no single champion without a knockout stage to join its pool winners
+   * (a later slice). Joined to a username at render, like a row's `entryId`. */
+  champion: string | null
 }
 
 /** One *active* entry in an event. Withdrawn entries are not entrants — they
@@ -220,6 +293,12 @@ export interface TournamentEvent {
    * draw verbs, never through an event PATCH (which is why `eventToUpdateBody` omits
    * it, exactly as it omits the server-derived `entered`). */
   fixtures: Fixture[]
+  /** This event's **results** — its pool standings, whether it is complete, and its
+   * champion (ADR-0788) — or `null` for an uncut or non-round-robin event (nothing to
+   * stand). Server-derived, live, from the fixtures' completed matches; read it, never
+   * write it, and never re-sort or recompute it (the order and the numbers *are* the
+   * result). */
+  results: EventResults | null
 }
 
 /** A physical table in the venue catalogue, referenced by id from a

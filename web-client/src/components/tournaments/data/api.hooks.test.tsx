@@ -998,6 +998,7 @@ describe('useCutDraw', () => {
         entryBId: 'entry-2',
         winnerEntryId: null,
         matchId: null,
+        matchStatus: null,
       },
     ])
   })

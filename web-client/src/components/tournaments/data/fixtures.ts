@@ -24,7 +24,24 @@
 
 import { z } from 'zod'
 
+import type { MatchStatus } from '@/api/matches'
+
 import type { Fixture } from './types'
+
+/** The four match statuses, as the wire's `MatchStatus` enum spells them. `satisfies
+ * readonly MatchStatus[]` guards against a typo — every literal here must be a real
+ * `MatchStatus` — so this closed set and the generated `schema.d.ts` cannot drift into a
+ * status the app accepts but the server never sends (or vice versa). Exported because a
+ * materialized fixture is not the only place a status crosses the boundary (Slice 2's
+ * standings will want it too). */
+const MATCH_STATUSES = [
+  'pending',
+  'in_progress',
+  'completed',
+  'voided',
+] as const satisfies readonly MatchStatus[]
+
+export const matchStatusSchema = z.enum(MATCH_STATUSES)
 
 /** The wire shape (`TournamentFixtureRead`), as it really arrives: snake_case, with
  * five nullable columns that all mean something. Kept separate from the transform
@@ -44,6 +61,9 @@ const fixtureWireSchema = z.object({
   winner_entry_id: z.string().nullable(),
   /** `null` until the fixture materializes into a real match (#788). */
   match_id: z.string().nullable(),
+  /** The materialized match's live status, or `null` when the fixture has not
+   * materialized. Moves in lockstep with `match_id`. */
+  match_status: matchStatusSchema.nullable(),
 })
 
 /** The parser: one wire fixture → one domain `Fixture`.
@@ -62,6 +82,7 @@ export const fixtureSchema = fixtureWireSchema.transform(
     entryBId: f.entry_b_id,
     winnerEntryId: f.winner_entry_id,
     matchId: f.match_id,
+    matchStatus: f.match_status,
   }),
 )
 

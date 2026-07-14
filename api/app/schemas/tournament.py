@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.models.match import MatchStatus
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
@@ -483,8 +484,9 @@ class TournamentFixtureRead(BaseModel):
     """One planned pairing of an event's draw (ADR-0786): a round and a position —
     plus a pool, when the draw is pooled — whose sides may still be unknown.
 
-    A fixture is **not** a match. It materializes into one later (#788), and until it
-    does ``match_id`` is ``null``.
+    A fixture is **not** a match. It materializes into one at go-live (#788): once the
+    tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
+    gains a ``match_id``. Until then ``match_id`` (and ``match_status``) is ``null``.
 
     **Every ``null`` on this model is a fact, not a missing field**, and a client that
     dropped them would lose the draw's whole point:
@@ -495,7 +497,13 @@ class TournamentFixtureRead(BaseModel):
       (ADR-0786), so there is no ``is_bye`` flag here to tell the two apart.
     * ``winner_entry_id`` — ``null`` while the fixture is undecided.
     * ``match_id`` — ``null`` until the fixture becomes a real match, which only happens
-      once the tournament is ``live``.
+      once the tournament is ``live``. When set, it is the id of the match the slot
+      links to (``GET /v1/matches/{match_id}``), so a client can deep-link a slot.
+    * ``match_status`` — the live status of that match (``in_progress`` at go-live,
+      moving to ``completed`` / ``voided`` as it is played), or ``null`` when the
+      fixture has not materialized. It rides on the fixture so a bracket shows a slot's
+      state without a per-slot round-trip; it is the match's *current* status, read
+      live, not a copy frozen at go-live.
     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
@@ -518,6 +526,77 @@ class TournamentFixtureRead(BaseModel):
     entry_b_id: uuid.UUID | None
     winner_entry_id: uuid.UUID | None
     match_id: uuid.UUID | None
+    # The linked match's live status, or ``null`` when the fixture has not materialized.
+    # Read from the match row on every load (never snapshotted), so it tracks the match
+    # as it is played rather than freezing at go-live. See ``match_id`` above.
+    match_status: MatchStatus | None
+
+
+class StandingRowRead(BaseModel):
+    """One entry's line in a pool's standings (ADR-0788), at its settled rank.
+
+    The entry is carried as an **id only**, exactly as a fixture carries its sides: the
+    username behind ``entry_id`` is on the event's ``entrants`` list already, keyed by
+    that same id, so a client joins the two rather than reading a copy that could drift.
+
+    ``rank`` is 1-based and distinct per row — the pool's order is total (wins → two-way
+    head-to-head → game difference → games won → id), so position 1 is the leader.
+    ``game_difference`` (``games_won - games_lost``) rides along because it is the third
+    tiebreaker and a client shows it in the table; it is a pure function of the two game
+    counts beside it, computed once on the server so the two cannot disagree."""
+
+    entry_id: uuid.UUID
+    rank: int
+    played: int
+    wins: int
+    losses: int
+    games_won: int
+    games_lost: int
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic: decorate the property, not its getter
+    @property
+    def game_difference(self) -> int:
+        """``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+        to show but derived here so it cannot disagree with the two counts beside it."""
+        return self.games_won - self.games_lost
+
+
+class PoolStandingsRead(BaseModel):
+    """One pool's standings: its rows in finishing order, and whether every one of its
+    fixtures has been decided.
+
+    ``pool_id`` names a ``Pool`` in this same event's ``pools`` — the string ref a
+    fixture also carries — so a client titles the table from the pool it already
+    holds."""
+
+    pool_id: str
+    rows: list[StandingRowRead]
+    complete: bool
+
+
+class EventResultsRead(BaseModel):
+    """A round-robin event's results (ADR-0788): a standings table per pool, whether the
+    whole event is decided, and its champion when there is one.
+
+    It rides on the tournament-detail payload (one endpoint per page) and is **derived
+    live** from the fixtures' currently-completed matches — never a snapshot — so a
+    corrected or voided match re-orders the standings the instant it leaves
+    ``completed``.
+
+    ``champion`` is the leader of a **complete, single-pool** event — a pure
+    round-robin's winner. A multi-pool round-robin has no single champion without a
+    knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+    ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
+    played.
+
+    ``results`` on the event is ``null`` for an event that has **no draw** (nothing to
+    stand) or one whose draw type has no results strategy yet (only round-robin does
+    today) — an honest "no results here", not an empty table that would read as a played
+    event with nobody in it."""
+
+    pools: list[PoolStandingsRead]
+    complete: bool
+    champion: uuid.UUID | None
 
 
 class TournamentEventRead(BaseModel):
@@ -573,6 +652,14 @@ class TournamentEventRead(BaseModel):
     # event ever created (cutting is an explicit act, ADR-0786), so it answers ``[]``
     # and the client renders "no draw yet" from a list it can iterate either way.
     fixtures: list[TournamentFixtureRead]
+    # The event's RESULTS: its per-pool standings, event-complete flag and champion
+    # (ADR-0788), derived live from the fixtures' completed matches — the standings fill
+    # in as results land and a champion appears when the last one does. ``null`` for an
+    # event with no draw cut (nothing to stand) or one whose draw type has no results
+    # strategy yet — only round-robin does today. It rides on this same payload for the
+    # same one-endpoint-per-page reason ``fixtures`` does: the standings table is part
+    # of the tournament-detail page, not a second round-trip.
+    results: EventResultsRead | None
 
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
     @property
