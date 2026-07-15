@@ -1,4 +1,5 @@
 import { waitFor } from '@/test/utilities'
+import { mockSession } from '@/mocks/handlers'
 import { usersPage } from './users-page.page'
 import { DEFAULT_ROLE_ID, PLAIN_ROLE_ID, USER_ID } from './users-page.factory'
 
@@ -53,5 +54,40 @@ describe('UsersPage — the default role in the assignment editor', () => {
     // disabled. With no togglable state changed, Save reads "No changes".
     expect(await usersPage.findRoleCheckbox('User')).toBeDisabled()
     expect(usersPage.queryNoChangesButton()).toBeInTheDocument()
+  })
+})
+
+// Bug #8: the "Remove user" guard must key off `id`, not `username` — a rename
+// can't slip past it, and two users can't collide on a display name. Mirrors
+// the e2e coverage in `web-client/e2e/rbac-bugfixes.spec.ts` at the unit level.
+describe('UsersPage — self-removal guard keys off id, not username', () => {
+  it('disables Remove for a row whose id matches the session user, even with a different username', async () => {
+    const { id: sessionId } = mockSession.data.user
+    usersPage.render({
+      permissions: [],
+      roles: [],
+      users: [{ id: sessionId, username: 'someone.else', role_ids: [] }],
+    })
+
+    await usersPage.open('someone.else')
+
+    // The session loads asynchronously, so the guard flips on only once it
+    // resolves — poll rather than asserting immediately after the drawer opens.
+    await waitFor(async () => {
+      expect(await usersPage.findRemoveButton()).toBeDisabled()
+    })
+  })
+
+  it('leaves Remove enabled for a row whose username matches the session user but whose id differs', async () => {
+    const { username: sessionUsername } = mockSession.data.user
+    usersPage.render({
+      permissions: [],
+      roles: [],
+      users: [{ id: 'u_other', username: sessionUsername, role_ids: [] }],
+    })
+
+    await usersPage.open(sessionUsername)
+
+    expect(await usersPage.findRemoveButton()).toBeEnabled()
   })
 })

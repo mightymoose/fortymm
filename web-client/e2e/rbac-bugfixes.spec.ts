@@ -52,6 +52,38 @@ test.describe('Bug #8 · Remove user must not allow self-removal', () => {
     await expect(pom.sheet).toBeVisible()
     await expect(pom.removeButton).toBeEnabled()
   })
+
+  test('Remove user is disabled for a matching id even with a different username', async ({
+    page,
+  }) => {
+    // Same id as the signed-in admin, but a different username — proves the
+    // guard keys off id, not username. A username-keyed guard would leave
+    // this row enabled.
+    const { pom } = await UsersPage.navigateTo(page, {
+      permissions: [],
+      roles: [],
+      users: [{ id: SESSION_USER_ID, username: 'someone.else', role_ids: [] }],
+    })
+    await pom.userRow('someone.else').click()
+    await expect(pom.sheet).toBeVisible()
+    await expect(pom.removeButton).toBeDisabled()
+  })
+
+  test('Remove user stays enabled for a matching username with a different id', async ({
+    page,
+  }) => {
+    // Same username as the signed-in admin, but a different id — proves a
+    // username collision alone does not trigger the guard. A username-keyed
+    // guard would incorrectly disable this row.
+    const { pom } = await UsersPage.navigateTo(page, {
+      permissions: [],
+      roles: [],
+      users: [{ id: 'u_other', username: 'rita.kovac', role_ids: [] }],
+    })
+    await pom.userRow('rita.kovac').click()
+    await expect(pom.sheet).toBeVisible()
+    await expect(pom.removeButton).toBeEnabled()
+  })
 })
 
 test.describe('Bug #3 · relative timestamps must not land in the future', () => {
