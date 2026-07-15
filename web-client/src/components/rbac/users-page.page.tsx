@@ -25,6 +25,10 @@ const scoped = (container: Container) => ({
   queryNoChangesButton() {
     return container.queryByRole('button', { name: /no changes/i })
   },
+  /** The "Remove user" button in the open drawer's footer. */
+  findRemoveButton() {
+    return container.findByRole('button', { name: /remove user/i })
+  },
   /** Anything carrying `text` as a native tooltip (`title`) — the wrapper span
    * around a disabled checkbox, mirroring the delete-role-tooltip host. */
   queryTooltip(text: string | RegExp) {
