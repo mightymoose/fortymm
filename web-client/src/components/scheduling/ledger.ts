@@ -10,6 +10,7 @@
 // content (the strip's own precedent).
 
 import {
+  succeededVerdict,
   VERDICT_LABEL,
   type ScheduleSolveStatus,
   type SolverVerdict,
@@ -39,7 +40,8 @@ export interface SolveChip {
  * not fit, which is the point of pre-live solves, not a malfunction.
  *
  * A `succeeded` row whose verdict is missing degrades to `feasible` — the
- * modest claim — exactly as the strip does (`solveStripState`).
+ * modest claim — via the strip's own rule (`succeededVerdict`), so the two
+ * surfaces cannot drift apart on it.
  */
 export function solveChip(
   status: ScheduleSolveStatus,
@@ -54,7 +56,7 @@ export function solveChip(
       return {
         label: 'Solved',
         tone: 'ok',
-        verdict: VERDICT_LABEL[verdict === 'optimal' ? 'optimal' : 'feasible'],
+        verdict: VERDICT_LABEL[succeededVerdict(verdict)],
       }
     case 'infeasible':
       return { label: "Doesn't fit", tone: 'warn', verdict: null }
@@ -69,8 +71,12 @@ export function solveChip(
 
 /** True for the rows that carry a story worth expanding — the two terminal
  * not-a-plan outcomes. The expansion holds the failure detail: the server's
- * `error` sentence (failed only) and the drift guard's `input_fingerprint`. */
-export function hasFailureDetail(status: ScheduleSolveStatus): boolean {
+ * `error` sentence (failed only) and the drift guard's `input_fingerprint`.
+ * A type predicate, so a caller that passed the gate can index
+ * `FAILURE_HEADLINE` without a cast. */
+export function hasFailureDetail(
+  status: ScheduleSolveStatus,
+): status is 'failed' | 'infeasible' {
   return status === 'failed' || status === 'infeasible'
 }
 

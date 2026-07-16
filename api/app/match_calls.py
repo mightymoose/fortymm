@@ -33,8 +33,9 @@ commit-then-enqueue (``app.matches._notify_result_posted``): the worker's
 says they may not. So the call splits the channels: the **in-app
 ``Notification`` rows are persisted inside the pin transaction** (respecting
 each recipient's (match_calls, in_app) preference via the same resolution
-machinery the worker uses — ``app.notifications.service.effective_channels``),
-and only the best-effort external channels (push, email) are fanned out
+machinery the worker uses — ``app.notifications.service``, batch-resolved per
+recipient batch since the locks are held while resolving), and only the
+best-effort external channels (push, email) are fanned out
 post-commit via a ``NotificationJob`` restricted to those channels. A crash
 before commit leaves no pin and no notification; a crash after commit leaves
 the pin *with* its durable in-app record — the fan-out is best-effort by the
@@ -68,24 +69,17 @@ rewrites columns and tells nobody.
 
 import asyncio
 import logging
-import threading
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-from sqlalchemy.pool import NullPool
+from sqlalchemy import ColumnElement, exists, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
 from app import queue as queue_module
-from app.db import get_database_url
 from app.models import (
     Match,
     MatchStatus,
@@ -106,10 +100,15 @@ from app.notifications.match_calls import (
     match_call_moved_message,
     match_called_message,
 )
-from app.notifications.service import effective_channels
+from app.notifications.service import (
+    effective_channels_for_users,
+    enqueue_notification_job,
+)
 from app.notifications.taxonomy import NotificationChannel
+from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
-from app.schemas.tournament import Pool, TournamentTable
+from app.schemas.tournament import TournamentTable
+from app.tournament_draws import event_pools
 
 log = logging.getLogger(__name__)
 
@@ -134,8 +133,11 @@ _FANOUT_CHANNELS = [NotificationChannel.PUSH, NotificationChannel.EMAIL]
 
 
 def _wall_now() -> datetime:
-    """Naive wall-clock now — the frame ``scheduled_start`` / ``pinned_at``
-    live in (the deliberate ADR-0790 exemption from aware datetimes)."""
+    """Naive wall-clock now — the frame ``scheduled_start``, ``pinned_at``
+    and the pool windows live in (the deliberate ADR-0790 exemption from
+    aware datetimes). One definition for both halves of the pipeline:
+    ``app.schedule_solves`` imports this one, and each module's tests
+    monkeypatch their own module's binding."""
     return datetime.now()
 
 
@@ -160,12 +162,39 @@ def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
     )
 
 
+def _due_fixture_clauses(
+    tournament_id: uuid.UUID, now: datetime
+) -> tuple[ColumnElement[bool], ...]:
+    """:func:`_due_for_call` as SQL, scoped to one tournament — the tick's
+    narrowing predicate (both its lock-free EXISTS probe and its ``FOR
+    UPDATE`` select use it, so they cannot drift apart). Deliberately a
+    *narrowing* only: the settled-match filter lives on the joined match and
+    stays in :func:`call_due_fixtures`, and the Python
+    :func:`_due_for_call` re-check under the row lock remains the
+    authoritative exactly-once guard."""
+    return (
+        TournamentFixture.event_id.in_(
+            select(TournamentEvent.id).where(
+                TournamentEvent.tournament_id == tournament_id
+            )
+        ),
+        TournamentFixture.pinned_at.is_(None),
+        TournamentFixture.table_id.is_not(None),
+        TournamentFixture.scheduled_start.is_not(None),
+        TournamentFixture.scheduled_start <= now + timedelta(minutes=CALL_AHEAD_MIN),
+        TournamentFixture.entry_a_id.is_not(None),
+        TournamentFixture.entry_b_id.is_not(None),
+        TournamentFixture.winner_entry_id.is_(None),
+    )
+
+
 async def call_due_fixtures(
     db: AsyncSession,
     tournament: Tournament,
     fixtures: Sequence[TournamentFixture],
     *,
     now: datetime,
+    ingredients: "CopyIngredients | None" = None,
 ) -> list[NotificationJob]:
     """Call every due fixture among ``fixtures``: set ``pinned_at = now``,
     increment ``call_notified_count``, and persist one in-app ``Notification``
@@ -176,7 +205,10 @@ async def call_due_fixtures(
 
     Contract: the caller holds the tournament row lock and has the fixture
     rows locked ``FOR UPDATE`` ordered by id (the guarded apply's exact lock
-    order), and owns the commit. Does **not** commit.
+    order), and owns the commit. Does **not** commit. A caller that already
+    batch-loaded :class:`CopyIngredients` covering ``fixtures`` (the guarded
+    apply, which shares one batch with :func:`notify_pin_repairs`) passes it
+    as ``ingredients``; otherwise they are loaded here.
     """
     if tournament.status is not TournamentStatus.live:
         return []
@@ -204,9 +236,12 @@ async def call_due_fixtures(
     if not due:
         return []
 
-    ingredients = await _load_copy_ingredients(db, tournament, due)
+    if ingredients is None:
+        ingredients = await load_copy_ingredients(db, tournament, due)
 
-    fanout: list[NotificationJob] = []
+    # First pass resolves each due fixture's people, so the whole batch's
+    # in-app preferences resolve in one round (the locks are already held).
+    calls: list[tuple[TournamentFixture, User, User, _OpponentCopy]] = []
     for fixture in due:
         # Re-assured by _due_for_call above; narrow for the type checker.
         if (
@@ -223,35 +258,33 @@ async def call_due_fixtures(
             # A dangling ref (entry/event deleted under a stale placement) is
             # broken-pin territory — don't promise a match that can't run.
             continue
-
-        # The call: the pin and its notification records commit together.
-        fixture.pinned_at = now
-        fixture.call_notified_count += 1
-
-        context = _fixture_context(tournament, event, fixture.pool_id)
+        context = ingredients.context_for(tournament, event, fixture.pool_id)
         # A removed table under a stale placement can't be labeled; fall back
         # to the raw id rather than dropping the call (the *next* solve's
         # snapshot detects the broken pin and repairs it).
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
+        build = _called_copy(table_label, fixture.scheduled_start, context)
+        calls.append((fixture, user_a, user_b, build))
 
-        for recipient, opponent in ((user_a, user_b), (user_b, user_a)):
-            if recipient.merged_into_user_id is not None:
-                continue  # tombstoned ghost — same skip the worker's notify does
-            message = match_called_message(
-                table_label=table_label,
-                estimated_start=fixture.scheduled_start,
-                opponent_name=opponent.username,
-                context=context,
-            )
-            fanout.append(
-                await _record_message(
-                    db,
-                    recipient,
-                    message,
-                    tournament_id=tournament.id,
-                    fixture_id=fixture.id,
-                )
-            )
+    in_app_ids = await _in_app_allowed(
+        db, [user for _, user_a, user_b, _ in calls for user in (user_a, user_b)]
+    )
+
+    fanout: list[NotificationJob] = []
+    for fixture, user_a, user_b, build in calls:
+        # The call: the pin and its notification records commit together.
+        fixture.pinned_at = now
+        _tell_pair(
+            db,
+            fixture,
+            user_a,
+            user_b,
+            build=build,
+            tournament_id=tournament.id,
+            in_app_ids=in_app_ids,
+            increment_always=True,
+            fanout=fanout,
+        )
     await db.flush()
     return fanout
 
@@ -259,21 +292,9 @@ async def call_due_fixtures(
 def enqueue_call_fanout(jobs: Sequence[NotificationJob]) -> None:
     """Enqueue the post-commit push/email fan-out. Fire-and-forget: the pin and
     its in-app record are already committed, so a Redis hiccup must not fail
-    the calling flow (mirrors ``NotificationService.enqueue_notification``)."""
-    from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
-
+    the calling flow (``enqueue_notification_job``'s own contract)."""
     for job in jobs:
-        try:
-            queue_module.get_notifications_queue().enqueue(
-                DELIVER_NOTIFICATION_JOB,
-                job.model_dump_json(),
-                result_ttl=60,
-                failure_ttl=300,
-            )
-        except Exception:  # noqa: BLE001 -- best-effort by contract, like every fan-out enqueue
-            log.exception(
-                "Failed to enqueue match-call fan-out for user %s", job.user_id
-            )
+        enqueue_notification_job(job)
 
 
 # ----- broken-pin repair corrections -----------------------------------------
@@ -286,6 +307,7 @@ async def notify_pin_repairs(
     moved: Sequence[TournamentFixture],
     cancelled: Sequence[TournamentFixture],
     withdrawn_entry_ids: AbstractSet[uuid.UUID],
+    ingredients: "CopyIngredients | None" = None,
 ) -> list[NotificationJob]:
     """Send the corrections for pins the guarded apply just repaired: a
     *moved* message per entrant of each re-placed pin (``moved`` rows already
@@ -311,15 +333,22 @@ async def notify_pin_repairs(
     * **``call_notified_count`` increments once per correction actually
       sent** — the column means "times the players were told" (its model
       docstring), so a repair that reached no recipient leaves it alone.
+
+    A caller that already batch-loaded :class:`CopyIngredients` covering the
+    repaired fixtures (the guarded apply, which shares one batch with
+    :func:`call_due_fixtures`) passes it as ``ingredients``.
     """
     if tournament.status is not TournamentStatus.live:
         return []
     repaired = [*moved, *cancelled]
     if not repaired:
         return []
-    ingredients = await _load_copy_ingredients(db, tournament, repaired)
+    if ingredients is None:
+        ingredients = await load_copy_ingredients(db, tournament, repaired)
 
-    fanout: list[NotificationJob] = []
+    # First pass over both branches, so the whole batch's in-app preferences
+    # resolve in one round (the locks are already held).
+    moves: list[tuple[TournamentFixture, User, User, _OpponentCopy]] = []
     for fixture in moved:
         event = ingredients.events.get(fixture.event_id)
         user_a = ingredients.user_for_entry(fixture.entry_a_id)
@@ -332,37 +361,21 @@ async def notify_pin_repairs(
             or fixture.scheduled_start is None
         ):
             continue
-        context = _fixture_context(tournament, event, fixture.pool_id)
+        context = ingredients.context_for(tournament, event, fixture.pool_id)
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
-        told = False
-        for recipient, opponent in ((user_a, user_b), (user_b, user_a)):
-            if recipient.merged_into_user_id is not None:
-                continue
-            message = match_call_moved_message(
-                new_table_label=table_label,
-                new_estimated_start=fixture.scheduled_start,
-                opponent_name=opponent.username,
-                context=context,
-            )
-            fanout.append(
-                await _record_message(
-                    db,
-                    recipient,
-                    message,
-                    tournament_id=tournament.id,
-                    fixture_id=fixture.id,
-                )
-            )
-            told = True
-        if told:
-            fixture.call_notified_count += 1
+        build = _moved_copy(table_label, fixture.scheduled_start, context)
+        moves.append((fixture, user_a, user_b, build))
 
+    # Cancellations go to the REMAINING entrant only (docstring above).
+    cancellations: list[
+        tuple[TournamentFixture, MatchCallContext, list[tuple[User, User]]]
+    ] = []
     for fixture in cancelled:
         event = ingredients.events.get(fixture.event_id)
         if event is None:
             continue
-        context = _fixture_context(tournament, event, fixture.pool_id)
-        told = False
+        context = ingredients.context_for(tournament, event, fixture.pool_id)
+        recipients: list[tuple[User, User]] = []
         for entry_id, opponent_entry_id in (
             (fixture.entry_a_id, fixture.entry_b_id),
             (fixture.entry_b_id, fixture.entry_a_id),
@@ -377,18 +390,49 @@ async def notify_pin_repairs(
                 or remaining.merged_into_user_id is not None
             ):
                 continue
+            recipients.append((remaining, withdrew))
+        cancellations.append((fixture, context, recipients))
+
+    in_app_ids = await _in_app_allowed(
+        db,
+        [user for _, user_a, user_b, _ in moves for user in (user_a, user_b)]
+        + [
+            remaining
+            for _, _, recipients in cancellations
+            for remaining, _ in recipients
+        ],
+    )
+
+    fanout: list[NotificationJob] = []
+    for fixture, user_a, user_b, build in moves:
+        _tell_pair(
+            db,
+            fixture,
+            user_a,
+            user_b,
+            build=build,
+            tournament_id=tournament.id,
+            in_app_ids=in_app_ids,
+            increment_always=False,
+            fanout=fanout,
+        )
+
+    for fixture, context, recipients in cancellations:
+        told = False
+        for remaining, withdrew in recipients:
             message = match_call_cancelled_message(
                 reason=MatchCallCancellationReason.OPPONENT_WITHDREW,
                 opponent_name=withdrew.username,
                 context=context,
             )
             fanout.append(
-                await _record_message(
+                _record_message(
                     db,
                     remaining,
                     message,
                     tournament_id=tournament.id,
                     fixture_id=fixture.id,
+                    in_app=remaining.id in in_app_ids,
                 )
             )
             told = True
@@ -544,53 +588,135 @@ async def _tell_both_entrants(
     *,
     build: _ManualMessageBuilder,
 ) -> list[NotificationJob]:
-    """Record one manual-transition message per entrant (skipping tombstoned
-    ghosts, like every other sender here) and increment
-    ``call_notified_count`` once if anyone was actually told. A dangling ref
-    (entry/event deleted under a stale placement) records nothing — the state
-    columns still change; the solve pipeline's broken-pin detection owns that
-    territory."""
-    ingredients = await _load_copy_ingredients(db, tournament, [fixture])
+    """Record one manual-transition message per entrant (via the shared
+    :func:`_tell_pair` loop — tombstone skip, told-gated count increment). A
+    dangling ref (entry/event deleted under a stale placement) records
+    nothing — the state columns still change; the solve pipeline's broken-pin
+    detection owns that territory."""
+    ingredients = await load_copy_ingredients(db, tournament, [fixture])
     event = ingredients.events.get(fixture.event_id)
     user_a = ingredients.user_for_entry(fixture.entry_a_id)
     user_b = ingredients.user_for_entry(fixture.entry_b_id)
     if event is None or user_a is None or user_b is None:
         return []
-    context = _fixture_context(tournament, event, fixture.pool_id)
+    context = ingredients.context_for(tournament, event, fixture.pool_id)
+    in_app_ids = await _in_app_allowed(db, (user_a, user_b))
     fanout: list[NotificationJob] = []
+    _tell_pair(
+        db,
+        fixture,
+        user_a,
+        user_b,
+        build=lambda opponent: build(opponent, context, ingredients.table_labels),
+        tournament_id=tournament.id,
+        in_app_ids=in_app_ids,
+        increment_always=False,
+        fanout=fanout,
+    )
+    return fanout
+
+
+# ----- the shared both-entrants loop ------------------------------------------
+
+
+#: A message with everything but the opponent bound: how each two-entrant
+#: sender hands :func:`_tell_pair` its copy.
+_OpponentCopy = Callable[[User], MatchCallMessage]
+
+
+def _called_copy(
+    table_label: str, estimated_start: datetime, context: MatchCallContext
+) -> _OpponentCopy:
+    """Bind a *match_called* message to everything but the opponent."""
+
+    def build(opponent: User) -> MatchCallMessage:
+        return match_called_message(
+            table_label=table_label,
+            estimated_start=estimated_start,
+            opponent_name=opponent.username,
+            context=context,
+        )
+
+    return build
+
+
+def _moved_copy(
+    new_table_label: str, new_estimated_start: datetime, context: MatchCallContext
+) -> _OpponentCopy:
+    """Bind a *match_call_moved* correction to everything but the opponent."""
+
+    def build(opponent: User) -> MatchCallMessage:
+        return match_call_moved_message(
+            new_table_label=new_table_label,
+            new_estimated_start=new_estimated_start,
+            opponent_name=opponent.username,
+            context=context,
+        )
+
+    return build
+
+
+def _tell_pair(
+    db: AsyncSession,
+    fixture: TournamentFixture,
+    user_a: User,
+    user_b: User,
+    *,
+    build: _OpponentCopy,
+    tournament_id: uuid.UUID,
+    in_app_ids: AbstractSet[uuid.UUID],
+    increment_always: bool,
+    fanout: list[NotificationJob],
+) -> None:
+    """The both-ways (recipient, opponent) loop every two-entrant sender
+    shares: record one message per non-tombstoned entrant (appended to the
+    caller's ``fanout``) and settle ``call_notified_count``.
+
+    ``increment_always`` is the senders' one deliberate divergence: a *call*
+    (:func:`call_due_fixtures`) counts once per due fixture regardless of
+    whether any entrant could be told — the pin happened, and the count's
+    pairing with it is the exactly-once invariant — while the corrections
+    (moved repairs, the manual transitions) count only when at least one
+    entrant was actually told, because the column means "times the players
+    were told" and a correction that reached nobody told nobody.
+    """
     told = False
     for recipient, opponent in ((user_a, user_b), (user_b, user_a)):
         if recipient.merged_into_user_id is not None:
-            continue
+            continue  # tombstoned ghost — same skip the worker's notify does
         fanout.append(
-            await _record_message(
+            _record_message(
                 db,
                 recipient,
-                build(opponent, context, ingredients.table_labels),
-                tournament_id=tournament.id,
+                build(opponent),
+                tournament_id=tournament_id,
                 fixture_id=fixture.id,
+                in_app=recipient.id in in_app_ids,
             )
         )
         told = True
-    if told:
+    if increment_always or told:
         fixture.call_notified_count += 1
-    return fanout
 
 
 # ----- shared copy machinery --------------------------------------------------
 
 
 @dataclass(frozen=True)
-class _CopyIngredients:
+class CopyIngredients:
     """The batch-loaded ingredients every match-call message is built from:
-    entrant→user resolution, the events (names + pool labels), and the venue's
-    table labels. Loaded once per batch, parsed with the same models the write
-    boundary validated them with (parse, don't validate)."""
+    entrant→user resolution, the events (names + pool labels, the latter
+    parsed once per event into ``pool_names``), and the venue's table labels.
+    Loaded once per batch, parsed with the same models the write boundary
+    validated them with (parse, don't validate)."""
 
     entry_user: dict[uuid.UUID, uuid.UUID]
     users: dict[uuid.UUID, User]
     events: dict[uuid.UUID, TournamentEvent]
     table_labels: dict[str, str]
+    #: Per event, its pools' id → display name (``pool_id`` is a string ref
+    #: into the event's own ``pools`` JSONB).
+    pool_names: dict[uuid.UUID, dict[str, str]]
 
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
         if entry_id is None:
@@ -598,12 +724,25 @@ class _CopyIngredients:
         user_id = self.entry_user.get(entry_id)
         return self.users.get(user_id) if user_id is not None else None
 
+    def context_for(
+        self, tournament: Tournament, event: TournamentEvent, pool_id: str | None
+    ) -> MatchCallContext:
+        """The fixture's whereabouts in the player's terms."""
+        pool_name: str | None = None
+        if pool_id is not None:
+            pool_name = self.pool_names.get(event.id, {}).get(pool_id)
+        return MatchCallContext(
+            tournament_name=tournament.name,
+            event_name=event.name,
+            pool_name=pool_name,
+        )
 
-async def _load_copy_ingredients(
+
+async def load_copy_ingredients(
     db: AsyncSession,
     tournament: Tournament,
     fixtures: Sequence[TournamentFixture],
-) -> _CopyIngredients:
+) -> CopyIngredients:
     entry_ids = {
         entry_id
         for fixture in fixtures
@@ -646,56 +785,57 @@ async def _load_copy_ingredients(
             TournamentTable.model_validate(raw) for raw in tournament.table_catalogue
         )
     }
-    return _CopyIngredients(
+    pool_names = {
+        event.id: {pool.id: pool.name for pool in event_pools(event)}
+        for event in events.values()
+    }
+    return CopyIngredients(
         entry_user=entry_user,
         users=users,
         events=events,
         table_labels=table_labels,
+        pool_names=pool_names,
     )
 
 
-def _fixture_context(
-    tournament: Tournament, event: TournamentEvent, pool_id: str | None
-) -> MatchCallContext:
-    """The fixture's whereabouts in the player's terms; the pool name resolves
-    through the event's own ``pools`` JSONB (``pool_id`` is a string ref)."""
-    pool_name: str | None = None
-    if pool_id is not None:
-        pool_name = next(
-            (
-                pool.name
-                for pool in (Pool.model_validate(raw) for raw in event.pools)
-                if pool.id == pool_id
-            ),
-            None,
-        )
-    return MatchCallContext(
-        tournament_name=tournament.name,
-        event_name=event.name,
-        pool_name=pool_name,
+async def _in_app_allowed(
+    db: AsyncSession, recipients: Collection[User]
+) -> set[uuid.UUID]:
+    """Which of ``recipients`` allow the (match_calls, in_app) cell — resolved
+    with the same machinery the worker's ``notify`` uses
+    (``app.notifications.service``), but batched: this runs inside the pin
+    transaction while the tournament + fixture locks are held, so the
+    availability read happens once and the per-user overrides arrive in
+    ``IN``-queries instead of a query fan per recipient."""
+    allowed = await effective_channels_for_users(
+        db,
+        {recipient.id for recipient in recipients},
+        MATCH_CALLS_CATEGORY,
+        {NotificationChannel.IN_APP},
     )
+    return {
+        user_id
+        for user_id, channels in allowed.items()
+        if NotificationChannel.IN_APP in channels
+    }
 
 
-async def _record_message(
+def _record_message(
     db: AsyncSession,
     recipient: User,
     message: MatchCallMessage,
     *,
     tournament_id: uuid.UUID,
     fixture_id: uuid.UUID,
+    in_app: bool,
 ) -> NotificationJob:
     """Persist the recipient's in-app row on the caller's open transaction
-    (respecting their (match_calls, in_app) preference) and return the
-    push/email fan-out job the caller enqueues post-commit — the atomicity
-    split the module docstring describes."""
+    (``in_app`` is their batch-resolved (match_calls, in_app) preference —
+    :func:`_in_app_allowed`) and return the push/email fan-out job the caller
+    enqueues post-commit — the atomicity split the module docstring
+    describes."""
     link = f"/tournaments/{tournament_id}"
-    allowed = await effective_channels(
-        db,
-        recipient.id,
-        MATCH_CALLS_CATEGORY,
-        {NotificationChannel.IN_APP},
-    )
-    if NotificationChannel.IN_APP in allowed:
+    if in_app:
         db.add(
             Notification(
                 user_id=recipient.id,
@@ -723,55 +863,47 @@ async def _record_message(
 
 def run_pin_tick(tournament_id: str) -> None:
     """RQ entry point: pin+notify whatever the tournament's current schedule
-    says is imminent. Idempotent — see the module docstring.
-
-    A sync wrapper that owns its own engine, exactly like
-    ``app.schedule_solves.run_schedule_solve`` (and for the same reasons: RQ
-    workers are sync; under the tests' synchronous fake queue the job runs
-    inline inside an async test, so a fresh thread hosts its own loop).
-    """
+    says is imminent. Idempotent — see the module docstring. A thin wrapper
+    over :func:`app.rq_async.run_async_db_job`, which owns the sync-entry
+    loop-hosting and the per-run ``NullPool`` engine."""
     tid = uuid.UUID(tournament_id)
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_run_pin_tick(tid))
-        return
-
-    errors: list[Exception] = []
-
-    def _run_on_own_loop() -> None:
-        try:
-            asyncio.run(_run_pin_tick(tid))
-        except Exception as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
-            errors.append(exc)
-
-    thread = threading.Thread(target=_run_on_own_loop, name=f"pin-tick-{tid}")
-    thread.start()
-    thread.join()
-    if errors:
-        raise errors[0]
-
-
-async def _run_pin_tick(tournament_id: uuid.UUID) -> None:
-    engine = create_async_engine(get_database_url(), poolclass=NullPool)
-    try:
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        await execute_pin_tick(sessionmaker, tournament_id)
-    finally:
-        await engine.dispose()
+    run_async_db_job(
+        f"pin-tick-{tid}",
+        lambda sessionmaker: execute_pin_tick(sessionmaker, tid),
+    )
 
 
 async def execute_pin_tick(
     sessionmaker: async_sessionmaker[AsyncSession], tournament_id: uuid.UUID
 ) -> None:
     """The tick body, sessionmaker-injected so it is runnable anywhere a
-    database is. Takes the guarded apply's locks in the guarded apply's order
-    — tournament row, then fixture rows ``FOR UPDATE`` ordered by id — so a
-    tick and an in-flight apply serialize instead of deadlocking, and the
-    ``pinned_at IS NULL`` re-check under those locks makes whichever runs
-    second a no-op (multiple API replicas double-enqueueing ticks are
-    therefore harmless)."""
+    database is.
+
+    Starts with a **lock-free EXISTS probe** for a due fixture
+    (:func:`_due_fixture_clauses`): the overwhelmingly common tick finds
+    nothing imminent, and it must not take the tournament row lock — the lock
+    every tournament writer queues on — just to discover that. Only when the
+    probe finds something does the tick take the guarded apply's locks in the
+    guarded apply's order — tournament row, then fixture rows ``FOR UPDATE``
+    ordered by id (the id-ordered *subset* keeps the deadlock-free order) —
+    and the Python ``pinned_at IS NULL`` re-check under those locks
+    (:func:`_due_for_call`, inside :func:`call_due_fixtures`) remains the
+    authoritative exactly-once guard, so whichever of a tick/apply pair runs
+    second is a no-op and multiple API replicas double-enqueueing ticks are
+    harmless. The probe racing a concurrent writer costs nothing: a
+    false positive is caught by the re-check, and a fixture becoming due
+    right after a ``False`` probe is the next tick's work."""
     async with sessionmaker() as db:
+        now = _wall_now()
+        due_clauses = _due_fixture_clauses(tournament_id, now)
+        has_due = (
+            await db.execute(
+                select(exists(select(TournamentFixture.id).where(*due_clauses)))
+            )
+        ).scalar_one()
+        if not has_due:
+            return
+
         tournament = (
             await db.execute(
                 select(Tournament)
@@ -782,33 +914,20 @@ async def execute_pin_tick(
         if tournament is None or tournament.status is not TournamentStatus.live:
             return
 
-        event_ids = (
+        fixtures: Sequence[TournamentFixture] = (
             (
                 await db.execute(
-                    select(TournamentEvent.id).where(
-                        TournamentEvent.tournament_id == tournament_id
-                    )
+                    select(TournamentFixture)
+                    .where(*due_clauses)
+                    .order_by(TournamentFixture.id)
+                    .with_for_update()
                 )
             )
             .scalars()
             .all()
         )
-        fixtures: Sequence[TournamentFixture] = []
-        if event_ids:
-            fixtures = (
-                (
-                    await db.execute(
-                        select(TournamentFixture)
-                        .where(TournamentFixture.event_id.in_(event_ids))
-                        .order_by(TournamentFixture.id)
-                        .with_for_update()
-                    )
-                )
-                .scalars()
-                .all()
-            )
 
-        fanout = await call_due_fixtures(db, tournament, fixtures, now=_wall_now())
+        fanout = await call_due_fixtures(db, tournament, fixtures, now=now)
         await db.commit()
     # Post-commit, by design: the pin + in-app rows are durable; push/email
     # fan-out is best-effort (module docstring).

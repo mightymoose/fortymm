@@ -23,9 +23,8 @@ import { z } from 'zod'
 import { api, unwrap } from '@/api/client'
 import type { components } from '@/api/schema'
 import {
-  scheduleSolveStatusSchema,
-  scheduleSolveTriggerSchema,
-  solverVerdictSchema,
+  scheduleSolveFromWire,
+  scheduleSolveWireSchema,
   type ScheduleSolve,
 } from '@/components/tournaments/data/solve'
 
@@ -71,22 +70,12 @@ export interface AdminScheduleSolve extends ScheduleSolve {
 }
 
 /** The wire shape (`AdminScheduleSolveRead`), as it really arrives: snake_case,
- * every nullable present (`.nullable()`, never `.optional()`). The enum fields
- * reuse the closed sets `../tournaments/data/solve.ts` pins to the generated
- * schema with `satisfies`, so this parser cannot drift from the OpenAPI
- * contract without a compile error there. */
-const adminScheduleSolveWireSchema = z.object({
-  id: z.string(),
-  trigger: scheduleSolveTriggerSchema,
-  status: scheduleSolveStatusSchema,
-  verdict: solverVerdictSchema.nullable(),
-  requested_at: z.string(),
-  started_at: z.string().nullable(),
-  finished_at: z.string().nullable(),
-  wall_time_ms: z.number().nullable(),
-  fixtures_placed: z.number().int().nullable(),
-  fixtures_pinned: z.number().int().nullable(),
-  error: z.string().nullable(),
+ * every nullable present (`.nullable()`, never `.optional()`). It IS the
+ * tournament-facing wire schema plus the four operator-only fields —
+ * `.extend()`ed from `../tournaments/data/solve.ts` rather than re-spelled, so
+ * this parser cannot drift from that one (whose enum sets are pinned to the
+ * generated schema with `satisfies`). */
+const adminScheduleSolveWireSchema = scheduleSolveWireSchema.extend({
   input_fingerprint: z.string().nullable(),
   rerun_requested: z.boolean(),
   tournament_id: z.string(),
@@ -108,17 +97,7 @@ void _wireParity
  * this transform is a compile error. */
 export const adminScheduleSolveSchema = adminScheduleSolveWireSchema.transform(
   (s): AdminScheduleSolve => ({
-    id: s.id,
-    trigger: s.trigger,
-    status: s.status,
-    verdict: s.verdict,
-    requestedAt: s.requested_at,
-    startedAt: s.started_at,
-    finishedAt: s.finished_at,
-    wallTimeMs: s.wall_time_ms,
-    fixturesPlaced: s.fixtures_placed,
-    fixturesPinned: s.fixtures_pinned,
-    error: s.error,
+    ...scheduleSolveFromWire(s),
     inputFingerprint: s.input_fingerprint,
     rerunRequested: s.rerun_requested,
     tournamentId: s.tournament_id,

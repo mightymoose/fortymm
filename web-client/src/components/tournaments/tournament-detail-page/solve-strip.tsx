@@ -35,9 +35,6 @@ export interface SolveStripProps {
    * strip owns the inline notice (`runSchedulerNotice`), so the mutation behind
    * this must not also toast. */
   onRun: () => Promise<void>
-  /** True while the request is in the air — the double-click guard's other half
-   * (the first is the ledger row itself going `queued`). */
-  isRequesting: boolean
 }
 
 /** One visual grammar for the five states: an icon in the state's tint, a
@@ -176,20 +173,21 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
  *
  * The button is **withheld while a solve is in flight** (queued/running): the
  * server would absorb the click anyway (one solve per tournament), so offering it
- * would be offering a no-op. `isRequesting` guards the gap before the queued row
+ * would be offering a no-op. `submitting` guards the gap before the queued row
  * arrives — the double-click family (#436).
  */
-export const SolveStrip = ({ solve, canEdit, onRun, isRequesting }: SolveStripProps) => {
+export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
   // The last refusal, in words. Cleared when a new attempt starts — a notice
   // about the click before last is worse than none. (The `LifecycleActions`
   // pattern, which is the page's other inline-refusal surface.)
   const [notice, setNotice] = useState<RunSchedulerNotice | null>(null)
-  // The strip's OWN in-flight latch, distinct from `isRequesting`: a prop takes a
-  // render to arrive, and the second click of a double-click lands in that gap
-  // (#436 family). Belt and braces with the `disabled` below.
+  // The strip's OWN in-flight latch: set synchronously on click, so the second
+  // click of a double-click cannot land in a render gap (#436 family). It spans
+  // the whole `onRun` promise, so it also covers the mutation's own in-flight
+  // window — no prop needed for that.
   const [submitting, setSubmitting] = useState(false)
 
-  const busy = submitting || isRequesting || solveInFlight(solve)
+  const busy = submitting || solveInFlight(solve)
 
   const run = async () => {
     if (busy) return

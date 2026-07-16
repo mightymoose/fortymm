@@ -21,7 +21,7 @@
 import type { MatchStatus } from '@/api/matches'
 
 import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
-import { fixtureTier, type TimelineTier } from './timeline'
+import { fixtureTier, isTold, timeOfDay, type TimelineTier } from './timeline'
 import type {
   Entrant,
   Fixture,
@@ -280,14 +280,10 @@ export function composeScheduledStart(date: string, time: string): string {
   return `${date}T${time}:00`
 }
 
-/** The `HH:MM` time-of-day of a naive placement timestamp — for prefilling the picker and
- * showing the placement. Tolerant of a bare date or a seconds-bearing stamp; `''` when
- * there is no time (an unscheduled fixture). */
-export function timeOfDay(scheduledStart: string | null): string {
-  if (!scheduledStart) return ''
-  const time = scheduledStart.split('T')[1]
-  return time ? time.slice(0, 5) : ''
-}
+/** The `HH:MM` time-of-day helper lives in `./timeline.ts` now (this module already
+ * imports from there, so the dependency could only point that way); re-exported
+ * here because the schedule's readers are its natural audience. */
+export { timeOfDay }
 
 /**
  * What a placement write would DO to the players, before it is sent (ADR "the schedule
@@ -316,10 +312,10 @@ export type PlacementConsequenceKind =
  * Judge one placement write — a mirror of the server's own transition
  * (`apply_manual_placement`, `api/app/match_calls.py`), branch for branch:
  *
- * - **Told-ness is `pinnedAt` AND `callNotifiedCount > 0`**, never the count alone: a
- *   call that was later cancelled keeps its count (it is "how many times the players
- *   were told", and a clear does not reset it) but drops its pin — re-placing that
- *   fixture live is a fresh CALL, not a "moved" correcting a promise nobody holds.
+ * - **Told-ness is `isTold` (`./timeline.ts`)** — `pinnedAt` AND the count, never the
+ *   count alone: a call that was later cancelled keeps its count but drops its pin —
+ *   re-placing that fixture live is a fresh CALL, not a "moved" correcting a promise
+ *   nobody holds.
  * - **Anything less than a full placement is a clear**: a half-placement (a table with
  *   no time) cannot stay promised, so the server unpins it — and, live + told, sends
  *   the cancelled correction. The gate must price that write as the cancel it is.
@@ -338,7 +334,7 @@ export function placementConsequence(input: {
   write: { tableId: string | null; scheduledStart: string | null }
 }): PlacementConsequenceKind {
   if (input.tournamentStatus !== 'live') return 'silent'
-  const told = input.match.pinnedAt !== null && input.match.callNotifiedCount > 0
+  const told = isTold(input.match)
   // The server's clear branch: any half-placement lifts the pin with the columns.
   if (input.write.tableId === null || input.write.scheduledStart === null) {
     return told ? 'correction-cancel' : 'silent'

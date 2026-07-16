@@ -262,7 +262,10 @@ function LedgerRow({
   const chip = solveChip(solve.status, solve.verdict)
   const wall = fmtWallTime(solve.wallTimeMs)
   const counts = fmtFixtureCounts(solve.fixturesPlaced, solve.fixturesPinned)
-  const expandable = hasFailureDetail(solve.status)
+  // A local, so `hasFailureDetail`'s type predicate narrows it for the
+  // `FAILURE_HEADLINE` lookup below (a property access won't stay narrowed).
+  const status = solve.status
+  const expandable = hasFailureDetail(status)
   const detailId = `solve-detail-${solve.id}`
 
   return (
@@ -336,7 +339,9 @@ function LedgerRow({
           <td colSpan={COLUMN_COUNT}>
             <div id={detailId} data-testid={detailId} className="solve-ledger-detail">
               <div className="solve-ledger-detail-title">
-                {FAILURE_HEADLINE[solve.status as 'failed' | 'infeasible']}
+                {/* `expandable` is `hasFailureDetail`'s type predicate, so
+                    `status` is already narrowed to the two headline keys here. */}
+                {FAILURE_HEADLINE[status]}
               </div>
               {/* The server's own account of why the job broke — the one wire
                   sentence this page carries, because it is the actionable

@@ -94,8 +94,10 @@ export interface ScheduleSolve {
 
 /** The wire shape (`ScheduleSolveRead`), as it really arrives: snake_case, every
  * nullable present (`.nullable()`, never `.optional()` — an absent key is a payload
- * we cannot tell apart from a stage not reached). */
-const scheduleSolveWireSchema = z.object({
+ * we cannot tell apart from a stage not reached). Exported so the admin ledger's
+ * wire schema (`components/scheduling/queries.ts`) can `.extend()` it with the
+ * operator-only fields rather than re-spelling these. */
+export const scheduleSolveWireSchema = z.object({
   id: z.string(),
   trigger: scheduleSolveTriggerSchema,
   status: scheduleSolveStatusSchema,
@@ -109,11 +111,15 @@ const scheduleSolveWireSchema = z.object({
   error: z.string().nullable(),
 })
 
-/** The parser: one wire row → one domain `ScheduleSolve`. Annotated
- * `: ScheduleSolve` so the interface above and this schema are one thing — drop a
- * field from either and this line is a compile error (the `./fixtures.ts` pattern). */
-export const scheduleSolveSchema = scheduleSolveWireSchema.transform(
-  (s): ScheduleSolve => ({
+/** The snake→camel mapping, one wire row → one domain `ScheduleSolve`. Annotated
+ * `: ScheduleSolve` so the interface above and the wire schema are one thing — drop
+ * a field from either and this is a compile error (the `./fixtures.ts` pattern).
+ * Exported so the admin ledger's transform spreads this base mapping rather than
+ * re-spelling it. */
+export function scheduleSolveFromWire(
+  s: z.infer<typeof scheduleSolveWireSchema>,
+): ScheduleSolve {
+  return {
     id: s.id,
     trigger: s.trigger,
     status: s.status,
@@ -125,8 +131,11 @@ export const scheduleSolveSchema = scheduleSolveWireSchema.transform(
     fixturesPlaced: s.fixtures_placed,
     fixturesPinned: s.fixtures_pinned,
     error: s.error,
-  }),
-)
+  }
+}
+
+/** The parser: the wire schema plus the mapping above, as one Zod pipeline. */
+export const scheduleSolveSchema = scheduleSolveWireSchema.transform(scheduleSolveFromWire)
 
 /** Parse a 202's ledger row (the Run-scheduler response), or throw. `unknown` on
  * purpose — the generated type is exactly the claim this checks. */
@@ -177,6 +186,17 @@ export type SolveStripState =
       trigger: ScheduleSolveTrigger
     }
 
+/** The verdict a `succeeded` run can honestly claim: a succeeded row whose verdict
+ * is missing degrades to `feasible` — the modest claim — rather than inventing
+ * optimality or refusing to render. ONE rule, consumed by the strip below and the
+ * admin ledger's chip (`components/scheduling/ledger.ts`), so the two surfaces
+ * cannot drift on what a verdict-less success reads as. */
+export function succeededVerdict(
+  verdict: SolverVerdict | null,
+): 'optimal' | 'feasible' {
+  return verdict === 'optimal' ? 'optimal' : 'feasible'
+}
+
 /** Reduce the latest ledger row to the strip's state. Pure, so it is unit-tested
  * rather than asserted through a DOM (the `./schedule.ts` shape). */
 export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
@@ -188,7 +208,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
     case 'succeeded':
       return {
         kind: 'succeeded',
-        verdict: solve.verdict === 'optimal' ? 'optimal' : 'feasible',
+        verdict: succeededVerdict(solve.verdict),
         wallTimeMs: solve.wallTimeMs,
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,

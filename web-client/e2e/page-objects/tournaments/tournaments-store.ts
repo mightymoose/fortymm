@@ -3,9 +3,16 @@ import type { Page, Route } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { PERM } from '../../../src/lib/permissions'
 import {
+  manualPlacementPin,
+  NO_DRAWN_EVENTS_MESSAGE,
+  queuedSolveRow,
+  SOLVE_TICK_DWELL_MS,
+  solveRowInFlight,
+  stepScheduleSolve,
+} from '../../../src/mocks/factories/tournaments/solver-sim'
+import {
   buildEventResultsRead,
   buildPoolStandingsRead,
-  buildScheduleSolveRead,
   buildStandingRowRead,
   buildTournamentDetailRead,
   buildTournamentEventRead,
@@ -1256,29 +1263,16 @@ export class TournamentsStore {
       return json(route, 422, {
         detail: {
           code: 'no_drawn_events',
-          message:
-            'There is nothing to schedule yet: no event of this tournament has ' +
-            "a draw. The scheduler places a draw's fixtures onto tables, so cut " +
-            "at least one event's draw, then run it.",
+          message: NO_DRAWN_EVENTS_MESSAGE,
         },
       })
     }
     const current = this.detail.latest_schedule_solve
-    if (current && (current.status === 'queued' || current.status === 'running')) {
+    if (solveRowInFlight(current)) {
       return json(route, 202, current)
     }
     this.solveCounter += 1
-    const solve = buildScheduleSolveRead({
-      id: `solve-${this.solveCounter}`,
-      status: 'queued',
-      verdict: null,
-      requested_at: new Date().toISOString(),
-      started_at: null,
-      finished_at: null,
-      wall_time_ms: null,
-      fixtures_placed: null,
-      fixtures_pinned: null,
-    })
+    const solve = queuedSolveRow(`solve-${this.solveCounter}`)
     this.detail = { ...this.detail, latest_schedule_solve: solve }
     return json(route, 202, solve)
   }
@@ -1287,128 +1281,45 @@ export class TournamentsStore {
   private lastSolveTickAt = 0
 
   /** One step of the mock worker, driven by the detail READS (there is no real
-   * queue here): `queued` → `running`, then `running` → `succeeded` with every
-   * unplaced pooled fixture dealt onto its pool's tables. Terminal rows never
-   * move — a seeded `infeasible`/`failed` strip stays what the spec seeded.
+   * queue here) — `stepScheduleSolve`, the shared sim (`solver-sim.ts`), so this
+   * stub and the MSW store cannot drift apart on what a solve does: `queued` →
+   * `running`, then `running` → `succeeded` with every unplaced pooled fixture
+   * dealt onto its pool's tables (and, while LIVE, the imminent ones called).
+   * Terminal rows never move — a seeded `infeasible`/`failed` strip stays what
+   * the spec seeded.
    *
-   * **At most one step per ~600ms.** The client's reconcile can land two detail
-   * GETs back-to-back (the list key prefix-matches the detail key, so one
-   * mutation's invalidate refetches it twice), and a tick per read would walk
-   * queued → succeeded inside one reconcile — the `solving` state would be
-   * unobservable, in the spec and in front of a person. The dwell makes each
-   * step land on a DIFFERENT poll, which is the loop under test. */
+   * **At most one step per dwell** (`SOLVE_TICK_DWELL_MS`). The client's
+   * reconcile can land two detail GETs back-to-back (the list key
+   * prefix-matches the detail key, so one mutation's invalidate refetches it
+   * twice), and a tick per read would walk queued → succeeded inside one
+   * reconcile — the `solving` state would be unobservable, in the spec and in
+   * front of a person. The dwell makes each step land on a DIFFERENT poll,
+   * which is the loop under test. */
   private tickSolve() {
     const solve = this.detail.latest_schedule_solve
-    if (!solve) return
-    if (solve.status !== 'queued' && solve.status !== 'running') return
+    if (!solve || !solveRowInFlight(solve)) return
     const now = Date.now()
-    if (now - this.lastSolveTickAt < 600) return
+    if (now - this.lastSolveTickAt < SOLVE_TICK_DWELL_MS) return
     this.lastSolveTickAt = now
-    if (solve.status === 'queued') {
-      this.detail = {
-        ...this.detail,
-        latest_schedule_solve: {
-          ...solve,
-          status: 'running',
-          started_at: new Date().toISOString(),
-        },
-      }
-      return
-    }
-    if (solve.status === 'running') {
-      const placed = this.placeUnplacedFixtures()
-      // Calling rides the apply, and only while LIVE (ADR "the schedule is
-      // solved; the call is pinned": pre-live placements are silent — solves
-      // plan, notify no one). Mirrors the MSW store's `pinImminentFixtures`.
-      const pinned = this.detail.status === 'live' ? this.pinImminentFixtures() : 0
-      this.detail = {
-        ...this.detail,
-        latest_schedule_solve: {
-          ...solve,
-          status: 'succeeded',
-          verdict: 'feasible',
-          finished_at: new Date().toISOString(),
-          wall_time_ms: 1200,
-          fixtures_placed: placed,
-          fixtures_pinned: pinned,
-        },
-      }
-    }
-  }
-
-  /** The mock's **calling pass**, run on a LIVE tournament's freshly-applied
-   * placements: any placed, still-unpinned fixture whose `scheduled_start`
-   * falls within the ~10-minute call-ahead window of the store's "now" gets
-   * `pinned_at` set and one notification counted — the fixture comes back
-   * CALLED on the next detail read, which is what the board/list specs watch.
-   *
-   * The store's "now" is the earliest placed `scheduled_start` anywhere — the
-   * moment the venue's day opens. The seeds' pool slots live on fixed calendar
-   * dates, so the machine's real clock could never be "10 minutes before Pool
-   * A"; the day's own first ball is the only honest clock the stub has. */
-  private pinImminentFixtures(): number {
-    const CALL_AHEAD_MIN = 10
-    const minutesOf = (stamp: string): { date: string; minutes: number } => {
-      const [date, time] = stamp.split('T')
-      const [h, m] = (time ?? '').split(':').map(Number)
-      return { date, minutes: (h || 0) * 60 + (m || 0) }
-    }
-    const starts = this.detail.events
-      .flatMap((e) => e.fixtures)
-      .filter((f) => f.table_id !== null && f.scheduled_start !== null)
-      .map((f) => f.scheduled_start as string)
-    if (starts.length === 0) return 0
-    const now = starts.reduce((a, b) => (a < b ? a : b))
-    const nowAt = minutesOf(now)
-    let pinned = 0
+    const step = stepScheduleSolve(
+      solve,
+      this.detail.events,
+      this.detail.status === 'live',
+    )
+    if (!step) return
     this.detail = {
       ...this.detail,
-      events: this.detail.events.map((event) => ({
-        ...event,
-        fixtures: event.fixtures.map((fixture) => {
-          if (
-            fixture.pinned_at !== null ||
-            fixture.table_id === null ||
-            fixture.scheduled_start === null ||
-            fixture.match_status === 'in_progress' ||
-            fixture.match_status === 'completed' ||
-            fixture.match_status === 'voided'
-          ) {
-            return fixture
-          }
-          const at = minutesOf(fixture.scheduled_start)
-          const imminent =
-            at.date === nowAt.date &&
-            at.minutes >= nowAt.minutes &&
-            at.minutes - nowAt.minutes <= CALL_AHEAD_MIN
-          if (!imminent) return fixture
-          pinned += 1
-          return { ...fixture, pinned_at: now, call_notified_count: 1 }
-        }),
-      })),
+      events: step.events,
+      latest_schedule_solve: step.solve,
     }
-    return pinned
   }
 
   /**
    * `PATCH …/fixtures/{fixture_id}/placement` — the director's hand, with the
-   * SERVER's transition table (`apply_manual_placement`, `api/app/match_calls.py`),
-   * branch for branch:
-   *
-   * - **Full placement, both entrants known → the pin, in EVERY status**:
-   *   `pinned_at = now`, set or refreshed (a manual placement is a pin — the
-   *   director's hand is a commitment, pre-live included). Live only gates the
-   *   *telling*: while live the placement notifies — called if the players were
-   *   never told, moved if they were — and the count moves with the batch.
-   *   Pre-live full placements are **silent pins**: pinned, count untouched.
-   * - **Full placement, a TBD side** → the columns store softly (ADR-0790), no
-   *   pin, nobody told: a promise to nobody is not a promise.
-   * - **Anything less than a full placement → a clear**: the pin (if any) lifts
-   *   with the columns, in every status; live + previously TOLD sends the
-   *   cancelled correction (count +1) — otherwise silent. The count is never
-   *   reset: it is "how many times the players were told".
-   *
-   * Told-ness is `pinned_at` AND `count > 0`, exactly as the server judges it.
+   * SERVER's transition table (`apply_manual_placement`,
+   * `api/app/match_calls.py`) via the shared `manualPlacementPin`
+   * (`solver-sim.ts`, where the table is documented branch for branch) — one
+   * implementation for this stub and the MSW store alike.
    *
    * Refused in the API's order: 403 (not the owner — the tab never offers the
    * control), 404 (no such fixture), 409 (the match is `completed`/`voided`, so
@@ -1435,31 +1346,16 @@ export class TournamentsStore {
     const table_id = patch?.table_id ?? null
     const scheduled_start = patch?.scheduled_start ?? null
 
-    const live = this.detail.status === 'live'
-    const wasTold = found.pinned_at !== null && found.call_notified_count > 0
-
-    let pinned_at = found.pinned_at
-    let call_notified_count = found.call_notified_count
-    if (table_id === null || scheduled_start === null) {
-      // The clear: a half-placement cannot stay promised — unpin, every status.
-      pinned_at = null
-      if (live && wasTold) call_notified_count += 1 // the cancelled correction
-    } else if (found.entry_a_id === null || found.entry_b_id === null) {
-      // TBD side: soft write, pin nothing, tell nobody.
-    } else {
-      // The pin — set or refreshed, re-dated to the moment the director made it.
-      // "Now" is the store's honest wall clock (the same one `pinImminentFixtures`
-      // reads): the day's first placed ball, this write included.
-      pinned_at = this.wallNow(scheduled_start)
-      if (live) call_notified_count += 1 // called (untold) or moved (told)
-    }
-
     const updated: TournamentFixtureRead = {
       ...found,
       table_id,
       scheduled_start,
-      pinned_at,
-      call_notified_count,
+      ...manualPlacementPin(
+        this.detail.events,
+        found,
+        { table_id, scheduled_start },
+        this.detail.status === 'live',
+      ),
     }
     this.detail = {
       ...this.detail,
@@ -1469,56 +1365,6 @@ export class TournamentsStore {
       })),
     }
     return json(route, 200, updated)
-  }
-
-  /** The store's naive "now" — the earliest placed `scheduled_start` anywhere
-   * (the moment the venue's day opens), the one honest clock a stub whose seeds
-   * live on fixed calendar dates has (see `pinImminentFixtures`). `fallback`
-   * covers the first placement of the day judging before it lands. */
-  private wallNow(fallback: string): string {
-    const starts = this.detail.events
-      .flatMap((e) => e.fixtures)
-      .filter((f) => f.table_id !== null && f.scheduled_start !== null)
-      .map((f) => f.scheduled_start as string)
-    starts.push(fallback)
-    return starts.reduce((a, b) => (a < b ? a : b))
-  }
-
-  /** The mock solver's placement pass: every table-less pooled fixture goes onto
-   * its pool's tables round-robin, 30 minutes apart from the pool window's start,
-   * in the naive wall-clock frame the Slot is in (plain string assembly — no
-   * `Date`, ADR-0790). Returns how many placements were written. */
-  private placeUnplacedFixtures(): number {
-    let placed = 0
-    this.detail = {
-      ...this.detail,
-      events: this.detail.events.map((event) => {
-        const poolById = new Map(event.pools.map((p) => [p.id, p]))
-        const perPool = new Map<string, number>()
-        const fixtures = event.fixtures.map((fixture) => {
-          if (fixture.table_id !== null) return fixture
-          const pool =
-            fixture.pool_id !== null ? poolById.get(fixture.pool_id) : undefined
-          if (!pool || pool.table_ids.length === 0) return fixture
-          const index = perPool.get(pool.id) ?? 0
-          perPool.set(pool.id, index + 1)
-          const table = pool.table_ids[index % pool.table_ids.length]
-          const wave = Math.floor(index / pool.table_ids.length)
-          const [hours, minutes] = pool.slot.start.split(':').map(Number)
-          const total = hours * 60 + minutes + wave * 30
-          const hh = String(Math.floor(total / 60) % 24).padStart(2, '0')
-          const mm = String(total % 60).padStart(2, '0')
-          placed += 1
-          return {
-            ...fixture,
-            table_id: table,
-            scheduled_start: `${pool.slot.date}T${hh}:${mm}:00`,
-          }
-        })
-        return { ...event, fixtures }
-      }),
-    }
-    return placed
   }
 
   /** `DELETE …/events/{event_id}/draw` — un-cut an event's draw. **Idempotent**: an

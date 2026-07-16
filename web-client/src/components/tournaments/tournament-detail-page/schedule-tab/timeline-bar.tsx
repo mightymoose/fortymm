@@ -10,12 +10,13 @@ import { cn } from '@/lib/utils'
 import { fmtDateShort } from '../../data/helpers'
 import {
   calledAtLabel,
+  isTold,
   notifiedLabel,
   PX_PER_MIN,
   tierSentence,
   type TimelineBarData,
-  type TimelineTier,
 } from '../../data/timeline'
+import { TIER_GRAMMAR } from './tier-grammar'
 
 export interface TimelineBarProps {
   bar: TimelineBarData
@@ -24,18 +25,6 @@ export interface TimelineBarProps {
   title: string
   /** The board window's start: the minute at the track's left edge. */
   originMin: number
-}
-
-/** One visual grammar per tier (ADR "the schedule is solved; the call is
- * pinned"): an **estimate** is tentative on its face (dashed), a **call** is a
- * promise (solid, pinned), a **started** match is fact (filled, quiet). */
-const TIER_CLASS: Record<TimelineTier, string> = {
-  estimate:
-    'border border-dashed border-[color:var(--ball-500)] bg-[color:var(--bg-raised)] text-[color:var(--fg-2)]',
-  called:
-    'border border-[color:var(--ball-500)] bg-[color:var(--ball-500)]/20 text-[color:var(--fg-1)]',
-  started:
-    'border border-[color:var(--serve-500)]/70 bg-[color:var(--serve-500)]/15 text-[color:var(--fg-2)]',
 }
 
 const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
@@ -63,7 +52,7 @@ const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
  * tooltip on hover/focus, and carries the same details in its accessible name so
  * nothing depends on the tooltip opening.
  *
- * The tier is encoded three ways on purpose: the visual grammar (`TIER_CLASS`),
+ * The tier is encoded three ways on purpose: the visual grammar (`TIER_GRAMMAR`),
  * a `data-tier` attribute (what tests and styling hooks read), and the words of
  * `tierSentence` (what a screen reader hears) — so "estimate vs promise" never
  * rides on color alone.
@@ -71,15 +60,15 @@ const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
 export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
   const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
   const when = `${bar.startClock}–${bar.endClock}`
-  const sentence = tierSentence(bar.tier, bar.status, bar.callNotifiedCount)
+  const sentence = tierSentence(bar.tier, bar.status, bar)
   // The call's cost, made visible (the ADR's called-at / notified-count marker):
   // only on a bar whose tier IS the promise — a started match reads as fact, an
   // estimate has promised nothing — and only when the players were actually TOLD
-  // (`callNotifiedCount > 0`): a silent pin (a director's pre-live placement) has
-  // no call to date and nobody to have notified, so it carries the sentence alone.
+  // (`isTold`): a silent pin (a director's pre-live placement) has no call to
+  // date and nobody to have notified, so it carries the sentence alone.
   const notified = notifiedLabel(bar.callNotifiedCount)
   const marker =
-    bar.tier === 'called' && bar.pinnedAt !== null && bar.callNotifiedCount > 0
+    bar.tier === 'called' && isTold(bar)
       ? `${calledAtLabel(bar.pinnedAt)}${notified ? ` · ${notified}` : ''}`
       : null
 
@@ -93,7 +82,7 @@ export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
           aria-label={`${bar.label}, ${where}, ${bar.tableLabel}, ${when}. ${sentence}.${marker ? ` ${marker}.` : ''}`}
           className={cn(
             'absolute top-1 bottom-1 flex flex-col justify-center overflow-hidden rounded-[4px] px-1.5 text-left leading-tight focus-visible:ring-2 focus-visible:ring-[color:var(--ball-500)] focus-visible:outline-none',
-            TIER_CLASS[bar.tier],
+            TIER_GRAMMAR[bar.tier].className,
           )}
           style={{
             left: (bar.startMin - originMin) * PX_PER_MIN,

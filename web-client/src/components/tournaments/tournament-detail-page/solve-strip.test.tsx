@@ -171,11 +171,6 @@ describe('SolveStrip', () => {
     },
   )
 
-  it('disables the button while the mutation reports itself pending', () => {
-    solveStripPage.render({ isRequesting: true })
-    expect(solveStripPage.getRunButton()).toBeDisabled()
-  })
-
   // ----- the refusals, inline ------------------------------------------------
 
   it('words the 422 no_drawn_events refusal as the designed "cut a draw first" notice', async () => {

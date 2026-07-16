@@ -102,11 +102,9 @@ cannot be placed and are left out of the snapshot; both still count toward the
 fingerprint, so their arrival or resolution is drift like any other.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
-import threading
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
@@ -116,16 +114,11 @@ from typing import Any
 
 from redis.exceptions import RedisError
 from sqlalchemy import exists, select, update
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import match_calls, scheduling
 from app import queue as queue_module
-from app.db import get_database_url
+from app.match_calls import _wall_now
 from app.models import (
     Match,
     MatchStatus,
@@ -138,7 +131,9 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
+    TournamentStatus,
 )
+from app.rq_async import run_async_db_job
 from app.scheduling import (
     EventId,
     EventSettings,
@@ -158,6 +153,7 @@ from app.scheduling import (
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
+from app.tournament_draws import event_pools
 
 log = logging.getLogger(__name__)
 
@@ -359,13 +355,6 @@ def _slot_bounds(slot: Slot) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _wall_now() -> datetime:
-    """The current time as naive wall-clock — the frame ``scheduled_start``,
-    ``pinned_at`` and pool windows share (the deliberate ADR-0790 exemption
-    from the aware-datetimes rule)."""
-    return datetime.now()
-
-
 async def _load_solver_inputs(
     db: AsyncSession,
     tournament_id: uuid.UUID,
@@ -468,7 +457,7 @@ async def _load_solver_inputs(
         (
             event,
             EventMatchSettings.model_validate(event.match_settings),
-            [Pool.model_validate(pool) for pool in event.pools],
+            event_pools(event),
         )
         for event in drawn_events
     ]
@@ -482,37 +471,38 @@ async def _load_solver_inputs(
     # reason to refuse the whole snapshot as incoherent (the raw ``table_ids``
     # still feed the fingerprint, so the edit itself is drift like any other).
     catalogue_ids = set(catalogue)
-    pool_bounds: dict[str, tuple[datetime, datetime]] = {}
     pool_tables: dict[str, tuple[TableId, ...]] = {}
+    # One pass derives each pool's key, bounds and usable tables; the
+    # ``SchedulePool``s are built from these same specs below (only ``base``
+    # — which needs every window start first — stands between the two).
+    pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
     for event, _settings, pools in parsed_events:
         for pool in pools:
             key = f"{event.id}:{pool.id}"
-            pool_bounds[key] = _slot_bounds(pool.slot)
-            pool_tables[key] = tuple(
+            start, end = _slot_bounds(pool.slot)
+            tables = tuple(
                 TableId(table_id)
                 for table_id in pool.table_ids
                 if TableId(table_id) in catalogue_ids
             )
+            pool_tables[key] = tables
+            pool_specs.append((key, tables, start, end))
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
     # and the apply converts back with the same base.
-    base = min((start for start, _ in pool_bounds.values()), default=now)
+    base = min((start for _, _, start, _ in pool_specs), default=now)
 
     def to_min(moment: datetime) -> int:
         return int((moment - base).total_seconds() // 60)
 
     schedule_pools = tuple(
         SchedulePool(
-            id=PoolId(f"{event.id}:{pool.id}"),
-            table_ids=pool_tables[f"{event.id}:{pool.id}"],
-            window=Window(
-                start_min=to_min(pool_bounds[f"{event.id}:{pool.id}"][0]),
-                end_min=to_min(pool_bounds[f"{event.id}:{pool.id}"][1]),
-            ),
+            id=PoolId(key),
+            table_ids=tables,
+            window=Window(start_min=to_min(start), end_min=to_min(end)),
         )
-        for event, _settings, pools in parsed_events
-        for pool in pools
+        for key, tables, start, end in pool_specs
     )
     event_settings = tuple(
         EventSettings(id=EventId(str(event.id)), length_games=settings.length_games)
@@ -698,45 +688,13 @@ def _opt(value: uuid.UUID | None) -> str | None:
 
 def run_schedule_solve(schedule_solve_id: str) -> None:
     """RQ entry point: run the schedule solve named by this ledger row id.
-
-    A sync wrapper (RQ workers can't call async) that owns its own engine —
-    created per run from ``DATABASE_URL`` with ``NullPool`` and disposed at the
-    end, so its connections live and die on the loop that made them. In the
-    worker there is no running loop and ``asyncio.run`` is used directly; under
-    the tests' *synchronous* fake queue the job executes inline at enqueue time
-    inside an async test, so a fresh thread hosts the job's own loop instead.
-    """
+    A thin wrapper over :func:`app.rq_async.run_async_db_job`, which owns the
+    sync-entry loop-hosting and the per-run ``NullPool`` engine."""
     solve_id = uuid.UUID(schedule_solve_id)
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_run_schedule_solve(solve_id))
-        return
-
-    errors: list[Exception] = []
-
-    def _run_on_own_loop() -> None:
-        try:
-            asyncio.run(_run_schedule_solve(solve_id))
-        except Exception as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
-            errors.append(exc)
-
-    thread = threading.Thread(
-        target=_run_on_own_loop, name=f"schedule-solve-{solve_id}"
+    run_async_db_job(
+        f"schedule-solve-{solve_id}",
+        lambda sessionmaker: execute_solve(sessionmaker, solve_id),
     )
-    thread.start()
-    thread.join()
-    if errors:
-        raise errors[0]
-
-
-async def _run_schedule_solve(solve_id: uuid.UUID) -> None:
-    engine = create_async_engine(get_database_url(), poolclass=NullPool)
-    try:
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        await execute_solve(sessionmaker, solve_id)
-    finally:
-        await engine.dispose()
 
 
 async def execute_solve(
@@ -899,6 +857,15 @@ async def _apply_result(
                 )
                 row.fixtures_placed = placed
                 row.fixtures_pinned = pinned
+                # One ingredients batch serves both the repair corrections and
+                # the call evaluation below (they read the same fixture set) —
+                # loaded only while live, since both are live-gated no-ops
+                # otherwise.
+                ingredients: match_calls.CopyIngredients | None = None
+                if tournament.status is TournamentStatus.live:
+                    ingredients = await match_calls.load_copy_ingredients(
+                        db, tournament, list(fresh.fixtures.values())
+                    )
                 # Corrections for the repairs above — same transaction, same
                 # locks, live tournaments only: moved → both entrants,
                 # cancelled → the remaining entrant. In-app rows persist
@@ -909,6 +876,7 @@ async def _apply_result(
                     moved=moved_repairs,
                     cancelled=voided_repairs,
                     withdrawn_entry_ids=fresh.withdrawn_entry_ids,
+                    ingredients=ingredients,
                 )
                 # Call evaluation — same transaction, same locks: any fixture
                 # this apply just placed inside the call-ahead window (or that
@@ -920,6 +888,7 @@ async def _apply_result(
                     tournament,
                     list(fresh.fixtures.values()),
                     now=apply_now,
+                    ingredients=ingredients,
                 )
             case scheduling.Verdict.infeasible:
                 # A designed outcome, not a failure: the solver *proved* the

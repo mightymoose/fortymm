@@ -130,24 +130,33 @@ describe('fixtureTier', () => {
 })
 
 describe('tierSentence', () => {
+  const told = { pinnedAt: '2026-06-13T08:50:00', callNotifiedCount: 1 }
+  const untold = { pinnedAt: null, callNotifiedCount: 0 }
+
   it('labels an estimate as movable and a TOLD call as notified', () => {
-    expect(tierSentence('estimate', null, 0)).toBe(
+    expect(tierSentence('estimate', null, untold)).toBe(
       'Estimate — the scheduler may still move it',
     )
-    expect(tierSentence('called', null, 1)).toBe(
+    expect(tierSentence('called', null, told)).toBe(
       'Called — the players were notified',
     )
   })
 
   it('labels a SILENT pin as pinned — it must not claim a notification nobody received', () => {
-    // Pinned is not told: every manual placement pins (pre-live included), but
-    // only a live one notifies — a count of 0 means the players heard nothing.
-    expect(tierSentence('called', null, 0)).toBe('Pinned — placed by the director')
+    // Pinned is not told (`isTold`): every manual placement pins (pre-live
+    // included), but only a live one notifies — a count of 0 means the players
+    // heard nothing.
+    expect(
+      tierSentence('called', null, {
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 0,
+      }),
+    ).toBe('Pinned — placed by the director')
   })
 
   it("says a started bar's actual state", () => {
-    expect(tierSentence('started', 'in_progress', 1)).toBe('In progress')
-    expect(tierSentence('started', 'completed', 0)).toBe('Completed')
+    expect(tierSentence('started', 'in_progress', told)).toBe('In progress')
+    expect(tierSentence('started', 'completed', untold)).toBe('Completed')
   })
 })
 

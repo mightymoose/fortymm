@@ -8,7 +8,7 @@ import {
   Plus,
   Users,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -35,6 +35,7 @@ import {
 import {
   buildTimelineBoard,
   calledAtLabel,
+  isTold,
   notifiedLabel,
 } from '../data/timeline'
 import type { Tournament, TournamentStatus, TournamentTable } from '../data/types'
@@ -362,9 +363,7 @@ const MatchRow = ({
               className="inline-flex items-center gap-1 self-center rounded-full border border-[color:var(--ball-500)] bg-[color:var(--ball-500)]/20 px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-[color:var(--fg-1)]"
             >
               <Pin size={10} aria-hidden className="shrink-0" />
-              {match.callNotifiedCount > 0
-                ? calledAtLabel(match.pinnedAt)
-                : 'Pinned'}
+              {isTold(match) ? calledAtLabel(match.pinnedAt) : 'Pinned'}
             </span>
             {notified && (
               <span
@@ -509,7 +508,10 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
   const requestSolve = useRequestScheduleSolve(tournament.id)
-  const schedule = buildSchedule(tournament, tables)
+  // Memoized on the query cache's stable references: the reduction walks every
+  // fixture of every event, so it should re-run when the data changes, not on
+  // every poll-driven re-render.
+  const schedule = useMemo(() => buildSchedule(tournament, tables), [tournament, tables])
   const [view, setView] = useState<ScheduleView>('list')
   // Freshness is POLLING while this tab is on screen (ADR "the schedule is
   // solved"): ~3s while a solve is in flight, ~15s while the tournament is live,
@@ -520,8 +522,12 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   const onSubmit = (fixtureId: string, body: PlacementBody) =>
     place.mutateAsync({ fixtureId, body }).then(() => undefined)
 
-  // The boards' shared derivation — only paid for when a board is on screen.
-  const board = view === 'list' ? null : buildTimelineBoard(tournament, tables)
+  // The boards' shared derivation — only paid for when a board is on screen,
+  // and only re-run when the data (or the view) changes.
+  const board = useMemo(
+    () => (view === 'list' ? null : buildTimelineBoard(tournament, tables)),
+    [view, tournament, tables],
+  )
 
   return (
     <div data-testid="schedule-tab">
@@ -540,7 +546,6 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
       <SolveStrip
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
-        isRequesting={requestSolve.isPending}
         onRun={() => requestSolve.mutateAsync().then(() => undefined)}
       />
 

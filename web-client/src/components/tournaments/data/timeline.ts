@@ -67,6 +67,15 @@ export function estimatedMatchMinutes(lengthGames: MatchLength): number {
  */
 export type TimelineTier = 'estimate' | 'called' | 'started'
 
+/** The tiers in the order a reader meets them (plan → promise → fact) — the one
+ * list a per-tier surface (the legend) maps over, so a new tier cannot be
+ * silently missing from it. */
+export const TIMELINE_TIERS = [
+  'estimate',
+  'called',
+  'started',
+] as const satisfies readonly TimelineTier[]
+
 const STARTED_STATUSES: ReadonlySet<MatchStatus> = new Set([
   'in_progress',
   'completed',
@@ -81,6 +90,18 @@ export function fixtureTier(fixture: Fixture): TimelineTier {
   return 'estimate'
 }
 
+/** **Told-ness is `pinnedAt` AND `callNotifiedCount > 0`**, never the count alone
+ * (ADR "the schedule is solved; the call is pinned"): a call that was later
+ * cancelled keeps its count — it is "how many times the players were told", and
+ * a clear does not reset it — but drops its pin, so nobody holds that promise
+ * any more. A type predicate, so a teller of a told fixture may read its
+ * `pinnedAt` without a cast. */
+export function isTold<
+  F extends { pinnedAt: string | null; callNotifiedCount: number },
+>(fixture: F): fixture is F & { pinnedAt: string } {
+  return fixture.pinnedAt !== null && fixture.callNotifiedCount > 0
+}
+
 /** The board's own status words — a `started` bar's detail line. Local to the
  * board on purpose (the schedule list's `scheduleStatusLabel` says "Unplayed"
  * for an in-progress match, which is the right word in a to-do list and the
@@ -93,14 +114,24 @@ const BOARD_STATUS_LABEL: Record<MatchStatus, string> = {
   voided: 'Voided',
 }
 
+/** The `HH:MM` time-of-day of a naive wall-clock timestamp — for prefilling the
+ * placement picker, showing a placement, and reading a `pinnedAt` stamp. Tolerant
+ * of a bare date or a seconds-bearing stamp; `''` when there is no time (an
+ * unscheduled fixture). Lives here (not `./schedule.ts`, which re-exports it)
+ * because `./schedule.ts` already imports from this module. */
+export function timeOfDay(scheduledStart: string | null): string {
+  if (!scheduledStart) return ''
+  const time = scheduledStart.split('T')[1]
+  return time ? time.slice(0, 5) : ''
+}
+
 /** What a call **cost**, made visible (ADR "the schedule is solved; the call is
  * pinned": called fixtures carry a visible called-at / notified-count marker):
  * `Called 08:50` — the wall-clock minute the promise was made. The time is read
- * straight off the naive `pinnedAt` stamp, the same frame every other schedule
- * clock is in. */
+ * straight off the naive `pinnedAt` stamp (`timeOfDay`), the same frame every
+ * other schedule clock is in. */
 export function calledAtLabel(pinnedAt: string): string {
-  const [, time] = pinnedAt.split('T')
-  return `Called ${time ? time.slice(0, 5) : '00:00'}`
+  return `Called ${timeOfDay(pinnedAt) || '00:00'}`
 }
 
 /** The notified-count half of the marker: `notified 2×` — but only once the
@@ -115,19 +146,20 @@ export function notifiedLabel(callNotifiedCount: number): string | null {
  * tail of the bar's accessible name. The estimate/called copy is the ADR's own
  * distinction; a started bar reads as its match's actual state.
  *
- * The `called` tier needs the notified count, because pinned is not told: a
- * **silent pin** (a director's pre-live placement — pinned, `callNotifiedCount`
- * 0) must not claim "the players were notified" when nobody was. */
+ * The `called` tier needs the fixture's pin facts, because pinned is not told
+ * (`isTold`): a **silent pin** (a director's pre-live placement — pinned,
+ * `callNotifiedCount` 0) must not claim "the players were notified" when nobody
+ * was. */
 export function tierSentence(
   tier: TimelineTier,
   status: MatchStatus | null,
-  callNotifiedCount: number,
+  fixture: { pinnedAt: string | null; callNotifiedCount: number },
 ): string {
   switch (tier) {
     case 'estimate':
       return 'Estimate — the scheduler may still move it'
     case 'called':
-      return callNotifiedCount > 0
+      return isTold(fixture)
         ? 'Called — the players were notified'
         : 'Pinned — placed by the director'
     case 'started':
