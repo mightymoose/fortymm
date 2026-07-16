@@ -175,10 +175,11 @@ describe('ScheduleTab', () => {
   })
 
   // ADR-0015: a non-owner sees the schedule as a VIEW — the same matches, and zero
-  // interactive controls (no placement control, not a disabled one). The sweep
-  // covers the solve strip too: its Run-scheduler button must be hidden, not
-  // disabled, for a viewer.
-  it('renders no interactive controls for a non-owner', () => {
+  // EDITING controls (no placement control, not a disabled one; no Run scheduler).
+  // The view toggle stays: choosing how to read the schedule is a reading
+  // affordance, the Events tab's "View" open-target precedent — so the sweep
+  // asserts the toggle's items are the ONLY controls left.
+  it('renders no editing controls for a non-owner — the view toggle is all that remains', () => {
     page.render({
       tournament: buildTournament({
         canEdit: false,
@@ -190,7 +191,109 @@ describe('ScheduleTab', () => {
     expect(page.queryTableColumn('t1')).toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-a-2')).not.toBeInTheDocument()
     expect(page.queryRunScheduler()).not.toBeInTheDocument()
-    expect(page.getControls()).toHaveLength(0)
+    expect(page.getEditingControls()).toHaveLength(0)
+    // …and the whole-sweep remainder is the view toggle alone (its three items,
+    // plus radix's roving-focus wrapper).
+    const controls = page.getControls()
+    expect(controls.length).toBeGreaterThan(0)
+    expect(
+      controls.every(
+        (el) => el.closest('[data-testid="schedule-view-toggle"]') !== null,
+      ),
+    ).toBe(true)
+  })
+
+  it('offers a non-owner no editing control on the boards either', () => {
+    page.render({
+      tournament: buildTournament({
+        canEdit: false,
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    page.setView('Gantt')
+    expect(page.gantt.queryBoard()).toBeInTheDocument()
+    expect(page.getEditingControls()).toHaveLength(0)
+  })
+
+  // ----- the view toggle & the boards (ADR "the schedule is solved") ----------
+
+  it('defaults to the list view — the toggle offered, the boards not yet drawn', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+    expect(page.queryViewToggle()).toBeInTheDocument()
+    expect(page.queryTableColumn('t1')).toBeInTheDocument()
+    expect(page.gantt.queryBoard()).not.toBeInTheDocument()
+    expect(page.players.queryBoard()).not.toBeInTheDocument()
+    expect(page.legend.queryLegend()).not.toBeInTheDocument()
+  })
+
+  it('switches to the Gantt board — bars where the list rows were, the legend up', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+    page.setView('Gantt')
+
+    expect(page.gantt.queryBoard()).toBeInTheDocument()
+    expect(page.queryTableColumn('t1')).not.toBeInTheDocument()
+    expect(page.legend.queryLegend()).toBeInTheDocument()
+    // Wiring only: the placed fixture's bar lands in its table's row — the
+    // board's own rendering is pinned by the gantt-board / timeline tests.
+    expect(page.gantt.barIdsIn('t1')).toEqual(['fx-a-1'])
+    // The unplaced fixture is in the rail, not lost.
+    expect(page.gantt.getItem('fx-a-2')).toBeInTheDocument()
+  })
+
+  it('switches to the player timeline', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+    page.setView('Player timeline')
+
+    expect(page.players.queryBoard()).toBeInTheDocument()
+    expect(page.gantt.queryBoard()).not.toBeInTheDocument()
+    expect(page.players.rowNames()).toEqual([
+      'player.1',
+      'player.4',
+      'player.5',
+    ])
+  })
+
+  it('keeps the current view when the active toggle item is re-clicked (radix empties the value)', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+    page.setView('Gantt')
+    page.setView('Gantt')
+    expect(page.gantt.queryBoard()).toBeInTheDocument()
+  })
+
+  it('prompts the owner to run the scheduler when a board view has nothing placed yet', () => {
+    page.render({
+      // A cut draw, nothing placed: every fixture is table-less.
+      tournament: buildTournament({ events: [buildDrawnEvent()] }),
+      tables: buildTables(),
+    })
+    page.setView('Gantt')
+
+    expect(page.boardEmpty.queryEmpty()).toBeInTheDocument()
+    expect(page.boardEmpty.getEmpty()).toHaveTextContent(
+      'Run the scheduler to place every match on a table',
+    )
+    expect(page.gantt.queryBoard()).not.toBeInTheDocument()
+  })
+
+  it('offers no view toggle when there is nothing to schedule at all', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildDrawnEvent({ fixtures: [] })] }),
+      tables: buildTables(),
+    })
+    expect(page.queryViewToggle()).not.toBeInTheDocument()
   })
 
   // ----- the solve strip on the tab (ADR "the schedule is solved") ------------

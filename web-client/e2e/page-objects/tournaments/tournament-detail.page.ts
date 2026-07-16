@@ -596,4 +596,60 @@ export class TournamentDetailPage {
   get runSchedulerNotice(): Locator {
     return this.page.getByTestId('run-scheduler-notice')
   }
+
+  // ----- the schedule boards (Gantt / player timeline, chore 2a) -------------
+
+  /** The tab's view toggle — List | Gantt | Player timeline. Its items are
+   * radios (radix single ToggleGroup). */
+  get scheduleViewToggle(): Locator {
+    return this.page.getByTestId('schedule-view-toggle')
+  }
+
+  async setScheduleView(label: 'List' | 'Gantt' | 'Player timeline') {
+    await this.scheduleViewToggle.getByRole('radio', { name: label }).click()
+  }
+
+  /** The Gantt board (rows = tables), and its labelled scrollable chart region
+   * — the region is the keyboard-focusable scroll container (#1035 family). */
+  get ganttBoard(): Locator {
+    return this.page.getByTestId('schedule-gantt')
+  }
+
+  get ganttRegion(): Locator {
+    return this.page.getByRole('region', { name: 'Schedule by table' })
+  }
+
+  /** One table's Gantt row, by catalogue id (`t1` …). */
+  ganttRow(tableId: string): Locator {
+    return this.page.getByTestId(`gantt-row-${tableId}`)
+  }
+
+  /** The player-timeline board (rows = entrants) and its scroll region. */
+  get playerTimelineBoard(): Locator {
+    return this.page.getByTestId('schedule-player-timeline')
+  }
+
+  get playerRegion(): Locator {
+    return this.page.getByRole('region', { name: 'Schedule by player' })
+  }
+
+  /** Every placed fixture's bar, in either board — focusable buttons. */
+  get timelineBars(): Locator {
+    return this.page.locator('[data-testid^="timeline-bar-"]')
+  }
+
+  /** The boards' designed "no placements yet" prompt. */
+  get boardEmptyPrompt(): Locator {
+    return this.page.getByTestId('schedule-board-empty')
+  }
+
+  /** The Gantt's "Not yet scheduled" side rail. */
+  get unscheduledRail(): Locator {
+    return this.page.getByTestId('schedule-unscheduled')
+  }
+
+  /** The open match tooltip (radix portals it to the body). */
+  get matchTooltip(): Locator {
+    return this.page.getByRole('tooltip')
+  }
 }

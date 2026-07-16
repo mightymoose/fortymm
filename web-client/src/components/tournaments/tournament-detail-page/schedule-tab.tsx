@@ -1,9 +1,18 @@
-import { CalendarClock, MapPin, Pencil, Plus } from 'lucide-react'
+import {
+  CalendarClock,
+  LayoutGrid,
+  List,
+  MapPin,
+  Pencil,
+  Plus,
+  Users,
+} from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 import {
   usePlaceFixture,
@@ -21,14 +30,32 @@ import {
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
+import { buildTimelineBoard } from '../data/timeline'
 import type { Tournament, TournamentTable } from '../data/types'
 import { EmptyState } from '../empty-state'
 import { OptionSelect } from './event-editor/option-select'
+import { BoardEmpty } from './schedule-tab/board-empty'
+import { GanttBoard } from './schedule-tab/gantt-board'
+import { PlayerTimelineBoard } from './schedule-tab/player-timeline-board'
+import { TierLegend } from './schedule-tab/tier-legend'
 import { SectionHeader } from './section-header'
 import { SolveStrip } from './solve-strip'
 
 /** The body the placement PATCH takes — the placement whole, `null` to clear. */
 type PlacementBody = { table_id: string | null; scheduled_start: string | null }
+
+/** The tab's three readings of ONE schedule: the placement **list** (the
+ * default — nothing regresses), the **Gantt** board (tables × time) and the
+ * **player timeline** (entrants × time). View choice is component state, the
+ * same mechanism the page's own tabs use (`TournamentDetailPage` holds `tab` in
+ * `useState`) — this page encodes no view state in the URL, so the toggle
+ * invents no new URL contract. */
+type ScheduleView = 'list' | 'gantt' | 'players'
+
+/** Radix hands `onValueChange` a plain string (and `''` for a re-click on the
+ * active item); narrow it rather than cast it. */
+const isScheduleView = (v: string): v is ScheduleView =>
+  v === 'list' || v === 'gantt' || v === 'players'
 
 export interface ScheduleTabProps {
   tournament: Tournament
@@ -353,6 +380,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   const place = usePlaceFixture(tournament.id)
   const requestSolve = useRequestScheduleSolve(tournament.id)
   const schedule = buildSchedule(tournament, tables)
+  const [view, setView] = useState<ScheduleView>('list')
   // Freshness is POLLING while this tab is on screen (ADR "the schedule is
   // solved"): ~3s while a solve is in flight, ~15s while the tournament is live,
   // none otherwise. Mounted here — not on the page — so only the Schedule tab
@@ -361,6 +389,9 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
 
   const onSubmit = (fixtureId: string, body: PlacementBody) =>
     place.mutateAsync({ fixtureId, body }).then(() => undefined)
+
+  // The boards' shared derivation — only paid for when a board is on screen.
+  const board = view === 'list' ? null : buildTimelineBoard(tournament, tables)
 
   return (
     <div data-testid="schedule-tab">
@@ -390,7 +421,47 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
           hint="Cut a draw for an event to see its matches here."
         />
       ) : (
-        <div className="flex flex-col gap-6">
+        <>
+          {/* Three readings of one schedule; the list stays the default so
+              nothing regresses. The legend rides with the boards — the list
+              has no bars to explain. */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            <ToggleGroup
+              type="single"
+              value={view}
+              onValueChange={(v) => {
+                if (isScheduleView(v)) setView(v)
+              }}
+              aria-label="Schedule view"
+              data-testid="schedule-view-toggle"
+              className="w-fit"
+            >
+              <ToggleGroupItem value="list">
+                <List size={14} /> List
+              </ToggleGroupItem>
+              <ToggleGroupItem value="gantt">
+                <LayoutGrid size={14} /> Gantt
+              </ToggleGroupItem>
+              <ToggleGroupItem value="players">
+                <Users size={14} /> Player timeline
+              </ToggleGroupItem>
+            </ToggleGroup>
+            {view !== 'list' && <TierLegend />}
+          </div>
+
+          {board &&
+            (!board.hasBars ? (
+              // Fixtures exist but nothing is placed: the boards' designed
+              // prompt — the Run-scheduler button is right above, on the strip.
+              <BoardEmpty canEdit={canEdit} />
+            ) : view === 'gantt' ? (
+              <GanttBoard board={board} />
+            ) : (
+              <PlayerTimelineBoard board={board} />
+            ))}
+
+          {view === 'list' && (
+            <div className="flex flex-col gap-6">
           {schedule.tables.map((column) => (
             <TableColumn
               key={column.tableId}
@@ -428,8 +499,10 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             </section>
           )}
 
-          <ReservedWindows tournament={tournament} />
-        </div>
+              <ReservedWindows tournament={tournament} />
+            </div>
+          )}
+        </>
       )}
     </div>
   )

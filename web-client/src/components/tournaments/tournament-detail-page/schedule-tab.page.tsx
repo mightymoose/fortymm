@@ -3,6 +3,13 @@ import { fireEvent, render, screen, within, type Container } from '@/test/utilit
 
 import { ScheduleTab, type ScheduleTabProps } from './schedule-tab'
 import { buildScheduleTabProps } from './schedule-tab.factory'
+import { boardEmptyPage } from './schedule-tab/board-empty.page'
+import { ganttBoardPage } from './schedule-tab/gantt-board.page'
+import { playerTimelineBoardPage } from './schedule-tab/player-timeline-board.page'
+import { tierLegendPage } from './schedule-tab/tier-legend.page'
+
+/** The tab's view toggle labels, as the user reads them. */
+export type ScheduleViewLabel = 'List' | 'Gantt' | 'Player timeline'
 
 /** Every match row, wherever it is — the id prefix is the only thing that identifies one. */
 const MATCH_TESTID = /^schedule-match-/
@@ -120,6 +127,45 @@ const scoped = (container: Container) => ({
   getControls() {
     return interactiveElementsIn(container.getByTestId('schedule-tab'))
   },
+  /** The sweep, minus the tab's own **view navigation** — the toggle's items, the
+   * boards' focusable scroll regions and their tooltip-bearing bars, which are
+   * reading affordances a viewer legitimately keeps (the Events tab's "View"
+   * open-target precedent). What must be zero for a non-owner is everything
+   * else: the placement editors, Run scheduler — the controls that *change*
+   * something. */
+  getEditingControls() {
+    return interactiveElementsIn(container.getByTestId('schedule-tab')).filter(
+      (el) =>
+        el.closest(
+          '[data-testid="schedule-view-toggle"], [data-testid="schedule-gantt"], [data-testid="schedule-player-timeline"]',
+        ) === null,
+    )
+  },
+
+  /** The view toggle (List | Gantt | Player timeline) — absent while there is
+   * nothing to schedule at all. */
+  getViewToggle() {
+    return container.getByTestId('schedule-view-toggle')
+  },
+  queryViewToggle() {
+    return container.queryByTestId('schedule-view-toggle')
+  },
+  /** Switch the schedule view. The toggle is a radix single ToggleGroup, so the
+   * items are radios, addressed by the label the user reads. */
+  setView(label: ScheduleViewLabel) {
+    fireEvent.click(
+      within(container.getByTestId('schedule-view-toggle')).getByRole('radio', {
+        name: label,
+      }),
+    )
+  },
+
+  /** The board quartets' own accessors, as named sub-objects (their generic
+   * `getBoard`/`getRow` names would collide if spread flat). */
+  gantt: ganttBoardPage.within(container),
+  players: playerTimelineBoardPage.within(container),
+  boardEmpty: boardEmptyPage.within(container),
+  legend: tierLegendPage.within(container),
 
   within(node: Container = screen) {
     return scoped(node)

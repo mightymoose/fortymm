@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SimulatorRouteImport } from './routes/simulator'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as AppRouteRouteImport } from './routes/_app/route'
@@ -42,11 +41,6 @@ import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/m
 import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 
-const SimulatorRoute = SimulatorRouteImport.update({
-  id: '/simulator',
-  path: '/simulator',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
@@ -211,7 +205,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/admin': typeof AppAdminRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
   '/notifications': typeof AppNotificationsRouteWithChildren
@@ -244,7 +237,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/dashboard': typeof AppDashboardRoute
   '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
@@ -276,7 +268,6 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/notifications': typeof AppNotificationsRouteWithChildren
@@ -311,7 +302,6 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/admin'
     | '/dashboard'
     | '/notifications'
@@ -344,7 +334,6 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/dashboard'
     | '/settings'
     | '/login/sent'
@@ -375,7 +364,6 @@ export interface FileRouteTypes {
     | '/_app'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/_app/admin'
     | '/_app/dashboard'
     | '/_app/notifications'
@@ -410,7 +398,6 @@ export interface RootRouteChildren {
   AppRouteRoute: typeof AppRouteRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DesignSystemRoute: typeof DesignSystemRoute
-  SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
@@ -419,13 +406,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/simulator': {
-      id: '/simulator'
-      path: '/simulator'
-      fullPath: '/simulator'
-      preLoaderRoute: typeof SimulatorRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/design-system': {
       id: '/design-system'
       path: '/design-system'
@@ -738,7 +718,6 @@ const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
   DesignSystemRoute: DesignSystemRoute,
-  SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,

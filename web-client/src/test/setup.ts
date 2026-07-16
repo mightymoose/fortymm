@@ -47,6 +47,16 @@ if (!window.matchMedia) {
     }) as unknown as MediaQueryList
 }
 
+// jsdom doesn't implement ResizeObserver; Radix's popper layer (Tooltip,
+// Popover) observes its content's size on mount, so provide an inert stub.
+if (!window.ResizeObserver) {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()
