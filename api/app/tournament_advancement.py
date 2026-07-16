@@ -13,8 +13,9 @@ It is called from a single :func:`~app.result_acceptance.finalize_match` helper 
 both completion sites funnel through — the rated accept/retire path and the unrated
 immediate-self-accept path — so a future third path cannot forget the hook.
 
-The dependency points **one way**: this imports the match models, the draw layer and the
-materializer; nothing in the match or draw domain imports it, and it is imported only by
+The dependency points **one way**: this imports the match models, the draw layer, the
+materializer and the solve-request seam (``app.schedule_solves``); nothing in the match,
+draw or scheduling domain imports it, and it is imported only by
 ``app.result_acceptance``, so there is no cycle.
 
 For round-robin — the only draw type with a strategy today — the pool is already whole
@@ -27,7 +28,14 @@ moment #785 lands.
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, Tournament, TournamentEvent, TournamentFixture
+from app.models import (
+    Match,
+    ScheduleSolveTrigger,
+    Tournament,
+    TournamentEvent,
+    TournamentFixture,
+)
+from app.schedule_solves import request_solve
 from app.tournament_materialization import materialize_event
 
 
@@ -52,6 +60,25 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
     correction-safety (ADR-0788). It is written-but-unread in round-robin, the accepted
     price of one seam; a correction that un-completes the match simply stops
     re-advancing it until it is re-accepted.
+
+    A completed tournament match is also a **scheduling input** (ADR "the schedule is
+    solved; the call is pinned"): its table frees, so a ``match_completed`` re-solve is
+    requested last, through the one coalesced :func:`~app.schedule_solves.request_solve`
+    funnel — a burst of finishes collapses onto one queued run. ``request_solve``'s
+    contract asks its caller to hold the tournament row lock first (lock order:
+    tournament → schedule_solves → tournament_fixtures, the order the solve job's
+    guarded apply takes), and ``finalize_match`` holds only the *match* row lock — so
+    this function takes the tournament lock itself, **before any fixture write
+    flushes**. That ordering is load-bearing: the winner write below reaches Postgres
+    at the next autoflush, and a fixture row lock taken before the tournament lock
+    would run fixtures → tournament against the apply's tournament → fixtures — a
+    deadlock waiting for a busy venue. (No solve-side transaction ever locks a match
+    row, so the match lock this runs under joins no cycle.) The lock also serializes
+    the winner write itself against a mid-flight apply, which the pre-solver code
+    never guaranteed. A ``None`` from ``request_solve`` (Redis down: it logged, and
+    took its row back out) is DELIBERATELY tolerated — the accepted result must stand
+    whether or not the scheduler heard about it; the pin tick and the Run-scheduler
+    button re-request the missing solve.
     """
     fixture = (
         await db.execute(
@@ -61,18 +88,28 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
     if fixture is None:
         return
 
+    event = (
+        await db.execute(
+            select(TournamentEvent).where(TournamentEvent.id == fixture.event_id)
+        )
+    ).scalar_one()
+    # The tournament row lock, and it must come before the winner assignment:
+    # once ``fixture`` is dirty, the next SELECT autoflushes the UPDATE and
+    # takes the fixture's row lock — which must never precede the tournament's
+    # (see the docstring's lock-order paragraph).
+    tournament = (
+        await db.execute(
+            select(Tournament)
+            .where(Tournament.id == event.tournament_id)
+            .with_for_update()
+        )
+    ).scalar_one()
+
     winning_side = next((side for side in match.sides if side.won is True), None)
     if winning_side is not None:
         fixture.winner_entry_id = (
             fixture.entry_a_id if winning_side.side_number == 1 else fixture.entry_b_id
         )
 
-    event = (
-        await db.execute(
-            select(TournamentEvent).where(TournamentEvent.id == fixture.event_id)
-        )
-    ).scalar_one()
-    tournament = (
-        await db.execute(select(Tournament).where(Tournament.id == event.tournament_id))
-    ).scalar_one()
     await materialize_event(db, tournament, event)
+    await request_solve(db, tournament.id, ScheduleSolveTrigger.match_completed)
