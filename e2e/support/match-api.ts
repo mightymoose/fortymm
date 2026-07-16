@@ -134,6 +134,27 @@ export async function proposeResult(
   return standingResultId(await res.json())
 }
 
+/** Complete an **unrated** match in one POST: on an unrated match the proposed
+ * result self-accepts (no standing result is left for the other side), so this
+ * is the whole finalize funnel — the same 201 the score-entry UI's "Finalize
+ * result" rides. The tournament-scheduling spec uses it to finish a
+ * materialized tournament match over the API, which is what triggers the
+ * worker's `match_completed` re-solve. Unlike `proposeResult`, it deliberately
+ * does NOT read a standing-result id — there is none on the self-accept path. */
+export async function completeUnratedMatch(
+  proposer: Guest,
+  matchId: string,
+  games: ReadonlyArray<ResultGame>,
+): Promise<void> {
+  const res = await proposer.ctx.post(`${API}/matches/${matchId}/results`, {
+    headers: { [CSRF_HEADER]: proposer.csrf },
+    data: { games },
+  })
+  if (res.status() !== 201) {
+    throw new Error(`complete match failed: ${res.status()} ${await res.text()}`)
+  }
+}
+
 /** Accept a standing proposal (`POST .../results/{id}/acceptance`) — the second
  * verb. Only the **opposing** side may accept (the proposer already consented by
  * proposing). This is what completes the match and, on a rated one, runs the

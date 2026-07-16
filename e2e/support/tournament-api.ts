@@ -30,6 +30,33 @@ const TABLE_ID = 't1'
  * entrants in one pool is exactly one fixture: the minimal playable draw. */
 const POOL_ID = 'pool-a'
 
+/** A pool/event window (`Slot` on the wire): a date plus `HH:MM` bounds, all
+ * naive wall-clock strings in the venue's frame (ADR-0790). */
+export interface SlotSpec {
+  readonly date: string
+  readonly start: string
+  readonly end: string
+}
+
+/** One table of the tournament's catalogue (`TournamentTable` on the wire). */
+export interface TableSpec {
+  readonly id: string
+  readonly label: string
+  readonly court: string
+}
+
+/** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
+ * shape (one table, one pool, a far-future window), so existing specs are
+ * untouched; the solver-schedule spec overrides both — its pool window must
+ * bracket the stack's real NOW for the call-ahead pinning to fire naturally,
+ * and a 4-entrant round-robin wants two tables to run its rounds in parallel. */
+export interface SeedTournamentOptions {
+  /** The window both the event and its single pool carry. */
+  readonly slot?: SlotSpec
+  /** The table catalogue; the pool references every listed table. */
+  readonly tables?: ReadonlyArray<TableSpec>
+}
+
 /** A seeded tournament and the ids a spec needs to address it and its event. */
 export interface SeededTournament {
   readonly tournamentId: string
@@ -56,8 +83,10 @@ export interface SeededTournament {
 export async function seedTournament(
   director: Guest,
   name: string,
+  options: SeedTournamentOptions = {},
 ): Promise<SeededTournament> {
-  const slot = { date: '2026-08-01', start: '09:00', end: '17:00' }
+  const slot = options.slot ?? { date: '2026-08-01', start: '09:00', end: '17:00' }
+  const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
 
   const tournamentRes = await director.ctx.post(`${API}/tournaments`, {
     headers: { [CSRF_HEADER]: director.csrf },
@@ -71,8 +100,8 @@ export async function seedTournament(
         postal: '00000',
         country: 'Testland',
       },
-      // The pool references this table by id, so the catalogue must carry it.
-      table_catalogue: [{ id: TABLE_ID, label: 'Table 1', court: 'A' }],
+      // The pool references these tables by id, so the catalogue must carry them.
+      table_catalogue: tables,
     },
   })
   if (tournamentRes.status() !== 201) {
@@ -94,7 +123,14 @@ export async function seedTournament(
         slot,
         match_settings: { rated: false, length_games: 1 },
         predicates: [],
-        pools: [{ id: POOL_ID, name: 'Pool A', slot, table_ids: [TABLE_ID] }],
+        pools: [
+          {
+            id: POOL_ID,
+            name: 'Pool A',
+            slot,
+            table_ids: tables.map((table) => table.id),
+          },
+        ],
       },
     },
   )
@@ -135,6 +171,107 @@ export async function enterPlayer(
       `director-entry failed: ${res.status()} ${await res.text()}`,
     )
   }
+}
+
+/**
+ * Move the tournament along one lifecycle edge (`POST …/transitions`,
+ * ADR-0017): `published` opens registration, `live` materializes every ready
+ * fixture into a real match AND auto-enqueues the initial schedule solve on
+ * the stack's real RQ worker (ADR "the schedule is solved; the call is
+ * pinned"). Owner-only; the server judges whether the edge is legal.
+ */
+export async function transitionTournament(
+  director: Guest,
+  tournamentId: string,
+  to: 'published' | 'live' | 'archived',
+): Promise<void> {
+  const res = await director.ctx.post(
+    `${API}/tournaments/${tournamentId}/transitions`,
+    {
+      headers: { [CSRF_HEADER]: director.csrf },
+      data: { to },
+    },
+  )
+  if (res.status() !== 201) {
+    throw new Error(
+      `transition to ${to} failed: ${res.status()} ${await res.text()}`,
+    )
+  }
+}
+
+/** Cut (or re-cut) an event's draw over the API (`POST …/draw`) — the
+ * scaffolding step of a spec whose subject is what happens *after* the cut
+ * (scheduling), so the browser is saved for that surface. Owner-only. */
+export async function cutDraw(
+  director: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<void> {
+  const res = await director.ctx.post(
+    `${API}/tournaments/${tournamentId}/events/${eventId}/draw`,
+    { headers: { [CSRF_HEADER]: director.csrf } },
+  )
+  if (res.status() !== 201) {
+    throw new Error(`cut draw failed: ${res.status()} ${await res.text()}`)
+  }
+}
+
+/** One fixture of the tournament detail, scoped to the scheduling facts a spec
+ * reads: who plays (entry refs), the materialized match, the ADR-0790
+ * placement columns, and the ADR "the call is pinned" pin facts. */
+export interface FixtureDetail {
+  readonly id: string
+  readonly entry_a_id: string | null
+  readonly entry_b_id: string | null
+  readonly match_id: string | null
+  readonly match_status: string | null
+  readonly table_id: string | null
+  /** Naive wall-clock `YYYY-MM-DDTHH:MM:SS` in the venue's frame, or null. */
+  readonly scheduled_start: string | null
+  /** Null = the placement is an estimate; set = the fixture was CALLED. */
+  readonly pinned_at: string | null
+  readonly call_notified_count: number
+}
+
+/** One entrant row — the join key between a fixture's `entry_*_id` refs and
+ * the humans (usernames) a spec minted them from. */
+export interface EntrantDetail {
+  readonly id: string
+  readonly user_id: string
+  readonly username: string
+}
+
+/** The latest run of the schedule solver, as the detail payload carries it. */
+export interface SolveDetail {
+  readonly id: string
+  readonly status: 'queued' | 'running' | 'succeeded' | 'infeasible' | 'failed'
+  readonly trigger: string
+  readonly verdict: 'optimal' | 'feasible' | null
+}
+
+/** The slice of `GET /v1/tournaments/{id}` the solver-schedule spec reads. */
+export interface TournamentScheduleDetail {
+  readonly events: ReadonlyArray<{
+    readonly id: string
+    readonly entrants: ReadonlyArray<EntrantDetail>
+    readonly fixtures: ReadonlyArray<FixtureDetail>
+  }>
+  readonly latest_schedule_solve: SolveDetail | null
+}
+
+/** Read the tournament detail, typed to the scheduling slice above. The spec
+ * uses it as its seed/verify seam: mapping entries to the guests it minted,
+ * finding which fixtures the solver pinned, and watching the solve ledger —
+ * while the browser stays on the surfaces under test. */
+export async function getScheduleDetail(
+  viewer: Guest,
+  tournamentId: string,
+): Promise<TournamentScheduleDetail> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  return (await res.json()) as TournamentScheduleDetail
 }
 
 /**
