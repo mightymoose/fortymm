@@ -4,6 +4,7 @@ import {
   Clock,
   Flag,
   Mail,
+  Megaphone,
   MessageSquare,
   Smartphone,
   Swords,
@@ -52,6 +53,11 @@ export const CATEGORY_VISUAL: Record<NotificationCategory, CategoryVisual> = {
     Icon: CheckCircle2,
     color: 'var(--warn)',
     tint: 'rgba(255, 196, 61, 0.14)',
+  },
+  match_calls: {
+    Icon: Megaphone,
+    color: 'var(--ball-500)',
+    tint: 'rgba(255, 122, 26, 0.12)',
   },
 }
 

@@ -58,6 +58,7 @@ export function buildScheduleBoard(
     endClock: '10:35',
     tier: 'called',
     pinnedAt: '2026-06-13T09:50:00',
+    callNotifiedCount: 1,
   })
   const started = buildTimelineBarData({
     fixtureId: 'fx-a-3',

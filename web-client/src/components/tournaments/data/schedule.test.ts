@@ -64,6 +64,53 @@ describe('buildSchedule', () => {
     expect(buildSchedule(tournament, buildTables()).isEmpty).toBe(true)
   })
 
+  it('speaks the boards’ tier vocabulary on every match — with the call’s own timestamp and cost', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          fixtures: [
+            buildFixture({
+              id: 'fx-est',
+              poolId: 'p-a',
+              tableId: 't1',
+              scheduledStart: at('09:00'),
+            }),
+            buildFixture({
+              id: 'fx-called',
+              poolId: 'p-a',
+              round: 2,
+              tableId: 't1',
+              scheduledStart: at('10:00'),
+              pinnedAt: at('09:50'),
+              callNotifiedCount: 2,
+            }),
+            buildFixture({
+              id: 'fx-live',
+              poolId: 'p-a',
+              round: 3,
+              matchId: 'm-live',
+              matchStatus: 'in_progress',
+              tableId: 't1',
+              scheduledStart: at('11:00'),
+              pinnedAt: at('10:50'),
+            }),
+          ],
+        }),
+      ],
+    })
+    const { tables } = buildSchedule(tournament, buildTables())
+    const byId = new Map(tables[0].matches.map((m) => [m.fixtureId, m]))
+    // The same started > called > estimate precedence the bars draw with.
+    expect(byId.get('fx-est')!.tier).toBe('estimate')
+    expect(byId.get('fx-called')!.tier).toBe('called')
+    expect(byId.get('fx-live')!.tier).toBe('started')
+    // The call's facts ride along verbatim, for the list row's badge.
+    expect(byId.get('fx-called')!.pinnedAt).toBe(at('09:50'))
+    expect(byId.get('fx-called')!.callNotifiedCount).toBe(2)
+    expect(byId.get('fx-est')!.pinnedAt).toBeNull()
+    expect(byId.get('fx-est')!.callNotifiedCount).toBe(0)
+  })
+
   it('resolves a table from the catalogue, and shows a dangling ref rather than dropping it', () => {
     const tournament = buildTournament({
       events: [

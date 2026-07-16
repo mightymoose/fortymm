@@ -9,9 +9,11 @@ import {
 import {
   axisTicks,
   buildTimelineBoard,
+  calledAtLabel,
   estimatedMatchMinutes,
   fixtureTier,
   fmtBoardClock,
+  notifiedLabel,
   tierSentence,
 } from './timeline'
 import type { Fixture, Tournament, TournamentEvent } from './types'
@@ -31,7 +33,8 @@ const placedEvent = (): TournamentEvent =>
         tableId: 't1',
         scheduledStart: '2026-06-13T09:00:00',
       }),
-      // A CALL: pinned — the players were notified.
+      // A CALL: pinned — the players were notified. Twice: a correction has
+      // already gone out, so the bar owes a `notified 2×` marker.
       buildFixture({
         id: 'fx-called',
         poolId: 'p-a',
@@ -41,6 +44,7 @@ const placedEvent = (): TournamentEvent =>
         tableId: 't2',
         scheduledStart: '2026-06-13T10:00:00',
         pinnedAt: '2026-06-13T09:50:00',
+        callNotifiedCount: 2,
       }),
       // STARTED: in progress — and pinned, which the started tier outranks.
       buildFixture({
@@ -136,6 +140,26 @@ describe('tierSentence', () => {
   it("says a started bar's actual state", () => {
     expect(tierSentence('started', 'in_progress')).toBe('In progress')
     expect(tierSentence('started', 'completed')).toBe('Completed')
+  })
+})
+
+describe('calledAtLabel', () => {
+  it('reads the call’s wall-clock minute straight off the naive stamp', () => {
+    expect(calledAtLabel('2026-06-13T08:50:00')).toBe('Called 08:50')
+    expect(calledAtLabel('2026-06-13T14:32')).toBe('Called 14:32')
+  })
+
+  it('tolerates a bare date the way the board’s own stamp split does', () => {
+    expect(calledAtLabel('2026-06-13')).toBe('Called 00:00')
+  })
+})
+
+describe('notifiedLabel', () => {
+  it('counts only past the first call — one notification is the ordinary case', () => {
+    expect(notifiedLabel(0)).toBeNull()
+    expect(notifiedLabel(1)).toBeNull()
+    expect(notifiedLabel(2)).toBe('notified 2×')
+    expect(notifiedLabel(3)).toBe('notified 3×')
   })
 })
 
@@ -258,6 +282,18 @@ describe('buildTimelineBoard', () => {
     expect(bars.get('fx-est')!.tier).toBe('estimate')
     expect(bars.get('fx-called')!.tier).toBe('called')
     expect(bars.get('fx-live')!.tier).toBe('started')
+  })
+
+  it('carries the call’s cost onto the bar verbatim — pinnedAt and the notified count', () => {
+    const board = boardOf(buildTournament({ events: [placedEvent()] }))
+    const bars = new Map(
+      board.tables.flatMap((r) => r.bars).map((b) => [b.fixtureId, b]),
+    )
+    expect(bars.get('fx-called')!.pinnedAt).toBe('2026-06-13T09:50:00')
+    expect(bars.get('fx-called')!.callNotifiedCount).toBe(2)
+    // A never-called estimate has promised nothing and cost nothing.
+    expect(bars.get('fx-est')!.pinnedAt).toBeNull()
+    expect(bars.get('fx-est')!.callNotifiedCount).toBe(0)
   })
 
   it('gives every tournament table a row — bars or none — in the tournament’s order', () => {

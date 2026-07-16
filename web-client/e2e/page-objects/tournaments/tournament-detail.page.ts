@@ -638,6 +638,27 @@ export class TournamentDetailPage {
     return this.page.locator('[data-testid^="timeline-bar-"]')
   }
 
+  /** The bars whose tier is **called** — pinned promises (ADR "the schedule is
+   * solved; the call is pinned"), as the `data-tier` hook encodes it. */
+  get calledBars(): Locator {
+    return this.page.locator('[data-testid^="timeline-bar-"][data-tier="called"]')
+  }
+
+  /** The LIST rows' called-at badges (`Called 09:00`) and, past the first call,
+   * their `notified n×` counters — the list-view half of the same marker. */
+  get calledBadges(): Locator {
+    return this.page.locator('[data-testid^="schedule-called-"]')
+  }
+
+  get notifiedMarkers(): Locator {
+    return this.page.locator('[data-testid^="schedule-notified-"]')
+  }
+
+  /** The `est` marks on the list's scheduled-but-still-estimate rows. */
+  get estMarks(): Locator {
+    return this.page.locator('[data-testid^="schedule-est-"]')
+  }
+
   /** The boards' designed "no placements yet" prompt. */
   get boardEmptyPrompt(): Locator {
     return this.page.getByTestId('schedule-board-empty')

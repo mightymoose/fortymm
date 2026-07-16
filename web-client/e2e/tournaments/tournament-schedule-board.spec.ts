@@ -104,6 +104,52 @@ test.describe('Tournaments · schedule boards', () => {
     await expect(pom.playerTimelineBoard).not.toBeVisible()
   })
 
+  test('on a LIVE tournament the solve CALLS the imminent fixtures — pinned bars on the board, badged rows on the list', async ({
+    page,
+  }) => {
+    // LIVE is what arms the calling pass (ADR "the schedule is solved; the call
+    // is pinned"): pre-live solves plan silently, a live solve promises — and
+    // the stub's mock worker pins whatever lands within the ~10-minute
+    // call-ahead window of the day's first ball.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      status: 'live',
+    })
+    await pom.openScheduleTab()
+    await pom.runScheduler.click()
+    await expect(pom.solveStripState('succeeded')).toBeVisible({ timeout: 15_000 })
+
+    // The server now holds real pins: pinned_at set, one notification counted.
+    const fixtures = [
+      ...store.fixturesOf(EVENT.JOURNEY),
+      ...store.fixturesOf(EVENT.POOLS),
+    ]
+    const called = fixtures.filter((f) => f.pinned_at !== null)
+    expect(called.length).toBeGreaterThan(0)
+    expect(called.every((f) => f.call_notified_count === 1)).toBe(true)
+    const estimates = fixtures.filter(
+      (f) => f.pinned_at === null && f.scheduled_start !== null,
+    )
+    expect(estimates.length).toBeGreaterThan(0)
+
+    // The LIST (the default view) says which rows are promises: one called-at
+    // badge per pin, `est` on every still-movable time — never blurred.
+    await expect(pom.calledBadges).toHaveCount(called.length)
+    await expect(pom.calledBadges.first()).toContainText('Called 09:00')
+    await expect(pom.estMarks).toHaveCount(estimates.length)
+    // One call each, no corrections yet: the `notified n×` counter stays off.
+    await expect(pom.notifiedMarkers).toHaveCount(0)
+
+    await expectAxeClean(page, 'schedule tab — list view with called badges')
+
+    // The boards encode the same promise as the called tier, on the bar itself.
+    await pom.setScheduleView('Gantt')
+    await expect(pom.calledBars).toHaveCount(called.length)
+    await expect(pom.calledBars.first()).toHaveAttribute('data-tier', 'called')
+
+    await expectAxeClean(page, 'schedule tab — Gantt view with called bars')
+  })
+
   test('keyboard: Tab reaches a bar and its tooltip opens with the match details', async ({
     page,
   }) => {

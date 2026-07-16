@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils'
 
 import { fmtDateShort } from '../../data/helpers'
 import {
+  calledAtLabel,
+  notifiedLabel,
   PX_PER_MIN,
   tierSentence,
   type TimelineBarData,
@@ -70,6 +72,14 @@ export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
   const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
   const when = `${bar.startClock}–${bar.endClock}`
   const sentence = tierSentence(bar.tier, bar.status)
+  // The call's cost, made visible (the ADR's called-at / notified-count marker):
+  // only on a bar whose tier IS the promise — a started match reads as fact, and
+  // an estimate has promised nothing.
+  const notified = notifiedLabel(bar.callNotifiedCount)
+  const marker =
+    bar.tier === 'called' && bar.pinnedAt !== null
+      ? `${calledAtLabel(bar.pinnedAt)}${notified ? ` · ${notified}` : ''}`
+      : null
 
   return (
     <Tooltip>
@@ -78,7 +88,7 @@ export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
           type="button"
           data-testid={`timeline-bar-${bar.fixtureId}`}
           data-tier={bar.tier}
-          aria-label={`${bar.label}, ${where}, ${bar.tableLabel}, ${when}. ${sentence}.`}
+          aria-label={`${bar.label}, ${where}, ${bar.tableLabel}, ${when}. ${sentence}.${marker ? ` ${marker}.` : ''}`}
           className={cn(
             'absolute top-1 bottom-1 flex flex-col justify-center overflow-hidden rounded-[4px] px-1.5 text-left leading-tight focus-visible:ring-2 focus-visible:ring-[color:var(--ball-500)] focus-visible:outline-none',
             TIER_CLASS[bar.tier],
@@ -106,6 +116,11 @@ export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
             {bar.tableLabel} · {fmtDateShort(bar.date)} · {when}
           </span>
           <span>{sentence}</span>
+          {marker && (
+            <span className="font-mono tabular-nums text-[color:var(--ball-500)]">
+              {marker}
+            </span>
+          )}
         </div>
       </TooltipContent>
     </Tooltip>

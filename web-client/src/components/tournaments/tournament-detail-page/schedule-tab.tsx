@@ -4,6 +4,7 @@ import {
   List,
   MapPin,
   Pencil,
+  Pin,
   Plus,
   Users,
 } from 'lucide-react'
@@ -30,7 +31,11 @@ import {
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
-import { buildTimelineBoard } from '../data/timeline'
+import {
+  buildTimelineBoard,
+  calledAtLabel,
+  notifiedLabel,
+} from '../data/timeline'
 import type { Tournament, TournamentTable } from '../data/types'
 import { EmptyState } from '../empty-state'
 import { OptionSelect } from './event-editor/option-select'
@@ -231,6 +236,11 @@ const MatchRow = ({
   showTime: boolean
 }) => {
   const time = timeOfDay(match.scheduledStart)
+  // The list speaks the boards' tier vocabulary (ADR "the schedule is solved; the
+  // call is pinned" — the UI never blurs an estimate into a promise): a scheduled
+  // time that is still the solver's plan says `est`; a called fixture wears its
+  // called-at badge (and, past the first call, what the corrections cost).
+  const notified = notifiedLabel(match.callNotifiedCount)
   return (
     <div
       data-testid={`schedule-match-${match.fixtureId}`}
@@ -240,6 +250,15 @@ const MatchRow = ({
         {showTime && (
           <span className="font-mono text-[12px] tabular-nums text-[color:var(--ball-500)]">
             {time || EM_DASH}
+            {time && match.tier === 'estimate' && (
+              <span
+                data-testid={`schedule-est-${match.fixtureId}`}
+                className="text-[10px] text-[color:var(--fg-3)]"
+              >
+                {' '}
+                · est
+              </span>
+            )}
           </span>
         )}
         <span className="flex items-baseline gap-x-1.5">
@@ -250,6 +269,25 @@ const MatchRow = ({
         <span className="text-[11px] text-[color:var(--fg-3)]">
           · {match.eventName}
         </span>
+        {match.tier === 'called' && match.pinnedAt !== null && (
+          <>
+            <span
+              data-testid={`schedule-called-${match.fixtureId}`}
+              className="inline-flex items-center gap-1 self-center rounded-full border border-[color:var(--ball-500)] bg-[color:var(--ball-500)]/20 px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-[color:var(--fg-1)]"
+            >
+              <Pin size={10} aria-hidden className="shrink-0" />
+              {calledAtLabel(match.pinnedAt)}
+            </span>
+            {notified && (
+              <span
+                data-testid={`schedule-notified-${match.fixtureId}`}
+                className="font-mono text-[10px] tabular-nums text-[color:var(--fg-3)]"
+              >
+                {notified}
+              </span>
+            )}
+          </>
+        )}
         <span
           data-testid={`schedule-status-${match.fixtureId}`}
           className="ml-auto text-[11px] font-medium text-[color:var(--fg-3)]"

@@ -21,6 +21,7 @@
 import type { MatchStatus } from '@/api/matches'
 
 import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
+import { fixtureTier, type TimelineTier } from './timeline'
 import type {
   Entrant,
   Fixture,
@@ -69,6 +70,18 @@ export interface ScheduleMatch {
    * `completed`/`voided` — its placement is frozen server-side, so the control is hidden
    * rather than offered and refused (ADR-0790). */
   placeable: boolean
+  /** How firm the time is — the boards' `estimate` / `called` / `started` vocabulary
+   * (`fixtureTier`), so the LIST reads the same tier system the bars draw: an estimate
+   * says `est`, a call carries its called-at badge, a started match reads as its status.
+   * The list must not blur a promise into a plan any more than a bar may. */
+  tier: TimelineTier
+  /** When the fixture was **called** (`null` = never): the promise's own timestamp,
+   * shown on the row so a director sees what they told the players (ADR "the schedule
+   * is solved; the call is pinned"). */
+  pinnedAt: string | null
+  /** How many call/correction notifications the players have received — `0` until
+   * called; `> 1` means a correction already spent their attention once. */
+  callNotifiedCount: number
 }
 
 /**
@@ -139,6 +152,9 @@ function toScheduleMatch(
     suggestedTableIds: pool?.tableIds ?? [],
     placeable:
       fixture.matchStatus === null || !FROZEN_STATUSES.has(fixture.matchStatus),
+    tier: fixtureTier(fixture),
+    pinnedAt: fixture.pinnedAt,
+    callNotifiedCount: fixture.callNotifiedCount,
   }
 }
 

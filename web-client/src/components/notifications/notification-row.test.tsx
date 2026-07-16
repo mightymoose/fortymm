@@ -15,6 +15,24 @@ describe('NotificationRow', () => {
     expect(notificationRowPage.getText('Court 3 · vs Silva, R.')).toBeInTheDocument()
   })
 
+  it('renders a match_calls item — the calls category is drawable like any other', () => {
+    // The category the pin transaction fires (ADR "the schedule is solved; the
+    // call is pinned": called / moved / cancelled). The row renders any category
+    // generically off CATEGORY_VISUAL, so this pins that the new category has a
+    // visual and flows through the shared row unchanged.
+    notificationRowPage.render({
+      notification: buildNotificationItem({
+        category: 'match_calls',
+        title: 'You’re called: Table 3',
+        body: 'U1200 Singles vs Okafor, D. — head to Table 3 now.',
+      }),
+    })
+    expect(notificationRowPage.getText('You’re called: Table 3')).toBeInTheDocument()
+    expect(
+      notificationRowPage.getText('U1200 Singles vs Okafor, D. — head to Table 3 now.'),
+    ).toBeInTheDocument()
+  })
+
   it('marks an unread row with the card wash and an sr-only marker', () => {
     notificationRowPage.render({
       notification: buildNotificationItem({ read_at: null }),

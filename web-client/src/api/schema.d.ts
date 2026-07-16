@@ -2301,7 +2301,7 @@ export interface components {
          *     a user can mute each category independently per channel.
          * @enum {string}
          */
-        NotificationCategory: "match_reminder" | "rating_change" | "tournament" | "opponent" | "result_confirm";
+        NotificationCategory: "match_reminder" | "rating_change" | "tournament" | "opponent" | "result_confirm" | "match_calls";
         /**
          * NotificationCategoryCell
          * @description One cell of the matrix: this category's setting for one channel.

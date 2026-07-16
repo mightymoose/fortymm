@@ -4,9 +4,9 @@ import type { TimelineBarProps } from './timeline-bar'
 /** One placed, **unpinned** Bo5 fixture — `player.1 vs player.4`, U1200 Singles
  * Pool A, on `T1` at `09:00` for 35 estimated minutes: the ordinary `estimate`
  * tier every solve produces. A test that wants a call passes
- * `{ tier: 'called', pinnedAt: '…' }`; a started bar passes
- * `{ tier: 'started', status: 'in_progress' }` — keep the pair consistent, the
- * way the wire delivers them. */
+ * `{ tier: 'called', pinnedAt: '…', callNotifiedCount: 1 }`; a started bar
+ * passes `{ tier: 'started', status: 'in_progress' }` — keep each set
+ * consistent, the way the wire delivers them. */
 export function buildTimelineBarData(
   overrides: Partial<TimelineBarData> = {},
 ): TimelineBarData {
@@ -28,6 +28,7 @@ export function buildTimelineBarData(
     tier: 'estimate',
     status: null,
     pinnedAt: null,
+    callNotifiedCount: 0,
     ...overrides,
   }
 }

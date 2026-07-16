@@ -1565,6 +1565,70 @@ function placeUnplacedFixtures(events: StoredEvent[]): {
   return { events: next, placed }
 }
 
+/** The ADR's call-ahead window, in minutes: a fixture whose projected start is
+ * this close gets **called** — pinned and notified — rather than left an
+ * estimate. */
+const CALL_AHEAD_MIN = 10
+
+/** A naive placement stamp (`YYYY-MM-DDTHH:MM[:SS]`) as its date + minutes past
+ * that date's midnight — plain string arithmetic in the venue's own frame, never
+ * a `Date` (ADR-0790). */
+function stampMinutes(stamp: string): { date: string; minutes: number } {
+  const [date, time] = stamp.split('T')
+  const [h, m] = (time ?? '').split(':').map(Number)
+  return { date, minutes: (h || 0) * 60 + (m || 0) }
+}
+
+/** The mock's **calling pass** (ADR "the schedule is solved; the call is
+ * pinned"), run only while the tournament is LIVE: any placed, still-unpinned
+ * fixture whose `scheduled_start` falls within the call-ahead window of the
+ * store's "now" gets `pinned_at` set and one notification counted — so the dev
+ * loop demos a call: run the scheduler on a live tournament and the imminent
+ * bars come back `called`, badge and all.
+ *
+ * The store's "now" is the earliest placed `scheduled_start` anywhere in the
+ * tournament — the moment the venue's day opens. The seeds' slots live on fixed
+ * calendar dates, so the machine's real clock can never be "10 minutes before
+ * Pool A"; the day's own first ball is the only honest clock the mock has. */
+function pinImminentFixtures(events: StoredEvent[]): {
+  events: StoredEvent[]
+  pinned: number
+} {
+  const starts = events
+    .flatMap((e) => e.fixtures)
+    .filter((f) => f.table_id !== null && f.scheduled_start !== null)
+    .map((f) => f.scheduled_start as string)
+  if (starts.length === 0) return { events, pinned: 0 }
+  const now = starts.reduce((a, b) => (a < b ? a : b))
+  const nowAt = stampMinutes(now)
+  let pinned = 0
+  const next = events.map((event) => ({
+    ...event,
+    fixtures: event.fixtures.map((fixture) => {
+      // Already promised, unplaced, or already under way: nothing to call.
+      if (
+        fixture.pinned_at !== null ||
+        fixture.table_id === null ||
+        fixture.scheduled_start === null ||
+        fixture.match_status === 'in_progress' ||
+        fixture.match_status === 'completed' ||
+        fixture.match_status === 'voided'
+      ) {
+        return fixture
+      }
+      const at = stampMinutes(fixture.scheduled_start)
+      const imminent =
+        at.date === nowAt.date &&
+        at.minutes >= nowAt.minutes &&
+        at.minutes - nowAt.minutes <= CALL_AHEAD_MIN
+      if (!imminent) return fixture
+      pinned += 1
+      return { ...fixture, pinned_at: now, call_notified_count: 1 }
+    }),
+  }))
+  return { events: next, pinned }
+}
+
 /** When the mock worker last advanced — the dwell below reads it. */
 let lastSolveTickAt = 0
 
@@ -1598,9 +1662,13 @@ function tickScheduleSolve(t: StoredTournament): StoredTournament {
   }
   if (solve.status === 'running') {
     const { events, placed } = placeUnplacedFixtures(t.events)
+    // Calling rides the apply, and only while LIVE (ADR: pre-live placements are
+    // silent pins-to-be — solves plan, notify no one).
+    const call =
+      t.status === 'live' ? pinImminentFixtures(events) : { events, pinned: 0 }
     return {
       ...t,
-      events,
+      events: call.events,
       latest_schedule_solve: {
         ...solve,
         status: 'succeeded',
@@ -1608,7 +1676,7 @@ function tickScheduleSolve(t: StoredTournament): StoredTournament {
         finished_at: new Date().toISOString(),
         wall_time_ms: 1200,
         fixtures_placed: placed,
-        fixtures_pinned: 0,
+        fixtures_pinned: call.pinned,
       },
     }
   }

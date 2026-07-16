@@ -1,3 +1,5 @@
+import { interactiveElementsIn } from '@/test/read-only'
+
 import { buildScheduleBoard, buildTimelinePlayerRow } from './gantt-board.factory'
 import { playerTimelineBoardPage as page } from './player-timeline-board.page'
 import { buildTimelinePlayerBarData } from './timeline-bar.factory'
@@ -57,5 +59,15 @@ describe('PlayerTimelineBoard', () => {
     const tip = await page.findTooltip()
     expect(tip).toHaveTextContent('player.1 vs player.4')
     expect(tip).toHaveTextContent('T1 · Jun 13 · 09:00–09:35')
+  })
+
+  it('offers no mutating control — every interactive element is a bar or the scroll region', () => {
+    page.render()
+    const others = interactiveElementsIn(page.getBoard()).filter(
+      (el) =>
+        !(el.getAttribute('data-testid') ?? '').startsWith('timeline-bar-') &&
+        el.getAttribute('role') !== 'region',
+    )
+    expect(others).toHaveLength(0)
   })
 })

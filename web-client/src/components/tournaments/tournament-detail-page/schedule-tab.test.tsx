@@ -216,6 +216,102 @@ describe('ScheduleTab', () => {
     expect(page.getEditingControls()).toHaveLength(0)
   })
 
+  // ----- the tier markers on the LIST rows (ADR "the schedule is solved; the
+  // call is pinned"): the list is the default view, so it must distinguish a
+  // promise from a plan exactly as the boards do — `est` on an estimate, the
+  // called-at badge (and the corrections' cost) on a call. -------------------
+
+  /** One event holding all three tiers, placed on `t1`: an estimate at 09:00, a
+   * twice-notified call at 10:00, and an in-progress match at 11:00. */
+  const buildTieredEvent = () =>
+    buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-est',
+          poolId: 'p-a',
+          entryAId: 'entry-1',
+          entryBId: 'entry-4',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+        }),
+        buildFixture({
+          id: 'fx-called',
+          poolId: 'p-a',
+          round: 2,
+          entryAId: 'entry-1',
+          entryBId: 'entry-5',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T10:00:00',
+          pinnedAt: '2026-06-13T09:50:00',
+          callNotifiedCount: 2,
+        }),
+        buildFixture({
+          id: 'fx-live',
+          poolId: 'p-a',
+          round: 3,
+          entryAId: 'entry-4',
+          entryBId: 'entry-5',
+          matchId: 'm-live',
+          matchStatus: 'in_progress',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T11:00:00',
+          pinnedAt: '2026-06-13T10:50:00',
+        }),
+      ],
+    })
+
+  it('marks a scheduled estimate `est` on its list row — and only an estimate', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildTieredEvent()] }),
+      tables: buildTables(),
+    })
+    expect(page.getMatch('fx-est')).toHaveTextContent('09:00 · est')
+    // A call is a promise and a started match is fact — neither is an estimate,
+    // so neither says `est`.
+    expect(page.queryEst('fx-called')).not.toBeInTheDocument()
+    expect(page.queryEst('fx-live')).not.toBeInTheDocument()
+  })
+
+  it('badges a called match on its list row — the called-at time and the notified count', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildTieredEvent()] }),
+      tables: buildTables(),
+    })
+    expect(page.getCalledBadge('fx-called')).toHaveTextContent('Called 09:50')
+    expect(page.queryNotified('fx-called')).toHaveTextContent('notified 2×')
+    // The estimate has promised nothing; the started match reads as its status,
+    // not as the promise it once was (started outranks the pin, as on the bars).
+    expect(page.queryCalledBadge('fx-est')).not.toBeInTheDocument()
+    expect(page.queryCalledBadge('fx-live')).not.toBeInTheDocument()
+    expect(page.queryNotified('fx-est')).not.toBeInTheDocument()
+  })
+
+  it('keeps the notified counter off a once-called row — one call is the ordinary case', () => {
+    page.render({
+      tournament: buildTournament({
+        events: [
+          buildDrawnEvent({
+            fixtures: [
+              buildFixture({
+                id: 'fx-called-once',
+                poolId: 'p-a',
+                entryAId: 'entry-1',
+                entryBId: 'entry-4',
+                tableId: 't1',
+                scheduledStart: '2026-06-13T10:00:00',
+                pinnedAt: '2026-06-13T09:50:00',
+                callNotifiedCount: 1,
+              }),
+            ],
+          }),
+        ],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.getCalledBadge('fx-called-once')).toHaveTextContent('Called 09:50')
+    expect(page.queryNotified('fx-called-once')).not.toBeInTheDocument()
+  })
+
   // ----- the view toggle & the boards (ADR "the schedule is solved") ----------
 
   it('defaults to the list view — the toggle offered, the boards not yet drawn', () => {

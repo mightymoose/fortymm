@@ -260,8 +260,14 @@ class BroadcastResponse(BaseModel):
 class NotificationJob(BaseModel):
     """The queue payload for one background delivery: a category + copy for a
     single recipient. The worker resolves *this user's* preferences and delivers
-    on the channels they opted into — there is no channel restriction on the
-    payload. Serialized as JSON onto the ``notifications`` RQ queue."""
+    on the channels they opted into. Serialized as JSON onto the
+    ``notifications`` RQ queue.
+
+    ``channels`` narrows the candidate channel set (``None`` = all). It exists
+    for flows that already delivered a channel transactionally — the match-call
+    pin (``app.match_calls``) persists the in-app row inside the pin
+    transaction and fans out here with only push/email — and can only ever
+    *subtract* candidates; the recipient's preferences still apply on top."""
 
     user_id: uuid.UUID
     category: NotificationCategory
@@ -273,6 +279,7 @@ class NotificationJob(BaseModel):
     push_category: str | None = None
     push_data: dict[str, str] | None = None
     collapse_id: str | None = None
+    channels: list[NotificationChannel] | None = None
 
 
 class BroadcastRecipient(BaseModel):

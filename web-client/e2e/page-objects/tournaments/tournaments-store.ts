@@ -1308,6 +1308,10 @@ export class TournamentsStore {
     }
     if (solve.status === 'running') {
       const placed = this.placeUnplacedFixtures()
+      // Calling rides the apply, and only while LIVE (ADR "the schedule is
+      // solved; the call is pinned": pre-live placements are silent — solves
+      // plan, notify no one). Mirrors the MSW store's `pinImminentFixtures`.
+      const pinned = this.detail.status === 'live' ? this.pinImminentFixtures() : 0
       this.detail = {
         ...this.detail,
         latest_schedule_solve: {
@@ -1317,10 +1321,64 @@ export class TournamentsStore {
           finished_at: new Date().toISOString(),
           wall_time_ms: 1200,
           fixtures_placed: placed,
-          fixtures_pinned: 0,
+          fixtures_pinned: pinned,
         },
       }
     }
+  }
+
+  /** The mock's **calling pass**, run on a LIVE tournament's freshly-applied
+   * placements: any placed, still-unpinned fixture whose `scheduled_start`
+   * falls within the ~10-minute call-ahead window of the store's "now" gets
+   * `pinned_at` set and one notification counted — the fixture comes back
+   * CALLED on the next detail read, which is what the board/list specs watch.
+   *
+   * The store's "now" is the earliest placed `scheduled_start` anywhere — the
+   * moment the venue's day opens. The seeds' pool slots live on fixed calendar
+   * dates, so the machine's real clock could never be "10 minutes before Pool
+   * A"; the day's own first ball is the only honest clock the stub has. */
+  private pinImminentFixtures(): number {
+    const CALL_AHEAD_MIN = 10
+    const minutesOf = (stamp: string): { date: string; minutes: number } => {
+      const [date, time] = stamp.split('T')
+      const [h, m] = (time ?? '').split(':').map(Number)
+      return { date, minutes: (h || 0) * 60 + (m || 0) }
+    }
+    const starts = this.detail.events
+      .flatMap((e) => e.fixtures)
+      .filter((f) => f.table_id !== null && f.scheduled_start !== null)
+      .map((f) => f.scheduled_start as string)
+    if (starts.length === 0) return 0
+    const now = starts.reduce((a, b) => (a < b ? a : b))
+    const nowAt = minutesOf(now)
+    let pinned = 0
+    this.detail = {
+      ...this.detail,
+      events: this.detail.events.map((event) => ({
+        ...event,
+        fixtures: event.fixtures.map((fixture) => {
+          if (
+            fixture.pinned_at !== null ||
+            fixture.table_id === null ||
+            fixture.scheduled_start === null ||
+            fixture.match_status === 'in_progress' ||
+            fixture.match_status === 'completed' ||
+            fixture.match_status === 'voided'
+          ) {
+            return fixture
+          }
+          const at = minutesOf(fixture.scheduled_start)
+          const imminent =
+            at.date === nowAt.date &&
+            at.minutes >= nowAt.minutes &&
+            at.minutes - nowAt.minutes <= CALL_AHEAD_MIN
+          if (!imminent) return fixture
+          pinned += 1
+          return { ...fixture, pinned_at: now, call_notified_count: 1 }
+        }),
+      })),
+    }
+    return pinned
   }
 
   /** The mock solver's placement pass: every table-less pooled fixture goes onto

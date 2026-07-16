@@ -17,6 +17,23 @@ type BroadcastRecipient = components['schemas']['BroadcastRecipient']
 // Mutated by mark-read / broadcast so the dev UI feels live.
 let feed: NotificationItem[] = [
   {
+    // A **match call** (ADR "the schedule is solved; the call is pinned"): the
+    // promise a pinned fixture fires, in the `match_calls` category the API
+    // seeds (migration 0015). Newest in the feed, so the dev bell shows the
+    // category's Megaphone treatment without any clicking.
+    id: 'mn-0',
+    category: 'match_calls',
+    title: 'You’re called: Table 3',
+    body: 'U1200 Singles vs Okafor, D. — head to Table 3 now.',
+    // Like mn-1: a match that actually exists in the store, addressed the way
+    // the router expects (#958).
+    link: `/matches/${SEED_MATCH_IDS.inProgress}`,
+    action_label: 'View match',
+    delta: null,
+    read_at: null,
+    created_at: '2026-06-17T12:05:00.000Z',
+  },
+  {
     id: 'mn-1',
     category: 'result_confirm',
     title: 'Accept your score',

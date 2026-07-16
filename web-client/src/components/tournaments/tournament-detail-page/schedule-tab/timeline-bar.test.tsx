@@ -13,18 +13,24 @@ describe('TimelineBar', () => {
     )
   })
 
-  it('renders a called bar as a promise — solid tier, no `est` mark, the notified sentence', () => {
+  it('renders a called bar as a promise — solid tier, no `est` mark, the notified sentence and the called-at marker', () => {
     page.render({
       bar: buildTimelineBarData({
         tier: 'called',
         pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 1,
       }),
     })
     const bar = page.getBar('fx-a-1')
     expect(page.getTier('fx-a-1')).toBe('called')
     expect(bar).not.toHaveClass('border-dashed')
     expect(bar).not.toHaveTextContent('est')
-    expect(bar).toHaveAccessibleName(/Called — the players were notified\.$/)
+    // The called-at marker rides the accessible name too, so what the promise
+    // cost never depends on the tooltip opening. One notification is the
+    // ordinary call — no `notified n×` counter yet.
+    expect(bar).toHaveAccessibleName(
+      /Called — the players were notified\. Called 08:50\.$/,
+    )
   })
 
   it('renders a started bar as fact, reading its actual state', () => {
@@ -64,13 +70,44 @@ describe('TimelineBar', () => {
     expect(tip).toHaveTextContent('Estimate — the scheduler may still move it')
   })
 
-  it('says the pin state in the tooltip of a called bar', async () => {
+  it('says the pin state in the tooltip of a called bar — with the called-at time, not just the sentence', async () => {
     page.render({
-      bar: buildTimelineBarData({ tier: 'called', pinnedAt: '2026-06-13T08:50:00' }),
+      bar: buildTimelineBarData({
+        tier: 'called',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 1,
+      }),
+    })
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).toHaveTextContent('Called — the players were notified')
+    expect(tip).toHaveTextContent('Called 08:50')
+    // One call, no corrections: the counter stays off the marker.
+    expect(tip).not.toHaveTextContent('notified 1×')
+  })
+
+  it('counts the notifications on a re-called bar — `notified 2×` is the cost of the correction, made visible', async () => {
+    page.render({
+      bar: buildTimelineBarData({
+        tier: 'called',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 2,
+      }),
     })
     page.focusBar('fx-a-1')
     expect(await page.findTooltip()).toHaveTextContent(
-      'Called — the players were notified',
+      'Called 08:50 · notified 2×',
     )
+    expect(page.getBar('fx-a-1')).toHaveAccessibleName(
+      /Called 08:50 · notified 2×\.$/,
+    )
+  })
+
+  it('shows no called-at marker on an estimate — nothing was promised', async () => {
+    page.render({ bar: buildTimelineBarData() })
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).not.toHaveTextContent('Called')
+    expect(tip).not.toHaveTextContent('notified')
   })
 })

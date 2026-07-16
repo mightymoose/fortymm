@@ -66,6 +66,22 @@ const scoped = (container: Container) => ({
     return container.getByTestId(`schedule-status-${fixtureId}`)
   },
 
+  /** The list row's tier markers (ADR "the schedule is solved; the call is
+   * pinned"): the `est` mark on a scheduled estimate, the called-at badge on a
+   * call, and the `notified n×` counter once a correction has gone out. */
+  queryEst(fixtureId: string) {
+    return container.queryByTestId(`schedule-est-${fixtureId}`)
+  },
+  getCalledBadge(fixtureId: string) {
+    return container.getByTestId(`schedule-called-${fixtureId}`)
+  },
+  queryCalledBadge(fixtureId: string) {
+    return container.queryByTestId(`schedule-called-${fixtureId}`)
+  },
+  queryNotified(fixtureId: string) {
+    return container.queryByTestId(`schedule-notified-${fixtureId}`)
+  },
+
   /** The **Place** / **Move** trigger the owner sees on a match — absent for a non-owner
    * and for a finished (frozen) match. */
   queryPlaceTrigger(fixtureId: string) {

@@ -89,6 +89,24 @@ const BOARD_STATUS_LABEL: Record<MatchStatus, string> = {
   voided: 'Voided',
 }
 
+/** What a call **cost**, made visible (ADR "the schedule is solved; the call is
+ * pinned": called fixtures carry a visible called-at / notified-count marker):
+ * `Called 08:50` — the wall-clock minute the promise was made. The time is read
+ * straight off the naive `pinnedAt` stamp, the same frame every other schedule
+ * clock is in. */
+export function calledAtLabel(pinnedAt: string): string {
+  const [, time] = pinnedAt.split('T')
+  return `Called ${time ? time.slice(0, 5) : '00:00'}`
+}
+
+/** The notified-count half of the marker: `notified 2×` — but only once the
+ * fixture's players have been notified MORE than once (a correction went out).
+ * A single call is the ordinary case and earns no counter; `null` says so, and
+ * the caller renders nothing. */
+export function notifiedLabel(callNotifiedCount: number): string | null {
+  return callNotifiedCount > 1 ? `notified ${callNotifiedCount}×` : null
+}
+
 /** What a bar's tier reads as, in one sentence — the tooltip's last line and the
  * tail of the bar's accessible name. The estimate/called copy is the ADR's own
  * distinction; a started bar reads as its match's actual state. */
@@ -194,6 +212,10 @@ export interface TimelineBarData {
    * a planned pairing. */
   status: MatchStatus | null
   pinnedAt: string | null
+  /** How many call/correction notifications this fixture's players have received
+   * — `0` for a never-called fixture. Carried so a called bar can show what its
+   * promise cost (`notifiedLabel`). */
+  callNotifiedCount: number
 }
 
 /** One table's row on the Gantt: every tournament table gets a row, bars or
@@ -361,6 +383,7 @@ export function buildTimelineBoard(
       tier: fixtureTier(fixture),
       status: fixture.matchStatus,
       pinnedAt: fixture.pinnedAt,
+      callNotifiedCount: fixture.callNotifiedCount,
     })
     min = Math.min(min, startMin)
     max = Math.max(max, endMin)

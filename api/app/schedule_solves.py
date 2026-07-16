@@ -34,8 +34,9 @@ lock or Redis key to drift from it.
     returned placement for an *unpinned* fixture is written back as wall-clock
     (``base + minutes``); pinned fixtures' columns are never touched — the
     solver echoes pins verbatim, and a promise is not rewritten even with its
-    own bytes. No per-fixture merging, ever: the output is taken whole or not
-    at all.
+    own bytes. (The one exception is a pin *physics* broke — see the
+    broken-pins section below.) No per-fixture merging, ever: the output is
+    taken whole or not at all.
 
 **Lock order: tournament → schedule_solves → tournament_fixtures.** Routes
 take the tournament row lock before calling :func:`request_solve` (which takes
@@ -53,6 +54,37 @@ deliberately excluded — the clock advancing is not input drift. The entrant
 set is included even though the solver never reads entry *status*, because a
 mid-solve withdrawal means the draw is about to be re-cut and a plan computed
 against the old field should not land.
+
+**Broken pins: physics may move a pin, with a correction (ADR).** A pin is
+inviolable against *optimization*, never against physics. The snapshot phase
+detects pins physics broke, so they never reach the solver *as pins*:
+
+* **table gone** — the pinned ``table_id`` is no longer in the venue catalogue
+  or no longer in the fixture's pool's ``table_ids``: the fixture enters the
+  snapshot **unpinned** (the solver re-places it), and its id is carried in
+  ``SolveInputs.broken_pin_moves``;
+* **entrant withdrew** — an entry of the fixture is ``withdrawn`` (and the
+  match isn't already settled): the promised match cannot happen, so the
+  fixture is **excluded** from the snapshot and carried in
+  ``SolveInputs.broken_pin_voids``;
+* a deleted fixture needs nothing — the pin died with its row.
+
+The *repair* is applied only by phase (c), in the same transaction and under
+the same locks as every other placement write — and only on a successful
+verdict (whole-or-nothing: an infeasible/failed run writes nothing, and the
+still-broken pin is re-detected by every later snapshot until a solve lands).
+A moved pin gets the solver's new placement with ``pinned_at`` **refreshed to
+now** — the promise is renewed, not demoted to an estimate. A voided pin has
+its placement columns (``table_id``, ``scheduled_start``, ``pinned_at``)
+cleared — whether the draw layer later voids or deletes the fixture is its
+business. Both corrections notify via ``app.match_calls.notify_pin_repairs``
+(live tournaments only; moved → both entrants, cancelled → the remaining
+entrant only), with the same in-app-atomic + post-commit-fan-out split as the
+call. Repairs touch only fixtures that were actually **pinned**: a *planned*
+fixture on a removed table is simply re-planned by the ordinary placement
+write, silently — it was never promised. Because a repair rewrites the very
+columns whose state triggered detection, it is self-extinguishing: the next
+snapshot sees a healthy pin (or no pin) and detects nothing.
 
 **In-progress occupancy is a proxy, documented as one.** A tournament match is
 born ``in_progress`` at materialization (ADR-0788) — the status does *not*
@@ -91,8 +123,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app import match_calls, scheduling
 from app import queue as queue_module
-from app import scheduling
 from app.db import get_database_url
 from app.models import (
     Match,
@@ -123,6 +155,7 @@ from app.scheduling import (
     TableId,
     Window,
 )
+from app.schemas.notification import NotificationJob
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
 
@@ -287,12 +320,24 @@ class SolveInputs:
     """One transactional read of everything a solve consumes: the pure
     snapshot, its fingerprint, the wall-clock origin of the snapshot's minute
     frame, and the fixture rows themselves (keyed by id) so the apply that
-    re-read them under lock writes to exactly the rows it fingerprinted."""
+    re-read them under lock writes to exactly the rows it fingerprinted.
+
+    The ``broken_pin_*`` sets are the snapshot phase's broken-pin findings
+    (module docstring): ``broken_pin_moves`` entered the snapshot unpinned and
+    are re-pinned+notified at apply; ``broken_pin_voids`` were excluded from
+    the snapshot and have their placement cleared at apply.
+    ``withdrawn_entry_ids`` lets the cancelled correction pick the *remaining*
+    entrant. Everything these sets derive from is fingerprinted, so a
+    fingerprint match between snapshot and apply guarantees the fresh read's
+    sets are the ones the solve was computed against."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
     base: datetime
     fixtures: dict[uuid.UUID, TournamentFixture]
+    broken_pin_moves: frozenset[uuid.UUID] = frozenset()
+    broken_pin_voids: frozenset[uuid.UUID] = frozenset()
+    withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -331,7 +376,10 @@ async def _load_solver_inputs(
     """Read every solver input for the tournament and shape it for the pure
     module: pools become minute windows, pins become constants, live called
     matches become occupancy, existing unpinned placements become the
-    stability tier's previous plan.
+    stability tier's previous plan. Pins physics broke never reach the solver
+    as pins — a pin on a vanished table is demoted to a decision variable, a
+    pin whose entrant withdrew is excluded — with the findings carried on the
+    returned ``SolveInputs`` for the apply's repair (module docstring).
 
     ``lock=True`` (the apply phase) takes ``FOR UPDATE`` on the fixture rows,
     **ordered by id**, so concurrent placement writers (the pin tick, a
@@ -381,6 +429,7 @@ async def _load_solver_inputs(
 
     entry_user: dict[uuid.UUID, uuid.UUID] = {}
     active_entries: defaultdict[uuid.UUID, list[str]] = defaultdict(list)
+    withdrawn_entry_ids: set[uuid.UUID] = set()
     if drawn_events:
         entry_rows = (
             await db.execute(
@@ -396,6 +445,8 @@ async def _load_solver_inputs(
             entry_user[entry_id] = user_id
             if entry_status is TournamentEntryStatus.entered:
                 active_entries[event_id].append(str(entry_id))
+            else:
+                withdrawn_entry_ids.add(entry_id)
 
     match_status: dict[uuid.UUID, MatchStatus] = {}
     match_ids = [f.match_id for f in fixture_rows if f.match_id is not None]
@@ -424,10 +475,24 @@ async def _load_solver_inputs(
 
     # Pool ids are per-event value-objects — two events may both hold a
     # "pool-a" — so the solver's PoolId is namespaced by the event id.
+    # A pool's ``table_ids`` are intersected with the catalogue here: the
+    # catalogue and the pools are edited by two separate PATCHes, so a pool
+    # may momentarily name a table the venue no longer has. The catalogue is
+    # the venue's truth — a stale ref is a table the pool cannot use, not a
+    # reason to refuse the whole snapshot as incoherent (the raw ``table_ids``
+    # still feed the fingerprint, so the edit itself is drift like any other).
+    catalogue_ids = set(catalogue)
     pool_bounds: dict[str, tuple[datetime, datetime]] = {}
+    pool_tables: dict[str, tuple[TableId, ...]] = {}
     for event, _settings, pools in parsed_events:
         for pool in pools:
-            pool_bounds[f"{event.id}:{pool.id}"] = _slot_bounds(pool.slot)
+            key = f"{event.id}:{pool.id}"
+            pool_bounds[key] = _slot_bounds(pool.slot)
+            pool_tables[key] = tuple(
+                TableId(table_id)
+                for table_id in pool.table_ids
+                if TableId(table_id) in catalogue_ids
+            )
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
@@ -440,7 +505,7 @@ async def _load_solver_inputs(
     schedule_pools = tuple(
         SchedulePool(
             id=PoolId(f"{event.id}:{pool.id}"),
-            table_ids=tuple(TableId(table_id) for table_id in pool.table_ids),
+            table_ids=pool_tables[f"{event.id}:{pool.id}"],
             window=Window(
                 start_min=to_min(pool_bounds[f"{event.id}:{pool.id}"][0]),
                 end_min=to_min(pool_bounds[f"{event.id}:{pool.id}"][1]),
@@ -457,6 +522,8 @@ async def _load_solver_inputs(
     schedule_fixtures: list[ScheduleFixture] = []
     in_progress: list[InProgressMatch] = []
     previous_plan: list[PreviousPlacement] = []
+    broken_pin_moves: set[uuid.UUID] = set()
+    broken_pin_voids: set[uuid.UUID] = set()
     for event, _settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
             if fixture.pool_id is None:
@@ -481,10 +548,32 @@ async def _load_solver_inputs(
                 and fixture.table_id is not None
                 and fixture.scheduled_start is not None
             ):
-                pin = Pin(
-                    table_id=TableId(fixture.table_id),
-                    start_min=to_min(fixture.scheduled_start),
-                )
+                # Broken-pin detection (module docstring). A settled match's
+                # pin is history, not a promise left to break: completed
+                # fixtures are ignored by the solver whatever their pin says,
+                # and a voided match is dead — never re-place or cancel one.
+                settled = completed or status is MatchStatus.voided
+                if not settled and (
+                    fixture.entry_a_id in withdrawn_entry_ids
+                    or fixture.entry_b_id in withdrawn_entry_ids
+                ):
+                    # Case (b), entrant withdrew: the promised match cannot
+                    # happen. Excluded from the snapshot; voided at apply.
+                    broken_pin_voids.add(fixture.id)
+                    continue
+                if not settled and TableId(fixture.table_id) not in pool_tables.get(
+                    f"{event.id}:{fixture.pool_id}", ()
+                ):
+                    # Case (a), table gone (from the catalogue — pool_tables
+                    # is already catalogue-intersected — or from the pool):
+                    # enters the snapshot UNPINNED so the solver re-places
+                    # it; re-pinned + moved-notified at apply.
+                    broken_pin_moves.add(fixture.id)
+                else:
+                    pin = Pin(
+                        table_id=TableId(fixture.table_id),
+                        start_min=to_min(fixture.scheduled_start),
+                    )
             fixture_id = FixtureId(str(fixture.id))
             schedule_fixtures.append(
                 ScheduleFixture(
@@ -597,6 +686,9 @@ async def _load_solver_inputs(
         fingerprint=_fingerprint(payload),
         base=base,
         fixtures={fixture.id: fixture for fixture in fixture_rows},
+        broken_pin_moves=frozenset(broken_pin_moves),
+        broken_pin_voids=frozenset(broken_pin_voids),
+        withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
     )
 
 
@@ -716,9 +808,11 @@ async def _apply_result(
     """Phase (c): the guarded, whole-or-nothing apply (module docstring)."""
     async with sessionmaker() as db:
         # Lock order: tournament → schedule_solves → tournament_fixtures.
-        locked = (
+        # The full tournament row (not just the id): the call evaluation below
+        # reads its status, name and table catalogue. Same lock either way.
+        tournament = (
             await db.execute(
-                select(Tournament.id)
+                select(Tournament)
                 .where(Tournament.id == tournament_id)
                 .with_for_update()
             )
@@ -730,7 +824,7 @@ async def _apply_result(
                 .with_for_update()
             )
         ).scalar_one_or_none()
-        if locked is None or row is None:
+        if tournament is None or row is None:
             return
         if row.status is not ScheduleSolveStatus.running:
             return
@@ -738,7 +832,8 @@ async def _apply_result(
         # Re-read with the fixtures row-locked, against the same wall-clock
         # base frame (the fingerprint is over wall-clock values, so the two
         # ``now``s cannot fake a drift — or hide one).
-        fresh = await _load_solver_inputs(db, tournament_id, now=_wall_now(), lock=True)
+        apply_now = _wall_now()
+        fresh = await _load_solver_inputs(db, tournament_id, now=apply_now, lock=True)
         finished_at = datetime.now(UTC)
         rerun_was_requested = row.rerun_requested
         row.rerun_requested = False
@@ -756,22 +851,46 @@ async def _apply_result(
             await db.commit()
             return
 
+        call_fanout: list[NotificationJob] = []
         match result.verdict:
             case scheduling.Verdict.optimal | scheduling.Verdict.feasible:
                 placed = 0
                 pinned = 0
+                moved_repairs: list[TournamentFixture] = []
                 for placement in result.placements:
                     fixture = fresh.fixtures[uuid.UUID(placement.fixture_id)]
-                    if fixture.pinned_at is not None:
+                    if (
+                        fixture.pinned_at is not None
+                        and fixture.id not in fresh.broken_pin_moves
+                    ):
                         # The solver echoes pins verbatim; a promise's columns
                         # are never rewritten, not even with their own bytes.
                         pinned += 1
                         continue
+                    repaired_pin = fixture.pinned_at is not None
                     fixture.table_id = str(placement.table_id)
                     fixture.scheduled_start = fresh.base + timedelta(
                         minutes=placement.start_min
                     )
+                    if repaired_pin:
+                        # Broken pin, case (a): physics moved the promise, so
+                        # it is renewed — still a pin, re-dated to the moment
+                        # the new placement was made — never demoted back to
+                        # an estimate.
+                        fixture.pinned_at = apply_now
+                        moved_repairs.append(fixture)
                     placed += 1
+                # Broken pins, case (b): an entrant withdrew, so the promised
+                # match cannot happen and the fixture stops being schedulable.
+                # Whether the draw layer later voids or deletes the fixture is
+                # its business; here the placement and the pin are cleared.
+                voided_repairs: list[TournamentFixture] = []
+                for fixture_id in sorted(fresh.broken_pin_voids):
+                    fixture = fresh.fixtures[fixture_id]
+                    fixture.table_id = None
+                    fixture.scheduled_start = None
+                    fixture.pinned_at = None
+                    voided_repairs.append(fixture)
                 row.status = ScheduleSolveStatus.succeeded
                 row.verdict = (
                     SolverVerdict.optimal
@@ -780,6 +899,28 @@ async def _apply_result(
                 )
                 row.fixtures_placed = placed
                 row.fixtures_pinned = pinned
+                # Corrections for the repairs above — same transaction, same
+                # locks, live tournaments only: moved → both entrants,
+                # cancelled → the remaining entrant. In-app rows persist
+                # here; push/email jobs join the post-commit fan-out.
+                call_fanout = await match_calls.notify_pin_repairs(
+                    db,
+                    tournament,
+                    moved=moved_repairs,
+                    cancelled=voided_repairs,
+                    withdrawn_entry_ids=fresh.withdrawn_entry_ids,
+                )
+                # Call evaluation — same transaction, same locks: any fixture
+                # this apply just placed inside the call-ahead window (or that
+                # was already due) is pinned + its in-app notifications
+                # persisted here; the push/email fan-out is enqueued after the
+                # commit below (see app.match_calls' atomicity contract).
+                call_fanout += await match_calls.call_due_fixtures(
+                    db,
+                    tournament,
+                    list(fresh.fixtures.values()),
+                    now=apply_now,
+                )
             case scheduling.Verdict.infeasible:
                 # A designed outcome, not a failure: the solver *proved* the
                 # day does not fit. Nothing is written; existing placements
@@ -795,6 +936,9 @@ async def _apply_result(
         if rerun_was_requested:
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)
         await db.commit()
+    # Post-commit, by design: the pins and their in-app rows are durable;
+    # push/email fan-out is best-effort (app.match_calls module docstring).
+    match_calls.enqueue_call_fanout(call_fanout)
 
 
 async def _finish_failed_best_effort(

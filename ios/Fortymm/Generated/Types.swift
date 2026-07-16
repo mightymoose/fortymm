@@ -4513,6 +4513,7 @@ internal enum Components {
             case tournament = "tournament"
             case opponent = "opponent"
             case resultConfirm = "result_confirm"
+            case matchCalls = "match_calls"
         }
         /// One cell of the matrix: this category's setting for one channel.
         ///
