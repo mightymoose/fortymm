@@ -201,6 +201,8 @@ describe('apiToEvent — the draw', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        pinnedAt: null,
+        callNotifiedCount: 0,
       },
       {
         id: 'fx-2',
@@ -214,6 +216,8 @@ describe('apiToEvent — the draw', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        pinnedAt: null,
+        callNotifiedCount: 0,
       },
     ])
   })
@@ -250,6 +254,8 @@ describe('apiToEvent — the draw', () => {
       matchStatus: null,
       tableId: null,
       scheduledStart: null,
+      pinnedAt: null,
+      callNotifiedCount: 0,
     })
   })
 
@@ -488,6 +494,7 @@ const draft: Omit<Tournament, 'id'> = {
   },
   tableIds: [],
   events: [],
+  latestScheduleSolve: null,
 }
 
 describe('draftToCreateBody', () => {
@@ -731,6 +738,8 @@ describe('eventToUpdateBody', () => {
           matchStatus: null,
           tableId: null,
           scheduledStart: null,
+          pinnedAt: null,
+          callNotifiedCount: 0,
         },
       ],
     })

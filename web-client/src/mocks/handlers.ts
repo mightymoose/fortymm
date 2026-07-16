@@ -48,6 +48,7 @@ import {
   findTournament,
   listTournaments,
   placeFixture as placeTournamentFixture,
+  requestScheduleSolve as requestTournamentScheduleSolve,
   transitionTournament,
   uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
@@ -1801,6 +1802,36 @@ export const handlers = [
         )
       }
       return HttpResponse.json(result.fixture)
+    },
+  ),
+  // The schedule solver (ADR "the schedule is solved; the call is pinned").
+  // Registered before the bare `:tournamentId` routes, like the fixtures route
+  // above. One verb, no body: POST queues a run — the owner's Run-scheduler
+  // button — and answers **202** with the ledger row that will carry the outcome.
+  // The outcome itself is read off the detail's `latest_schedule_solve`, which the
+  // store's read tick walks queued → running → succeeded (see `tournaments-store`).
+  // The 422 is CODED (`no_drawn_events`, the ADR-0968 shape): the client switches
+  // on the code and owns its copy; the message is the fallback sentence.
+  http.post(
+    '*/v1/tournaments/:tournamentId/schedule/solves',
+    async ({ params }) => {
+      await delay(250)
+      const result = requestTournamentScheduleSolve(String(params.tournamentId))
+      if (!result.ok) {
+        if (result.status === 422) {
+          return HttpResponse.json(
+            { detail: { code: result.code, message: result.message } },
+            { status: 422 },
+          )
+        }
+        return detail(
+          result.status === 403
+            ? 'Only the creator can run the scheduler.'
+            : 'Tournament not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.solve, { status: 202 })
     },
   ),
   http.patch(

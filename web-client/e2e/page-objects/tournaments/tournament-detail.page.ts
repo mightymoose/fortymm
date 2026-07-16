@@ -564,4 +564,36 @@ export class TournamentDetailPage {
   capacityNote(eventName: string): Locator {
     return this.eventCard(eventName).getByTestId('capacity-remaining')
   }
+
+  // ----- the Schedule tab & its solve strip (ADR "the schedule is solved") ---
+
+  /** Open the Schedule tab and wait for its strip to really be on screen — every
+   * "the strip says X" assertion passes vacuously against a tab that has not
+   * rendered yet. */
+  async openScheduleTab() {
+    await this.page.getByRole('tab', { name: 'Schedule' }).click()
+    await expect(this.solveStrip).toBeVisible()
+  }
+
+  /** The solve strip — what the latest run of the placement solver has to say. */
+  get solveStrip(): Locator {
+    return this.page.getByTestId('solve-strip')
+  }
+
+  /** One of the strip's five designed states — present iff the strip is in it. */
+  solveStripState(
+    state: 'none' | 'solving' | 'succeeded' | 'infeasible' | 'failed',
+  ): Locator {
+    return this.page.getByTestId(`solve-strip-${state}`)
+  }
+
+  /** The owner's Run-scheduler button — absent, not disabled, for a viewer. */
+  get runScheduler(): Locator {
+    return this.page.getByTestId('run-scheduler')
+  }
+
+  /** The inline run refusal (the strip's only error surface — never a toast). */
+  get runSchedulerNotice(): Locator {
+    return this.page.getByTestId('run-scheduler-notice')
+  }
 }

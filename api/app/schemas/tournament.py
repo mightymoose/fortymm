@@ -15,6 +15,11 @@ from pydantic import (
 )
 
 from app.models.match import MatchStatus
+from app.models.schedule_solve import (
+    ScheduleSolveStatus,
+    ScheduleSolveTrigger,
+    SolverVerdict,
+)
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
@@ -516,6 +521,11 @@ class TournamentFixtureRead(BaseModel):
       means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
       venue's frame, a prediction rather than a commitment — a match starting
       off-prediction is normal, not an error.
+    * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
+      the call is pinned"): ``null`` means the placement is still an estimate the
+      solver may move freely. When set, the placement is a promise — the players were
+      notified, and no later solve will rearrange it. Naive wall-clock in the venue's
+      frame, like ``scheduled_start``.
 
     The entries are carried as **ids only**. The name and username behind
     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -542,6 +552,51 @@ class TournamentFixtureRead(BaseModel):
     # ``scheduled_start`` is a naive wall-clock prediction. Both ``null`` = unassigned.
     table_id: str | None
     scheduled_start: datetime | None
+    # The pin facts (see the docstring): ``pinned_at`` null = estimate, set = promise;
+    # ``call_notified_count`` is how many times the players were told (call +
+    # corrections), the number the UI prices a re-drag with.
+    pinned_at: datetime | None
+    call_notified_count: int
+
+
+class ScheduleSolveRead(BaseModel):
+    """One row of a tournament's **solve ledger** (ADR "the schedule is solved, the
+    call is pinned") — a single run of the placement solver, which the admin page
+    reads verbatim.
+
+    ``status`` is the *run's* lifecycle; ``verdict`` is CP-SAT's own answer, and they
+    are deliberately separate facts: a run can end ``succeeded`` on a merely
+    ``feasible`` verdict (FEASIBLE is accepted under the time cap — mid-tournament we
+    want a good answer now, not a proof), and ``infeasible`` is a designed outcome,
+    not an error — it is the whole point of pre-live solves.
+
+    **Every ``null`` marks a stage not (or never) reached**, not a missing field:
+
+    * ``verdict`` — ``null`` until the solver has actually run; forever ``null`` for
+      a run that failed before reaching it.
+    * ``started_at`` / ``finished_at`` — ``null`` while the run is still ``queued`` /
+      still ``running``.
+    * ``wall_time_ms`` — the solver's wall time; ``null`` until it has finished.
+    * ``fixtures_placed`` / ``fixtures_pinned`` — the sizes of the *applied* output;
+      ``null`` until (unless) the run reaches its guarded apply. A solve whose output
+      was discarded for drift re-runs rather than reporting partial counts — the
+      apply is whole-or-nothing.
+    * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    trigger: ScheduleSolveTrigger
+    status: ScheduleSolveStatus
+    verdict: SolverVerdict | None
+    requested_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    wall_time_ms: int | None
+    fixtures_placed: int | None
+    fixtures_pinned: int | None
+    error: str | None
 
 
 class StandingRowRead(BaseModel):
@@ -709,6 +764,17 @@ class TournamentRead(BaseModel):
 
 class TournamentDetailRead(TournamentRead):
     events: list[TournamentEventRead]
+    # The Schedule tab's solve strip (ADR "the schedule is solved, the call is
+    # pinned"): the NEWEST row of the tournament's solve ledger, by ``requested_at``.
+    # One row, not the ledger — the strip shows the current run's state (queued /
+    # running / succeeded / infeasible / failed) and the counts of the last applied
+    # plan; the full history is the admin page's read, not this page's. It rides on
+    # this payload for the same one-endpoint-per-page reason ``fixtures`` does.
+    #
+    # ``null`` means **no solve has ever been requested** for this tournament — the
+    # designed state of every tournament until a draw exists and something (go-live,
+    # the Run-scheduler button, a completed match) asks for a schedule.
+    latest_schedule_solve: ScheduleSolveRead | None
 
 
 # ----- write models ---------------------------------------------------------

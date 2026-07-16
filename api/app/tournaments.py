@@ -22,6 +22,8 @@ from app.models import (
     EventFormat,
     Match,
     MatchStatus,
+    ScheduleSolve,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -32,6 +34,11 @@ from app.models import (
 )
 from app.rbac import require_permission, user_has_permission
 from app.results import EventResults, MatchOutcome, PoolInput, results_for
+from app.schedule_solves import (
+    latest_solve,
+    request_solve,
+    tournament_has_drawn_event,
+)
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
@@ -39,6 +46,7 @@ from app.schemas.tournament import (
     EventEntryState,
     EventResultsRead,
     PoolStandingsRead,
+    ScheduleSolveRead,
     StandingRowRead,
     TournamentCreate,
     TournamentDetailRead,
@@ -462,6 +470,7 @@ def _serialize_detail(
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
+    latest_schedule_solve: ScheduleSolve | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
@@ -476,6 +485,15 @@ def _serialize_detail(
                 t,
                 created_by_username=created_by_username,
                 current_user_id=current_user_id,
+            ),
+            # ``None`` is two things by design, exactly as ``results`` above is: on
+            # the DETAIL read it is the fact ("no solve ever requested"); on the LIST
+            # it is "not projected" — the list's cards render no solve strip, so it
+            # skips the ledger query the same way it skips standings.
+            "latest_schedule_solve": (
+                ScheduleSolveRead.model_validate(latest_schedule_solve)
+                if latest_schedule_solve is not None
+                else None
             ),
             "events": [
                 _serialize_event(
@@ -829,6 +847,11 @@ async def list_tournaments(
             fixtures_by_event=event_fixtures,
             game_counts=None,
             rating=ratings[tournament.league_id],
+            # The list projects no solve strip, for the same reason it projects no
+            # standings (``game_counts=None`` above): its cards never render one, so
+            # it skips the ledger read rather than paying a query for a field every
+            # card throws away. The solve strip is a detail-BFF concern.
+            latest_schedule_solve=None,
         )
         for tournament, username in rows
     ]
@@ -942,15 +965,20 @@ async def get_tournament(
     # — what each event's standings are projected from (ADR-0788). One statement for the
     # whole page, and **none at all** until something has been played (an unplayed
     # detail collects no completed match ids), so an unplayed tournament still costs
-    # five and the statement-count pin holds; a played one costs the one extra.
+    # six and the statement-count pin holds; a played one costs the one extra.
     game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
-    # The FIFTH query (and last on an unplayed page): the caller's rating on the
-    # tournament's league, read ONCE for the whole page. It is what every event's
-    # ``entry_state`` is judged against (ADR-0783), and a tournament has exactly one
-    # ladder — so a rating read inside the per-event loop would issue a query per event
-    # to learn the same number, on the page whose whole job is to describe a field of
-    # events.
+    # The FIFTH query: the caller's rating on the tournament's league, read ONCE for
+    # the whole page. It is what every event's ``entry_state`` is judged against
+    # (ADR-0783), and a tournament has exactly one ladder — so a rating read inside
+    # the per-event loop would issue a query per event to learn the same number, on
+    # the page whose whole job is to describe a field of events.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    # The SIXTH (and last): the newest row of the tournament's solve ledger — the
+    # Schedule tab's solve strip (ADR "the schedule is solved, the call is pinned").
+    # One row by the ledger's own index, whatever the day's solve count, so the
+    # statement-count pin stays flat; ``None`` is the designed state of a tournament
+    # nobody has asked to schedule yet.
+    latest_schedule_solve = await latest_solve(db, tournament.id)
     return _serialize_detail(
         tournament,
         created_by_username=username,
@@ -960,6 +988,7 @@ async def get_tournament(
         fixtures_by_event=event_fixtures,
         game_counts=game_counts,
         rating=rating,
+        latest_schedule_solve=latest_schedule_solve,
     )
 
 
@@ -2594,3 +2623,111 @@ async def place_fixture(
     # lookup always finds it.
     fixtures = (await fixtures_by_event(db, [fixture.event_id]))[fixture.event_id]
     return next(f for f in fixtures if f.id == fixture.id)
+
+
+# ----- the schedule solver (ADR "the schedule is solved; the call is pinned") -----
+#
+# One verb: POST queues a run of the placement solver — the owner's Run-scheduler
+# button. The solve's *outcome* is read on the tournament-detail BFF
+# (``latest_schedule_solve``, plus each fixture's placement and pin facts), one
+# endpoint per page (root CLAUDE.md), so there is deliberately no ``GET`` here.
+
+#: The machine-readable code for "nothing to schedule" — the client switches on it
+#: and owns its copy; the message below is the fallback prose (the
+#: ``tournament_entry_refusals`` / ``sessions.py`` shape).
+NO_DRAWN_EVENTS_CODE = "no_drawn_events"
+
+
+def _no_drawn_events_refusal() -> HTTPException:
+    """The 422 for a schedule solve on a tournament with no cut draw anywhere.
+
+    A 422 rather than a 409, for the same reason ``_draw_refusal`` is: the request is
+    well-formed and authorized, but its content — this tournament, as it stands — has
+    nothing the solver can place, and retrying unchanged fails identically until the
+    director cuts a draw. The detail is the ``{"code": ..., "message": ...}`` shape
+    (``tournament_entry_refusals``): the code is the contract, the message is the
+    fallback.
+
+    One sentence for every arity — a tournament with no events and one with ten
+    undrawn events are refused for the same reason (nothing is drawn), and copy that
+    counted events would have to pluralize correctly in both (#1048, #1059) for a
+    distinction the director cannot act on differently anyway: either way the fix is
+    to cut a draw.
+    """
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": NO_DRAWN_EVENTS_CODE,
+            "message": (
+                "There is nothing to schedule yet: no event of this tournament has "
+                "a draw. The scheduler places a draw's fixtures onto tables, so cut "
+                "at least one event's draw, then run it."
+            ),
+        },
+    )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/schedule/solves",
+    response_model=ScheduleSolveRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_schedule_solve(
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ScheduleSolveRead:
+    """Queue a run of the schedule solver for this tournament — the Run-scheduler
+    button — and answer with the ledger row that will carry its outcome.
+
+    **One solve in flight per tournament**, so this is a request, not a command:
+    if a run is already `queued`, this click is absorbed by it and the existing row
+    comes back (same id — the pending run will see whatever state motivated the
+    click); if one is `running`, its re-run flag is set and the running row comes
+    back (a fresh run follows at its finish). Only when neither exists is a new run
+    queued. The `202` is honest either way — the work is accepted, not done. Poll
+    the tournament detail's `latest_schedule_solve` for the outcome.
+
+    Allowed in **any** tournament status, from the moment any event has a cut draw
+    — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+    point: an infeasible verdict before going live is how a director learns the day
+    does not fit while there is still time to change it.
+
+    Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+    event of this tournament has a draw: the solver places a draw's fixtures, so
+    with nothing cut there is nothing to schedule. A `503` means the scheduling
+    queue itself was unreachable; nothing was queued, and the same request is safe
+    to retry.
+
+    Owner-only, like every other tournament mutation: an absent tournament is a
+    `404`, a non-owner a `403`.
+    """
+    # 404 → 403 → 422, the ordering ADR-0017 fixed for this module — and the same
+    # tournament row lock every scheduling-input writer takes, taken FIRST, which is
+    # the lock ``request_solve`` requires of its callers (lock order: tournament →
+    # schedule_solves). Without it, this route's "a draw exists" judgment and its
+    # enqueue would sit in two instants: an un-cut could commit between them and a
+    # solve would be queued for a tournament this route just certified as drawable.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+    # The caller's own refusal, last: nothing drawn means nothing to schedule.
+    if not await tournament_has_drawn_event(db, tournament_id):
+        raise _no_drawn_events_refusal()
+    row = await request_solve(db, tournament_id, ScheduleSolveTrigger.manual)
+    if row is None:
+        # The enqueue itself failed (Redis down) and ``request_solve`` took its row
+        # back out — a zombie row would absorb every later trigger while no job ever
+        # runs. Nothing was queued, so the honest answer is "not available", not a
+        # ledger row that names a run that does not exist.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The scheduling queue is unavailable, so the solve was not queued. "
+                "Try again in a moment."
+            ),
+        )
+    await db.commit()
+    # ``requested_at`` (and the other server defaults) were never round-tripped by
+    # the INSERT, so read the row back rather than serializing expired attributes.
+    await db.refresh(row)
+    return ScheduleSolveRead.model_validate(row)

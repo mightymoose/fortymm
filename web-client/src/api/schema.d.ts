@@ -1314,6 +1314,49 @@ export interface paths {
         patch: operations["place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch"];
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/schedule/solves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Schedule Solve
+         * @description Queue a run of the schedule solver for this tournament — the Run-scheduler
+         *     button — and answer with the ledger row that will carry its outcome.
+         *
+         *     **One solve in flight per tournament**, so this is a request, not a command:
+         *     if a run is already `queued`, this click is absorbed by it and the existing row
+         *     comes back (same id — the pending run will see whatever state motivated the
+         *     click); if one is `running`, its re-run flag is set and the running row comes
+         *     back (a fresh run follows at its finish). Only when neither exists is a new run
+         *     queued. The `202` is honest either way — the work is accepted, not done. Poll
+         *     the tournament detail's `latest_schedule_solve` for the outcome.
+         *
+         *     Allowed in **any** tournament status, from the moment any event has a cut draw
+         *     — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+         *     point: an infeasible verdict before going live is how a director learns the day
+         *     does not fit while there is still time to change it.
+         *
+         *     Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+         *     event of this tournament has a draw: the solver places a draw's fixtures, so
+         *     with nothing cut there is nothing to schedule. A `503` means the scheduling
+         *     queue itself was unreachable; nothing was queued, and the same request is safe
+         *     to retry.
+         *
+         *     Owner-only, like every other tournament mutation: an absent tournament is a
+         *     `404`, a non-owner a `403`.
+         */
+        post: operations["request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -3112,6 +3155,75 @@ export interface components {
             /** Permission Ids */
             permission_ids?: string[] | null;
         };
+        /**
+         * ScheduleSolveRead
+         * @description One row of a tournament's **solve ledger** (ADR "the schedule is solved, the
+         *     call is pinned") — a single run of the placement solver, which the admin page
+         *     reads verbatim.
+         *
+         *     ``status`` is the *run's* lifecycle; ``verdict`` is CP-SAT's own answer, and they
+         *     are deliberately separate facts: a run can end ``succeeded`` on a merely
+         *     ``feasible`` verdict (FEASIBLE is accepted under the time cap — mid-tournament we
+         *     want a good answer now, not a proof), and ``infeasible`` is a designed outcome,
+         *     not an error — it is the whole point of pre-live solves.
+         *
+         *     **Every ``null`` marks a stage not (or never) reached**, not a missing field:
+         *
+         *     * ``verdict`` — ``null`` until the solver has actually run; forever ``null`` for
+         *       a run that failed before reaching it.
+         *     * ``started_at`` / ``finished_at`` — ``null`` while the run is still ``queued`` /
+         *       still ``running``.
+         *     * ``wall_time_ms`` — the solver's wall time; ``null`` until it has finished.
+         *     * ``fixtures_placed`` / ``fixtures_pinned`` — the sizes of the *applied* output;
+         *       ``null`` until (unless) the run reaches its guarded apply. A solve whose output
+         *       was discarded for drift re-runs rather than reporting partial counts — the
+         *       apply is whole-or-nothing.
+         *     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+         */
+        ScheduleSolveRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            trigger: components["schemas"]["ScheduleSolveTrigger"];
+            status: components["schemas"]["ScheduleSolveStatus"];
+            verdict: components["schemas"]["SolverVerdict"] | null;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Wall Time Ms */
+            wall_time_ms: number | null;
+            /** Fixtures Placed */
+            fixtures_placed: number | null;
+            /** Fixtures Pinned */
+            fixtures_pinned: number | null;
+            /** Error */
+            error: string | null;
+        };
+        /**
+         * ScheduleSolveStatus
+         * @description The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:
+         *     the solver proved the day does not fit, which is exactly what a pre-live solve
+         *     is for. ``failed`` means the job itself broke (see ``error``).
+         * @enum {string}
+         */
+        ScheduleSolveStatus: "queued" | "running" | "succeeded" | "infeasible" | "failed";
+        /**
+         * ScheduleSolveTrigger
+         * @description What put this solve on the queue (ADR "the schedule is solved, the call is
+         *     pinned"). Every trigger funnels into ONE coalesced enqueue per tournament, so
+         *     the trigger recorded here is the one that *caused this row*, not a log of every
+         *     event absorbed while it sat queued.
+         * @enum {string}
+         */
+        ScheduleSolveTrigger: "go_live" | "match_completed" | "settings_changed" | "manual" | "pin_tick" | "rerun";
         /** Scoreboard */
         Scoreboard: {
             status: components["schemas"]["Status"];
@@ -3171,6 +3283,16 @@ export interface components {
             /** End */
             end: string;
         };
+        /**
+         * SolverVerdict
+         * @description CP-SAT's own answer, kept apart from ``status`` because they are different
+         *     facts: a solve can end ``succeeded`` on a merely ``feasible`` verdict (the ADR
+         *     accepts FEASIBLE under the time cap — mid-tournament we want a good answer now,
+         *     not a proof), and a run that never reached the solver has no verdict at all
+         *     (``NULL``).
+         * @enum {string}
+         */
+        SolverVerdict: "optimal" | "feasible" | "infeasible";
         /**
          * StandingRowRead
          * @description One entry's line in a pool's standings (ADR-0788), at its settled rank.
@@ -3303,6 +3425,7 @@ export interface components {
             updated_at: string;
             /** Events */
             events: components["schemas"]["TournamentEventRead"][];
+            latest_schedule_solve: components["schemas"]["ScheduleSolveRead"] | null;
         };
         /**
          * TournamentEntrantRead
@@ -3553,6 +3676,11 @@ export interface components {
          *       means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
          *       venue's frame, a prediction rather than a commitment — a match starting
          *       off-prediction is normal, not an error.
+         *     * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
+         *       the call is pinned"): ``null`` means the placement is still an estimate the
+         *       solver may move freely. When set, the placement is a promise — the players were
+         *       notified, and no later solve will rearrange it. Naive wall-clock in the venue's
+         *       frame, like ``scheduled_start``.
          *
          *     The entries are carried as **ids only**. The name and username behind
          *     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -3585,6 +3713,10 @@ export interface components {
             table_id: string | null;
             /** Scheduled Start */
             scheduled_start: string | null;
+            /** Pinned At */
+            pinned_at: string | null;
+            /** Call Notified Count */
+            call_notified_count: number;
         };
         /** TournamentRead */
         TournamentRead: {
@@ -6070,6 +6202,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentFixtureRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleSolveRead"];
                 };
             };
             /** @description Validation Error */

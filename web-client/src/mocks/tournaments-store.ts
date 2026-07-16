@@ -38,6 +38,7 @@ type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type Pool = components['schemas']['Pool']
+type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 
 /** What the store actually holds for an event: everything the wire shape has
  * *except* the two fields the server DERIVES at read time — the `entered` count
@@ -176,6 +177,11 @@ function seed(): StoredTournament[] {
       can_edit: true,
       created_at: '2026-06-01T09:00:00Z',
       updated_at: '2026-06-10T12:00:00Z',
+      // NO SOLVE YET — the state every tournament is born in. The Run-scheduler
+      // button (`requestScheduleSolve` below) is what puts a row here, and the
+      // mock's read tick then walks it queued → running → succeeded so `npm run
+      // dev` demos the whole loop.
+      latest_schedule_solve: null,
       events: [
         {
           id: 'ev-open-singles',
@@ -369,6 +375,7 @@ function seed(): StoredTournament[] {
       can_edit: true,
       created_at: '2026-06-05T15:30:00Z',
       updated_at: '2026-06-05T15:30:00Z',
+      latest_schedule_solve: null,
       events: [
         {
           // The seed's one **ready-to-start** event, and the reason this tournament has
@@ -434,6 +441,7 @@ function seed(): StoredTournament[] {
       can_edit: false,
       created_at: '2026-05-20T10:00:00Z',
       updated_at: '2026-06-12T08:00:00Z',
+      latest_schedule_solve: null,
       events: [
         {
           // On a tournament the dev user does NOT own (but which IS published):
@@ -531,6 +539,7 @@ function seed(): StoredTournament[] {
       can_edit: false,
       created_at: '2026-06-14T11:00:00Z',
       updated_at: '2026-06-14T11:00:00Z',
+      latest_schedule_solve: null,
       events: [],
     },
   ]
@@ -644,7 +653,13 @@ export function listTournaments(): TournamentDetailRead[] {
  * still 403 via `requireOwned`: those are all on rows the caller can see.) */
 export function findTournament(id: string): TournamentDetailRead | undefined {
   const found = tournaments.find((t) => t.id === id)
-  return found === undefined || !isVisible(found) ? undefined : readDetail(found)
+  if (found === undefined || !isVisible(found)) return undefined
+  // Walk any in-flight schedule solve forward (see `tickScheduleSolve`): the mock
+  // has no worker, so the detail read — the one the Schedule tab polls — is what
+  // advances queued → running → succeeded and lands the placements.
+  const ticked = tickScheduleSolve(found)
+  if (ticked !== found) replace(ticked)
+  return readDetail(ticked)
 }
 
 let createCounter = 0
@@ -687,6 +702,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     can_edit: true,
     created_at: now,
     updated_at: now,
+    latest_schedule_solve: null,
     events: [],
   }
   tournaments = [created, ...tournaments]
@@ -1434,6 +1450,169 @@ export function placeFixture(
     ),
   })
   return { ok: true, fixture: placed }
+}
+
+// ----- the schedule solver (ADR "the schedule is solved; the call is pinned") -----
+//
+// One verb: `POST …/schedule/solves` queues a run of the placement solver — the
+// owner's Run-scheduler button. There is deliberately no GET: the solve's outcome is
+// read off the tournament detail's `latest_schedule_solve` (one BFF endpoint per
+// page), which is exactly what the client polls.
+//
+// The mock has no worker, so the ledger row is walked forward BY THE READS
+// (`tickScheduleSolve` below): the POST answers 202 with a `queued` row, the next
+// detail read shows it `running`, and the read after that lands it `succeeded` with
+// every unplaced fixture placed onto its pool's tables. Two reads is the demo loop —
+// with the client's in-flight polling (~3s) the strip visibly resolves in `npm run
+// dev` without anyone reloading.
+
+/** The server's sentence for a solve on a tournament with no cut draw anywhere,
+ * verbatim (`_no_drawn_events_refusal`, `api/app/tournaments.py`). The CODE is the
+ * contract the client switches on (ADR-0968 shape); this message is its fallback. */
+const NO_DRAWN_EVENTS_MESSAGE =
+  'There is nothing to schedule yet: no event of this tournament has a draw. ' +
+  "The scheduler places a draw's fixtures onto tables, so cut at least one " +
+  "event's draw, then run it."
+
+/** Requesting a solve fails three ways, in the API's order: 404 (no such
+ * tournament), 403 (not the owner), and a **coded 422** (`no_drawn_events`) when no
+ * event has a draw — there is nothing to place. The 503 (queue down) is not
+ * modelled: the mock has no queue to lose. */
+export type RequestSolveResult =
+  | { ok: true; solve: ScheduleSolveRead }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 422; code: 'no_drawn_events'; message: string }
+
+let solveCounter = 0
+
+/** `POST …/schedule/solves` — queue a run of the schedule solver. Owner-only.
+ *
+ * **One solve in flight per tournament**, as on the server: while a run is `queued`
+ * or `running`, another click is absorbed by it and the SAME row comes back (same
+ * id) — the 202 is honest either way, the work is accepted, not done. Only when
+ * nothing is in flight is a fresh `queued` row minted. */
+export function requestScheduleSolve(tournamentId: string): RequestSolveResult {
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
+  if (!existing.events.some((e) => e.fixtures.length > 0)) {
+    return {
+      ok: false,
+      status: 422,
+      code: 'no_drawn_events',
+      message: NO_DRAWN_EVENTS_MESSAGE,
+    }
+  }
+  const current = existing.latest_schedule_solve
+  if (current && (current.status === 'queued' || current.status === 'running')) {
+    // Absorbed (queued) or rerun-flagged (running): the existing row answers.
+    return { ok: true, solve: current }
+  }
+  solveCounter += 1
+  const solve: ScheduleSolveRead = {
+    id: mockUuid(`schedule-solve:${tournamentId}:${solveCounter}`),
+    trigger: 'manual',
+    status: 'queued',
+    verdict: null,
+    requested_at: new Date().toISOString(),
+    started_at: null,
+    finished_at: null,
+    wall_time_ms: null,
+    fixtures_placed: null,
+    fixtures_pinned: null,
+    error: null,
+  }
+  replace({ ...existing, latest_schedule_solve: solve })
+  return { ok: true, solve }
+}
+
+/** The mock solver's own placement pass: every fixture with no table yet is dealt
+ * onto its **pool's** tables — round-robin across them, 30 minutes apart from the
+ * pool window's start — in the same naive wall-clock frame the Slot is in (no
+ * `Date`, ADR-0790). Un-pooled fixtures and already-placed ones are left alone: a
+ * real solve respects pins and this mock has nothing smarter to say about a fixture
+ * with no window. Returns the placed events plus how many placements were written,
+ * which is what the ledger row reports as `fixtures_placed`. */
+function placeUnplacedFixtures(events: StoredEvent[]): {
+  events: StoredEvent[]
+  placed: number
+} {
+  let placed = 0
+  const next = events.map((event) => {
+    const poolById = new Map(event.pools.map((p) => [p.id, p]))
+    const perPool = new Map<string, number>()
+    const fixtures = event.fixtures.map((fixture) => {
+      if (fixture.table_id !== null) return fixture
+      const pool = fixture.pool_id !== null ? poolById.get(fixture.pool_id) : undefined
+      if (!pool || pool.table_ids.length === 0) return fixture
+      const index = perPool.get(pool.id) ?? 0
+      perPool.set(pool.id, index + 1)
+      const table = pool.table_ids[index % pool.table_ids.length]
+      const wave = Math.floor(index / pool.table_ids.length)
+      const [hours, minutes] = pool.slot.start.split(':').map(Number)
+      const total = hours * 60 + minutes + wave * 30
+      const hh = String(Math.floor(total / 60) % 24).padStart(2, '0')
+      const mm = String(total % 60).padStart(2, '0')
+      placed += 1
+      return {
+        ...fixture,
+        table_id: table,
+        scheduled_start: `${pool.slot.date}T${hh}:${mm}:00`,
+      }
+    })
+    return { ...event, fixtures }
+  })
+  return { events: next, placed }
+}
+
+/** When the mock worker last advanced — the dwell below reads it. */
+let lastSolveTickAt = 0
+
+/** Walk an in-flight solve one step forward, on read: `queued` → `running`, and
+ * `running` → `succeeded` (verdict `feasible` — the honest mid-tournament answer, a
+ * good plan under the time cap) with the placements applied. Terminal rows are left
+ * exactly as they are. Called from `findTournament` — the read the Schedule tab
+ * polls — so the strip resolves at the polling cadence, like the real worker would.
+ *
+ * **At most one step per ~600ms**: a mutation's reconcile can land two detail reads
+ * back-to-back (the list key prefix-matches the detail key, so one invalidate
+ * refetches it twice), and a tick per read would walk queued → succeeded inside a
+ * single reconcile — `npm run dev` would never show the "solving…" state the whole
+ * loop exists to demo. The dwell puts each step on a different poll. */
+function tickScheduleSolve(t: StoredTournament): StoredTournament {
+  const solve = t.latest_schedule_solve
+  if (!solve) return t
+  if (solve.status !== 'queued' && solve.status !== 'running') return t
+  const now = Date.now()
+  if (now - lastSolveTickAt < 600) return t
+  lastSolveTickAt = now
+  if (solve.status === 'queued') {
+    return {
+      ...t,
+      latest_schedule_solve: {
+        ...solve,
+        status: 'running',
+        started_at: new Date().toISOString(),
+      },
+    }
+  }
+  if (solve.status === 'running') {
+    const { events, placed } = placeUnplacedFixtures(t.events)
+    return {
+      ...t,
+      events,
+      latest_schedule_solve: {
+        ...solve,
+        status: 'succeeded',
+        verdict: 'feasible',
+        finished_at: new Date().toISOString(),
+        wall_time_ms: 1200,
+        fixtures_placed: placed,
+        fixtures_pinned: 0,
+      },
+    }
+  }
+  return t
 }
 
 /** Delete an event. Creator-only. */

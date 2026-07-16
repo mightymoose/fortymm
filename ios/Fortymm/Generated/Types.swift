@@ -771,6 +771,36 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement/patch(place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch)`.
     func placeFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch(_ input: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Input) async throws -> Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output
+    /// Request Schedule Solve
+    ///
+    /// Queue a run of the schedule solver for this tournament — the Run-scheduler
+    /// button — and answer with the ledger row that will carry its outcome.
+    ///
+    /// **One solve in flight per tournament**, so this is a request, not a command:
+    /// if a run is already `queued`, this click is absorbed by it and the existing row
+    /// comes back (same id — the pending run will see whatever state motivated the
+    /// click); if one is `running`, its re-run flag is set and the running row comes
+    /// back (a fresh run follows at its finish). Only when neither exists is a new run
+    /// queued. The `202` is honest either way — the work is accepted, not done. Poll
+    /// the tournament detail's `latest_schedule_solve` for the outcome.
+    ///
+    /// Allowed in **any** tournament status, from the moment any event has a cut draw
+    /// — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+    /// point: an infeasible verdict before going live is how a director learns the day
+    /// does not fit while there is still time to change it.
+    ///
+    /// Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+    /// event of this tournament has a draw: the solver places a draw's fixtures, so
+    /// with nothing cut there is nothing to schedule. A `503` means the scheduling
+    /// queue itself was unreachable; nothing was queued, and the same request is safe
+    /// to retry.
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament is a
+    /// `404`, a non-owner a `403`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/solves`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)`.
+    func requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(_ input: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -2018,6 +2048,44 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// Request Schedule Solve
+    ///
+    /// Queue a run of the schedule solver for this tournament — the Run-scheduler
+    /// button — and answer with the ledger row that will carry its outcome.
+    ///
+    /// **One solve in flight per tournament**, so this is a request, not a command:
+    /// if a run is already `queued`, this click is absorbed by it and the existing row
+    /// comes back (same id — the pending run will see whatever state motivated the
+    /// click); if one is `running`, its re-run flag is set and the running row comes
+    /// back (a fresh run follows at its finish). Only when neither exists is a new run
+    /// queued. The `202` is honest either way — the work is accepted, not done. Poll
+    /// the tournament detail's `latest_schedule_solve` for the outcome.
+    ///
+    /// Allowed in **any** tournament status, from the moment any event has a cut draw
+    /// — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+    /// point: an infeasible verdict before going live is how a director learns the day
+    /// does not fit while there is still time to change it.
+    ///
+    /// Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+    /// event of this tournament has a draw: the solver places a draw's fixtures, so
+    /// with nothing cut there is nothing to schedule. A `503` means the scheduling
+    /// queue itself was unreachable; nothing was queued, and the same request is safe
+    /// to retry.
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament is a
+    /// `404`, a non-owner a `403`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/solves`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)`.
+    internal func requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(
+        path: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Path,
+        headers: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Headers = .init()
+    ) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output {
+        try await requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// Health
@@ -6567,6 +6635,150 @@ internal enum Components {
                 case permissionIds = "permission_ids"
             }
         }
+        /// One row of a tournament's **solve ledger** (ADR "the schedule is solved, the
+        /// call is pinned") — a single run of the placement solver, which the admin page
+        /// reads verbatim.
+        ///
+        /// ``status`` is the *run's* lifecycle; ``verdict`` is CP-SAT's own answer, and they
+        /// are deliberately separate facts: a run can end ``succeeded`` on a merely
+        /// ``feasible`` verdict (FEASIBLE is accepted under the time cap — mid-tournament we
+        /// want a good answer now, not a proof), and ``infeasible`` is a designed outcome,
+        /// not an error — it is the whole point of pre-live solves.
+        ///
+        /// **Every ``null`` marks a stage not (or never) reached**, not a missing field:
+        ///
+        /// * ``verdict`` — ``null`` until the solver has actually run; forever ``null`` for
+        ///   a run that failed before reaching it.
+        /// * ``started_at`` / ``finished_at`` — ``null`` while the run is still ``queued`` /
+        ///   still ``running``.
+        /// * ``wall_time_ms`` — the solver's wall time; ``null`` until it has finished.
+        /// * ``fixtures_placed`` / ``fixtures_pinned`` — the sizes of the *applied* output;
+        ///   ``null`` until (unless) the run reaches its guarded apply. A solve whose output
+        ///   was discarded for drift re-runs rather than reporting partial counts — the
+        ///   apply is whole-or-nothing.
+        /// * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead`.
+        internal struct ScheduleSolveRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/trigger`.
+            internal var trigger: Components.Schemas.ScheduleSolveTrigger
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/status`.
+            internal var status: Components.Schemas.ScheduleSolveStatus
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/verdict`.
+            internal struct VerdictPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/verdict/value1`.
+                internal var value1: Components.Schemas.SolverVerdict
+                /// Creates a new `VerdictPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.SolverVerdict) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/verdict`.
+            internal var verdict: Components.Schemas.ScheduleSolveRead.VerdictPayload?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/requested_at`.
+            internal var requestedAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/started_at`.
+            internal var startedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/finished_at`.
+            internal var finishedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/wall_time_ms`.
+            internal var wallTimeMs: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/fixtures_placed`.
+            internal var fixturesPlaced: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/fixtures_pinned`.
+            internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/error`.
+            internal var error: Swift.String?
+            /// Creates a new `ScheduleSolveRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - trigger:
+            ///   - status:
+            ///   - verdict:
+            ///   - requestedAt:
+            ///   - startedAt:
+            ///   - finishedAt:
+            ///   - wallTimeMs:
+            ///   - fixturesPlaced:
+            ///   - fixturesPinned:
+            ///   - error:
+            internal init(
+                id: Swift.String,
+                trigger: Components.Schemas.ScheduleSolveTrigger,
+                status: Components.Schemas.ScheduleSolveStatus,
+                verdict: Components.Schemas.ScheduleSolveRead.VerdictPayload? = nil,
+                requestedAt: Foundation.Date,
+                startedAt: Foundation.Date? = nil,
+                finishedAt: Foundation.Date? = nil,
+                wallTimeMs: Swift.Int? = nil,
+                fixturesPlaced: Swift.Int? = nil,
+                fixturesPinned: Swift.Int? = nil,
+                error: Swift.String? = nil
+            ) {
+                self.id = id
+                self.trigger = trigger
+                self.status = status
+                self.verdict = verdict
+                self.requestedAt = requestedAt
+                self.startedAt = startedAt
+                self.finishedAt = finishedAt
+                self.wallTimeMs = wallTimeMs
+                self.fixturesPlaced = fixturesPlaced
+                self.fixturesPinned = fixturesPinned
+                self.error = error
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case trigger
+                case status
+                case verdict
+                case requestedAt = "requested_at"
+                case startedAt = "started_at"
+                case finishedAt = "finished_at"
+                case wallTimeMs = "wall_time_ms"
+                case fixturesPlaced = "fixtures_placed"
+                case fixturesPinned = "fixtures_pinned"
+                case error
+            }
+        }
+        /// The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:
+        /// the solver proved the day does not fit, which is exactly what a pre-live solve
+        /// is for. ``failed`` means the job itself broke (see ``error``).
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScheduleSolveStatus`.
+        internal enum ScheduleSolveStatus: String, Codable, Hashable, Sendable, CaseIterable {
+            case queued = "queued"
+            case running = "running"
+            case succeeded = "succeeded"
+            case infeasible = "infeasible"
+            case failed = "failed"
+        }
+        /// What put this solve on the queue (ADR "the schedule is solved, the call is
+        /// pinned"). Every trigger funnels into ONE coalesced enqueue per tournament, so
+        /// the trigger recorded here is the one that *caused this row*, not a log of every
+        /// event absorbed while it sat queued.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScheduleSolveTrigger`.
+        internal enum ScheduleSolveTrigger: String, Codable, Hashable, Sendable, CaseIterable {
+            case goLive = "go_live"
+            case matchCompleted = "match_completed"
+            case settingsChanged = "settings_changed"
+            case manual = "manual"
+            case pinTick = "pin_tick"
+            case rerun = "rerun"
+        }
         /// - Remark: Generated from `#/components/schemas/Scoreboard`.
         internal struct Scoreboard: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Scoreboard/status`.
@@ -6765,6 +6977,18 @@ internal enum Components {
                     "end"
                 ])
             }
+        }
+        /// CP-SAT's own answer, kept apart from ``status`` because they are different
+        /// facts: a solve can end ``succeeded`` on a merely ``feasible`` verdict (the ADR
+        /// accepts FEASIBLE under the time cap — mid-tournament we want a good answer now,
+        /// not a proof), and a run that never reached the solver has no verdict at all
+        /// (``NULL``).
+        ///
+        /// - Remark: Generated from `#/components/schemas/SolverVerdict`.
+        internal enum SolverVerdict: String, Codable, Hashable, Sendable, CaseIterable {
+            case optimal = "optimal"
+            case feasible = "feasible"
+            case infeasible = "infeasible"
         }
         /// One entry's line in a pool's standings (ADR-0788), at its settled rank.
         ///
@@ -7012,6 +7236,26 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/events`.
             internal var events: [Components.Schemas.TournamentEventRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
+            internal struct LatestScheduleSolvePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve/value1`.
+                internal var value1: Components.Schemas.ScheduleSolveRead
+                /// Creates a new `LatestScheduleSolvePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.ScheduleSolveRead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
+            internal var latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload?
             /// Creates a new `TournamentDetailRead`.
             ///
             /// - Parameters:
@@ -7030,6 +7274,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - events:
+            ///   - latestScheduleSolve:
             internal init(
                 id: Swift.String,
                 name: Swift.String,
@@ -7045,7 +7290,8 @@ internal enum Components {
                 canEdit: Swift.Bool,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
-                events: [Components.Schemas.TournamentEventRead]
+                events: [Components.Schemas.TournamentEventRead],
+                latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil
             ) {
                 self.id = id
                 self.name = name
@@ -7062,6 +7308,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.events = events
+                self.latestScheduleSolve = latestScheduleSolve
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7079,6 +7326,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case events
+                case latestScheduleSolve = "latest_schedule_solve"
             }
         }
         /// One *active* entry in an event. Withdrawn entries are not entrants: they
@@ -7794,6 +8042,11 @@ internal enum Components {
         ///   means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
         ///   venue's frame, a prediction rather than a commitment — a match starting
         ///   off-prediction is normal, not an error.
+        /// * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
+        ///   the call is pinned"): ``null`` means the placement is still an estimate the
+        ///   solver may move freely. When set, the placement is a promise — the players were
+        ///   notified, and no later solve will rearrange it. Naive wall-clock in the venue's
+        ///   frame, like ``scheduled_start``.
         ///
         /// The entries are carried as **ids only**. The name and username behind
         /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -7843,6 +8096,10 @@ internal enum Components {
             internal var tableId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start`.
             internal var scheduledStart: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at`.
+            internal var pinnedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/call_notified_count`.
+            internal var callNotifiedCount: Swift.Int
             /// Creates a new `TournamentFixtureRead`.
             ///
             /// - Parameters:
@@ -7857,6 +8114,8 @@ internal enum Components {
             ///   - matchStatus:
             ///   - tableId:
             ///   - scheduledStart:
+            ///   - pinnedAt:
+            ///   - callNotifiedCount:
             internal init(
                 id: Swift.String,
                 poolId: Swift.String? = nil,
@@ -7868,7 +8127,9 @@ internal enum Components {
                 matchId: Swift.String? = nil,
                 matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil,
                 tableId: Swift.String? = nil,
-                scheduledStart: Foundation.Date? = nil
+                scheduledStart: Foundation.Date? = nil,
+                pinnedAt: Foundation.Date? = nil,
+                callNotifiedCount: Swift.Int
             ) {
                 self.id = id
                 self.poolId = poolId
@@ -7881,6 +8142,8 @@ internal enum Components {
                 self.matchStatus = matchStatus
                 self.tableId = tableId
                 self.scheduledStart = scheduledStart
+                self.pinnedAt = pinnedAt
+                self.callNotifiedCount = callNotifiedCount
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7894,6 +8157,8 @@ internal enum Components {
                 case matchStatus = "match_status"
                 case tableId = "table_id"
                 case scheduledStart = "scheduled_start"
+                case pinnedAt = "pinned_at"
+                case callNotifiedCount = "call_notified_count"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
@@ -20789,6 +21054,210 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.PlaceFixtureV1TournamentsTournamentIdFixturesFixtureIdPlacementPatch.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Request Schedule Solve
+    ///
+    /// Queue a run of the schedule solver for this tournament — the Run-scheduler
+    /// button — and answer with the ledger row that will carry its outcome.
+    ///
+    /// **One solve in flight per tournament**, so this is a request, not a command:
+    /// if a run is already `queued`, this click is absorbed by it and the existing row
+    /// comes back (same id — the pending run will see whatever state motivated the
+    /// click); if one is `running`, its re-run flag is set and the running row comes
+    /// back (a fresh run follows at its finish). Only when neither exists is a new run
+    /// queued. The `202` is honest either way — the work is accepted, not done. Poll
+    /// the tournament detail's `latest_schedule_solve` for the outcome.
+    ///
+    /// Allowed in **any** tournament status, from the moment any event has a cut draw
+    /// — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+    /// point: an infeasible verdict before going live is how a director learns the day
+    /// does not fit while there is still time to change it.
+    ///
+    /// Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+    /// event of this tournament has a draw: the solver places a draw's fixtures, so
+    /// with nothing cut there is nothing to schedule. A `503` means the scheduling
+    /// queue itself was unreachable; nothing was queued, and the same request is safe
+    /// to retry.
+    ///
+    /// Owner-only, like every other tournament mutation: an absent tournament is a
+    /// `404`, a non-owner a `403`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/solves`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)`.
+    internal enum RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost {
+        internal static let id: Swift.String = "request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Path,
+                headers: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Accepted: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/responses/202/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/responses/202/content/application\/json`.
+                    case json(Components.Schemas.ScheduleSolveRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.ScheduleSolveRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.Accepted.Body
+                /// Creates a new `Accepted`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.Accepted.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)/responses/202`.
+            ///
+            /// HTTP response code: `202 accepted`.
+            case accepted(Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.Accepted)
+            /// The associated value of the enum case if `self` is `.accepted`.
+            ///
+            /// - Throws: An error if `self` is not `.accepted`.
+            /// - SeeAlso: `.accepted`.
+            internal var accepted: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.Accepted {
+                get throws {
+                    switch self {
+                    case let .accepted(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "accepted",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/solves/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

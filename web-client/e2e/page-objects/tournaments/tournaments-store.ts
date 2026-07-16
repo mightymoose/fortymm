@@ -5,6 +5,7 @@ import { PERM } from '../../../src/lib/permissions'
 import {
   buildEventResultsRead,
   buildPoolStandingsRead,
+  buildScheduleSolveRead,
   buildStandingRowRead,
   buildTournamentDetailRead,
   buildTournamentEventRead,
@@ -20,6 +21,7 @@ type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
 type EventResultsRead = components['schemas']['EventResultsRead']
+type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
  * generated schema's, not a re-typed union of four strings. */
 export type TournamentStatus = TournamentDetailRead['status']
@@ -502,6 +504,13 @@ export interface TournamentsStoreOptions {
    * event's draw. Its rows name the drawable JOURNEY's own two entrants (`entry-1`,
    * `entry-2`), so the FE's name join lands. */
   standings?: boolean
+  /** The tournament's latest **schedule solve** ledger row when the page loads (ADR
+   * "the schedule is solved") — how a spec starts on a `succeeded`, `infeasible` or
+   * `failed` strip without walking the whole run. Built with
+   * `buildScheduleSolveRead(...)`, the same generated-schema-typed factory the MSW
+   * mocks use, so a contract change reds this file. Defaults to `null` — no solve
+   * ever requested, the state every tournament is born in. */
+  latestSolve?: ScheduleSolveRead
 }
 
 /** The options for a tournament that can actually be **started**: every event drawable,
@@ -807,6 +816,10 @@ export class TournamentsStore {
       const event = this.eventNamed(EVENT.JOURNEY)
       this.mutateEvent(event.id, (e) => ({ ...e, results: JOURNEY_RESULTS }))
     }
+    // The seeded solve ledger row, if any — a terminal strip state the spec starts on.
+    if (options.latestSolve) {
+      this.detail = { ...this.detail, latest_schedule_solve: options.latestSolve }
+    }
   }
 
   /** The tournament's status as the *server* now holds it — for asserting the
@@ -1048,7 +1061,21 @@ export class TournamentsStore {
       return json(route, 200, [this.readDetail()])
     }
     if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}`) {
+      // Walk any in-flight schedule solve one step per detail read — the read the
+      // Schedule tab POLLS — so a spec watches the strip resolve queued → running →
+      // succeeded at the client's own cadence, exactly as the worker would move it.
+      this.tickSolve()
       return json(route, 200, this.readDetail())
+    }
+
+    // The schedule solver's one verb (ADR "the schedule is solved"). Matched before
+    // the transitions/entries routes only for tidiness — its path collides with
+    // nothing.
+    if (
+      method === 'POST' &&
+      path === `/v1/tournaments/${TOURNAMENT_ID}/schedule/solves`
+    ) {
+      return this.requestSolve(route)
     }
 
     // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
@@ -1187,6 +1214,150 @@ export class TournamentsStore {
     // (`parseFixtures`, `data/api.ts`) before it reconciles off the refetch, so a body
     // of the wrong shape fails here rather than in production.
     return json(route, 201, fixtures)
+  }
+
+  // ----- the schedule solver (ADR "the schedule is solved; the call is pinned") ---
+
+  private solveCounter = 0
+
+  /** The solve ledger row as the SERVER now holds it — for asserting the strip
+   * tracked the state rather than that some markup flickered. */
+  get latestSolve(): ScheduleSolveRead | null {
+    return this.detail.latest_schedule_solve
+  }
+
+  /**
+   * `POST …/schedule/solves` — queue a run of the placement solver. Mirrors the
+   * route's refusals in its order: 403 (not the owner — the strip must not offer
+   * the button, so reaching this is a stale or forged view), then the **coded
+   * 422** (`no_drawn_events`, the ADR-0968 `{code, message}` shape — a stub
+   * answering bare prose would green a client that matched on the sentence).
+   *
+   * One solve in flight per tournament, as on the server: a POST while a run is
+   * `queued`/`running` is absorbed and the SAME row answers — the double-click
+   * spec asserts precisely that no second row is minted.
+   */
+  private async requestSolve(route: Route) {
+    if (!this.detail.can_edit) {
+      return json(route, 403, {
+        detail: 'Only the creator can run the scheduler.',
+      })
+    }
+    if (!this.detail.events.some((e) => e.fixtures.length > 0)) {
+      return json(route, 422, {
+        detail: {
+          code: 'no_drawn_events',
+          message:
+            'There is nothing to schedule yet: no event of this tournament has ' +
+            "a draw. The scheduler places a draw's fixtures onto tables, so cut " +
+            "at least one event's draw, then run it.",
+        },
+      })
+    }
+    const current = this.detail.latest_schedule_solve
+    if (current && (current.status === 'queued' || current.status === 'running')) {
+      return json(route, 202, current)
+    }
+    this.solveCounter += 1
+    const solve = buildScheduleSolveRead({
+      id: `solve-${this.solveCounter}`,
+      status: 'queued',
+      verdict: null,
+      requested_at: new Date().toISOString(),
+      started_at: null,
+      finished_at: null,
+      wall_time_ms: null,
+      fixtures_placed: null,
+      fixtures_pinned: null,
+    })
+    this.detail = { ...this.detail, latest_schedule_solve: solve }
+    return json(route, 202, solve)
+  }
+
+  /** When the mock worker last advanced — the dwell below reads it. */
+  private lastSolveTickAt = 0
+
+  /** One step of the mock worker, driven by the detail READS (there is no real
+   * queue here): `queued` → `running`, then `running` → `succeeded` with every
+   * unplaced pooled fixture dealt onto its pool's tables. Terminal rows never
+   * move — a seeded `infeasible`/`failed` strip stays what the spec seeded.
+   *
+   * **At most one step per ~600ms.** The client's reconcile can land two detail
+   * GETs back-to-back (the list key prefix-matches the detail key, so one
+   * mutation's invalidate refetches it twice), and a tick per read would walk
+   * queued → succeeded inside one reconcile — the `solving` state would be
+   * unobservable, in the spec and in front of a person. The dwell makes each
+   * step land on a DIFFERENT poll, which is the loop under test. */
+  private tickSolve() {
+    const solve = this.detail.latest_schedule_solve
+    if (!solve) return
+    if (solve.status !== 'queued' && solve.status !== 'running') return
+    const now = Date.now()
+    if (now - this.lastSolveTickAt < 600) return
+    this.lastSolveTickAt = now
+    if (solve.status === 'queued') {
+      this.detail = {
+        ...this.detail,
+        latest_schedule_solve: {
+          ...solve,
+          status: 'running',
+          started_at: new Date().toISOString(),
+        },
+      }
+      return
+    }
+    if (solve.status === 'running') {
+      const placed = this.placeUnplacedFixtures()
+      this.detail = {
+        ...this.detail,
+        latest_schedule_solve: {
+          ...solve,
+          status: 'succeeded',
+          verdict: 'feasible',
+          finished_at: new Date().toISOString(),
+          wall_time_ms: 1200,
+          fixtures_placed: placed,
+          fixtures_pinned: 0,
+        },
+      }
+    }
+  }
+
+  /** The mock solver's placement pass: every table-less pooled fixture goes onto
+   * its pool's tables round-robin, 30 minutes apart from the pool window's start,
+   * in the naive wall-clock frame the Slot is in (plain string assembly — no
+   * `Date`, ADR-0790). Returns how many placements were written. */
+  private placeUnplacedFixtures(): number {
+    let placed = 0
+    this.detail = {
+      ...this.detail,
+      events: this.detail.events.map((event) => {
+        const poolById = new Map(event.pools.map((p) => [p.id, p]))
+        const perPool = new Map<string, number>()
+        const fixtures = event.fixtures.map((fixture) => {
+          if (fixture.table_id !== null) return fixture
+          const pool =
+            fixture.pool_id !== null ? poolById.get(fixture.pool_id) : undefined
+          if (!pool || pool.table_ids.length === 0) return fixture
+          const index = perPool.get(pool.id) ?? 0
+          perPool.set(pool.id, index + 1)
+          const table = pool.table_ids[index % pool.table_ids.length]
+          const wave = Math.floor(index / pool.table_ids.length)
+          const [hours, minutes] = pool.slot.start.split(':').map(Number)
+          const total = hours * 60 + minutes + wave * 30
+          const hh = String(Math.floor(total / 60) % 24).padStart(2, '0')
+          const mm = String(total % 60).padStart(2, '0')
+          placed += 1
+          return {
+            ...fixture,
+            table_id: table,
+            scheduled_start: `${pool.slot.date}T${hh}:${mm}:00`,
+          }
+        })
+        return { ...event, fixtures }
+      }),
+    }
+    return placed
   }
 
   /** `DELETE …/events/{event_id}/draw` — un-cut an event's draw. **Idempotent**: an

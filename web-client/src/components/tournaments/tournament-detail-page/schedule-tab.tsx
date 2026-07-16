@@ -5,7 +5,11 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
-import { usePlaceFixture } from '../data/api'
+import {
+  usePlaceFixture,
+  useRequestScheduleSolve,
+  useSchedulePolling,
+} from '../data/api'
 import { type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from '../data/draw'
 import { EM_DASH, fmtDateShort, fmtTimeWindow } from '../data/helpers'
 import {
@@ -21,6 +25,7 @@ import type { Tournament, TournamentTable } from '../data/types'
 import { EmptyState } from '../empty-state'
 import { OptionSelect } from './event-editor/option-select'
 import { SectionHeader } from './section-header'
+import { SolveStrip } from './solve-strip'
 
 /** The body the placement PATCH takes — the placement whole, `null` to clear. */
 type PlacementBody = { table_id: string | null; scheduled_start: string | null }
@@ -346,7 +351,13 @@ const TableColumn = ({
 export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
+  const requestSolve = useRequestScheduleSolve(tournament.id)
   const schedule = buildSchedule(tournament, tables)
+  // Freshness is POLLING while this tab is on screen (ADR "the schedule is
+  // solved"): ~3s while a solve is in flight, ~15s while the tournament is live,
+  // none otherwise. Mounted here — not on the page — so only the Schedule tab
+  // ever polls, and only while it is the active tab.
+  useSchedulePolling(tournament.id)
 
   const onSubmit = (fixtureId: string, body: PlacementBody) =>
     place.mutateAsync({ fixtureId, body }).then(() => undefined)
@@ -360,6 +371,16 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             ? 'Every match, by table. Place a match on a table and a predicted time — the date comes from its pool window.'
             : 'Every match, by table, with its predicted start time.'
         }
+      />
+
+      {/* The solve strip renders in EVERY schedule state, the empty one included:
+          "no plan yet" over an uncut tournament is exactly where the owner meets
+          the designed 422 ("cut a draw first") if they run it early. */}
+      <SolveStrip
+        solve={tournament.latestScheduleSolve}
+        canEdit={canEdit}
+        isRequesting={requestSolve.isPending}
+        onRun={() => requestSolve.mutateAsync().then(() => undefined)}
       />
 
       {schedule.isEmpty ? (

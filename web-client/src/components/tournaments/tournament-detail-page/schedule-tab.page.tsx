@@ -94,6 +94,27 @@ const scoped = (container: Container) => ({
     return container.queryByTestId(`place-clear-${fixtureId}`)
   },
 
+  /** The solve strip (its own quartet — `solve-strip.page` has the fine-grained
+   * accessors; these are the joints the TAB's tests drive). */
+  getSolveStrip() {
+    return container.getByTestId('solve-strip')
+  },
+  queryStripState(state: 'none' | 'solving' | 'succeeded' | 'infeasible' | 'failed') {
+    return container.queryByTestId(`solve-strip-${state}`)
+  },
+  getRunScheduler() {
+    return container.getByTestId('run-scheduler') as HTMLButtonElement
+  },
+  queryRunScheduler() {
+    return container.queryByTestId('run-scheduler')
+  },
+  clickRunScheduler() {
+    fireEvent.click(container.getByTestId('run-scheduler'))
+  },
+  queryRunNotice() {
+    return container.queryByTestId('run-scheduler-notice')
+  },
+
   /** EVERY interactive control in the tab — the sweep a "a non-owner is offered nothing"
    * guard needs (ADR-0015: no control at all, not a disabled one). */
   getControls() {

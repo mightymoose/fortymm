@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@/test/utilities'
 import {
   mockEventCutDrawEndpoint,
+  mockScheduleSolveEndpoint,
   mockEventEnterEndpoint,
   mockFixturePlacementEndpoint,
   mockEventUncutDrawEndpoint,
@@ -26,6 +27,7 @@ import {
   mockTournamentsListEndpoint,
 } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import {
+  buildScheduleSolveRead,
   buildTournamentDetailRead,
   buildTournamentEntrantRead,
   buildTournamentEventRead,
@@ -45,6 +47,7 @@ import {
   useCutDraw,
   useEnterEvent,
   usePlaceFixture,
+  useRequestScheduleSolve,
   useTournament,
   useTournaments,
   useTransitionTournament,
@@ -1003,6 +1006,8 @@ describe('useCutDraw', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        pinnedAt: null,
+        callNotifiedCount: 0,
       },
     ])
   })
@@ -1242,6 +1247,98 @@ describe('usePlaceFixture', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
     expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('useRequestScheduleSolve', () => {
+  it('POSTs to the solves resource with NO body, and resolves the parsed ledger row', async () => {
+    let seen: { url: string; body: string } | null = null
+    mockScheduleSolveEndpoint(server, async ({ request }) => {
+      seen = { url: request.url, body: await request.text() }
+      return HttpResponse.json(
+        buildScheduleSolveRead({ status: 'queued', verdict: null }),
+        { status: 202 },
+      )
+    })
+
+    const { result } = renderHook(() => useRequestScheduleSolve('t-1'))
+    const solve = await result.current.mutateAsync()
+
+    expect(seen!.url).toContain('/v1/tournaments/t-1/schedule/solves')
+    // The tournament is the whole request — the trigger is always `manual` here.
+    expect(seen!.body).toBe('')
+    // Parsed into the domain's camelCase, never the wire shape.
+    expect(solve).toMatchObject({
+      id: 'solve-1',
+      status: 'queued',
+      trigger: 'manual',
+      requestedAt: '2026-06-13T09:00:00Z',
+    })
+  })
+
+  // THE invalidation contract (the map at the top of `./api`): exactly the two keys —
+  // the outcome rides the detail payload's `latest_schedule_solve`, so the strip
+  // re-renders from the refetch, with no solve query of its own.
+  it('invalidates EXACTLY the list and the detail on the 202', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(buildScheduleSolveRead({ status: 'queued', verdict: null }), {
+        status: 202,
+      }),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useRequestScheduleSolve('t-1'), {
+      wrapper,
+    })
+    result.current.mutate()
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // Reconciles on FAILURE too (`onSettled`) — a 422 means the draws this page shows
+  // are not the draws the server holds — and does NOT toast: the strip surfaces every
+  // refusal inline (`runSchedulerNotice`), and a mutation whose errors are shown
+  // inline must not also toast (web-client/CLAUDE.md, ## Forms).
+  it('invalidates on the coded 422 too, and raises no toast of its own', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: { code: 'no_drawn_events', message: 'Nothing is drawn.' },
+        } satisfies CodedErrorBody,
+        { status: 422 },
+      ),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useRequestScheduleSolve('t-1'), {
+      wrapper,
+    })
+
+    await expect(result.current.mutateAsync()).rejects.toBeInstanceOf(ApiError)
+
+    await waitForRaw(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] }),
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledTimes(2)
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it('refuses a 202 body that is not a ledger row — the parse boundary holds', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(
+        buildScheduleSolveRead({ status: 'later' as never }),
+        { status: 202 },
+      ),
+    )
+
+    const { result } = renderHook(() => useRequestScheduleSolve('t-1'))
+    await expect(result.current.mutateAsync()).rejects.toThrow()
   })
 })
 

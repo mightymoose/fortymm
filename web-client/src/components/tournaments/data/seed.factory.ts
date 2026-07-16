@@ -3,6 +3,7 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
+import type { ScheduleSolve } from './solve'
 import type {
   Address,
   Entrant,
@@ -248,6 +249,35 @@ export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
     matchStatus: null,
     tableId: null,
     scheduledStart: null,
+    // Uncalled (ADR "the schedule is solved, the call is pinned"): the placement —
+    // when one is set — is still an estimate, and nobody has been notified.
+    pinnedAt: null,
+    callNotifiedCount: 0,
+    ...overrides,
+  }
+}
+
+/** One row of the tournament's solve ledger, in the domain's spelling — by default
+ * a **finished, successful** manual run (`succeeded`/`optimal`, sub-second, nine
+ * fixtures placed). Internally consistent for that status: every stage reached, so
+ * every stage-marking field set. A test that wants an earlier stage overrides the
+ * status AND nulls the fields that stage has not reached — each `null` is a fact
+ * about how far the run got. */
+export function buildScheduleSolve(
+  overrides: Partial<ScheduleSolve> = {},
+): ScheduleSolve {
+  return {
+    id: 'solve-1',
+    trigger: 'manual',
+    status: 'succeeded',
+    verdict: 'optimal',
+    requestedAt: '2026-06-13T09:00:00Z',
+    startedAt: '2026-06-13T09:00:01Z',
+    finishedAt: '2026-06-13T09:00:02Z',
+    wallTimeMs: 850,
+    fixturesPlaced: 9,
+    fixturesPinned: 0,
+    error: null,
     ...overrides,
   }
 }
@@ -441,6 +471,9 @@ export function buildTournament(
     address: buildAddress(),
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [buildEvent()],
+    // NO SOLVE YET — the designed state every tournament is born in. A fixture that
+    // wants a row on the strip passes a `buildScheduleSolve()` override.
+    latestScheduleSolve: null,
     ...overrides,
   }
 }

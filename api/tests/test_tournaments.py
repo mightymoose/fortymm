@@ -3471,10 +3471,12 @@ async def test_the_list_and_the_detail_agree_about_an_entrants_rating(
 # The pin, measured: the tournament + username join, its events, ONE batched load of
 # those events' active entrants (their ratings on the tournament's ladder ride along on
 # that same statement — see ``active_entrants_by_event``), ONE batched load of those
-# events' fixtures — their draws (ADR-0786) — and ONE read of the caller's rating on the
-# tournament's league. Five, whatever the number of events, whatever the number of
-# entrants in them, and whatever the size of their draws.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 5
+# events' fixtures — their draws (ADR-0786) — ONE read of the caller's rating on the
+# tournament's league, and ONE read of the newest solve-ledger row (the Schedule tab's
+# solve strip, ADR "the schedule is solved, the call is pinned"). Six, whatever the
+# number of events, whatever the number of entrants in them, whatever the size of
+# their draws, and whatever the length of the day's solve ledger.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 6
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -3491,7 +3493,7 @@ async def test_detail_statement_count_does_not_grow_with_events(
     This is the trap the feature invites: resolving the rating (or counting capacity)
     inside the per-event loop is invisible in every assertion about the *response*, and
     turns a 12-event tournament's detail page into a dozen extra round-trips. A
-    per-event rating would measure 5 statements at one event and 8 at four, so the
+    per-event rating would measure 6 statements at one event and 9 at four, so the
     four-event case fails the pin even if the one-event case slipped past.
 
     Counted on a fresh session against the handler, exactly as the list endpoint's twin
@@ -3696,8 +3698,11 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     ``winner_entry_id``, ``match_id`` and ``match_status`` are the same story —
     undecided, not yet a match, so no live match status. ``table_id`` and
     ``scheduled_start`` are the fixture's **placement** (ADR-0790), both ``null`` on a
-    freshly-cut draw: unassigned to a table, unscheduled. The exact key set is asserted,
-    so a field silently dropped (or a username silently *added*) fails here.
+    freshly-cut draw: unassigned to a table, unscheduled. ``pinned_at`` and
+    ``call_notified_count`` are its **pin facts** (ADR "the schedule is solved, the
+    call is pinned"): unpinned — still an estimate, not a promise — and nobody told.
+    The exact key set is asserted, so a field silently dropped (or a username
+    silently *added*) fails here.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
@@ -3722,6 +3727,8 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
         "match_status",
         "table_id",
         "scheduled_start",
+        "pinned_at",
+        "call_notified_count",
     }
     assert fixture["entry_a_id"] == str(entry.id)
     # The facts that are not known yet — each present, each null.
@@ -3732,6 +3739,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     # A freshly-cut draw carries an unassigned placement: no table, no predicted start.
     assert fixture["table_id"] is None
     assert fixture["scheduled_start"] is None
+    # ... and it is unpinned: an estimate the solver may move, told to nobody.
+    assert fixture["pinned_at"] is None
+    assert fixture["call_notified_count"] == 0
 
 
 async def test_a_fixtures_sides_are_entry_ids_the_events_entrants_list_resolves(
@@ -3843,8 +3853,8 @@ async def test_detail_statement_count_does_not_grow_with_drawn_events(
     fixtures — or a loader that skipped the empty ones — costs them nothing and leaves
     them green, while the real page pays a query per drawn event. Hence the deliberate
     cut draw on every event here, and the two ``event_count`` cases: a per-event fetch
-    measures 6 statements at one event and 9 at four, so it fails the pin at four even
-    if it slipped past at one.
+    measures 7 statements at one event and 10 at four, so it fails the pin at four
+    even if it slipped past at one.
     """
     client, user = authed_client
     user_id = user.id  # read outside the counted block

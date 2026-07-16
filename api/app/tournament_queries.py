@@ -199,6 +199,8 @@ async def fixtures_by_event(
                 match_status=match_status,
                 table_id=fixture.table_id,
                 scheduled_start=fixture.scheduled_start,
+                pinned_at=fixture.pinned_at,
+                call_notified_count=fixture.call_notified_count,
             )
         )
     return fixtures

@@ -1,13 +1,20 @@
 import { HttpResponse } from 'msw'
 
 import { waitFor, within } from '@/test/utilities'
-import { mockFixturePlacementEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
-import { buildTournamentFixtureRead } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  mockFixturePlacementEndpoint,
+  mockScheduleSolveEndpoint,
+} from '@/mocks/endpoints/tournaments/tournaments.endpoint'
+import {
+  buildScheduleSolveRead,
+  buildTournamentFixtureRead,
+} from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
 
 import {
   buildDrawnEvent,
   buildFixture,
+  buildScheduleSolve,
   buildTables,
   buildTournament,
 } from '../data/seed.factory'
@@ -168,7 +175,9 @@ describe('ScheduleTab', () => {
   })
 
   // ADR-0015: a non-owner sees the schedule as a VIEW — the same matches, and zero
-  // interactive controls (no placement control, not a disabled one).
+  // interactive controls (no placement control, not a disabled one). The sweep
+  // covers the solve strip too: its Run-scheduler button must be hidden, not
+  // disabled, for a viewer.
   it('renders no interactive controls for a non-owner', () => {
     page.render({
       tournament: buildTournament({
@@ -180,6 +189,95 @@ describe('ScheduleTab', () => {
     // The schedule still renders for them.
     expect(page.queryTableColumn('t1')).toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-a-2')).not.toBeInTheDocument()
+    expect(page.queryRunScheduler()).not.toBeInTheDocument()
     expect(page.getControls()).toHaveLength(0)
+  })
+
+  // ----- the solve strip on the tab (ADR "the schedule is solved") ------------
+
+  it('renders the solve strip from the tournament’s latest solve', () => {
+    page.render({
+      tournament: buildTournament({
+        events: [buildScheduledEvent()],
+        latestScheduleSolve: buildScheduleSolve({ verdict: 'optimal' }),
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryStripState('succeeded')).toBeInTheDocument()
+    expect(page.getSolveStrip()).toHaveTextContent('Best possible plan')
+  })
+
+  it('keeps the strip on screen over the EMPTY schedule — where the owner meets "cut a draw first"', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildDrawnEvent({ fixtures: [] })] }),
+      tables: buildTables(),
+    })
+    expect(page.getTab()).toHaveTextContent('Nothing to schedule yet')
+    expect(page.queryStripState('none')).toBeInTheDocument()
+    expect(page.queryRunScheduler()).toBeInTheDocument()
+  })
+
+  it('fires the solve request from the Run-scheduler button, disabling it while in the air', async () => {
+    let posts = 0
+    let seenUrl = ''
+    mockScheduleSolveEndpoint(server, ({ request }) => {
+      posts += 1
+      seenUrl = request.url
+      return HttpResponse.json(
+        buildScheduleSolveRead({ status: 'queued', verdict: null }),
+        { status: 202 },
+      )
+    })
+
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+
+    page.clickRunScheduler()
+    // The in-flight guard: the button is dead while the request is out (#436 family).
+    expect(page.getRunScheduler()).toBeDisabled()
+
+    await waitFor(() => expect(posts).toBe(1))
+    expect(seenUrl).toContain('/v1/tournaments/bay-area-open-2026/schedule/solves')
+  })
+
+  it('shows the designed "cut a draw first" message inline when the server answers the coded 422', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: { code: 'no_drawn_events', message: 'Nothing is drawn.' } },
+        { status: 422 },
+      ),
+    )
+
+    page.render({
+      tournament: buildTournament({ events: [buildDrawnEvent({ fixtures: [] })] }),
+      tables: buildTables(),
+    })
+
+    page.clickRunScheduler()
+
+    await waitFor(() => expect(page.queryRunNotice()).toBeInTheDocument())
+    expect(page.queryRunNotice()).toHaveTextContent('Nothing to schedule yet')
+    expect(page.queryRunNotice()).toHaveTextContent("Cut at least one event's draw")
+  })
+
+  it('withholds the button while the latest solve is already in flight', () => {
+    page.render({
+      tournament: buildTournament({
+        events: [buildScheduledEvent()],
+        latestScheduleSolve: buildScheduleSolve({
+          status: 'queued',
+          verdict: null,
+          finishedAt: null,
+          wallTimeMs: null,
+          fixturesPlaced: null,
+          fixturesPinned: null,
+        }),
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryStripState('solving')).toBeInTheDocument()
+    expect(page.getRunScheduler()).toBeDisabled()
   })
 })

@@ -9,6 +9,7 @@ type TournamentTable = components['schemas']['TournamentTable']
 type EventResultsRead = components['schemas']['EventResultsRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
+type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 
 /** A single physical table, `T1` on court 1. */
 export function buildTournamentTable(
@@ -66,7 +67,9 @@ export function buildTournamentEntrantReads(
  * the morning of: a planned pairing, both players known, nothing played — so
  * `match_status` is `null` too, moving in lockstep with `match_id`. Its **placement**
  * (ADR-0790) starts empty: `table_id` null is unassigned, `scheduled_start` null is
- * unscheduled. */
+ * unscheduled — and **uncalled**: `pinned_at` null means the placement is still an
+ * estimate the solver may move, and `call_notified_count` 0 means nobody has been
+ * told anything (ADR "the schedule is solved, the call is pinned"). */
 export function buildTournamentFixtureRead(
   overrides: Partial<TournamentFixtureRead> = {},
 ): TournamentFixtureRead {
@@ -82,6 +85,38 @@ export function buildTournamentFixtureRead(
     match_status: null,
     table_id: null,
     scheduled_start: null,
+    pinned_at: null,
+    call_notified_count: 0,
+    ...overrides,
+  }
+}
+
+/** One row of the tournament's **solve ledger** (`ScheduleSolveRead`, ADR "the
+ * schedule is solved, the call is pinned") — by default a *finished, successful*
+ * manual run: the owner pressed Run scheduler, the solver proved the plan optimal
+ * in under a second, and every one of nine fixtures got a placement.
+ *
+ * The defaults are internally consistent for the `succeeded` status — every stage
+ * reached, so every stage-marking field is set. A fixture that wants an earlier
+ * stage overrides the status *and* nulls the fields that stage has not reached
+ * (`queued`: everything after `requested_at` null; `failed`: `verdict` and the
+ * apply counts null, `error` set) — each `null` is a fact about how far the run
+ * got, not a missing field. */
+export function buildScheduleSolveRead(
+  overrides: Partial<ScheduleSolveRead> = {},
+): ScheduleSolveRead {
+  return {
+    id: 'solve-1',
+    trigger: 'manual',
+    status: 'succeeded',
+    verdict: 'optimal',
+    requested_at: '2026-06-13T09:00:00Z',
+    started_at: '2026-06-13T09:00:01Z',
+    finished_at: '2026-06-13T09:00:02Z',
+    wall_time_ms: 850,
+    fixtures_placed: 9,
+    fixtures_pinned: 0,
+    error: null,
     ...overrides,
   }
 }
@@ -367,6 +402,11 @@ export function buildTournamentDetailRead(
     created_at: '2026-06-01T09:00:00Z',
     updated_at: '2026-06-10T12:00:00Z',
     events: [buildTournamentEventRead()],
+    // NO SOLVE YET — `null` is the state every tournament is born in, and the state
+    // it stays in until something (go-live, the Run-scheduler button, a completed
+    // match) puts a run on the queue. A fixture that wants a solve on the strip
+    // passes a `buildScheduleSolveRead()` override.
+    latest_schedule_solve: null,
     ...overrides,
   }
 }

@@ -35,6 +35,8 @@ describe('parseFixtures — the happy path', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        pinnedAt: null,
+        callNotifiedCount: 0,
       },
     ])
   })
