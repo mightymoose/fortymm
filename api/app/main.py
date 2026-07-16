@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app import db, queue
+from app.admin_schedule_solves import router as admin_schedule_solves_router
 from app.dashboard import router as dashboard_router
 from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
@@ -187,6 +188,7 @@ app.include_router(players_router)
 app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
+app.include_router(admin_schedule_solves_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

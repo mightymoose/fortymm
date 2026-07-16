@@ -32,6 +32,7 @@ import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$use
 import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
 import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
 import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
+import { Route as AppAdminScheduleSolvesRouteImport } from './routes/_app/admin.schedule-solves'
 import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
 import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
 import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
@@ -157,6 +158,11 @@ const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AppAdminRoute,
 } as any)
+const AppAdminScheduleSolvesRoute = AppAdminScheduleSolvesRouteImport.update({
+  id: '/schedule-solves',
+  path: '/schedule-solves',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
   id: '/roles',
   path: '/roles',
@@ -217,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -246,6 +253,7 @@ export interface FileRoutesByTo {
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -280,6 +288,7 @@ export interface FileRoutesById {
   '/_app/admin/broadcast': typeof AppAdminBroadcastRoute
   '/_app/admin/permissions': typeof AppAdminPermissionsRoute
   '/_app/admin/roles': typeof AppAdminRolesRoute
+  '/_app/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/matches/new': typeof AppMatchesNewRoute
   '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -314,6 +323,7 @@ export interface FileRouteTypes {
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
+    | '/admin/schedule-solves'
     | '/admin/users'
     | '/matches/new'
     | '/notifications/settings'
@@ -343,6 +353,7 @@ export interface FileRouteTypes {
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
+    | '/admin/schedule-solves'
     | '/admin/users'
     | '/matches/new'
     | '/notifications/settings'
@@ -376,6 +387,7 @@ export interface FileRouteTypes {
     | '/_app/admin/broadcast'
     | '/_app/admin/permissions'
     | '/_app/admin/roles'
+    | '/_app/admin/schedule-solves'
     | '/_app/admin/users'
     | '/_app/matches/new'
     | '/_app/notifications/settings'
@@ -567,6 +579,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminUsersRouteImport
       parentRoute: typeof AppAdminRoute
     }
+    '/_app/admin/schedule-solves': {
+      id: '/_app/admin/schedule-solves'
+      path: '/schedule-solves'
+      fullPath: '/admin/schedule-solves'
+      preLoaderRoute: typeof AppAdminScheduleSolvesRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/admin/roles': {
       id: '/_app/admin/roles'
       path: '/roles'
@@ -630,6 +649,7 @@ interface AppAdminRouteChildren {
   AppAdminBroadcastRoute: typeof AppAdminBroadcastRoute
   AppAdminPermissionsRoute: typeof AppAdminPermissionsRoute
   AppAdminRolesRoute: typeof AppAdminRolesRoute
+  AppAdminScheduleSolvesRoute: typeof AppAdminScheduleSolvesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
 }
@@ -638,6 +658,7 @@ const AppAdminRouteChildren: AppAdminRouteChildren = {
   AppAdminBroadcastRoute: AppAdminBroadcastRoute,
   AppAdminPermissionsRoute: AppAdminPermissionsRoute,
   AppAdminRolesRoute: AppAdminRolesRoute,
+  AppAdminScheduleSolvesRoute: AppAdminScheduleSolvesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
 }

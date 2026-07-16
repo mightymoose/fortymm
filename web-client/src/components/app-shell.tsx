@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Link, useLinkProps, useRouterState } from '@tanstack/react-router'
 import {
   Bell,
+  CalendarClock,
   ChevronDown,
   Gauge,
   Inbox,
@@ -141,6 +142,7 @@ const NAV_SECTIONS: NavSection[] = [
           { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
           { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
           { label: 'Broadcast', to: '/admin/broadcast', icon: <Megaphone size={15} strokeWidth={1.75} />, requires: PERM.NOTIFICATIONS_BROADCAST },
+          { label: 'Scheduling', to: '/admin/schedule-solves', icon: <CalendarClock size={15} strokeWidth={1.75} />, requires: PERM.SCHEDULING_VIEW },
         ],
       },
     ],

@@ -753,12 +753,32 @@ internal protocol APIProtocol: Sendable {
     /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
     /// that half; `(null, null)` unassigns the fixture.
     ///
-    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
-    /// constraints — the table belongs to the fixture's pool, the time falls inside the
-    /// pool's window, nothing is double-booked — are flags derived on read, **not**
-    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
-    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
-    /// a future scheduler slice.
+    /// **A manual placement is a pin.** The director's hand is a human commitment the
+    /// schedule solver plans around, not a suggestion it may undo: a full placement (both
+    /// halves set, both entrants known) sets `pinned_at`, and every later solve treats the
+    /// fixture as a fixed interval. While the tournament is **live**, placing a fixture
+    /// *is* calling it — a first placement notifies both entrants, and re-placing a
+    /// fixture whose players were already told sends them a "your match moved" correction
+    /// carrying the new table and time; `call_notified_count` counts exactly those
+    /// tellings, which is the price to state before a re-drag. Pre-live placements are
+    /// silent pins: free rearranging while planning, nobody paged. A fixture with a TBD
+    /// side stores the placement but does **not** pin (a promise to nobody is not a
+    /// promise) — the solver may still move it.
+    ///
+    /// **Clearing unpins.** Anything short of a full placement clears `pinned_at`; if the
+    /// players had been called, both get a cancellation ("the schedule changed"). Pre-live
+    /// or never-notified clears are silent. The count never resets — it is a history of
+    /// tellings, and a cancellation is one.
+    ///
+    /// Every successful write also queues a re-solve (`settings_changed`): the director
+    /// just changed the solver's inputs, so the board re-plans around the new pin set.
+    ///
+    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    /// pinned, and the placement's constraints — the table belongs to the fixture's pool,
+    /// the time falls inside the pool's window, nothing is double-booked — are flags
+    /// derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
+    /// names no table in the catalogue, is **stored, not rejected**; the queued re-solve
+    /// is what judges the consequences.
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
@@ -801,6 +821,21 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/solves`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)`.
     func requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(_ input: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output
+    /// List Schedule Solves
+    ///
+    /// Paginated cross-tournament solve ledger backing the Administration area's
+    /// scheduling page, newest request first.
+    ///
+    /// Each row is one run of the placement solver exactly as ``schedule_solves``
+    /// recorded it (ADR "the schedule is solved; the call is pinned"), plus the
+    /// operator-only facts the tournament-facing read omits: the drift guard's
+    /// ``input_fingerprint``, the coalescer's ``rerun_requested``, and the owning
+    /// tournament's id and name. ``tournament_id`` narrows the ledger to one
+    /// tournament's runs; ``total`` counts the rows matching that same filter.
+    ///
+    /// - Remark: HTTP `GET /v1/admin/schedule-solves`.
+    /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)`.
+    func listScheduleSolvesV1AdminScheduleSolvesGet(_ input: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input) async throws -> Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -2022,12 +2057,32 @@ extension APIProtocol {
     /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
     /// that half; `(null, null)` unassigns the fixture.
     ///
-    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
-    /// constraints — the table belongs to the fixture's pool, the time falls inside the
-    /// pool's window, nothing is double-booked — are flags derived on read, **not**
-    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
-    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
-    /// a future scheduler slice.
+    /// **A manual placement is a pin.** The director's hand is a human commitment the
+    /// schedule solver plans around, not a suggestion it may undo: a full placement (both
+    /// halves set, both entrants known) sets `pinned_at`, and every later solve treats the
+    /// fixture as a fixed interval. While the tournament is **live**, placing a fixture
+    /// *is* calling it — a first placement notifies both entrants, and re-placing a
+    /// fixture whose players were already told sends them a "your match moved" correction
+    /// carrying the new table and time; `call_notified_count` counts exactly those
+    /// tellings, which is the price to state before a re-drag. Pre-live placements are
+    /// silent pins: free rearranging while planning, nobody paged. A fixture with a TBD
+    /// side stores the placement but does **not** pin (a promise to nobody is not a
+    /// promise) — the solver may still move it.
+    ///
+    /// **Clearing unpins.** Anything short of a full placement clears `pinned_at`; if the
+    /// players had been called, both get a cancellation ("the schedule changed"). Pre-live
+    /// or never-notified clears are silent. The count never resets — it is a history of
+    /// tellings, and a cancellation is one.
+    ///
+    /// Every successful write also queues a re-solve (`settings_changed`): the director
+    /// just changed the solver's inputs, so the board re-plans around the new pin set.
+    ///
+    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    /// pinned, and the placement's constraints — the table belongs to the fixture's pool,
+    /// the time falls inside the pool's window, nothing is double-booked — are flags
+    /// derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
+    /// names no table in the catalogue, is **stored, not rejected**; the queued re-solve
+    /// is what judges the consequences.
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
@@ -2085,6 +2140,29 @@ extension APIProtocol {
     ) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output {
         try await requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input(
             path: path,
+            headers: headers
+        ))
+    }
+    /// List Schedule Solves
+    ///
+    /// Paginated cross-tournament solve ledger backing the Administration area's
+    /// scheduling page, newest request first.
+    ///
+    /// Each row is one run of the placement solver exactly as ``schedule_solves``
+    /// recorded it (ADR "the schedule is solved; the call is pinned"), plus the
+    /// operator-only facts the tournament-facing read omits: the drift guard's
+    /// ``input_fingerprint``, the coalescer's ``rerun_requested``, and the owning
+    /// tournament's id and name. ``tournament_id`` narrows the ledger to one
+    /// tournament's runs; ``total`` counts the rows matching that same filter.
+    ///
+    /// - Remark: HTTP `GET /v1/admin/schedule-solves`.
+    /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)`.
+    internal func listScheduleSolvesV1AdminScheduleSolvesGet(
+        query: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Query = .init(),
+        headers: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Headers = .init()
+    ) async throws -> Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output {
+        try await listScheduleSolvesV1AdminScheduleSolvesGet(Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input(
+            query: query,
             headers: headers
         ))
     }
@@ -2186,6 +2264,177 @@ internal enum Components {
                     "postal",
                     "country"
                 ])
+            }
+        }
+        /// Paginated `/v1/admin/schedule-solves` response backing the Administration
+        /// area's solve-ledger page.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveListResponse`.
+        internal struct AdminScheduleSolveListResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveListResponse/items`.
+            internal var items: [Components.Schemas.AdminScheduleSolveRead]
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveListResponse/page`.
+            internal var page: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveListResponse/page_size`.
+            internal var pageSize: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveListResponse/total`.
+            internal var total: Swift.Int
+            /// Creates a new `AdminScheduleSolveListResponse`.
+            ///
+            /// - Parameters:
+            ///   - items:
+            ///   - page:
+            ///   - pageSize:
+            ///   - total:
+            internal init(
+                items: [Components.Schemas.AdminScheduleSolveRead],
+                page: Swift.Int,
+                pageSize: Swift.Int,
+                total: Swift.Int
+            ) {
+                self.items = items
+                self.page = page
+                self.pageSize = pageSize
+                self.total = total
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case items
+                case page
+                case pageSize = "page_size"
+                case total
+            }
+        }
+        /// One ledger row as the *admin* page reads it: everything the
+        /// tournament-facing :class:`ScheduleSolveRead` carries, plus the
+        /// operator-only facts that schema deliberately omits —
+        ///
+        /// * ``input_fingerprint`` — the drift guard's comparison key (the hash of the
+        ///   snapshot this run solved against); ``null`` for a run that never
+        ///   snapshotted. The detail BFF's solve strip has no use for it; the operator
+        ///   chasing a ``superseded by re-run`` chain does.
+        /// * ``rerun_requested`` — the coalescer's second arm: a trigger landed while
+        ///   this run was ``running``. Meaningless (always ``false``) on terminal rows.
+        /// * ``tournament_id`` / ``tournament_name`` — the tournament the run belongs
+        ///   to, joined here so the page needs no follow-up lookups. The name is read
+        ///   live from the tournament row, not snapshotted at solve time.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead`.
+        internal struct AdminScheduleSolveRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/trigger`.
+            internal var trigger: Components.Schemas.ScheduleSolveTrigger
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/status`.
+            internal var status: Components.Schemas.ScheduleSolveStatus
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/verdict`.
+            internal struct VerdictPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/verdict/value1`.
+                internal var value1: Components.Schemas.SolverVerdict
+                /// Creates a new `VerdictPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.SolverVerdict) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/verdict`.
+            internal var verdict: Components.Schemas.AdminScheduleSolveRead.VerdictPayload?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/requested_at`.
+            internal var requestedAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/started_at`.
+            internal var startedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/finished_at`.
+            internal var finishedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/wall_time_ms`.
+            internal var wallTimeMs: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/fixtures_placed`.
+            internal var fixturesPlaced: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/fixtures_pinned`.
+            internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/error`.
+            internal var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/input_fingerprint`.
+            internal var inputFingerprint: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/rerun_requested`.
+            internal var rerunRequested: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/tournament_id`.
+            internal var tournamentId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/tournament_name`.
+            internal var tournamentName: Swift.String
+            /// Creates a new `AdminScheduleSolveRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - trigger:
+            ///   - status:
+            ///   - verdict:
+            ///   - requestedAt:
+            ///   - startedAt:
+            ///   - finishedAt:
+            ///   - wallTimeMs:
+            ///   - fixturesPlaced:
+            ///   - fixturesPinned:
+            ///   - error:
+            ///   - inputFingerprint:
+            ///   - rerunRequested:
+            ///   - tournamentId:
+            ///   - tournamentName:
+            internal init(
+                id: Swift.String,
+                trigger: Components.Schemas.ScheduleSolveTrigger,
+                status: Components.Schemas.ScheduleSolveStatus,
+                verdict: Components.Schemas.AdminScheduleSolveRead.VerdictPayload? = nil,
+                requestedAt: Foundation.Date,
+                startedAt: Foundation.Date? = nil,
+                finishedAt: Foundation.Date? = nil,
+                wallTimeMs: Swift.Int? = nil,
+                fixturesPlaced: Swift.Int? = nil,
+                fixturesPinned: Swift.Int? = nil,
+                error: Swift.String? = nil,
+                inputFingerprint: Swift.String? = nil,
+                rerunRequested: Swift.Bool,
+                tournamentId: Swift.String,
+                tournamentName: Swift.String
+            ) {
+                self.id = id
+                self.trigger = trigger
+                self.status = status
+                self.verdict = verdict
+                self.requestedAt = requestedAt
+                self.startedAt = startedAt
+                self.finishedAt = finishedAt
+                self.wallTimeMs = wallTimeMs
+                self.fixturesPlaced = fixturesPlaced
+                self.fixturesPinned = fixturesPinned
+                self.error = error
+                self.inputFingerprint = inputFingerprint
+                self.rerunRequested = rerunRequested
+                self.tournamentId = tournamentId
+                self.tournamentName = tournamentName
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case trigger
+                case status
+                case verdict
+                case requestedAt = "requested_at"
+                case startedAt = "started_at"
+                case finishedAt = "finished_at"
+                case wallTimeMs = "wall_time_ms"
+                case fixturesPlaced = "fixtures_placed"
+                case fixturesPinned = "fixtures_pinned"
+                case error
+                case inputFingerprint = "input_fingerprint"
+                case rerunRequested = "rerun_requested"
+                case tournamentId = "tournament_id"
+                case tournamentName = "tournament_name"
             }
         }
         /// One selectable player in the admin recipient picker.
@@ -7969,6 +8218,13 @@ internal enum Components {
         /// The one thing the *route* refuses is moving a fixture whose linked match is
         /// ``completed`` or ``voided``: its placement is history (409). A fixture with no match
         /// yet, or an ``in_progress`` one, is freely (re)placeable.
+        ///
+        /// Soft against *validation* — but not weightless: a manual placement is a **pin**
+        /// (ADR "the schedule is solved; the call is pinned"). A full placement of a fixture
+        /// whose entrants are known sets ``pinned_at`` — a commitment the solver schedules
+        /// around — and, while the tournament is live, notifies both players (the route
+        /// docstring has the full call/moved/cancelled semantics). Anything less than a full
+        /// placement unpins.
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentFixturePlacementUpdate`.
         internal struct TournamentFixturePlacementUpdate: Codable, Hashable, Sendable {
@@ -20890,12 +21146,32 @@ internal enum Operations {
     /// venue's local frame — an offset-aware value is a `422`). `null` on either clears
     /// that half; `(null, null)` unassigns the fixture.
     ///
-    /// **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
-    /// constraints — the table belongs to the fixture's pool, the time falls inside the
-    /// pool's window, nothing is double-booked — are flags derived on read, **not**
-    /// invariants. So an out-of-window time, or a `table_id` that names no table in the
-    /// catalogue, is **stored, not rejected**. There is no conflict detection here; that is
-    /// a future scheduler slice.
+    /// **A manual placement is a pin.** The director's hand is a human commitment the
+    /// schedule solver plans around, not a suggestion it may undo: a full placement (both
+    /// halves set, both entrants known) sets `pinned_at`, and every later solve treats the
+    /// fixture as a fixed interval. While the tournament is **live**, placing a fixture
+    /// *is* calling it — a first placement notifies both entrants, and re-placing a
+    /// fixture whose players were already told sends them a "your match moved" correction
+    /// carrying the new table and time; `call_notified_count` counts exactly those
+    /// tellings, which is the price to state before a re-drag. Pre-live placements are
+    /// silent pins: free rearranging while planning, nobody paged. A fixture with a TBD
+    /// side stores the placement but does **not** pin (a promise to nobody is not a
+    /// promise) — the solver may still move it.
+    ///
+    /// **Clearing unpins.** Anything short of a full placement clears `pinned_at`; if the
+    /// players had been called, both get a cancellation ("the schedule changed"). Pre-live
+    /// or never-notified clears are silent. The count never resets — it is a history of
+    /// tellings, and a cancellation is one.
+    ///
+    /// Every successful write also queues a re-solve (`settings_changed`): the director
+    /// just changed the solver's inputs, so the board re-plans around the new pin set.
+    ///
+    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    /// pinned, and the placement's constraints — the table belongs to the fixture's pool,
+    /// the time falls inside the pool's window, nothing is double-booked — are flags
+    /// derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
+    /// names no table in the catalogue, is **stored, not rejected**; the queued re-solve
+    /// is what judges the consequences.
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
@@ -21259,6 +21535,207 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// List Schedule Solves
+    ///
+    /// Paginated cross-tournament solve ledger backing the Administration area's
+    /// scheduling page, newest request first.
+    ///
+    /// Each row is one run of the placement solver exactly as ``schedule_solves``
+    /// recorded it (ADR "the schedule is solved; the call is pinned"), plus the
+    /// operator-only facts the tournament-facing read omits: the drift guard's
+    /// ``input_fingerprint``, the coalescer's ``rerun_requested``, and the owning
+    /// tournament's id and name. ``tournament_id`` narrows the ledger to one
+    /// tournament's runs; ``total`` counts the rows matching that same filter.
+    ///
+    /// - Remark: HTTP `GET /v1/admin/schedule-solves`.
+    /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)`.
+    internal enum ListScheduleSolvesV1AdminScheduleSolvesGet {
+        internal static let id: Swift.String = "list_schedule_solves_v1_admin_schedule_solves_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/query/tournament_id`.
+                internal var tournamentId: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/query/page`.
+                internal var page: Swift.Int?
+                /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/query/page_size`.
+                internal var pageSize: Swift.Int?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - page:
+                ///   - pageSize:
+                internal init(
+                    tournamentId: Swift.String? = nil,
+                    page: Swift.Int? = nil,
+                    pageSize: Swift.Int? = nil
+                ) {
+                    self.tournamentId = tournamentId
+                    self.page = page
+                    self.pageSize = pageSize
+                }
+            }
+            internal var query: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                query: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Query = .init(),
+                headers: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.AdminScheduleSolveListResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AdminScheduleSolveListResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/admin/schedule-solves/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

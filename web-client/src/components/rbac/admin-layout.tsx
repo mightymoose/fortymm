@@ -8,6 +8,7 @@ const TAB_LABELS: Record<string, string> = {
   '/admin/roles': 'Roles',
   '/admin/permissions': 'Permissions',
   '/admin/users': 'Users',
+  '/admin/schedule-solves': 'Scheduling',
 }
 
 export function AdminBreadcrumbAndCounts() {
