@@ -33,6 +33,30 @@ describe('TimelineBar', () => {
     )
   })
 
+  it('renders a SILENT pin as pinned, not called — no notified claim, no call time', async () => {
+    // Pinned is not told (the server pins EVERY full manual placement; live only
+    // gates the notify): a pre-live director placement is pinned with a count of
+    // 0, and the words must not invent a call that never went out.
+    page.render({
+      bar: buildTimelineBarData({
+        tier: 'called',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 0,
+      }),
+    })
+    const bar = page.getBar('fx-a-1')
+    // Same visual tier as a call — the solver treats both as immovable…
+    expect(page.getTier('fx-a-1')).toBe('called')
+    // …but the words say pinned, and never "notified" or a called-at minute.
+    expect(bar).toHaveAccessibleName(/Pinned — placed by the director\.$/)
+    expect(bar).not.toHaveAccessibleName(/notified/)
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).toHaveTextContent('Pinned — placed by the director')
+    expect(tip).not.toHaveTextContent('Called')
+    expect(tip).not.toHaveTextContent('notified')
+  })
+
   it('renders a started bar as fact, reading its actual state', () => {
     page.render({
       bar: buildTimelineBarData({

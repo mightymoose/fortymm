@@ -22,11 +22,13 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from httpx import AsyncClient, Response
-from sqlalchemy import func, select, text
+from rq import Queue
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app import match_calls
 from app.account_merge import merge_user
 from app.draws import DrawError
 from app.leagues import seed_user_league_rating
@@ -37,7 +39,11 @@ from app.models import (
     MatchSettings,
     MatchSide,
     MatchStatus,
+    Notification,
     RatingStrategy,
+    ScheduleSolve,
+    ScheduleSolveStatus,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -48,6 +54,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.models.tournament import DrawType, EventFormat
+from app.schemas.notification import NotificationJob
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryRatingIneligible,
@@ -6701,3 +6708,317 @@ async def test_placement_404s_for_a_fixture_not_under_the_named_tournament(
     ).status_code == 404
     # The foreign fixture is untouched under its own tournament.
     assert other_id != tournament_id
+
+
+# ----- manual placement pins (ADR "the schedule is solved; the call is pinned") -----
+#
+# A manual placement is a pin, and while live, placing IS calling. These tests drive
+# the real route end-to-end: pin columns on the response, in-app ``Notification`` rows
+# committed with the pin, push/email fan-out on the (async, record-only) notifications
+# queue, and the ``settings_changed`` re-solve on the ledger.
+
+
+async def _go_live_directly(db_session: AsyncSession, tournament_id: str) -> None:
+    """Flip the tournament to ``live`` by hand. The placement's call semantics judge
+    the *status*, nothing else — and skipping the transition route (and with it
+    ``materialize_live_draw``) keeps the fixtures matchless, i.e. freely placeable."""
+    tournament = await db_session.get(Tournament, uuid.UUID(tournament_id))
+    assert tournament is not None
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+
+
+async def _clear_solve_ledger(db_session: AsyncSession) -> None:
+    """Empty ``schedule_solves`` so a test can attribute the NEXT queued row to the
+    action under test — cutting the draw already queued a ``settings_changed`` solve,
+    and ``request_solve`` coalesces into an existing queued row rather than adding
+    one (the absorb branch), so without this reset the placement's enqueue would be
+    invisible."""
+    await db_session.execute(delete(ScheduleSolve))
+    await db_session.commit()
+
+
+async def _queued_solves(
+    db_session: AsyncSession, tournament_id: str
+) -> list[ScheduleSolve]:
+    db_session.expire_all()
+    return list(
+        (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == uuid.UUID(tournament_id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _match_call_rows(db_session: AsyncSession) -> list[Notification]:
+    db_session.expire_all()
+    return list(
+        (
+            await db_session.execute(
+                select(Notification)
+                .where(Notification.category == "match_calls")
+                .order_by(Notification.created_at, Notification.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _entrant_user_ids_of(
+    db_session: AsyncSession, fixture: TournamentFixture
+) -> set[uuid.UUID]:
+    """The two humans a call to this fixture must reach — entry → user."""
+    return set(
+        (
+            await db_session.execute(
+                select(TournamentEntry.user_id).where(
+                    TournamentEntry.id.in_([fixture.entry_a_id, fixture.entry_b_id])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _match_call_jobs(queue: Queue) -> list[NotificationJob]:
+    jobs = [NotificationJob.model_validate_json(job.args[0]) for job in queue.jobs]
+    return [job for job in jobs if job.category == "match_calls"]
+
+
+async def test_a_live_placement_pins_and_calls_both_entrants(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """While live, placing a fixture IS calling it (ADR): the first full placement
+    pins (``pinned_at`` set, count 1) and tells both entrants — one ``match_called``
+    in-app row each, committed with the pin, plus one push/email fan-out job each,
+    enqueued post-commit. And the director just changed the solver's inputs, so a
+    ``settings_changed`` solve is queued."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    entrants = await _entrant_user_ids_of(db_session, fixture)
+    await _go_live_directly(db_session, tournament_id)
+    await _clear_solve_ledger(db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pinned_at"] is not None
+    assert body["call_notified_count"] == 1
+
+    rows = await _match_call_rows(db_session)
+    assert len(rows) == 2
+    assert {row.user_id for row in rows} == entrants
+    for row in rows:
+        assert row.title == "You're up soon — Table 1"
+        assert "10:00" in row.body
+        assert row.link == f"/tournaments/{tournament_id}"
+
+    jobs = _match_call_jobs(fake_notifications_queue)
+    assert {job.user_id for job in jobs} == entrants
+    assert all(job.channels == ["push", "email"] for job in jobs)
+
+    (solve,) = await _queued_solves(db_session, tournament_id)
+    assert solve.trigger is ScheduleSolveTrigger.settings_changed
+    assert solve.status is ScheduleSolveStatus.queued
+
+
+async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-placing a fixture whose players were already told is not a double call —
+    it is a *moved* correction (ADR: "both players were told Table 3 — moving sends
+    a correction"): still pinned, ``pinned_at`` refreshed to the moment of the
+    re-decision, count 2, and one ``match_call_moved`` per entrant carrying the NEW
+    table's label and time."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    entrants = await _entrant_user_ids_of(db_session, fixture)
+    await _go_live_directly(db_session, tournament_id)
+    url = _placement_url(tournament_id, str(fixture.id))
+
+    monkeypatch.setattr(match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 40))
+    first = await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+    assert first.json()["pinned_at"] == "2026-06-13T09:40:00"
+
+    monkeypatch.setattr(match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 50))
+    response = await client.patch(
+        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pinned_at"] == "2026-06-13T09:50:00"  # renewed, not the first pin
+    assert body["call_notified_count"] == 2
+
+    moved = [
+        row
+        for row in await _match_call_rows(db_session)
+        if row.title == "Your match moved to Table 2"
+    ]
+    assert len(moved) == 2
+    assert {row.user_id for row in moved} == entrants
+    assert all("10:30" in row.body for row in moved)
+
+
+async def test_a_pre_live_placement_is_a_silent_pin(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """Pre-live placements are silent pins (ADR: free rearranging while planning):
+    ``pinned_at`` is set — the solver schedules around the director's hand from the
+    first drag — but nobody is paged and the count stays 0."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pinned_at"] is not None
+    assert body["call_notified_count"] == 0
+    assert await _match_call_rows(db_session) == []
+    assert _match_call_jobs(fake_notifications_queue) == []
+
+
+async def test_clearing_a_called_placement_cancels_the_call(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The full walk — call, move, clear — with the count keeping its one invariant
+    ("times the players were told something") at every step: place (called, 1),
+    re-place (moved, 2), then clear. The clear unpins and nulls the columns, and the
+    players were told to go to a table that no longer expects them, so both get the
+    ``match_call_cancelled`` correction (the schedule changed) — count 3, never
+    reset."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    entrants = await _entrant_user_ids_of(db_session, fixture)
+    await _go_live_directly(db_session, tournament_id)
+    url = _placement_url(tournament_id, str(fixture.id))
+    await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+    await client.patch(
+        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
+    )
+
+    response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["table_id"] is None
+    assert body["scheduled_start"] is None
+    assert body["pinned_at"] is None
+    assert body["call_notified_count"] == 3
+
+    rows = await _match_call_rows(db_session)
+    assert len(rows) == 6  # 2 called + 2 moved + 2 cancelled
+    cancelled = [row for row in rows if row.title == "Your match was cancelled"]
+    assert len(cancelled) == 2
+    assert {row.user_id for row in cancelled} == entrants
+    assert all("the schedule changed" in row.body for row in cancelled)
+
+
+async def test_clearing_a_pre_live_placement_is_silent(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """Un-placing while planning is as free as placing: the silent pin lifts, and
+    nobody hears about a promise that was never made."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    url = _placement_url(tournament_id, str(fixture.id))
+    await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+
+    response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pinned_at"] is None
+    assert body["call_notified_count"] == 0
+    assert await _match_call_rows(db_session) == []
+    assert _match_call_jobs(fake_notifications_queue) == []
+
+
+async def test_clearing_a_never_notified_placement_is_silent_even_live(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """A pin made silently pre-live, cleared after go-live: the players were never
+    told anything, so there is nothing to cancel — the clear unpins and says
+    nothing (a cancellation corrects a promise; this fixture never carried one)."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    url = _placement_url(tournament_id, str(fixture.id))
+    await client.patch(
+        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+    )
+    await _go_live_directly(db_session, tournament_id)
+
+    response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pinned_at"] is None
+    assert body["call_notified_count"] == 0
+    assert await _match_call_rows(db_session) == []
+    assert _match_call_jobs(fake_notifications_queue) == []
+
+
+async def test_a_tbd_side_fixture_placement_saves_without_pinning(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """A promise to nobody is not a promise: a fixture with a TBD side stores the
+    placement (the write stays soft, ADR-0790) but is NOT pinned and nobody is told
+    — the solver keeps treating it as an unpinned placement it may move. The
+    re-solve is still owed, though: the board's inputs changed."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    fixture.entry_b_id = None  # a TBD side — representable by design (ADR-0786)
+    await db_session.commit()
+    await _go_live_directly(db_session, tournament_id)
+    await _clear_solve_ledger(db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["table_id"] == "t1"
+    assert body["scheduled_start"] == "2026-06-13T10:00:00"
+    assert body["pinned_at"] is None
+    assert body["call_notified_count"] == 0
+    assert await _match_call_rows(db_session) == []
+    assert _match_call_jobs(fake_notifications_queue) == []
+
+    (solve,) = await _queued_solves(db_session, tournament_id)
+    assert solve.trigger is ScheduleSolveTrigger.settings_changed

@@ -130,16 +130,24 @@ describe('fixtureTier', () => {
 })
 
 describe('tierSentence', () => {
-  it('labels an estimate as movable and a call as notified', () => {
-    expect(tierSentence('estimate', null)).toBe(
+  it('labels an estimate as movable and a TOLD call as notified', () => {
+    expect(tierSentence('estimate', null, 0)).toBe(
       'Estimate — the scheduler may still move it',
     )
-    expect(tierSentence('called', null)).toBe('Called — the players were notified')
+    expect(tierSentence('called', null, 1)).toBe(
+      'Called — the players were notified',
+    )
+  })
+
+  it('labels a SILENT pin as pinned — it must not claim a notification nobody received', () => {
+    // Pinned is not told: every manual placement pins (pre-live included), but
+    // only a live one notifies — a count of 0 means the players heard nothing.
+    expect(tierSentence('called', null, 0)).toBe('Pinned — placed by the director')
   })
 
   it("says a started bar's actual state", () => {
-    expect(tierSentence('started', 'in_progress')).toBe('In progress')
-    expect(tierSentence('started', 'completed')).toBe('Completed')
+    expect(tierSentence('started', 'in_progress', 1)).toBe('In progress')
+    expect(tierSentence('started', 'completed', 0)).toBe('Completed')
   })
 })
 

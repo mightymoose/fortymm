@@ -148,6 +148,242 @@ describe('ScheduleTab', () => {
     expect(sent).toMatchObject({ table_id: 't1', scheduled_start: null })
   })
 
+  // ----- the consequence gate on the placement submit path (ADR "the schedule
+  // is solved; the call is pinned": while LIVE, placing a fixture IS calling it,
+  // so any placement write that would notify is priced by a confirm before the
+  // mutation fires; pre-live placements stay silent). ------------------------
+
+  it('places silently pre-live — no dialog, the mutation fires directly (free rearranging while planning)', async () => {
+    let patches = 0
+    mockFixturePlacementEndpoint(server, () => {
+      patches += 1
+      return HttpResponse.json(
+        buildTournamentFixtureRead({ id: 'fx-a-2', table_id: 't1' }),
+      )
+    })
+
+    page.render({
+      // `published` — the pre-live default.
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-a-2')
+    page.savePlacement('fx-a-2')
+
+    // No gate: nothing to confirm, the write is already in the air.
+    expect(page.callDialog.queryDialog()).not.toBeInTheDocument()
+    await waitFor(() => expect(patches).toBe(1))
+  })
+
+  it('gates a LIVE placement of an untold fixture behind the CALL confirm — the mutation waits for it', async () => {
+    let sent: unknown = null
+    let patches = 0
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      patches += 1
+      sent = await request.json()
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-a-2',
+          table_id: 't1',
+          scheduled_start: '2026-06-13T09:00:00',
+        }),
+      )
+    })
+
+    page.render({
+      tournament: buildTournament({
+        status: 'live',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-a-2')
+    page.savePlacement('fx-a-2')
+
+    // The dialog is up, the call copy names the destination — and NOTHING has
+    // been sent yet: the confirm prices the click before it spends anything.
+    const dialog = page.callDialog.getDialog()
+    expect(dialog).toHaveTextContent('Call this match?')
+    expect(dialog).toHaveTextContent('player.1 vs player.5')
+    expect(dialog).toHaveTextContent('T1 at 09:00')
+    expect(page.callDialog.getConfirmButton()).toHaveTextContent('Call the match')
+    expect(patches).toBe(0)
+
+    page.callDialog.confirm()
+    await waitFor(() => expect(patches).toBe(1))
+    expect(sent).toMatchObject({
+      table_id: 't1',
+      scheduled_start: '2026-06-13T09:00:00',
+    })
+    // The editor closes on success, as on the silent path.
+    await waitFor(() =>
+      expect(page.queryPlaceEditor('fx-a-2')).not.toBeInTheDocument(),
+    )
+  })
+
+  it('backs out of the confirm without sending anything — the editor keeps the work', async () => {
+    let patches = 0
+    mockFixturePlacementEndpoint(server, () => {
+      patches += 1
+      return HttpResponse.json(buildTournamentFixtureRead({ id: 'fx-a-2' }))
+    })
+
+    page.render({
+      tournament: buildTournament({
+        status: 'live',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-a-2')
+    page.savePlacement('fx-a-2')
+    expect(page.callDialog.queryDialog()).toBeInTheDocument()
+
+    page.callDialog.cancel()
+    await waitFor(() =>
+      expect(page.callDialog.queryDialog()).not.toBeInTheDocument(),
+    )
+    // No mutation fired; the editor is still open with the director's picks.
+    expect(patches).toBe(0)
+    expect(page.queryPlaceEditor('fx-a-2')).toBeInTheDocument()
+  })
+
+  /** A LIVE tournament whose fixture the players have already been told about
+   * twice: placed on `t1` at 10:00, pinned, `callNotifiedCount: 2`. */
+  const buildLiveToldTournament = () =>
+    buildTournament({
+      status: 'live',
+      events: [
+        buildDrawnEvent({
+          fixtures: [
+            buildFixture({
+              id: 'fx-told',
+              poolId: 'p-a',
+              entryAId: 'entry-1',
+              entryBId: 'entry-4',
+              tableId: 't1',
+              scheduledStart: '2026-06-13T10:00:00',
+              pinnedAt: '2026-06-13T09:50:00',
+              callNotifiedCount: 2,
+            }),
+          ],
+        }),
+      ],
+    })
+
+  it('gates a LIVE move of a TOLD fixture behind the stronger correction confirm — the old table named, the count visible', async () => {
+    let sent: unknown = null
+    let patches = 0
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      patches += 1
+      sent = await request.json()
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-told',
+          table_id: 't1',
+          scheduled_start: '2026-06-13T11:30:00',
+        }),
+      )
+    })
+
+    page.render({ tournament: buildLiveToldTournament(), tables: buildTables() })
+
+    page.openPlacement('fx-told')
+    page.setPlaceTime('fx-told', '11:30')
+    page.savePlacement('fx-told')
+
+    // The correction copy names what the players were TOLD — the promise being
+    // rewritten — and what the calls have already cost them.
+    const dialog = page.callDialog.getDialog()
+    expect(dialog).toHaveTextContent('Move a called match?')
+    expect(dialog).toHaveTextContent('were told T1 at 10:00')
+    expect(dialog).toHaveTextContent('T1 at 11:30')
+    expect(page.callDialog.queryNotified()).toHaveTextContent('notified 2× already')
+    expect(page.callDialog.getConfirmButton()).toHaveTextContent('Move and notify')
+    expect(patches).toBe(0)
+
+    page.callDialog.confirm()
+    await waitFor(() => expect(patches).toBe(1))
+    expect(sent).toMatchObject({ scheduled_start: '2026-06-13T11:30:00' })
+  })
+
+  it('gates CLEARING a TOLD fixture (live) behind the cancel-specific confirm — a cancellation notifies too', async () => {
+    let sent: unknown = null
+    let patches = 0
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      patches += 1
+      sent = await request.json()
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-told',
+          table_id: null,
+          scheduled_start: null,
+        }),
+      )
+    })
+
+    page.render({ tournament: buildLiveToldTournament(), tables: buildTables() })
+
+    page.openPlacement('fx-told')
+    page.clearPlacement('fx-told')
+
+    const dialog = page.callDialog.getDialog()
+    expect(dialog).toHaveTextContent('Cancel this call?')
+    expect(dialog).toHaveTextContent('were told T1 at 10:00')
+    expect(dialog).toHaveTextContent('the match is off this table')
+    expect(page.callDialog.getConfirmButton()).toHaveTextContent('Cancel the call')
+    expect(patches).toBe(0)
+
+    page.callDialog.confirm()
+    await waitFor(() => expect(patches).toBe(1))
+    expect(sent).toMatchObject({ table_id: null, scheduled_start: null })
+  })
+
+  it('clears an UNTOLD placement silently even while live — nobody was promised anything', async () => {
+    let patches = 0
+    mockFixturePlacementEndpoint(server, () => {
+      patches += 1
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-a-1',
+          table_id: null,
+          scheduled_start: null,
+        }),
+      )
+    })
+
+    page.render({
+      tournament: buildTournament({
+        status: 'live',
+        events: [
+          buildDrawnEvent({
+            fixtures: [
+              // Placed pre-live (an estimate — count 0), tournament now live.
+              buildFixture({
+                id: 'fx-a-1',
+                poolId: 'p-a',
+                entryAId: 'entry-1',
+                entryBId: 'entry-4',
+                tableId: 't1',
+                scheduledStart: '2026-06-13T09:00:00',
+              }),
+            ],
+          }),
+        ],
+      }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-a-1')
+    page.clearPlacement('fx-a-1')
+
+    expect(page.callDialog.queryDialog()).not.toBeInTheDocument()
+    await waitFor(() => expect(patches).toBe(1))
+  })
+
   it('does not offer to move a finished match (its placement is frozen)', () => {
     page.render({
       tournament: buildTournament({
@@ -284,6 +520,39 @@ describe('ScheduleTab', () => {
     expect(page.queryCalledBadge('fx-est')).not.toBeInTheDocument()
     expect(page.queryCalledBadge('fx-live')).not.toBeInTheDocument()
     expect(page.queryNotified('fx-est')).not.toBeInTheDocument()
+  })
+
+  it('badges a SILENT pin `Pinned` — never `Called`, never a notified claim (pinned is not told)', () => {
+    // Every full manual placement pins, pre-live included; live only gates the
+    // notify. A pin with a count of 0 is the director's silent pre-live hand —
+    // the row must not claim a call time or a notification nobody received.
+    page.render({
+      tournament: buildTournament({
+        events: [
+          buildDrawnEvent({
+            fixtures: [
+              buildFixture({
+                id: 'fx-silent-pin',
+                poolId: 'p-a',
+                entryAId: 'entry-1',
+                entryBId: 'entry-4',
+                tableId: 't1',
+                scheduledStart: '2026-06-13T10:00:00',
+                pinnedAt: '2026-06-13T09:50:00',
+                callNotifiedCount: 0,
+              }),
+            ],
+          }),
+        ],
+      }),
+      tables: buildTables(),
+    })
+    const badge = page.getCalledBadge('fx-silent-pin')
+    expect(badge).toHaveTextContent('Pinned')
+    expect(badge).not.toHaveTextContent('Called')
+    expect(page.queryNotified('fx-silent-pin')).not.toBeInTheDocument()
+    // The pinned time is firm, not an estimate — no `est` mark either.
+    expect(page.queryEst('fx-silent-pin')).not.toBeInTheDocument()
   })
 
   it('keeps the notified counter off a once-called row — one call is the ordinary case', () => {

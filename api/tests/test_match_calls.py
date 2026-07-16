@@ -1017,6 +1017,83 @@ class TestBrokenPinRepair:
         assert fake_notifications_queue.jobs == []
 
 
+class TestManualPlacementPin:
+    async def test_the_next_solve_schedules_around_a_manual_placement_pin(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A manual placement is a pin the solver schedules around, not a
+        suggestion it may undo (ADR): the director drops one of three fixtures
+        mid-window pre-live — a silent pin — and the next solve leaves that
+        placement byte-for-byte (columns, ``pinned_at``, count) while packing
+        the other two fixtures into slots that don't overlap it."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, status=TournamentStatus.published, entrants=3
+        )
+        _freeze_clocks(monkeypatch, BASE)
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+        fixtures = (
+            (
+                await db_session.execute(
+                    select(TournamentFixture)
+                    .where(TournamentFixture.event_id == event_id)
+                    .order_by(TournamentFixture.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        target = fixtures[0]
+        target_id = target.id
+        pin_start = BASE + timedelta(minutes=60)
+        fanout = await match_calls.apply_manual_placement(
+            db_session, tournament, target, table_id="t1", scheduled_start=pin_start
+        )
+        assert fanout == []  # pre-live: a silent pin, nobody paged
+        await db_session.commit()
+
+        await _request_and_run_solve(db_session, solver_queue, tournament_id)
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(TournamentFixture)
+                    .where(TournamentFixture.event_id == event_id)
+                    .order_by(TournamentFixture.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pinned_row = next(row for row in rows if row.id == target_id)
+        assert pinned_row.table_id == "t1"
+        assert pinned_row.scheduled_start == pin_start
+        assert pinned_row.pinned_at == BASE  # the director's pin, untouched
+        assert pinned_row.call_notified_count == 0
+
+        # Every fixture is placed on the one table, and no interval overlaps
+        # the pin's — the solver planned AROUND the director's hand.
+        duration = timedelta(minutes=scheduling.match_minutes(3))
+        intervals: list[tuple[datetime, datetime]] = []
+        for row in rows:
+            assert row.table_id == "t1"
+            assert row.scheduled_start is not None
+            intervals.append((row.scheduled_start, row.scheduled_start + duration))
+        intervals.sort()
+        for (_, end_before), (start_after, _) in zip(
+            intervals, intervals[1:], strict=False
+        ):
+            assert end_before <= start_after
+
+        # Still pre-live: neither the manual pin nor the solve told anyone.
+        assert await _call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
+
 class TestTickEnqueueSelection:
     async def test_enqueues_one_tick_per_live_tournament(
         self, db_session: AsyncSession, solver_queue: Queue

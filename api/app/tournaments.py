@@ -17,6 +17,7 @@ from app.draws import (
     UnsupportedDrawType,
 )
 from app.leagues import resolve_league
+from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
     DrawType,
     EventFormat,
@@ -2614,14 +2615,20 @@ async def uncut_event_draw(
 #
 # A placement is two nullable columns on a fixture — ``table_id`` (a string ref into
 # the tournament's ``table_catalogue``) and ``scheduled_start`` (a naive, predicted
-# wall-clock time). A human PATCHes them here; a future scheduler slice writes the same
-# two fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
+# wall-clock time). A human PATCHes them here; the schedule solver writes the same two
+# fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
 # on ``TournamentFixtureRead``), so there is deliberately no ``GET …/placement``.
 #
 # The write is **soft**: the placement's constraints (table-in-pool, time-in-window, no
 # double-booking) are flags derived on read, NOT invariants (ADR-0790), so this route
 # stores an out-of-window time and an unknown ``table_id`` without complaint. Its one
 # hard rule is the freeze below.
+#
+# But a manual placement is a **pin** (ADR "the schedule is solved; the call is
+# pinned"): the director's hand is a human commitment every later solve schedules
+# around, and while the tournament is live, placing a fixture IS calling it. The whole
+# pin/notify transition lives in ``app.match_calls.apply_manual_placement``; this route
+# supplies the locks, the freeze, and the re-solve enqueue.
 
 
 async def _get_fixture_or_404(
@@ -2715,12 +2722,32 @@ async def place_fixture(
     venue's local frame — an offset-aware value is a `422`). `null` on either clears
     that half; `(null, null)` unassigns the fixture.
 
-    **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
-    constraints — the table belongs to the fixture's pool, the time falls inside the
-    pool's window, nothing is double-booked — are flags derived on read, **not**
-    invariants. So an out-of-window time, or a `table_id` that names no table in the
-    catalogue, is **stored, not rejected**. There is no conflict detection here; that is
-    a future scheduler slice.
+    **A manual placement is a pin.** The director's hand is a human commitment the
+    schedule solver plans around, not a suggestion it may undo: a full placement (both
+    halves set, both entrants known) sets `pinned_at`, and every later solve treats the
+    fixture as a fixed interval. While the tournament is **live**, placing a fixture
+    *is* calling it — a first placement notifies both entrants, and re-placing a
+    fixture whose players were already told sends them a "your match moved" correction
+    carrying the new table and time; `call_notified_count` counts exactly those
+    tellings, which is the price to state before a re-drag. Pre-live placements are
+    silent pins: free rearranging while planning, nobody paged. A fixture with a TBD
+    side stores the placement but does **not** pin (a promise to nobody is not a
+    promise) — the solver may still move it.
+
+    **Clearing unpins.** Anything short of a full placement clears `pinned_at`; if the
+    players had been called, both get a cancellation ("the schedule changed"). Pre-live
+    or never-notified clears are silent. The count never resets — it is a history of
+    tellings, and a cancellation is one.
+
+    Every successful write also queues a re-solve (`settings_changed`): the director
+    just changed the solver's inputs, so the board re-plans around the new pin set.
+
+    **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    pinned, and the placement's constraints — the table belongs to the fixture's pool,
+    the time falls inside the pool's window, nothing is double-booked — are flags
+    derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
+    names no table in the catalogue, is **stored, not rejected**; the queued re-solve
+    is what judges the consequences.
 
     **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     history, so its placement can no longer be changed — a `409`. A fixture with no
@@ -2756,9 +2783,30 @@ async def place_fixture(
     # The one hard rule, before anything is written: a played-out fixture keeps its
     # placement. Everything else — an odd time, a dangling table ref — saves.
     _enforce_fixture_placeable(match_status)
-    fixture.table_id = payload.table_id
-    fixture.scheduled_start = payload.scheduled_start
+    # The whole pin/notify transition — columns, ``pinned_at``, in-app rows — on this
+    # open transaction (the atomicity contract of ``app.match_calls``: a call and its
+    # durable record commit together); the returned push/email fan-out is enqueued
+    # only after the commit below. The tournament row lock held above is the lock
+    # every pin writer takes first, so this write serializes with a concurrent pin
+    # tick or guarded apply.
+    fanout = await apply_manual_placement(
+        db,
+        tournament,
+        fixture,
+        table_id=payload.table_id,
+        scheduled_start=payload.scheduled_start,
+    )
+    # Scheduling-input trigger: the director just changed the solver's inputs — a new
+    # pin to plan around, or a freed slot — so the board re-plans (ADR). Same
+    # transaction, under the tournament row lock (the order ``request_solve``
+    # requires); no drawn-event gate, because a fixture in hand means a draw is cut by
+    # definition. A ``None`` return (Redis down) deliberately costs the solve, never
+    # the placement.
+    await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
+    # Post-commit, by design: the pin and its in-app rows are durable; push/email
+    # fan-out is best-effort (``app.match_calls``'s atomicity contract).
+    enqueue_call_fanout(fanout)
     # Read back through the SAME loader the detail page reads fixtures through, so the
     # placed fixture this answers with is byte-for-byte the one the page will show —
     # ``match_status`` live (not the value the freeze just judged, which was a means to

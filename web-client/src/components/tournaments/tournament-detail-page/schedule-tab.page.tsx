@@ -1,6 +1,7 @@
 import { interactiveElementsIn } from '@/test/read-only'
 import { fireEvent, render, screen, within, type Container } from '@/test/utilities'
 
+import { confirmCallDialogPage } from './confirm-call-dialog.page'
 import { ScheduleTab, type ScheduleTabProps } from './schedule-tab'
 import { buildScheduleTabProps } from './schedule-tab.factory'
 import { boardEmptyPage } from './schedule-tab/board-empty.page'
@@ -182,6 +183,11 @@ const scoped = (container: Container) => ({
   players: playerTimelineBoardPage.within(container),
   boardEmpty: boardEmptyPage.within(container),
   legend: tierLegendPage.within(container),
+
+  /** The consequence-stating confirm on a NOTIFYING placement (its own quartet —
+   * `confirm-call-dialog.page` has the copy-level accessors; these are the joints
+   * the TAB's regime tests drive). Portals to the body. */
+  callDialog: confirmCallDialogPage.within(container),
 
   within(node: Container = screen) {
     return scoped(node)

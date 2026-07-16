@@ -1078,6 +1078,15 @@ export class TournamentsStore {
       return this.requestSolve(route)
     }
 
+    // The manual placement (ADR-0790) — while LIVE, a pin + a notification
+    // (ADR "the schedule is solved; the call is pinned").
+    const placement = path.match(
+      /^\/v1\/tournaments\/([^/]+)\/fixtures\/([^/]+)\/placement$/,
+    )
+    if (method === 'PATCH' && placement) {
+      return this.placeFixture(route, placement[2], request.postDataJSON())
+    }
+
     // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
     if (method === 'POST' && path === '/v1/tournaments') {
       return this.createTournament(route, request.postDataJSON())
@@ -1379,6 +1388,100 @@ export class TournamentsStore {
       })),
     }
     return pinned
+  }
+
+  /**
+   * `PATCH …/fixtures/{fixture_id}/placement` — the director's hand, with the
+   * SERVER's transition table (`apply_manual_placement`, `api/app/match_calls.py`),
+   * branch for branch:
+   *
+   * - **Full placement, both entrants known → the pin, in EVERY status**:
+   *   `pinned_at = now`, set or refreshed (a manual placement is a pin — the
+   *   director's hand is a commitment, pre-live included). Live only gates the
+   *   *telling*: while live the placement notifies — called if the players were
+   *   never told, moved if they were — and the count moves with the batch.
+   *   Pre-live full placements are **silent pins**: pinned, count untouched.
+   * - **Full placement, a TBD side** → the columns store softly (ADR-0790), no
+   *   pin, nobody told: a promise to nobody is not a promise.
+   * - **Anything less than a full placement → a clear**: the pin (if any) lifts
+   *   with the columns, in every status; live + previously TOLD sends the
+   *   cancelled correction (count +1) — otherwise silent. The count is never
+   *   reset: it is "how many times the players were told".
+   *
+   * Told-ness is `pinned_at` AND `count > 0`, exactly as the server judges it.
+   *
+   * Refused in the API's order: 403 (not the owner — the tab never offers the
+   * control), 404 (no such fixture), 409 (the match is `completed`/`voided`, so
+   * its placement is history).
+   */
+  private async placeFixture(route: Route, fixtureId: string, body: unknown) {
+    if (!this.detail.can_edit) {
+      return json(route, 403, { detail: 'Only the creator can place matches.' })
+    }
+    const found = this.detail.events
+      .flatMap((e) => e.fixtures)
+      .find((f) => f.id === fixtureId)
+    if (!found) return json(route, 404, { detail: 'fixture not found' })
+    if (found.match_status === 'completed' || found.match_status === 'voided') {
+      return json(route, 409, {
+        detail: 'This match is finished, so its placement can no longer change.',
+      })
+    }
+
+    const patch = body as {
+      table_id?: string | null
+      scheduled_start?: string | null
+    } | null
+    const table_id = patch?.table_id ?? null
+    const scheduled_start = patch?.scheduled_start ?? null
+
+    const live = this.detail.status === 'live'
+    const wasTold = found.pinned_at !== null && found.call_notified_count > 0
+
+    let pinned_at = found.pinned_at
+    let call_notified_count = found.call_notified_count
+    if (table_id === null || scheduled_start === null) {
+      // The clear: a half-placement cannot stay promised — unpin, every status.
+      pinned_at = null
+      if (live && wasTold) call_notified_count += 1 // the cancelled correction
+    } else if (found.entry_a_id === null || found.entry_b_id === null) {
+      // TBD side: soft write, pin nothing, tell nobody.
+    } else {
+      // The pin — set or refreshed, re-dated to the moment the director made it.
+      // "Now" is the store's honest wall clock (the same one `pinImminentFixtures`
+      // reads): the day's first placed ball, this write included.
+      pinned_at = this.wallNow(scheduled_start)
+      if (live) call_notified_count += 1 // called (untold) or moved (told)
+    }
+
+    const updated: TournamentFixtureRead = {
+      ...found,
+      table_id,
+      scheduled_start,
+      pinned_at,
+      call_notified_count,
+    }
+    this.detail = {
+      ...this.detail,
+      events: this.detail.events.map((event) => ({
+        ...event,
+        fixtures: event.fixtures.map((f) => (f.id === fixtureId ? updated : f)),
+      })),
+    }
+    return json(route, 200, updated)
+  }
+
+  /** The store's naive "now" — the earliest placed `scheduled_start` anywhere
+   * (the moment the venue's day opens), the one honest clock a stub whose seeds
+   * live on fixed calendar dates has (see `pinImminentFixtures`). `fallback`
+   * covers the first placement of the day judging before it lands. */
+  private wallNow(fallback: string): string {
+    const starts = this.detail.events
+      .flatMap((e) => e.fixtures)
+      .filter((f) => f.table_id !== null && f.scheduled_start !== null)
+      .map((f) => f.scheduled_start as string)
+    starts.push(fallback)
+    return starts.reduce((a, b) => (a < b ? a : b))
   }
 
   /** The mock solver's placement pass: every table-less pooled fixture goes onto

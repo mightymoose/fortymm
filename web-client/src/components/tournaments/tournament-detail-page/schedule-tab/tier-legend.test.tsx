@@ -5,7 +5,7 @@ describe('TierLegend', () => {
     page.render()
     const legend = page.getLegend()
     expect(legend).toHaveTextContent('Estimate — may move')
-    expect(legend).toHaveTextContent('Called — players notified')
+    expect(legend).toHaveTextContent('Called / pinned — a fixed time')
     expect(legend).toHaveTextContent('In play or finished')
   })
 })

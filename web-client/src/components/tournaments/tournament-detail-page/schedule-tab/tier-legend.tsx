@@ -26,7 +26,7 @@ export const TierLegend = () => (
       >
         <Pin size={8} className="text-[color:var(--fg-2)]" />
       </span>
-      Called — players notified
+      Called / pinned — a fixed time
     </li>
     <li className="flex items-center gap-1.5">
       <span

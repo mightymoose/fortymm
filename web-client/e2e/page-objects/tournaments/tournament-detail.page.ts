@@ -673,4 +673,45 @@ export class TournamentDetailPage {
   get matchTooltip(): Locator {
     return this.page.getByRole('tooltip')
   }
+
+  // ----- the placement editor & its consequence confirm (ADR "the schedule is
+  // solved; the call is pinned": while live, placing IS calling) --------------
+
+  /** One list row's **Place** / **Move** trigger — the owner's, per fixture. */
+  placeTrigger(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-trigger-${fixtureId}`)
+  }
+
+  /** The open placement editor's time input / Save / Clear, per fixture. */
+  placeTime(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-time-${fixtureId}`)
+  }
+
+  placeSave(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-save-${fixtureId}`)
+  }
+
+  placeClear(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-clear-${fixtureId}`)
+  }
+
+  /** The consequence-stating confirm a NOTIFYING placement is gated by, and its
+   * two buttons — the confirm names the consequence (`Call the match` / `Move
+   * and notify` / `Cancel the call`), never a bare "OK". */
+  get callDialog(): Locator {
+    return this.page.getByTestId('confirm-call-dialog')
+  }
+
+  get callDialogConfirm(): Locator {
+    return this.page.getByTestId('confirm-call-confirm')
+  }
+
+  get callDialogCancel(): Locator {
+    return this.page.getByTestId('confirm-call-cancel')
+  }
+
+  /** One list row's called-at badge, by fixture. */
+  calledBadge(fixtureId: string): Locator {
+    return this.page.getByTestId(`schedule-called-${fixtureId}`)
+  }
 }

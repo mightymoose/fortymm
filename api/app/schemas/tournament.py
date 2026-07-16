@@ -1039,6 +1039,13 @@ class TournamentFixturePlacementUpdate(BaseModel):
     The one thing the *route* refuses is moving a fixture whose linked match is
     ``completed`` or ``voided``: its placement is history (409). A fixture with no match
     yet, or an ``in_progress`` one, is freely (re)placeable.
+
+    Soft against *validation* — but not weightless: a manual placement is a **pin**
+    (ADR "the schedule is solved; the call is pinned"). A full placement of a fixture
+    whose entrants are known sets ``pinned_at`` — a commitment the solver schedules
+    around — and, while the tournament is live, notifies both players (the route
+    docstring has the full call/moved/cancelled semantics). Anything less than a full
+    placement unpins.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -71,13 +71,15 @@ const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
 export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
   const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
   const when = `${bar.startClock}–${bar.endClock}`
-  const sentence = tierSentence(bar.tier, bar.status)
+  const sentence = tierSentence(bar.tier, bar.status, bar.callNotifiedCount)
   // The call's cost, made visible (the ADR's called-at / notified-count marker):
-  // only on a bar whose tier IS the promise — a started match reads as fact, and
-  // an estimate has promised nothing.
+  // only on a bar whose tier IS the promise — a started match reads as fact, an
+  // estimate has promised nothing — and only when the players were actually TOLD
+  // (`callNotifiedCount > 0`): a silent pin (a director's pre-live placement) has
+  // no call to date and nobody to have notified, so it carries the sentence alone.
   const notified = notifiedLabel(bar.callNotifiedCount)
   const marker =
-    bar.tier === 'called' && bar.pinnedAt !== null
+    bar.tier === 'called' && bar.pinnedAt !== null && bar.callNotifiedCount > 0
       ? `${calledAtLabel(bar.pinnedAt)}${notified ? ` · ${notified}` : ''}`
       : null
 

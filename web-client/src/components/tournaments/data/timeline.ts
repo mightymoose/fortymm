@@ -53,10 +53,14 @@ export function estimatedMatchMinutes(lengthGames: MatchLength): number {
  * How firm a bar's time is — the board's whole vocabulary (ADR "the schedule is
  * solved; the call is pinned": a plan is an estimate, a call is a promise).
  *
- * - `estimate` — placed (by a solve or the director's hand pre-live), unpinned:
- *   the solver may still move it, and the board must say so.
- * - `called` — `pinnedAt` is set: the players were notified, and no later solve
- *   rearranges it.
+ * - `estimate` — placed (by a solve), unpinned: the solver may still move it,
+ *   and the board must say so.
+ * - `called` — `pinnedAt` is set: a fixed interval no later solve rearranges.
+ *   Pinned-ness and TOLD-ness are two facts, not one: every manual placement
+ *   pins (a director's hand is a commitment), but only a LIVE one notifies —
+ *   a pre-live manual placement is a **silent pin** (`callNotifiedCount` 0),
+ *   and the words (`tierSentence`, the markers) must not claim the players
+ *   were notified unless they were.
  * - `started` — the fixture's match is `in_progress`, `completed` or `voided`:
  *   the placement is history (or unfolding), not a plan of any kind. Takes
  *   precedence over the pin — every called match eventually starts.
@@ -109,13 +113,23 @@ export function notifiedLabel(callNotifiedCount: number): string | null {
 
 /** What a bar's tier reads as, in one sentence — the tooltip's last line and the
  * tail of the bar's accessible name. The estimate/called copy is the ADR's own
- * distinction; a started bar reads as its match's actual state. */
-export function tierSentence(tier: TimelineTier, status: MatchStatus | null): string {
+ * distinction; a started bar reads as its match's actual state.
+ *
+ * The `called` tier needs the notified count, because pinned is not told: a
+ * **silent pin** (a director's pre-live placement — pinned, `callNotifiedCount`
+ * 0) must not claim "the players were notified" when nobody was. */
+export function tierSentence(
+  tier: TimelineTier,
+  status: MatchStatus | null,
+  callNotifiedCount: number,
+): string {
   switch (tier) {
     case 'estimate':
       return 'Estimate — the scheduler may still move it'
     case 'called':
-      return 'Called — the players were notified'
+      return callNotifiedCount > 0
+        ? 'Called — the players were notified'
+        : 'Pinned — placed by the director'
     case 'started':
       return status === null ? 'Started' : BOARD_STATUS_LABEL[status]
     default: {

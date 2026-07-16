@@ -150,6 +150,84 @@ test.describe('Tournaments · schedule boards', () => {
     await expectAxeClean(page, 'schedule tab — Gantt view with called bars')
   })
 
+  test('while LIVE a manual placement is priced: the call confirm, then the correction confirm on a move', async ({
+    page,
+  }) => {
+    // While live, a director's placement IS a call (ADR "the schedule is solved;
+    // the call is pinned") — so the UI prices it before the click. Only this
+    // suite can prove the whole loop: confirm → real PATCH on the wire → the
+    // server pins in the same write → the refetch brings the badge back.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      status: 'live',
+    })
+    await pom.openScheduleTab()
+
+    const placementPatches = () =>
+      store.requests.filter(
+        (r) => r.method === 'PATCH' && r.path.endsWith('/placement'),
+      )
+
+    // An untold, unplaced fixture straight off the server's own draw.
+    const fixture = store.fixturesOf(EVENT.JOURNEY)[0]
+    expect(fixture.call_notified_count).toBe(0)
+
+    await pom.placeTrigger(fixture.id).click()
+    await pom.placeSave(fixture.id).click()
+
+    // The consequence gate is up — the CALL copy names the destination and the
+    // confirm states the consequence — and NOTHING has been sent yet.
+    await expect(pom.callDialog).toBeVisible()
+    await expect(pom.callDialog).toContainText('placing a match calls it')
+    await expect(pom.callDialog).toContainText('will be notified')
+    await expect(pom.callDialog).toContainText('T1 at 09:00')
+    await expect(pom.callDialogConfirm).toHaveText('Call the match')
+    expect(placementPatches()).toHaveLength(0)
+
+    await expectAxeClean(page, 'schedule tab — call confirm dialog open')
+
+    await pom.callDialogConfirm.click()
+
+    // The PATCH landed, the server pinned in the same write, and the refetched
+    // row wears the called-at badge — the count is the server's, never guessed.
+    // The badge's minute is the pin's own stamp (the server's "now" at click
+    // time), so the assertion is the CLAIM — a call went out — not the clock.
+    await expect(pom.calledBadge(fixture.id)).toBeVisible()
+    await expect(pom.calledBadge(fixture.id)).toContainText('Called')
+    expect(placementPatches()).toHaveLength(1)
+    const told = store.fixturesOf(EVENT.JOURNEY).find((f) => f.id === fixture.id)!
+    expect(told.pinned_at).not.toBeNull()
+    expect(told.call_notified_count).toBe(1)
+
+    // Moving the now-TOLD fixture meets the STRONGER copy: what the players were
+    // told, what the calls have already cost, and a correction-stating confirm.
+    await pom.placeTrigger(fixture.id).click()
+    await pom.placeTime(fixture.id).fill('10:30')
+    await pom.placeSave(fixture.id).click()
+
+    await expect(pom.callDialog).toBeVisible()
+    await expect(pom.callDialog).toContainText('were told T1 at 09:00')
+    await expect(pom.callDialog).toContainText('T1 at 10:30')
+    await expect(pom.callDialog).toContainText('notified 1× already')
+    await expect(pom.callDialogConfirm).toHaveText('Move and notify')
+
+    await expectAxeClean(page, 'schedule tab — correction confirm dialog open')
+
+    await pom.callDialogConfirm.click()
+
+    // The correction went out: the server counts 2, and past the first call the
+    // row's own `notified n×` marker comes up beside the badge.
+    await expect(pom.notifiedMarkers.first()).toBeVisible()
+    await expect(pom.notifiedMarkers.first()).toContainText('notified 2×')
+    expect(
+      store.fixturesOf(EVENT.JOURNEY).find((f) => f.id === fixture.id)!
+        .call_notified_count,
+    ).toBe(2)
+
+    // Nothing fell through to an unmocked route along the way.
+    expect(store.unhandled).toHaveLength(0)
+  })
+
   test('keyboard: Tab reaches a bar and its tooltip opens with the match details', async ({
     page,
   }) => {

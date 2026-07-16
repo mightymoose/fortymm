@@ -26,6 +26,7 @@ import {
   buildSchedule,
   composeScheduledStart,
   matchLabel,
+  placementConsequence,
   scheduleStatusLabel,
   timeOfDay,
   type ScheduleMatch,
@@ -36,8 +37,13 @@ import {
   calledAtLabel,
   notifiedLabel,
 } from '../data/timeline'
-import type { Tournament, TournamentTable } from '../data/types'
+import type { Tournament, TournamentStatus, TournamentTable } from '../data/types'
 import { EmptyState } from '../empty-state'
+import {
+  ConfirmCallDialog,
+  type CallConsequence,
+  type PlacementSummary,
+} from './confirm-call-dialog'
 import { OptionSelect } from './event-editor/option-select'
 import { BoardEmpty } from './schedule-tab/board-empty'
 import { GanttBoard } from './schedule-tab/gantt-board'
@@ -99,11 +105,16 @@ const Side = ({ side }: { side: FixtureSide }) => {
 const PlacementControl = ({
   match,
   tables,
+  status,
   onSubmit,
   isPending,
 }: {
   match: ScheduleMatch
   tables: TournamentTable[]
+  /** The tournament's lifecycle status — while `live`, a placement NOTIFIES
+   * (ADR "the schedule is solved; the call is pinned"), so the submit path is
+   * gated by a consequence-stating confirm. */
+  status: TournamentStatus
   onSubmit: (body: PlacementBody) => Promise<void>
   isPending: boolean
 }) => {
@@ -115,6 +126,12 @@ const PlacementControl = ({
   const [time, setTime] = useState(
     () => timeOfDay(match.scheduledStart) || match.window.start,
   )
+  /** The write held at the confirm gate — the body to send iff the director
+   * confirms, with the consequence the dialog states. `null` = no dialog. */
+  const [pending, setPending] = useState<{
+    body: PlacementBody
+    consequence: CallConsequence
+  } | null>(null)
 
   const options = tables.map((t) => ({
     value: t.id,
@@ -138,8 +155,53 @@ const PlacementControl = ({
       /* keep the panel open */
     }
   }
+
+  /** A placement as the dialog would name it — the catalogue label (or the raw id of
+   * a dangling ref, shown never blanked) and the `HH:MM`. */
+  const summarize = (id: string | null, start: string | null): PlacementSummary => ({
+    tableLabel:
+      id === null ? '' : (tables.find((t) => t.id === id)?.label ?? id),
+    time: timeOfDay(start) || null,
+  })
+
+  /**
+   * The gate on the submit path (ADR "the schedule is solved; the call is pinned"):
+   * a write that would NOTIFY is priced before it is sent — held in `pending` behind
+   * a consequence-stating confirm — and a silent one (pre-live, or clearing an
+   * untold fixture) goes straight through, exactly as before.
+   */
+  const request = (body: PlacementBody) => {
+    const kind = placementConsequence({
+      tournamentStatus: status,
+      match,
+      write: { tableId: body.table_id, scheduledStart: body.scheduled_start },
+    })
+    if (kind === 'silent') {
+      void run(body)
+      return
+    }
+    const told = summarize(match.tableId, match.scheduledStart)
+    const to = summarize(body.table_id, body.scheduled_start)
+    const consequence: CallConsequence =
+      kind === 'call'
+        ? { variant: 'call', to }
+        : kind === 'correction-move'
+          ? {
+              variant: 'correction-move',
+              told,
+              to,
+              notifiedCount: match.callNotifiedCount,
+            }
+          : {
+              variant: 'correction-cancel',
+              told,
+              notifiedCount: match.callNotifiedCount,
+            }
+    setPending({ body, consequence })
+  }
+
   const submit = () =>
-    run({
+    request({
       table_id: tableId,
       // A placement's time is a *prediction*: an empty time is a valid table-only
       // placement (`scheduled_start: null`, ADR-0790), not a reason to compose a
@@ -147,7 +209,7 @@ const PlacementControl = ({
       // silent no-op). Only compose when there is a time to compose.
       scheduled_start: time ? composeScheduledStart(match.window.date, time) : null,
     })
-  const clear = () => run({ table_id: null, scheduled_start: null })
+  const clear = () => request({ table_id: null, scheduled_start: null })
 
   if (!editing) {
     return (
@@ -212,6 +274,24 @@ const PlacementControl = ({
       >
         Cancel
       </Button>
+      {/* The confirm on a NOTIFYING write. Confirm releases the held body to the
+          same mutation the silent path uses; Go back (or Escape / the overlay)
+          drops it — nothing is sent, the editor keeps the work. The refetched
+          tournament brings pinned_at / call_notified_count back from the server;
+          nothing here guesses the new count. */}
+      {pending && (
+        <ConfirmCallDialog
+          open
+          matchLabel={label}
+          consequence={pending.consequence}
+          onConfirm={() => {
+            const { body } = pending
+            setPending(null)
+            void run(body)
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   )
 }
@@ -223,6 +303,7 @@ const PlacementControl = ({
 const MatchRow = ({
   match,
   tables,
+  status,
   canEdit,
   onSubmit,
   isPending,
@@ -230,6 +311,7 @@ const MatchRow = ({
 }: {
   match: ScheduleMatch
   tables: TournamentTable[]
+  status: TournamentStatus
   canEdit: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
@@ -271,12 +353,18 @@ const MatchRow = ({
         </span>
         {match.tier === 'called' && match.pinnedAt !== null && (
           <>
+            {/* Pinned is not told: only a fixture whose players were actually
+                NOTIFIED wears the called-at time — a silent pin (a director's
+                pre-live placement, count 0) says `Pinned`, claiming no call
+                and no notification that never happened. */}
             <span
               data-testid={`schedule-called-${match.fixtureId}`}
               className="inline-flex items-center gap-1 self-center rounded-full border border-[color:var(--ball-500)] bg-[color:var(--ball-500)]/20 px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-[color:var(--fg-1)]"
             >
               <Pin size={10} aria-hidden className="shrink-0" />
-              {calledAtLabel(match.pinnedAt)}
+              {match.callNotifiedCount > 0
+                ? calledAtLabel(match.pinnedAt)
+                : 'Pinned'}
             </span>
             {notified && (
               <span
@@ -302,6 +390,7 @@ const MatchRow = ({
         <PlacementControl
           match={match}
           tables={tables}
+          status={status}
           isPending={isPending}
           onSubmit={(body) => onSubmit(match.fixtureId, body)}
         />
@@ -356,12 +445,14 @@ const ReservedWindows = ({ tournament }: { tournament: Tournament }) => {
 const TableColumn = ({
   column,
   tables,
+  status,
   canEdit,
   onSubmit,
   isPending,
 }: {
   column: ScheduleTable
   tables: TournamentTable[]
+  status: TournamentStatus
   canEdit: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
@@ -387,6 +478,7 @@ const TableColumn = ({
           key={match.fixtureId}
           match={match}
           tables={tables}
+          status={status}
           canEdit={canEdit}
           onSubmit={onSubmit}
           isPending={isPending}
@@ -505,6 +597,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
               key={column.tableId}
               column={column}
               tables={tables}
+              status={tournament.status}
               canEdit={canEdit}
               onSubmit={onSubmit}
               isPending={place.isPending}
@@ -527,6 +620,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
                     key={match.fixtureId}
                     match={match}
                     tables={tables}
+                    status={tournament.status}
                     canEdit={canEdit}
                     onSubmit={onSubmit}
                     isPending={place.isPending}

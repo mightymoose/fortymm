@@ -1416,7 +1416,17 @@ const PLACEMENT_FROZEN_DETAIL =
  * **Soft, deliberately**: an out-of-window time or a `table_id` that names no catalogue
  * table is *stored*, not refused — those are flags-on-read, a later scheduler slice. The
  * one refusal is a **409** on a fixture whose match is `completed`/`voided`; everything
- * else — no match yet, or `in_progress` — is freely (re)placeable. */
+ * else — no match yet, or `in_progress` — is freely (re)placeable.
+ *
+ * The **pin consequences** mirror the server's transition table
+ * (`apply_manual_placement`, `api/app/match_calls.py`): a full placement with both
+ * entrants known PINS in every status — `pinned_at = now`, the store's honest clock
+ * (see `pinImminentFixtures`) — and only LIVE additionally notifies (count +1: called
+ * if the players were never told, moved if they were). A TBD side stores softly, no
+ * pin, nobody told. Anything less than a full placement is a clear: unpin in every
+ * status, and the cancelled correction (count +1) only when live AND previously told
+ * (`pinned_at` set with `count > 0`). The count is never reset — it is "how many
+ * times the players were told". */
 export function placeFixture(
   tournamentId: string,
   fixtureId: string,
@@ -1433,10 +1443,37 @@ export function placeFixture(
   if (fixture.match_status === 'completed' || fixture.match_status === 'voided') {
     return { ok: false, status: 409, detail: PLACEMENT_FROZEN_DETAIL }
   }
+
+  const live = existing.status === 'live'
+  const wasTold = fixture.pinned_at !== null && fixture.call_notified_count > 0
+
+  let pinned_at = fixture.pinned_at
+  let call_notified_count = fixture.call_notified_count
+  if (body.table_id === null || body.scheduled_start === null) {
+    // The clear: a half-placement cannot stay promised — unpin, every status.
+    pinned_at = null
+    if (live && wasTold) call_notified_count += 1 // the cancelled correction
+  } else if (fixture.entry_a_id === null || fixture.entry_b_id === null) {
+    // TBD side: soft write (ADR-0790), pin nothing, tell nobody.
+  } else {
+    // The pin — set or refreshed, re-dated to the moment the director made it.
+    // "Now" is the day's first placed ball, this write included (the same clock
+    // `pinImminentFixtures` reads — the only honest one a fixed-date seed has).
+    const starts = existing.events
+      .flatMap((e) => e.fixtures)
+      .filter((f) => f.table_id !== null && f.scheduled_start !== null)
+      .map((f) => f.scheduled_start as string)
+    starts.push(body.scheduled_start)
+    pinned_at = starts.reduce((a, b) => (a < b ? a : b))
+    if (live) call_notified_count += 1 // called (untold) or moved (told)
+  }
+
   const placed: TournamentFixtureRead = {
     ...fixture,
     table_id: body.table_id,
     scheduled_start: body.scheduled_start,
+    pinned_at,
+    call_notified_count,
   }
   replace({
     ...existing,

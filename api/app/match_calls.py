@@ -6,9 +6,9 @@ is called when the schedule says its start is within :data:`CALL_AHEAD_MIN`
 minutes of now (or already due — a table that freed with no warning): calling
 sets ``pinned_at``, increments ``call_notified_count``, and tells both
 entrants, and from then on the placement is a hard constraint in every later
-solve. Two paths call fixtures, and **only** these two (the ADR's invariant:
-pins are written only inside the guarded apply or by the pin tick, under the
-same locks):
+solve. Three paths write pins, and **only** these three (the ADR's invariant:
+every pin writer works under the same tournament row lock, so "pinned" and
+"notified" cannot drift apart):
 
 * the guarded apply (``app.schedule_solves._apply_result``) — right after it
   writes a solve's placements, in the same transaction, under the same
@@ -17,7 +17,14 @@ same locks):
   every ~:data:`PIN_TICK_INTERVAL_S` seconds for each **live** tournament by
   an API-lifespan background task. The tick runs **no solve**; it only
   pins+notifies what the current schedule already says is imminent (the
-  schedule ages into the call-ahead window between solves).
+  schedule ages into the call-ahead window between solves);
+* the manual placement route (``app.tournaments.place_fixture`` →
+  :func:`apply_manual_placement`) — the director's hand (ADR: "a manual
+  placement is a pin"). Unlike the two solver-side paths it pins regardless
+  of imminence — the call-ahead window prices the *solver's* promises, not
+  the director's — and, being a deliberate human re-decision, it is exempt
+  from the ``pinned_at IS NULL`` exactly-once guard below: re-placing a
+  called fixture is not a double call, it is a *moved* correction.
 
 **Atomicity of pin + notify.** The repo's established notification pattern is
 commit-then-enqueue (``app.matches._notify_result_posted``): the worker's
@@ -63,7 +70,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -389,6 +396,184 @@ async def notify_pin_repairs(
             fixture.call_notified_count += 1
 
     await db.flush()
+    return fanout
+
+
+# ----- manual placement pins (the director's hand) ---------------------------
+
+
+async def apply_manual_placement(
+    db: AsyncSession,
+    tournament: Tournament,
+    fixture: TournamentFixture,
+    *,
+    table_id: str | None,
+    scheduled_start: datetime | None,
+) -> list[NotificationJob]:
+    """Write a manual placement **and its pin consequences** — "a manual
+    placement is a pin" (ADR): the director's hand is a human commitment the
+    solver schedules around, not a suggestion it may undo.
+
+    The whole state transition lives here so the pin and its notification
+    records commit together (the module's atomicity contract). The caller —
+    only ever ``app.tournaments.place_fixture`` — holds the tournament row
+    lock (the lock every pin writer takes first, so this write serializes
+    with a concurrent tick or guarded apply), owns the commit, and enqueues
+    the returned push/email jobs after it (:func:`enqueue_call_fanout`).
+    Does **not** commit.
+
+    The transition, exhaustively:
+
+    * **Full placement** (both halves set), both entrants known → **the
+      pin**: ``pinned_at = now``, set or refreshed. While the tournament is
+      live, placing *is* calling — a fixture whose players were never told
+      gets *match_called* to both entrants; re-placing one they **were** told
+      about sends the *match_call_moved* correction carrying the NEW table
+      and time. Pre-live placements are silent pins (free rearranging while
+      planning) — and a pin made silently pre-live earns a *match_called*,
+      not a "moved", the first time it is re-placed live, because "moved"
+      corrects a promise the players never received.
+    * **Full placement, a TBD side** → the columns save (the write is soft,
+      ADR-0790) but nothing pins and nobody is told: a promise to nobody is
+      not a promise, and the solver keeps treating the fixture as an
+      unpinned placement it may move.
+    * **Anything less than a full placement** → **a clear**: the pin (if
+      any) is lifted with the columns — a half-placement cannot be a fixed
+      interval, so it cannot stay promised. If the players had been called,
+      both entrants get the *match_call_cancelled* correction (reason: the
+      schedule changed) — they were told to go to a table that no longer
+      expects them. Pre-live or never-told clears are silent.
+
+    ``call_notified_count`` keeps its one invariant — "how many times the
+    players were told" — incrementing once per correction batch actually
+    recorded for at least one entrant (call, moved, or cancelled alike) and
+    never on a silent transition; a clear does not reset it.
+    """
+    was_told = fixture.pinned_at is not None and fixture.call_notified_count > 0
+    live = tournament.status is TournamentStatus.live
+
+    fixture.table_id = table_id
+    fixture.scheduled_start = scheduled_start
+
+    if table_id is None or scheduled_start is None:
+        # The clear: whatever these columns now say, they are not a full
+        # placement, so they are not a promise — unpin.
+        fixture.pinned_at = None
+        fanout: list[NotificationJob] = []
+        if live and was_told:
+            fanout = await _tell_both_entrants(
+                db, tournament, fixture, build=_cancelled_by_schedule_change
+            )
+        await db.flush()
+        return fanout
+
+    if fixture.entry_a_id is None or fixture.entry_b_id is None:
+        # TBD side: store the placement (soft write, ADR-0790), pin nothing,
+        # tell nobody.
+        await db.flush()
+        return []
+
+    # The pin. Set — or refreshed on a re-place: the promise is renewed,
+    # re-dated to the moment the director made it, never demoted.
+    fixture.pinned_at = _wall_now()
+    fanout = []
+    if live:
+        builder = (
+            _moved_to(table_id, scheduled_start)
+            if was_told
+            else _called_to(table_id, scheduled_start)
+        )
+        fanout = await _tell_both_entrants(db, tournament, fixture, build=builder)
+    await db.flush()
+    return fanout
+
+
+#: How a manual transition renders one recipient's message: given the
+#: opponent, the fixture's context, and the venue's table labels, produce the
+#: copy. A closure per transition kind keeps :func:`_tell_both_entrants`'s
+#: recipient loop (tombstone skip, count increment) written once.
+_ManualMessageBuilder = Callable[
+    [User, MatchCallContext, dict[str, str]], MatchCallMessage
+]
+
+
+def _called_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilder:
+    def build(
+        opponent: User, context: MatchCallContext, table_labels: dict[str, str]
+    ) -> MatchCallMessage:
+        return match_called_message(
+            table_label=table_labels.get(table_id, table_id),
+            estimated_start=scheduled_start,
+            opponent_name=opponent.username,
+            context=context,
+        )
+
+    return build
+
+
+def _moved_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilder:
+    def build(
+        opponent: User, context: MatchCallContext, table_labels: dict[str, str]
+    ) -> MatchCallMessage:
+        return match_call_moved_message(
+            new_table_label=table_labels.get(table_id, table_id),
+            new_estimated_start=scheduled_start,
+            opponent_name=opponent.username,
+            context=context,
+        )
+
+    return build
+
+
+def _cancelled_by_schedule_change(
+    opponent: User,
+    context: MatchCallContext,
+    table_labels: dict[str, str],  # noqa: ARG001 -- uniform builder shape; a cancellation names no table
+) -> MatchCallMessage:
+    return match_call_cancelled_message(
+        reason=MatchCallCancellationReason.SCHEDULE_CHANGE,
+        opponent_name=opponent.username,
+        context=context,
+    )
+
+
+async def _tell_both_entrants(
+    db: AsyncSession,
+    tournament: Tournament,
+    fixture: TournamentFixture,
+    *,
+    build: _ManualMessageBuilder,
+) -> list[NotificationJob]:
+    """Record one manual-transition message per entrant (skipping tombstoned
+    ghosts, like every other sender here) and increment
+    ``call_notified_count`` once if anyone was actually told. A dangling ref
+    (entry/event deleted under a stale placement) records nothing — the state
+    columns still change; the solve pipeline's broken-pin detection owns that
+    territory."""
+    ingredients = await _load_copy_ingredients(db, tournament, [fixture])
+    event = ingredients.events.get(fixture.event_id)
+    user_a = ingredients.user_for_entry(fixture.entry_a_id)
+    user_b = ingredients.user_for_entry(fixture.entry_b_id)
+    if event is None or user_a is None or user_b is None:
+        return []
+    context = _fixture_context(tournament, event, fixture.pool_id)
+    fanout: list[NotificationJob] = []
+    told = False
+    for recipient, opponent in ((user_a, user_b), (user_b, user_a)):
+        if recipient.merged_into_user_id is not None:
+            continue
+        fanout.append(
+            await _record_message(
+                db,
+                recipient,
+                build(opponent, context, ingredients.table_labels),
+                tournament_id=tournament.id,
+                fixture_id=fixture.id,
+            )
+        )
+        told = True
+    if told:
+        fixture.call_notified_count += 1
     return fanout
 
 
