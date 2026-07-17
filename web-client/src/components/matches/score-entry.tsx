@@ -585,19 +585,43 @@ function ScoreEntryInner({
       : { side_1_points: Number(opp), side_2_points: Number(me) }
   }
 
-  // The submit gesture, always live (ADR-0018): `handleSubmit` is the ONLY
-  // gate — it runs Zod validation and calls `onValid` only when the parse
-  // succeeds (an invalid submit fires nothing but bumps `submitCount`, which is
-  // what surfaces the errors). The button is never disabled on validity; the
-  // in-flight/overrun guards below stay inside `onValid`.
-  const submit = form.handleSubmit(onValid)
+  // Async handler used ONLY to reveal validation errors on an invalid submit.
+  // React Hook Form's `handleSubmit` returns an async function that `await`s the
+  // Zod resolver before deciding — bumping `submitCount` (which flips
+  // `submitted` on and turns on live re-validation) either way. Its callback is
+  // a no-op: this path never writes and never navigates, so its post-`await`
+  // timing is harmless (there is no autofocus to preserve on the error path).
+  const revealErrors = form.handleSubmit(() => {})
 
-  function onValid() {
-    // The score is legal on its own but the board can't take it (it would leave
-    // the match decided before its last game). Block the write — the inline
-    // `overrunError` (now visible, `submitCount > 0`) tells the user to clear the
-    // trailing games first.
-    if (overrunAt !== null) return
+  // The submit gesture, always live (ADR-0018). The button is never disabled on
+  // validity; `onSubmit` is the only gate. It splits by validity SYNCHRONOUSLY:
+  // an invalid / board-illegal submit routes through the async `revealErrors`
+  // (fine — it only surfaces messages), while a valid, board-legal submit runs
+  // the sanctioned write path inline, inside the tap gesture. That synchronous
+  // valid path is load-bearing for #567 (see the fire-and-forget tail below):
+  // iOS Safari only keeps the soft keyboard open across the next game if the
+  // next input's autofocus fires while still inside the tap that triggered it,
+  // and RHF's async `handleSubmit` would defer that navigation into a microtask
+  // AFTER the tap — dropping the keyboard between games.
+  function onSubmit() {
+    // A Zod-invalid score, or a locally-legal score the board can't take (the
+    // cross-game overrun: it would leave the match decided before its last
+    // game): surface the messages but write nothing. `revealErrors` bumps
+    // `submitCount`, so `submitted` turns on and the inline Zod / `overrunError`
+    // lines (both `submitCount`-gated) become visible; live re-validation then
+    // clears them as the user fixes the score. No navigation happens here, so
+    // routing it through the async `handleSubmit` is fine.
+    if (!parseResult.success || overrunAt !== null) {
+      void revealErrors()
+      return
+    }
+    // Valid + board-legal: run the sanctioned write path SYNCHRONOUSLY, inside
+    // the tap, so the next game's autofocus keeps the mobile keyboard open
+    // (#567; see the fire-and-forget tail). This path always either navigates
+    // away or surfaces an ungated banner/finalize-error, so it never needs
+    // `submitCount` — which is why only the invalid/overrun branch above bumps
+    // it, and why the navigating path can't set state after it unmounts.
+    //
     // Ignore a second Save while the per-game save is still in flight (#538):
     // a double-tap would otherwise fire a duplicate create that 409s. This
     // synchronous guard is the only protection now — the mutationFn no longer
@@ -662,7 +686,10 @@ function ScoreEntryInner({
     // the network round-trip — is what keeps the mobile soft keyboard open: a
     // browser only honours the next input's autofocus while still inside the
     // tap that triggered it, so deferring to onSettled dropped focus and closed
-    // the keyboard between games (#567).
+    // the keyboard between games (#567). This is also why `onSubmit` runs this
+    // whole path synchronously instead of through RHF's async `handleSubmit`:
+    // awaiting the Zod resolver would push this `navigate` into a microtask
+    // AFTER the tap, dropping the keyboard the exact same way onSettled did.
     saveMutation.mutate(args)
     navigate({ ...next, ignoreBlocker: true })
   }
@@ -774,7 +801,7 @@ function ScoreEntryInner({
         oppRef.current?.focus()
         oppRef.current?.select()
       } else if (side === 'opp') {
-        submit()
+        onSubmit()
       }
     } else if (e.key === 'ArrowRight' && side === 'me') {
       e.preventDefault()
@@ -905,7 +932,7 @@ function ScoreEntryInner({
           // genuine in-flight locks via `inputsLocked` (finalize pending /
           // 409-redirect window), handled inside ScorePad.
           canSubmit
-          onSubmit={submit}
+          onSubmit={onSubmit}
           onClear={isEdit ? onClear : undefined}
           clearDisabled={deleteMutation.isPending}
         />

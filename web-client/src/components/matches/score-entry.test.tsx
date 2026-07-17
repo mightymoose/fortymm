@@ -16,7 +16,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
@@ -138,11 +138,17 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/entry'] }),
   })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  )
+  // Expose the router so a timing test can `vi.spyOn(router, 'navigate')` —
+  // `useNavigate` reads `router.navigate` at call time, so the spy captures the
+  // component's imperative hops (see the #567 synchronous-navigation test).
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+    router,
+  }
 }
 
 // Like `renderScoreEntry`, but also mounts a caller-supplied sibling control
@@ -377,6 +383,63 @@ describe('ScoreEntry — create', () => {
     // Already on game 4 even though the game-3 save is still pending.
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+  })
+
+  it('fires the save + next-game navigation SYNCHRONOUSLY inside the Save tap, not a microtask later (#567)', async () => {
+    // The #567 mobile-keyboard guarantee is a TIMING contract: iOS Safari only
+    // keeps the soft keyboard open across games if the next input's autofocus
+    // fires inside the same tap gesture. Routing the *valid* submit through
+    // RHF's async `handleSubmit` (which `await`s the Zod resolver before its
+    // callback) would defer this navigation into a microtask AFTER the tap,
+    // silently dropping the keyboard — a regression neither jsdom nor Playwright
+    // can feel (neither models the soft keyboard). This locks the timing in
+    // instead: `fireEvent.click` dispatches synchronously and does NOT flush
+    // microtasks, so had the navigation only fired after awaiting the resolver
+    // the spy would still be empty right after the click. It must already have
+    // been called. (The actual keyboard behaviour is only verifiable on device;
+    // this is the closest reliable proxy — it fails against the async-
+    // handleSubmit version.)
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      // Never resolves — the save stays in flight, so any synchronous
+      // navigation can't be piggy-backing on the request settling.
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        () => new Promise<Response>(() => {}),
+      ),
+    )
+
+    const { router } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 3,
+    })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+
+    // Spy AFTER typing so only the submit's imperative hop is captured (the
+    // mount-time `<Navigate>` guards don't fire for this valid game-3 create).
+    const navigateSpy = vi.spyOn(router, 'navigate')
+    const save = screen.getByRole('button', { name: /save game & next/i })
+
+    // Synchronous dispatch. The async `handleSubmit` path would leave this spy
+    // empty here; the synchronous valid path calls `navigate` during the tap.
+    fireEvent.click(save)
+
+    expect(navigateSpy).toHaveBeenCalledTimes(1)
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '/matches/$matchId/games/$gameNumber/scores/new',
+        params: { matchId: 'm-1', gameNumber: '4' },
+        ignoreBlocker: true,
+      }),
     )
   })
 
