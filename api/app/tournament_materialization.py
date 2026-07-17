@@ -2,8 +2,9 @@
 
 A **fixture** is a planned pairing; a **match** is the real, playable thing it becomes.
 Materialization is the crossing: at go-live, every *ready* round-robin fixture — both
-sides known, no match yet — is turned into an ordinary ``in_progress`` match and linked
-back to its fixture by ``fixture.match_id``.
+sides known, no match yet — is turned into a scheduled ``pending`` match and linked
+back to its fixture by ``fixture.match_id`` (ADR-0788, amended by the "born scheduled,
+goes live when called" ADR — the call flips it to ``in_progress``).
 
 The pure planning half lives in ``app.draws`` (which fixtures are ready), the fixture
 persistence in ``app.tournament_draws`` (the rows, and the ORM↔domain ``fixture_state``
@@ -38,8 +39,9 @@ from app.tournament_draws import fixture_state
 
 
 async def materialize_live_draw(db: AsyncSession, tournament: Tournament) -> None:
-    """The go-live transition's final act (ADR-0788): consume the first ``advance()``
-    of every event's draw, turning each **ready** fixture into an ``in_progress`` match.
+    """The go-live transition's final act (ADR-0788, amended): consume the first
+    ``advance()`` of every event's draw, turning each **ready** fixture into a scheduled
+    ``pending`` match (it goes live when the schedule calls it — see chore 1b).
 
     For round-robin this is the whole pool at once — every pairing is known at the cut,
     so a freshly-cut draw's ``advance()`` reports every fixture ready — and it is a
@@ -164,10 +166,15 @@ def _build_match(
     side_1_user_id: uuid.UUID,
     side_2_user_id: uuid.UUID,
 ) -> Match:
-    """The real match one ready fixture becomes (ADR-0788) — built, not yet persisted.
+    """The real match one ready fixture becomes (ADR-0788, amended) — built, not yet
+    persisted.
 
-    The match is born ``in_progress``: both players are known and committed, and
-    propose/accept is about the *result*, not about starting. It carries the
+    The match is born ``pending`` (*scheduled*): both players are known and committed,
+    but a tournament match is not played on agreement — it is played when the schedule
+    **calls it to a table**. The call (the *match_called* notification) is what flips it
+    ``pending → in_progress``; until then it is scheduled, not live, and folds into the
+    passive "waiting" attention bucket rather than flooding entrants with actionable
+    "score" rows (the fix for issue #1073). It carries the
     **tournament's** league and is created by the tournament **owner** (a tournament
     match has no player-initiator — the director's go-live created it; the field grants
     no scoring rights, which are by side participation). Its ``MatchSettings`` copy the
@@ -187,7 +194,7 @@ def _build_match(
         ),
         league_id=tournament.league_id,
         created_by_user_id=tournament.created_by_user_id,
-        status=MatchStatus.in_progress,
+        status=MatchStatus.pending,
     )
     _add_side(match, side_number=1, user_id=side_1_user_id)
     _add_side(match, side_number=2, user_id=side_2_user_id)

@@ -94,7 +94,8 @@ columns whose state triggered detection, it is self-extinguishing: the next
 snapshot sees a healthy pin (or no pin) and detects nothing.
 
 **In-progress occupancy is a proxy, documented as one.** A tournament match is
-born ``in_progress`` at materialization (ADR-0788) — the status does *not*
+born ``pending`` and flips to ``in_progress`` when it is called (the 2026-07-17
+ADR, amending ADR-0788) — but even ``in_progress`` does *not*
 mean "physically on a table", and nothing records an actual start yet. The
 proxy: a fixture that is pinned (called to a table), whose match is live, and
 whose promised start has arrived is presumed underway from that promised
