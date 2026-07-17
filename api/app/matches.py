@@ -966,17 +966,24 @@ def _is_scorable(match: Match) -> bool:
 
     The saved games are a provisional *scratchpad* until somebody posts the
     first result: editable regardless of whether they already decide the match.
-    So the only gates are structural — two sides, a non-terminal status, and
-    **no result row at all**. The scratchpad freezes the instant the first
-    result is proposed (#715); from there the board only changes via the
-    propose/accept negotiation, not the score endpoints.
+    So the gates are structural — two sides, a **live** (``in_progress``)
+    status, and **no result row at all**. The scratchpad freezes the instant
+    the first result is proposed (#715); from there the board only changes via
+    the propose/accept negotiation, not the score endpoints.
+
+    ``in_progress`` (not merely non-terminal) is the status gate: a tournament
+    match is born ``pending`` (scheduled) and is not scorable until the
+    scheduler *calls* it to a table — playing an uncalled match out-of-band
+    would corrupt the solver's table model (#1073). This aligns scoring with
+    ``can_finalize``, which already required ``in_progress``. Casual matches are
+    born ``in_progress`` and so remain scorable at once.
 
     Single source of truth shared by the write-path guard
     (``_enforce_scorable``) and the BFF ``can_score`` flag, so the flag the
     clients trust can never disagree with what the score endpoints accept."""
     return (
         len(match.sides) >= 2
-        and match.status not in _TERMINAL_STATUSES
+        and match.status == MatchStatus.in_progress
         and not match.results
     )
 
@@ -1000,6 +1007,13 @@ def _enforce_scorable(match: Match) -> None:
         raise HTTPException(
             status_code=409,
             detail="This match has a posted result; scores are frozen.",
+        )
+    # Scheduled but not yet called to a table (#1073): the schedule is
+    # authoritative, so an uncalled match can't be played out-of-band.
+    if match.status == MatchStatus.pending:
+        raise HTTPException(
+            status_code=409,
+            detail="This match hasn't been called to a table yet.",
         )
     # Terminal status (``completed``/``voided``) — or any future
     # ``_is_scorable`` gate without a message of its own.

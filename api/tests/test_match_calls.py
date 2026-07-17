@@ -41,6 +41,9 @@ from app.match_calls import (
 from app.models import (
     DrawType,
     EventFormat,
+    Match,
+    MatchSettings,
+    MatchStatus,
     Notification,
     NotificationPreference,
     ScheduleSolve,
@@ -903,6 +906,39 @@ async def _pin_directly(
     await db.commit()
 
 
+async def _link_match(
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    fixture: TournamentFixture,
+    *,
+    status: MatchStatus = MatchStatus.pending,
+) -> uuid.UUID:
+    """Link a materialized match to ``fixture`` in the given born status,
+    mirroring go-live materialization's ``fixture.match_id`` wiring without its
+    full side machinery — the call flip is keyed on ``fixture.match_id`` and
+    ``Match.status``, which is all these tests read."""
+    tournament = await db.get(Tournament, tournament_id)
+    assert tournament is not None
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
+        league_id=tournament.league_id,
+        created_by_user_id=tournament.created_by_user_id,
+        status=status,
+    )
+    db.add(match)
+    await db.flush()
+    fixture.match_id = match.id
+    await db.commit()
+    return match.id
+
+
+async def _match_status(db: AsyncSession, match_id: uuid.UUID) -> MatchStatus:
+    db.expire_all()
+    match = await db.get(Match, match_id)
+    assert match is not None
+    return match.status
+
+
 async def _remove_table(
     db: AsyncSession,
     tournament_id: uuid.UUID,
@@ -1333,6 +1369,165 @@ class TestBrokenPinRepair:
         assert fixture.call_notified_count == 0  # …but nobody was told
         assert await _call_notifications(db_session) == []
         assert fake_notifications_queue.jobs == []
+
+
+class TestCallFlipsMatchLive:
+    """The forward transition (ADR "born scheduled, live when called"): a
+    scheduled (``pending``) match flips to ``in_progress`` the moment its
+    entrants are told to play — the *match_called* signal — and never on a
+    silent pre-live pin, nor twice."""
+
+    async def test_calling_a_fixture_flips_its_match_pending_to_in_progress(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The tick calls an imminent, unpinned fixture (players notified) →
+        its born-``pending`` linked match goes ``in_progress``."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        await _place_fixture(
+            db_session, event_id, table_id="t1", start=BASE + timedelta(minutes=5)
+        )
+        fixture = await _the_fixture(db_session, event_id)
+        match_id = await _link_match(db_session, tournament_id, fixture)
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.call_notified_count == 1  # the players were told…
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
+
+    async def test_notify_without_re_pin_of_a_silent_pin_flips_the_match(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A silent pin gone imminent on a live tournament: the tick delivers
+        the owed *match_called* without re-pinning (count 0 → 1) → the match
+        flips ``pending → in_progress`` on that late delivery, not on the
+        earlier silent pin."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=7),
+            pinned_at=BASE - timedelta(minutes=45),
+            notified=0,  # silently pinned pre-live, never announced
+        )
+        match_id = await _link_match(db_session, tournament_id, fixture)
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.call_notified_count == 1  # finally delivered
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
+
+    async def test_a_live_manual_placement_call_flips_the_match(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The director's hand: a live full manual placement of a never-told
+        fixture *is* a call (*match_called*) → its ``pending`` match flips
+        live."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        _freeze_clocks(monkeypatch, BASE)
+        fixture = await _the_fixture(db_session, event_id)
+        match_id = await _link_match(db_session, tournament_id, fixture)
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+
+        fanout = await match_calls.apply_manual_placement(
+            db_session,
+            tournament,
+            fixture,
+            table_id="t1",
+            scheduled_start=BASE + timedelta(minutes=5),
+        )
+        await db_session.commit()
+
+        assert fanout  # players were told
+        assert fixture.call_notified_count == 1
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
+
+    async def test_a_silent_pre_live_pin_leaves_the_match_pending(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pin with nobody told (here: pinned but its start is beyond the
+        call-ahead window on a live tournament, so no notify fires) leaves the
+        match ``pending`` — the flip is keyed on the notification, not raw
+        ``pinned_at``."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=60),  # beyond the window: not due
+            pinned_at=BASE - timedelta(minutes=45),
+            notified=0,  # silently pinned, nobody told
+        )
+        match_id = await _link_match(db_session, tournament_id, fixture)
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.call_notified_count == 0  # nobody was told
+        assert await _call_notifications(db_session) == []
+        assert await _match_status(db_session, match_id) is MatchStatus.pending
+
+    async def test_a_moved_correction_on_a_live_match_is_an_idempotent_noop(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A *moved* correction (a re-placement of an already-called fixture)
+        lands on an already-``in_progress`` match: no error, and the status is
+        not re-flipped or demoted — the flip is guarded ``pending →
+        in_progress`` only."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=5),
+            notified=1,  # already told → a re-place is a *moved* correction
+        )
+        match_id = await _link_match(
+            db_session, tournament_id, fixture, status=MatchStatus.in_progress
+        )
+        _freeze_clocks(monkeypatch, BASE)
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+
+        fanout = await match_calls.apply_manual_placement(
+            db_session,
+            tournament,
+            fixture,
+            table_id="t1",
+            scheduled_start=BASE + timedelta(minutes=20),  # a move
+        )
+        await db_session.commit()
+
+        assert fanout  # a moved correction was sent
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
 
 
 class TestManualPlacementPin:

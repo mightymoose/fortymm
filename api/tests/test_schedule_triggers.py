@@ -30,6 +30,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import match_calls
 from app import queue as queue_module
 from app.leagues import get_default_league
 from app.models import (
@@ -175,16 +176,44 @@ async def _solve_rows(
     )
 
 
+async def _call_fixture(
+    db: AsyncSession, tournament_id: uuid.UUID, fixture: TournamentFixture
+) -> None:
+    """Route a materialized fixture through the *real call* — a live manual
+    placement — so its scheduled ``pending`` match flips to ``in_progress`` and
+    becomes scorable (#1073). A tournament match is born ``pending`` and cannot
+    be played until the schedule calls it to a table, so the completion helper
+    must call before it scores. The scheduling frame is naive wall-clock."""
+    tournament = await db.get(Tournament, tournament_id)
+    assert tournament is not None
+    await match_calls.apply_manual_placement(
+        db,
+        tournament,
+        fixture,
+        table_id="t1",
+        scheduled_start=datetime(2030, 1, 1, 10, 0),
+    )
+    await db.commit()
+
+
 async def _complete_fixture_match(
-    client: AsyncClient, fixture: TournamentFixture
+    client: AsyncClient,
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    fixture: TournamentFixture,
 ) -> None:
     """Finish a materialized fixture's match through the real score endpoint,
     as ``client`` (which must belong to one of its two players). The event is
     unrated, so the decided board self-accepts on the proposal — the post IS
-    the completion, running the real ``finalize_match`` funnel."""
-    assert fixture.match_id is not None, "the fixture materialized at go-live"
+    the completion, running the real ``finalize_match`` funnel.
+
+    The match is born ``pending``; it is *called* first (play follows a call,
+    #1073) so the score endpoint accepts it."""
+    match_id = fixture.match_id
+    assert match_id is not None, "the fixture materialized at go-live"
+    await _call_fixture(db, tournament_id, fixture)
     response = await client.post(
-        f"/v1/matches/{fixture.match_id}/results",
+        f"/v1/matches/{match_id}/results",
         json={
             "games": [
                 {"game_number": n, "side_1_points": 11, "side_2_points": 5}
@@ -283,7 +312,7 @@ async def test_a_tournament_match_completion_enqueues_a_solve_for_its_tournament
         await db_session.commit()
 
         (fixture,) = await _fixtures_of(db_session, event.id)
-        await _complete_fixture_match(client, fixture)
+        await _complete_fixture_match(client, db_session, tournament_id, fixture)
 
     (row,) = await _solve_rows(db_session, tournament_id)
     assert row.trigger is ScheduleSolveTrigger.match_completed
@@ -373,12 +402,16 @@ async def test_burst_completions_coalesce_onto_one_queued_solve(
             assert fixture.entry_a_id is not None
             return clients_by_user[entry_user[fixture.entry_a_id]]
 
-        await _complete_fixture_match(proposer_for(fixtures[0]), fixtures[0])
+        await _complete_fixture_match(
+            proposer_for(fixtures[0]), db_session, tournament_id, fixtures[0]
+        )
         (first,) = await _solve_rows(db_session, tournament_id)
         assert first.trigger is ScheduleSolveTrigger.match_completed
         assert first.status is ScheduleSolveStatus.queued
 
-        await _complete_fixture_match(proposer_for(fixtures[1]), fixtures[1])
+        await _complete_fixture_match(
+            proposer_for(fixtures[1]), db_session, tournament_id, fixtures[1]
+        )
 
         (absorbed,) = await _solve_rows(db_session, tournament_id)
         assert absorbed.id == first.id, (
@@ -407,7 +440,7 @@ async def test_a_completion_during_a_running_solve_sets_the_rerun_flag(
         await db_session.commit()
 
         (fixture,) = await _fixtures_of(db_session, event.id)
-        await _complete_fixture_match(client, fixture)
+        await _complete_fixture_match(client, db_session, tournament_id, fixture)
 
     (row,) = await _solve_rows(db_session, tournament_id)
     assert row.id == go_live_row.id

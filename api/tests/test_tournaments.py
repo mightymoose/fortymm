@@ -5846,7 +5846,8 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
 # ----- materialization at go-live (#788) ------------------------------------
 #
 # Going live consumes the first ``advance()``: every ready round-robin fixture becomes a
-# real ``in_progress`` match, seated **side 1 ← entry_a, side 2 ← entry_b**, linked back
+# real ``pending`` (scheduled) match, seated **side 1 ← entry_a, side 2 ← entry_b**,
+# linked back
 # by ``fixture.match_id``. It is idempotent on ``match_id`` — a second advance sees the
 # link and materializes nothing — and it happens in the same transaction as the status
 # write, so a tournament is never seen ``live`` without the matches its go-live created.
@@ -5905,10 +5906,12 @@ async def test_going_live_materializes_the_whole_pool(
     length_games: int,
 ) -> None:
     """Going live turns **every** ready fixture of a round-robin pool into a real
-    ``in_progress`` match in one stroke (ADR-0788), and each match is exactly the
-    fixture made real:
+    ``pending`` (scheduled) match in one stroke (ADR-0788, amended by the "born
+    scheduled, goes live when called" ADR), and each match is exactly the fixture made
+    real:
 
-    * ``status`` is ``in_progress`` — both players are known and committed;
+    * ``status`` is ``pending`` — known and committed, but not called to a table yet
+      (the call flips it to ``in_progress``, chore 1b);
     * ``league_id`` is the tournament's, ``created_by_user_id`` is its owner (the
       director whose go-live created it);
     * its ``MatchSettings`` copy the only two things the event holds — ``best_of`` from
@@ -5953,7 +5956,7 @@ async def test_going_live_materializes_the_whole_pool(
     for fixture in fixtures:
         assert fixture.match_id is not None
         match = await _load_match(db_session, fixture.match_id)
-        assert match.status == MatchStatus.in_progress
+        assert match.status == MatchStatus.pending
         assert match.league_id == tournament.league_id
         assert match.created_by_user_id == owner.id
         assert match.match_settings.team_size == 1
@@ -5968,18 +5971,81 @@ async def test_going_live_materializes_the_whole_pool(
         ], "side 2 seats entry_b's user"
 
 
-async def test_the_detail_bff_links_a_materialized_fixture_to_its_live_match(
+async def test_go_live_does_not_flood_an_entrants_dashboard_with_uncalled_matches(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """The tournament-detail BFF carries each fixture's ``match_id`` and the live
+    """The #1073 regression, guarded end-to-end through the dashboard BFF: cutting a
+    draw and going live must not turn an entrant's dashboard into a wall of phantom
+    "score" rows for matches nobody has been called to play.
+
+    Born-``in_progress`` did exactly that — the attention panel treats any
+    ``in_progress`` match the caller hasn't posted a result on as actionable, so a
+    5-player round-robin (10 matches, each entrant in 4) put **4** "score" rows on
+    every entrant's dashboard the instant the draw was cut. Born-``pending``
+    (scheduled) is excluded from the actionable bucket and routes to the passive
+    ``waiting_count`` instead, so ``attention_total_count`` is **0** and those 4
+    matches fold into the waiting count.
+
+    The field is deliberately 5 players: a smaller pool wouldn't exhibit the flood
+    (a 2-player pool gives the entrant a single match, and the whole point is the
+    *many* uncalled matches a real round-robin seats at once)."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            POOL_A,
+            match_settings={"rated": True, "length_games": 3},
+            predicates=[],
+        ),
+    )
+    # Owner is one of five entrants in a single round-robin pool, so the draw seats
+    # C(5,2) = 10 fixtures and the owner is a party to four of them.
+    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    await _enter(
+        db_session, event["id"], owner, seed=1, created_at=base + timedelta(minutes=1)
+    )
+    for seed in range(2, 6):
+        other = await make_user(db_session, f"flood-p{seed}")
+        await _enter(
+            db_session,
+            event["id"],
+            other,
+            seed=seed,
+            created_at=base + timedelta(minutes=seed),
+        )
+
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    assert await _match_count(db_session) == 10, (
+        "a 5-player round-robin materializes C(5,2) = 10 matches at go-live"
+    )
+
+    body = (await client.get("/v1/dashboard")).json()
+    assert body["attention_total_count"] == 0, (
+        "an uncalled (pending) match is not actionable — no phantom 'score' rows "
+        "(#1073; was 4 when matches were born in_progress)"
+    )
+    assert body["attention"] == [], "and nothing is rendered in the attention panel"
+    assert body["waiting_count"] == 4, (
+        "the owner's four scheduled matches fold into the passive waiting count"
+    )
+
+
+async def test_the_detail_bff_links_a_materialized_fixture_to_its_scheduled_match(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The tournament-detail BFF carries each fixture's ``match_id`` and the
     ``match_status`` (#788), so the front-end can link a bracket slot to its match and
     show its state — one endpoint per page, no per-slot round-trip.
 
     Read through the real detail route (not the database), because the field the wire
     carries is the point: an un-materialized fixture answers ``null`` on both, and a
-    materialized one answers its match's id and its *current* status (``in_progress``
-    the moment it is created).
+    materialized one answers its match's id and its *current* status (``pending`` —
+    scheduled — the moment it is created, until the schedule calls it).
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
@@ -5992,7 +6058,7 @@ async def test_the_detail_bff_links_a_materialized_fixture_to_its_live_match(
     assert all(f["match_id"] is None for f in read["fixtures"])
     assert all(f["match_status"] is None for f in read["fixtures"])
 
-    # After go-live: every slot links to its live, in-progress match.
+    # After go-live: every slot links to its scheduled, pending match.
     await _set_status(db_session, tournament_id, TournamentStatus.published)
     assert (await _go_live(client, tournament_id)).status_code == 201
 
@@ -6002,8 +6068,8 @@ async def test_the_detail_bff_links_a_materialized_fixture_to_its_live_match(
     assert all(f["match_id"] is not None for f in fixtures), (
         "a materialized slot carries the id of the match it links to"
     )
-    assert all(f["match_status"] == "in_progress" for f in fixtures), (
-        "and the match's live status, read fresh — in_progress the moment it is created"
+    assert all(f["match_status"] == "pending" for f in fixtures), (
+        "and the match's scheduled status, read fresh — pending when it is created"
     )
 
 
@@ -6155,6 +6221,33 @@ async def _win_fixture_match(
         await accept_standing_result(clients_by_entry[loser_entry], match_id)
 
 
+async def _call_fixtures(
+    db: AsyncSession, tournament_id: str, fixtures: Sequence[TournamentFixture]
+) -> None:
+    """Route each materialized fixture through the *real call* — a live manual
+    placement (``apply_manual_placement``) — so its scheduled ``pending`` match
+    flips to ``in_progress`` and becomes scorable (the ADR's forward
+    transition, keyed on the *match_called* notification).
+
+    Born ``pending``, a tournament match is not scorable until it is called
+    (#1073), so the completion helpers below must call before they score — play
+    follows a call, so the tests go through one rather than forcing the status."""
+    tournament = await db.get(Tournament, uuid.UUID(tournament_id))
+    assert tournament is not None
+    # The scheduling frame (``scheduled_start``/``pinned_at``) is naive
+    # wall-clock, like ``match_calls._wall_now`` — not the aware datetimes the
+    # rest of the app uses.
+    for i, fixture in enumerate(fixtures):
+        await match_calls.apply_manual_placement(
+            db,
+            tournament,
+            fixture,
+            table_id=f"t{i + 1}",
+            scheduled_start=datetime(2026, 6, 1, 10, 0),
+        )
+    await db.commit()
+
+
 async def _live_two_player_pool(
     client: AsyncClient,
     owner: User,
@@ -6162,10 +6255,15 @@ async def _live_two_player_pool(
     db_session: AsyncSession,
     *,
     rated: bool,
+    call: bool = True,
 ) -> tuple[str, dict[str, Any], TournamentEntry, TournamentEntry, TournamentFixture]:
     """A round-robin event of two seeded players, taken all the way to ``live`` so its
     one fixture has materialized into a real match. ``owner`` is seed 1, so the draw
-    seats them as ``entry_a`` (side 1)."""
+    seats them as ``entry_a`` (side 1).
+
+    The match is born ``pending`` (scheduled); with ``call=True`` (default) it is
+    routed through the real call so it flips to ``in_progress`` and becomes scorable —
+    play follows a call. Pass ``call=False`` to leave it uncalled/``pending``."""
     tournament_id, (event,) = await _tournament_with_events(
         client,
         _rr_payload(
@@ -6189,6 +6287,9 @@ async def _live_two_player_pool(
     await _set_status(db_session, tournament_id, TournamentStatus.published)
     assert (await _go_live(client, tournament_id)).status_code == 201
     (fixture,) = await _fixture_rows(db_session, event["id"])
+    if call:
+        await _call_fixtures(db_session, tournament_id, [fixture])
+        (fixture,) = await _fixture_rows(db_session, event["id"])
     return tournament_id, event, e_owner, e_opp, fixture
 
 
@@ -6231,6 +6332,8 @@ async def _live_three_player_pool(
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
     assert (await _go_live(client, tournament_id)).status_code == 201
+    fixtures = await _fixture_rows(db_session, event["id"])
+    await _call_fixtures(db_session, tournament_id, fixtures)
     fixtures = await _fixture_rows(db_session, event["id"])
     entries = (seated[0], seated[1], seated[2])
     return tournament_id, event, entries, fixtures
@@ -6297,6 +6400,63 @@ async def test_a_completed_unrated_tournament_match_writes_the_winner_to_its_fix
 
     (decided,) = await _fixture_rows(db_session, event["id"])
     assert decided.winner_entry_id == e_owner.id
+
+
+async def test_a_pending_tournament_match_is_not_scorable(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The schedule is authoritative: a match born ``pending`` (scheduled, not yet
+    called to a table) rejects score writes and reads ``can_score = false`` on the
+    BFF — you cannot play a match the scheduler has not called (#1073)."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "rr-uncalled-opp") as (_opp_client, opp):
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True, call=False
+        )
+        match = await db_session.get(Match, fixture.match_id)
+        assert match is not None and match.status is MatchStatus.pending, (
+            "the fixture materialized into a scheduled (pending), uncalled match"
+        )
+
+        write = await client.post(
+            f"/v1/matches/{fixture.match_id}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+        assert write.status_code == 409, write.text
+        assert "hasn't been called to a table" in write.json()["detail"]
+
+        read = await client.get(f"/v1/matches/{fixture.match_id}")
+        assert read.status_code == 200
+        assert read.json()["can_score"] is False
+
+
+async def test_a_called_tournament_match_becomes_scorable(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Once the schedule *calls* the match to a table (``pending → in_progress``), it
+    is scorable: a per-game write is accepted and the BFF reads ``can_score = true``.
+    The default ``_live_two_player_pool`` routes the fixture through the real call."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "rr-called-opp") as (_opp_client, opp):
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        match = await db_session.get(Match, fixture.match_id)
+        assert match is not None and match.status is MatchStatus.in_progress, (
+            "the call flipped the scheduled match live"
+        )
+
+        write = await client.post(
+            f"/v1/matches/{fixture.match_id}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+        assert write.status_code == 201, write.text
+
+        read = await client.get(f"/v1/matches/{fixture.match_id}")
+        assert read.status_code == 200
+        assert read.json()["can_score"] is True
 
 
 async def test_completing_a_round_robin_match_materializes_nothing_new(
@@ -6641,9 +6801,9 @@ async def test_an_in_progress_fixture_is_freely_placeable(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """``in_progress`` is NOT the freeze trigger (ADR-0790): every round-robin match is
-    ``in_progress`` from go-live, and its plan is exactly what a scheduler moves. Only
-    ``completed``/``voided`` freezes, so a live-match fixture still (re)places."""
+    """``in_progress`` is NOT the freeze trigger (ADR-0790): a live (called) match's
+    plan is exactly what a scheduler moves. Only ``completed``/``voided`` freezes, so a
+    live-match fixture still (re)places."""
     client, owner = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     match = await _make_match(db_session, owner, default_league)
