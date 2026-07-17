@@ -31,7 +31,7 @@ jobs:
           # the default shallow checkout.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '26.1.0'
           cache: npm
