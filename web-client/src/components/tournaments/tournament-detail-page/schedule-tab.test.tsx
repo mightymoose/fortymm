@@ -458,7 +458,9 @@ describe('ScheduleTab', () => {
   // called-at badge (and the corrections' cost) on a call. -------------------
 
   /** One event holding all three tiers, placed on `t1`: an estimate at 09:00, a
-   * twice-notified call at 10:00, and an in-progress match at 11:00. */
+   * twice-notified call at 10:00, and a called (told once) in-progress match at
+   * 11:00 — the shape every live round-robin holds, since go-live materializes
+   * each fixture into an `in_progress` match. */
   const buildTieredEvent = () =>
     buildDrawnEvent({
       fixtures: [
@@ -492,6 +494,7 @@ describe('ScheduleTab', () => {
           tableId: 't1',
           scheduledStart: '2026-06-13T11:00:00',
           pinnedAt: '2026-06-13T10:50:00',
+          callNotifiedCount: 1,
         }),
       ],
     })
@@ -515,11 +518,82 @@ describe('ScheduleTab', () => {
     })
     expect(page.getCalledBadge('fx-called')).toHaveTextContent('Called 09:50')
     expect(page.queryNotified('fx-called')).toHaveTextContent('notified 2×')
-    // The estimate has promised nothing; the started match reads as its status,
-    // not as the promise it once was (started outranks the pin, as on the bars).
+    // The estimate has promised nothing.
     expect(page.queryCalledBadge('fx-est')).not.toBeInTheDocument()
-    expect(page.queryCalledBadge('fx-live')).not.toBeInTheDocument()
     expect(page.queryNotified('fx-est')).not.toBeInTheDocument()
+  })
+
+  it('keeps the badge on a TOLD in_progress row — materialization must not hide the promise', () => {
+    // The QA-caught gap: go-live materializes EVERY round-robin fixture into
+    // an `in_progress` match, so a called match is tier `started` from the
+    // first live second — and the badge used to vanish with the tier, leaving
+    // the director unable to see which matches were called.
+    page.render({
+      tournament: buildTournament({ events: [buildTieredEvent()] }),
+      tables: buildTables(),
+    })
+    expect(page.getCalledBadge('fx-live')).toHaveTextContent('Called 10:50')
+    // Told once — no correction yet, so no counter.
+    expect(page.queryNotified('fx-live')).not.toBeInTheDocument()
+  })
+
+  it('retires the badge once the match is decided — no stale call marker on a completed row', () => {
+    page.render({
+      tournament: buildTournament({
+        events: [
+          buildDrawnEvent({
+            fixtures: [
+              buildFixture({
+                id: 'fx-done',
+                poolId: 'p-a',
+                entryAId: 'entry-1',
+                entryBId: 'entry-4',
+                matchId: 'm-done',
+                matchStatus: 'completed',
+                tableId: 't1',
+                scheduledStart: '2026-06-13T10:00:00',
+                pinnedAt: '2026-06-13T09:50:00',
+                callNotifiedCount: 2,
+              }),
+            ],
+          }),
+        ],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryCalledBadge('fx-done')).not.toBeInTheDocument()
+    expect(page.queryNotified('fx-done')).not.toBeInTheDocument()
+    expect(page.getStatus('fx-done')).toHaveTextContent('Completed')
+  })
+
+  it('badges a pinned-untold in_progress row `Pinned` — the pin holds through materialization, claiming no call', () => {
+    page.render({
+      tournament: buildTournament({
+        events: [
+          buildDrawnEvent({
+            fixtures: [
+              buildFixture({
+                id: 'fx-pin-live',
+                poolId: 'p-a',
+                entryAId: 'entry-1',
+                entryBId: 'entry-4',
+                matchId: 'm-pin-live',
+                matchStatus: 'in_progress',
+                tableId: 't1',
+                scheduledStart: '2026-06-13T10:00:00',
+                pinnedAt: '2026-06-13T09:50:00',
+                callNotifiedCount: 0,
+              }),
+            ],
+          }),
+        ],
+      }),
+      tables: buildTables(),
+    })
+    const badge = page.getCalledBadge('fx-pin-live')
+    expect(badge).toHaveTextContent('Pinned')
+    expect(badge).not.toHaveTextContent('Called')
+    expect(page.queryNotified('fx-pin-live')).not.toBeInTheDocument()
   })
 
   it('badges a SILENT pin `Pinned` — never `Called`, never a notified claim (pinned is not told)', () => {

@@ -638,8 +638,17 @@ export class TournamentDetailPage {
     return this.page.locator('[data-testid^="timeline-bar-"]')
   }
 
+  /** One fixture's bar, by id — for reading a single bar's tier or its
+   * accessible name (where the call marker rides). */
+  timelineBar(fixtureId: string): Locator {
+    return this.page.getByTestId(`timeline-bar-${fixtureId}`)
+  }
+
   /** The bars whose tier is **called** — pinned promises (ADR "the schedule is
-   * solved; the call is pinned"), as the `data-tier` hook encodes it. */
+   * solved; the call is pinned"), as the `data-tier` hook encodes it. While
+   * LIVE this tier is rare on purpose: materialization (#788) makes a called
+   * fixture's match `in_progress` (tier `started`), and the promise rides the
+   * bar's marker/aria instead. */
   get calledBars(): Locator {
     return this.page.locator('[data-testid^="timeline-bar-"][data-tier="called"]')
   }

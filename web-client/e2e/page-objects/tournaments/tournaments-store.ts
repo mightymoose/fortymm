@@ -662,6 +662,30 @@ const DRAW_UNDER_WAY_DETAIL =
   "This event's draw is already under way — at least one fixture has a match " +
   'or a recorded winner — so it can no longer be cut or removed.'
 
+/** Materialize an event's ready fixtures into real **`in_progress` matches** — the
+ * go-live step (#788, `api/app/tournaments.py`), mirroring the MSW store's
+ * `materializeFixtures`: a fixture is ready when both its sides are known (a TBD side
+ * waits), and the mint is idempotent on `match_id`. The match id is deterministic off
+ * the fixture, so the same draw materializes the same way every run.
+ *
+ * ⚠️ This stub used to OMIT the step, and the omission was load-bearing: a live seed's
+ * fixtures stayed matchless, every pinned fixture kept tier `called`, and the board
+ * specs went green against a world the server never serves — live round-robin fixtures
+ * are `in_progress` from the first second, and the QA pass caught the real board hiding
+ * every called badge behind exactly that status. */
+function materializeFixtures(event: TournamentEventRead): TournamentEventRead {
+  const fixtures = event.fixtures.map((fixture) => {
+    const ready = fixture.entry_a_id !== null && fixture.entry_b_id !== null
+    if (!ready || fixture.match_id !== null) return fixture
+    return {
+      ...fixture,
+      match_id: `m-${fixture.id}`,
+      match_status: 'in_progress' as const,
+    }
+  })
+  return { ...event, fixtures }
+}
+
 /** Evidence of play: a fixture with a recorded winner, or one that has become a real
  * match. */
 function drawHasPlay(event: TournamentEventRead): boolean {
@@ -816,6 +840,16 @@ export class TournamentsStore {
       const refusal = cutRefusal(event)
       if (refusal) throw new Error(`cannot seed a draw for ${name}: ${refusal}`)
       this.mutateEvent(event.id, (e) => ({ ...e, fixtures: planDraw(e) }))
+    }
+    // A tournament SEEDED live has been through go-live, so its ready fixtures are
+    // `in_progress` matches already (#788) — a live seed whose fixtures stayed
+    // matchless would be a world the server cannot produce (see
+    // `materializeFixtures`).
+    if (this.detail.status === 'live') {
+      this.detail = {
+        ...this.detail,
+        events: this.detail.events.map(materializeFixtures),
+      }
     }
     // The played-out result (ADR-0788), last: standings are derived from a decided draw, so
     // this rides on the seeded JOURNEY draw above rather than inventing one.
@@ -1190,7 +1224,12 @@ export class TournamentsStore {
       if (refusal) return json(route, 409, { detail: refusal })
     }
 
-    this.detail = { ...this.detail, status: to }
+    // Go-live materializes every event's ready fixtures into real `in_progress`
+    // matches (#788) — only on `published → live`; publishing and archiving touch
+    // no fixtures.
+    const events =
+      to === 'live' ? this.detail.events.map(materializeFixtures) : this.detail.events
+    this.detail = { ...this.detail, events, status: to }
     // **201**, as the route is declared (`status_code=status.HTTP_201_CREATED` —
     // a transition CREATES a move, it does not update a field), and as the MSW
     // mock answers. A stub that answered 200 would be the one thing this table of

@@ -63,7 +63,13 @@ export function estimatedMatchMinutes(lengthGames: MatchLength): number {
  *   were notified unless they were.
  * - `started` — the fixture's match is `in_progress`, `completed` or `voided`:
  *   the placement is history (or unfolding), not a plan of any kind. Takes
- *   precedence over the pin — every called match eventually starts.
+ *   precedence over the pin — every called match eventually starts. The TIER
+ *   outranking the pin is a fact about the styling only: the call's marker
+ *   (the list badge, the bar's `Called HH:MM` line) survives into this tier
+ *   until the match is decided (`isDecided`), because a round-robin
+ *   materializes EVERY fixture into an `in_progress` match at go-live — while
+ *   live, `started` is the ordinary state of a called match, not proof it is
+ *   being played.
  */
 export type TimelineTier = 'estimate' | 'called' | 'started'
 
@@ -102,16 +108,32 @@ export function isTold<
   return fixture.pinnedAt !== null && fixture.callNotifiedCount > 0
 }
 
-/** The board's own status words — a `started` bar's detail line. Local to the
- * board on purpose (the schedule list's `scheduleStatusLabel` says "Unplayed"
- * for an in-progress match, which is the right word in a to-do list and the
- * wrong one on a live bar). Keyed so a new `MatchStatus` is a compile error
- * until it has a word here. */
+/** The board's own status words — a `started` bar's detail line and the
+ * unscheduled rail's status. Local to the board on purpose (the schedule
+ * list's `scheduleStatusLabel` says "Unplayed" for an in-progress match,
+ * which is the right word in a to-do list). `in_progress` deliberately does
+ * NOT say "In progress": on the wire it means the match was **materialized**
+ * at go-live — created, scoreable — not that anyone is at the table, and a
+ * board claiming live play for a match hours out would be lying (the ADR-0788
+ * materialize-at-go-live consequence). Keyed so a new `MatchStatus` is a
+ * compile error until it has a word here. */
 const BOARD_STATUS_LABEL: Record<MatchStatus, string> = {
   pending: 'Not started',
-  in_progress: 'In progress',
+  in_progress: 'Underway or up next',
   completed: 'Completed',
   voided: 'Voided',
+}
+
+/** A **decided** match — `completed` or `voided`: the promise a call made was
+ * kept (or destroyed), so it is no longer outstanding. This — never the tier —
+ * is what retires the call markers (the list badge, the bars' `Called HH:MM`
+ * line): an `in_progress` match that was called still owes the director its
+ * marker, because while live every materialized fixture is `in_progress` from
+ * the first second, called or not. */
+const DECIDED_STATUSES: ReadonlySet<MatchStatus> = new Set(['completed', 'voided'])
+
+export function isDecided(status: MatchStatus | null): boolean {
+  return status !== null && DECIDED_STATUSES.has(status)
 }
 
 /** The `HH:MM` time-of-day of a naive wall-clock timestamp — for prefilling the
@@ -163,6 +185,13 @@ export function tierSentence(
         ? 'Called — the players were notified'
         : 'Pinned — placed by the director'
     case 'started':
+      // `in_progress` means materialized — scoreable — not "being played": a
+      // round-robin turns every fixture into an in_progress match at go-live,
+      // so claiming live play here would lie about a match hours out. Say
+      // what the status actually promises.
+      if (status === 'in_progress') {
+        return 'Underway or up next — scores can be entered'
+      }
       return status === null ? 'Started' : BOARD_STATUS_LABEL[status]
     default: {
       const exhaustive: never = tier

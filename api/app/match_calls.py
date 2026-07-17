@@ -6,7 +6,28 @@ is called when the schedule says its start is within :data:`CALL_AHEAD_MIN`
 minutes of now (or already due — a table that freed with no warning): calling
 sets ``pinned_at``, increments ``call_notified_count``, and tells both
 entrants, and from then on the placement is a hard constraint in every later
-solve. Three paths write pins, and **only** these three (the ADR's invariant:
+solve.
+
+The call pass owns two transitions, keyed on the fixture's pin state (the
+same was-told principle the manual path dispatches on):
+
+=====================  ========================================================
+due fixture state      transition
+=====================  ========================================================
+``pinned_at IS NULL``  **the call**: ``pinned_at = now``, *match_called* to
+                       both entrants, count 0 → 1
+``pinned_at IS NOT     **notify-without-re-pin**: a silent pin (made pre-live,
+NULL AND count = 0``   its players never told) whose start is now imminent on
+                       a live tournament — *match_called* to both entrants,
+                       count 0 → 1, ``pinned_at`` and the placement columns
+                       untouched (the promise already exists; it just was
+                       never delivered)
+pinned, count ≥ 1      not due — the players already know; only a broken-pin
+                       correction (:func:`notify_pin_repairs`) or the manual
+                       path may re-notify
+=====================  ========================================================
+
+Three paths write pins, and **only** these three (the ADR's invariant:
 every pin writer works under the same tournament row lock, so "pinned" and
 "notified" cannot drift apart):
 
@@ -41,16 +62,23 @@ before commit leaves no pin and no notification; a crash after commit leaves
 the pin *with* its durable in-app record — the fan-out is best-effort by the
 same contract every other push/email in the repo has.
 
-**Exactly-once.** Both call paths re-check ``pinned_at IS NULL`` while holding
-the fixture's row lock (``FOR UPDATE``, ordered by id, behind the tournament
-row lock — the exact lock order of the guarded apply). A concurrent tick and
-apply therefore serialize: whichever transaction commits first sets
-``pinned_at``, and the other re-reads under the lock and skips. Multiple API
-replicas double-enqueueing ticks is likewise harmless — the second tick finds
-``pinned_at`` set and is a no-op. ``call_notified_count`` increments on the
-real transition (0 → called = 1) and once per **moved/cancelled correction**
-sent by :func:`notify_pin_repairs` — the count is "how many times the players
-were told", so silent (pre-live) repairs do not touch it.
+**Exactly-once.** Both call paths re-check the due predicate — ``pinned_at IS
+NULL`` for the call, ``call_notified_count = 0`` for the notify-without-re-pin
+transition — while holding the fixture's row lock (``FOR UPDATE``, ordered by
+id, behind the tournament row lock — the exact lock order of the guarded
+apply). A concurrent tick and apply therefore serialize: whichever transaction
+commits first sets ``pinned_at`` (or, for a silent pin, bumps the count), and
+the other re-reads under the lock and skips. The count re-check is the *only*
+guard for the silent-pin transition — the solve fingerprint deliberately
+excludes ``call_notified_count``, so a mid-solve tick that merely notified is
+not drift; the Python re-check under the row locks is authoritative. Multiple
+API replicas double-enqueueing ticks is likewise harmless — the second tick
+finds ``pinned_at`` set with a nonzero count and is a no-op.
+``call_notified_count`` increments on the real transition (0 → told = 1,
+whether that is a fresh call or a silent pin's late delivery) and once per
+**moved/cancelled correction** sent by :func:`notify_pin_repairs` — the count
+is "how many times the players were told", so silent (pre-live) repairs do
+not touch it.
 
 **Broken-pin corrections.** A pin is inviolable against optimization, not
 against physics (ADR): when a pinned fixture's table leaves the venue or an
@@ -75,7 +103,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import ColumnElement, exists, select
+from sqlalchemy import ColumnElement, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
@@ -142,17 +170,21 @@ def _wall_now() -> datetime:
 
 
 def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
-    """Whether this fixture row, as read **under its row lock**, is due to be
-    called: unpinned, fully placed, both entrants known, not decided by
-    winner, and starting within the call-ahead window (or already due).
+    """Whether this fixture row, as read **under its row lock**, is due for
+    the call pass: fully placed, both entrants known, not decided by winner,
+    starting within the call-ahead window (or already due), and its players
+    not yet told — either unpinned (→ the call) or pinned with
+    ``call_notified_count == 0`` (a silent pre-live pin → the
+    notify-without-re-pin transition; module docstring's transition table).
 
-    The ``pinned_at IS NULL`` check here is the exactly-once guard: both call
-    paths evaluate it while holding the fixture's ``FOR UPDATE`` lock, so a
-    concurrent tick/apply pair cannot both see ``NULL``. (The race test's
-    falsification bypasses exactly this predicate to prove it load-bearing.)
+    The ``pinned_at IS NULL`` / ``call_notified_count == 0`` check here is
+    the exactly-once guard: both call paths evaluate it while holding the
+    fixture's ``FOR UPDATE`` lock, so a concurrent tick/apply pair cannot
+    both see an untold fixture. (The race tests' falsifications bypass
+    exactly this predicate to prove it load-bearing.)
     """
     return (
-        fixture.pinned_at is None
+        (fixture.pinned_at is None or fixture.call_notified_count == 0)
         and fixture.table_id is not None
         and fixture.scheduled_start is not None
         and fixture.scheduled_start <= now + timedelta(minutes=CALL_AHEAD_MIN)
@@ -178,7 +210,10 @@ def _due_fixture_clauses(
                 TournamentEvent.tournament_id == tournament_id
             )
         ),
-        TournamentFixture.pinned_at.is_(None),
+        or_(
+            TournamentFixture.pinned_at.is_(None),
+            TournamentFixture.call_notified_count == 0,
+        ),
         TournamentFixture.table_id.is_not(None),
         TournamentFixture.scheduled_start.is_not(None),
         TournamentFixture.scheduled_start <= now + timedelta(minutes=CALL_AHEAD_MIN),
@@ -196,12 +231,15 @@ async def call_due_fixtures(
     now: datetime,
     ingredients: "CopyIngredients | None" = None,
 ) -> list[NotificationJob]:
-    """Call every due fixture among ``fixtures``: set ``pinned_at = now``,
-    increment ``call_notified_count``, and persist one in-app ``Notification``
-    per entrant (preferences permitting) — all on the caller's open
-    transaction. Returns the push/email fan-out jobs the caller must enqueue
-    **after** its commit (:func:`enqueue_call_fanout`); returns ``[]`` and
-    writes nothing when the tournament isn't live.
+    """Call every due fixture among ``fixtures``: set ``pinned_at = now``
+    (unless the fixture is already pinned — a silent pre-live pin keeps its
+    ``pinned_at`` and placement and only gets the *match_called* it was
+    owed; the module docstring's notify-without-re-pin transition), increment
+    ``call_notified_count``, and persist one in-app ``Notification`` per
+    entrant (preferences permitting) — all on the caller's open transaction.
+    Returns the push/email fan-out jobs the caller must enqueue **after** its
+    commit (:func:`enqueue_call_fanout`); returns ``[]`` and writes nothing
+    when the tournament isn't live.
 
     Contract: the caller holds the tournament row lock and has the fixture
     rows locked ``FOR UPDATE`` ordered by id (the guarded apply's exact lock
@@ -272,8 +310,11 @@ async def call_due_fixtures(
 
     fanout: list[NotificationJob] = []
     for fixture, user_a, user_b, build in calls:
-        # The call: the pin and its notification records commit together.
-        fixture.pinned_at = now
+        # The call: the pin and its notification records commit together. A
+        # silent pin keeps its pinned_at — the promise already exists, this
+        # pass only delivers it (notify-without-re-pin).
+        if fixture.pinned_at is None:
+            fixture.pinned_at = now
         _tell_pair(
             db,
             fixture,
@@ -886,8 +927,9 @@ async def execute_pin_tick(
     probe finds something does the tick take the guarded apply's locks in the
     guarded apply's order — tournament row, then fixture rows ``FOR UPDATE``
     ordered by id (the id-ordered *subset* keeps the deadlock-free order) —
-    and the Python ``pinned_at IS NULL`` re-check under those locks
-    (:func:`_due_for_call`, inside :func:`call_due_fixtures`) remains the
+    and the Python untold re-check under those locks — ``pinned_at IS NULL``
+    or, for a silent pin, ``call_notified_count == 0``
+    (:func:`_due_for_call`, inside :func:`call_due_fixtures`) — remains the
     authoritative exactly-once guard, so whichever of a tick/apply pair runs
     second is a no-op and multiple API replicas double-enqueueing ticks are
     harmless. The probe racing a concurrent writer costs nothing: a

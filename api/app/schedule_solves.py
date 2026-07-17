@@ -59,10 +59,17 @@ against the old field should not land.
 inviolable against *optimization*, never against physics. The snapshot phase
 detects pins physics broke, so they never reach the solver *as pins*:
 
-* **table gone** — the pinned ``table_id`` is no longer in the venue catalogue
-  or no longer in the fixture's pool's ``table_ids``: the fixture enters the
-  snapshot **unpinned** (the solver re-places it), and its id is carried in
-  ``SolveInputs.broken_pin_moves``;
+* **table gone** — the pinned ``table_id`` is no longer in the venue
+  **catalogue**: the fixture enters the snapshot **unpinned** (the solver
+  re-places it), and its id is carried in ``SolveInputs.broken_pin_moves``.
+  Pool membership does **not** break a pin: a director deliberately pinning a
+  fixture to a spare catalogue table outside its pool's ``table_ids`` (the
+  manual PATCH allows off-pool soft placements, ADR-0790) is a legitimate
+  hand, and pins are broken by physics, not preferences. Such a pin enters
+  the snapshot as a pin like any other — the pure module treats pins as
+  constants and never checks a pin's table against the pool (or even the
+  catalogue) — survives every solve byte-identical, and is called by the
+  ordinary call pass when imminent;
 * **entrant withdrew** — an entry of the fixture is ``withdrawn`` (and the
   match isn't already settled): the promised match cannot happen, so the
   fixture is **excluded** from the snapshot and carried in
@@ -366,9 +373,10 @@ async def _load_solver_inputs(
     module: pools become minute windows, pins become constants, live called
     matches become occupancy, existing unpinned placements become the
     stability tier's previous plan. Pins physics broke never reach the solver
-    as pins — a pin on a vanished table is demoted to a decision variable, a
-    pin whose entrant withdrew is excluded — with the findings carried on the
-    returned ``SolveInputs`` for the apply's repair (module docstring).
+    as pins — a pin whose table left the venue catalogue is demoted to a
+    decision variable, a pin whose entrant withdrew is excluded (pool
+    membership breaks nothing — module docstring) — with the findings carried
+    on the returned ``SolveInputs`` for the apply's repair (module docstring).
 
     ``lock=True`` (the apply phase) takes ``FOR UPDATE`` on the fixture rows,
     **ordered by id**, so concurrent placement writers (the pin tick, a
@@ -471,7 +479,6 @@ async def _load_solver_inputs(
     # reason to refuse the whole snapshot as incoherent (the raw ``table_ids``
     # still feed the fingerprint, so the edit itself is drift like any other).
     catalogue_ids = set(catalogue)
-    pool_tables: dict[str, tuple[TableId, ...]] = {}
     # One pass derives each pool's key, bounds and usable tables; the
     # ``SchedulePool``s are built from these same specs below (only ``base``
     # — which needs every window start first — stands between the two).
@@ -485,7 +492,6 @@ async def _load_solver_inputs(
                 for table_id in pool.table_ids
                 if TableId(table_id) in catalogue_ids
             )
-            pool_tables[key] = tables
             pool_specs.append((key, tables, start, end))
 
     # The minute frame's origin: the earliest pool window start. Everything —
@@ -551,13 +557,16 @@ async def _load_solver_inputs(
                     # happen. Excluded from the snapshot; voided at apply.
                     broken_pin_voids.add(fixture.id)
                     continue
-                if not settled and TableId(fixture.table_id) not in pool_tables.get(
-                    f"{event.id}:{fixture.pool_id}", ()
-                ):
-                    # Case (a), table gone (from the catalogue — pool_tables
-                    # is already catalogue-intersected — or from the pool):
-                    # enters the snapshot UNPINNED so the solver re-places
-                    # it; re-pinned + moved-notified at apply.
+                if not settled and TableId(fixture.table_id) not in catalogue_ids:
+                    # Case (a), table gone from the venue CATALOGUE: enters
+                    # the snapshot UNPINNED so the solver re-places it;
+                    # re-pinned + moved-notified at apply. The pool's
+                    # table_ids are deliberately NOT consulted — an off-pool
+                    # pin on a catalogue table is the director's hand (the
+                    # manual PATCH allows off-pool soft placements, ADR-0790),
+                    # and pins break on physics, not preferences. The pure
+                    # module honors it as-is: pins are constants there, never
+                    # checked against pool residency.
                     broken_pin_moves.add(fixture.id)
                 else:
                     pin = Pin(
@@ -881,8 +890,12 @@ async def _apply_result(
                 # Call evaluation — same transaction, same locks: any fixture
                 # this apply just placed inside the call-ahead window (or that
                 # was already due) is pinned + its in-app notifications
-                # persisted here; the push/email fan-out is enqueued after the
-                # commit below (see app.match_calls' atomicity contract).
+                # persisted here — and an imminent silent pin (pinned
+                # pre-live, count 0) gets the match_called it was owed without
+                # its pinned_at or placement moving (app.match_calls'
+                # notify-without-re-pin transition); the push/email fan-out is
+                # enqueued after the commit below (see app.match_calls'
+                # atomicity contract).
                 call_fanout += await match_calls.call_due_fixtures(
                     db,
                     tournament,

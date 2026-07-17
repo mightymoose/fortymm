@@ -6,6 +6,8 @@ describe('TierLegend', () => {
     const legend = page.getLegend()
     expect(legend).toHaveTextContent('Estimate — may move')
     expect(legend).toHaveTextContent('Called / pinned — a fixed time')
-    expect(legend).toHaveTextContent('In play or finished')
+    // Not "in play": a materialized (`in_progress`) match may be hours from
+    // its table — the legend must not promise live play either.
+    expect(legend).toHaveTextContent('Underway, up next, or finished')
   })
 })

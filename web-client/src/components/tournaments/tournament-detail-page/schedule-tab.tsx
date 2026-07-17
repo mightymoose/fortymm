@@ -35,6 +35,7 @@ import {
 import {
   buildTimelineBoard,
   calledAtLabel,
+  isDecided,
   isTold,
   notifiedLabel,
 } from '../data/timeline'
@@ -352,9 +353,15 @@ const MatchRow = ({
         <span className="text-[11px] text-[color:var(--fg-3)]">
           · {match.eventName}
         </span>
-        {match.tier === 'called' && match.pinnedAt !== null && (
+        {match.pinnedAt !== null && !isDecided(match.match?.status ?? null) && (
           <>
-            {/* Pinned is not told: only a fixture whose players were actually
+            {/* The badge rides the PIN, not the tier: go-live materializes
+                every round-robin fixture into an `in_progress` match, so a
+                called match is tier `started` from the first live second and
+                must still show what the director promised (the QA-caught
+                gap). Only a decided match (completed/voided, `isDecided`)
+                retires the badge — its promise is no longer outstanding.
+                Pinned is not told: only a fixture whose players were actually
                 NOTIFIED wears the called-at time — a silent pin (a director's
                 pre-live placement, count 0) says `Pinned`, claiming no call
                 and no notification that never happened. */}

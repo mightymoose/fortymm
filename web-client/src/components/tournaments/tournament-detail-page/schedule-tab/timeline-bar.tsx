@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { fmtDateShort } from '../../data/helpers'
 import {
   calledAtLabel,
+  isDecided,
   isTold,
   notifiedLabel,
   PX_PER_MIN,
@@ -61,16 +62,24 @@ export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
   const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
   const when = `${bar.startClock}–${bar.endClock}`
   const sentence = tierSentence(bar.tier, bar.status, bar)
-  // The call's cost, made visible (the ADR's called-at / notified-count marker):
-  // only on a bar whose tier IS the promise — a started match reads as fact, an
-  // estimate has promised nothing — and only when the players were actually TOLD
-  // (`isTold`): a silent pin (a director's pre-live placement) has no call to
-  // date and nobody to have notified, so it carries the sentence alone.
+  // The call's cost, made visible (the ADR's called-at / notified-count
+  // marker) — gated on the pin facts and `isDecided`, NEVER on the tier: a
+  // round-robin materializes every fixture into an `in_progress` match at
+  // go-live, so a called match spends most of its life on the `started` tier
+  // and must keep its `Called HH:MM` marker there (the QA-caught gap). Only a
+  // decided match retires it — the promise is no longer outstanding. A
+  // pinned-but-untold started bar says `Pinned` instead (a silent pin claims
+  // no call); on the `called` tier the sentence itself already says pinned,
+  // so no marker doubles it. An estimate has promised nothing — no pin, no
+  // marker.
   const notified = notifiedLabel(bar.callNotifiedCount)
-  const marker =
-    bar.tier === 'called' && isTold(bar)
+  const marker = isDecided(bar.status)
+    ? null
+    : isTold(bar)
       ? `${calledAtLabel(bar.pinnedAt)}${notified ? ` · ${notified}` : ''}`
-      : null
+      : bar.pinnedAt !== null && bar.tier === 'started'
+        ? 'Pinned'
+        : null
 
   return (
     <Tooltip>

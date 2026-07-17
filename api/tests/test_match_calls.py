@@ -7,13 +7,16 @@ Clock control: both call paths read a module-level ``_wall_now`` seam
 the tick), monkeypatched here to a fixed 2030 wall clock so "imminent" is a
 deterministic fact about the fixtures, never about when CI runs.
 
-THE race test stages a pin tick in the gap between a solve's snapshot and its
+THE race tests stage a pin tick in the gap between a solve's snapshot and its
 guarded apply (the ``_solve`` seam — the same gatekeeper harness as
 ``test_schedule_solve_service``), so tick and apply genuinely contend for the
-same imminent fixture. Its falsifications prove both guards are load-bearing:
+same imminent fixture. The falsifications prove the guards are load-bearing:
 neutering the fingerprint alone still yields exactly one call (the row-locked
 ``pinned_at IS NULL`` re-check holds the line), and bypassing *that* re-check
-produces the double-notify the guard exists to prevent.
+produces the double-notify the guard exists to prevent. The silent-pin race
+runs the same play for the notify-without-re-pin transition (a pre-live
+silent pin delivered late), where the row-locked ``call_notified_count == 0``
+re-check is the ONLY guard — the fingerprint deliberately excludes the count.
 """
 
 import uuid
@@ -282,6 +285,59 @@ class TestApplyCallEvaluation:
         assert all(job.channels == ["push", "email"] for job in jobs)
         assert all(job.category == "match_calls" for job in jobs)
 
+    async def test_apply_notifies_a_silent_pin_without_re_pinning(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The notify-without-re-pin transition through the guarded apply: the
+        solve echoes the silent pin verbatim (``fixtures_pinned``, not
+        placed), and the apply's call evaluation delivers the owed
+        *match_called* — count 0 → 1 — with ``pinned_at`` and the off-grid
+        placement byte-identical."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        silent_pin_time = BASE - timedelta(minutes=45)
+        start = BASE + timedelta(minutes=7)  # off-grid: a rewrite would show
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=start,
+            pinned_at=silent_pin_time,
+            notified=0,  # a silent pre-live pin was never announced
+        )
+        _freeze_clocks(monkeypatch, BASE)
+
+        await _request_and_run_solve(db_session, solver_queue, tournament_id)
+
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.table_id == "t1"
+        assert fixture.scheduled_start == start
+        assert fixture.pinned_at == silent_pin_time  # the promise, untouched
+        assert fixture.call_notified_count == 1  # …finally delivered
+        entrants = await _entrant_user_ids(db_session, event_id)
+        rows = await _call_notifications(db_session)
+        assert {row.user_id for row in rows} == entrants
+        assert len(rows) == 2
+        assert all(row.title == "You're up soon — T1" for row in rows)
+        assert {job.user_id for job in _fanout_jobs(fake_notifications_queue)} == (
+            entrants
+        )
+
+        ledger = (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        ).scalar_one()
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 0
+        assert ledger.fixtures_pinned == 1  # echoed verbatim, never rewritten
+
     async def test_a_placement_beyond_the_window_is_not_called(
         self,
         db_session: AsyncSession,
@@ -408,6 +464,88 @@ class TestPinTick:
         assert fixture.call_notified_count == 1
         assert len(await _call_notifications(db_session)) == 2
         assert len(fake_notifications_queue.jobs) == 2
+
+    async def test_tick_notifies_a_silent_pin_without_re_pinning(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The notify-without-re-pin transition: a silent pin (pinned
+        pre-live, players never told, count 0) whose start enters the window
+        on a live tournament gets the *match_called* it was owed — count
+        0 → 1, one notification per entrant — while ``pinned_at`` and the
+        (deliberately off-grid) placement stay byte-identical. A second tick
+        is a no-op under the row-locked count re-check."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        silent_pin_time = BASE - timedelta(minutes=45)
+        start = BASE + timedelta(minutes=7)  # off-grid: a rewrite would show
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=start,
+            pinned_at=silent_pin_time,
+            notified=0,  # a silent pre-live pin was never announced
+        )
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.table_id == "t1"
+        assert fixture.scheduled_start == start  # the placement is untouched…
+        assert fixture.pinned_at == silent_pin_time  # …and so is the pin
+        assert fixture.call_notified_count == 1
+        entrants = await _entrant_user_ids(db_session, event_id)
+        rows = await _call_notifications(db_session)
+        assert {row.user_id for row in rows} == entrants
+        assert len(rows) == 2
+        assert all(
+            row.title == "You're up soon — T1" and "09:07" in row.body for row in rows
+        )
+        assert len(fake_notifications_queue.jobs) == 2
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.pinned_at == silent_pin_time
+        assert fixture.call_notified_count == 1
+        assert len(await _call_notifications(db_session)) == 2
+        assert len(fake_notifications_queue.jobs) == 2
+
+    async def test_tick_does_not_renotify_a_told_pin(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pinned fixture whose players WERE told (count > 0) is not the
+        call pass's business, however imminent: only a broken-pin correction
+        or the director's hand may re-notify it."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=5),
+            notified=1,
+        )
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.pinned_at == BASE - timedelta(minutes=5)
+        assert fixture.call_notified_count == 1
+        assert await _call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
 
     async def test_tick_is_a_noop_for_a_non_live_tournament(
         self,
@@ -624,6 +762,111 @@ class TestConcurrentTickAndApply:
         assert len(await _call_notifications(db_session)) == 4
         assert len(fake_notifications_queue.jobs) == 4
 
+    # -- the same race, for the notify-without-re-pin transition ------------
+
+    async def _staged_silent_pin_race(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+        """Like :meth:`_staged_race`, but the fixture is already silently
+        pinned (count 0): tick and apply now contend for the
+        notify-without-re-pin transition rather than for the pin itself."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=30),
+            notified=0,
+        )
+        _freeze_clocks(monkeypatch, BASE)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _hijack_solve(monkeypatch, after_solve=lambda: run_pin_tick(str(tournament_id)))
+        return tournament_id, event_id, row_id
+
+    async def test_concurrent_tick_and_apply_notify_a_silent_pin_exactly_once(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The tick wins the gap and delivers the silent pin's *match_called*
+        (count 0 → 1, ``pinned_at`` untouched). The count is deliberately NOT
+        fingerprinted — a mid-solve delivery is not input drift — so the
+        apply proceeds, and the row-locked ``call_notified_count == 0``
+        re-check is the ONLY line of defense. It holds: exactly one
+        notification pair, and the ledger row succeeds (no superseding
+        re-run, unlike the unpinned race where the tick's pin write IS
+        drift)."""
+        tournament_id, event_id, row_id = await self._staged_silent_pin_race(
+            db_session, monkeypatch
+        )
+
+        _run_recorded_solve(solver_queue, row_id)
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.pinned_at == BASE - timedelta(minutes=30)
+        assert fixture.call_notified_count == 1
+        assert len(await _call_notifications(db_session)) == 2
+        assert len(fake_notifications_queue.jobs) == 2
+
+        ledger = (
+            await db_session.execute(
+                select(ScheduleSolve).where(ScheduleSolve.id == row_id)
+            )
+        ).scalar_one()
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_pinned == 1
+
+    async def test_falsification_bypassing_the_count_recheck_double_notifies(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The falsification: with the untold re-check bypassed (a
+        ``_due_for_call`` that ignores pin state and count), the very same
+        staged silent-pin race double-notifies — count 2, two notification
+        pairs — proving the green above is the row-locked count re-check's
+        doing, not scheduler luck. No fingerprint neutering is needed: the
+        count was never fingerprinted, which is exactly why the re-check is
+        load-bearing."""
+        tournament_id, event_id, row_id = await self._staged_silent_pin_race(
+            db_session, monkeypatch
+        )
+
+        def no_untold_guard(fixture: TournamentFixture, now: datetime) -> bool:
+            return (  # _due_for_call minus its pinned_at / count check
+                fixture.table_id is not None
+                and fixture.scheduled_start is not None
+                and fixture.scheduled_start
+                <= now + timedelta(minutes=match_calls.CALL_AHEAD_MIN)
+                and fixture.entry_a_id is not None
+                and fixture.entry_b_id is not None
+                and fixture.winner_entry_id is None
+            )
+
+        monkeypatch.setattr(match_calls, "_due_for_call", no_untold_guard)
+
+        _run_recorded_solve(solver_queue, row_id)
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.call_notified_count == 2  # the double the guard prevents
+        assert len(await _call_notifications(db_session)) == 4
+        assert len(fake_notifications_queue.jobs) == 4
+
 
 async def _all_fixtures(
     db: AsyncSession, event_id: uuid.UUID
@@ -724,11 +967,14 @@ async def _usernames(
 
 class TestBrokenPinRepair:
     """Chore 3c: pins are inviolable against optimization, not against
-    physics. A pinned fixture whose table left the venue is re-placed by the
-    next solve and STAYS a pin (renewed, moved-notified); a pinned fixture
-    whose entrant withdrew is voided (placement cleared, the remaining
-    entrant cancelled-notified). Planned fixtures re-plan silently; pre-live
-    repairs are silent; untouched pins stay byte-identical."""
+    physics. A pinned fixture whose table left the venue CATALOGUE is
+    re-placed by the next solve and STAYS a pin (renewed, moved-notified); a
+    pinned fixture whose entrant withdrew is voided (placement cleared, the
+    remaining entrant cancelled-notified). Pool membership is a preference,
+    not physics: an off-pool pin on a table still in the catalogue is the
+    director's legitimate hand and is honored byte-identical. Planned
+    fixtures re-plan silently; pre-live repairs are silent; untouched pins
+    stay byte-identical."""
 
     async def test_a_removed_catalogue_table_moved_correction_and_untouched_control_pin(
         self,
@@ -816,25 +1062,31 @@ class TestBrokenPinRepair:
         assert ledger.fixtures_placed == 5  # 4 plans + the repaired pin
         assert ledger.fixtures_pinned == 1  # the control's verbatim echo
 
-    async def test_a_table_dropped_from_the_pool_gets_the_same_moved_correction(
+    async def test_a_table_dropped_from_the_pool_keeps_the_pin(
         self,
         db_session: AsyncSession,
         solver_queue: Queue,
         fake_notifications_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The other flavor of a broken table: still in the venue catalogue,
-        no longer in the fixture's pool's ``table_ids`` — same repair path."""
+        """Pool membership is a preference, not physics: a called pin whose
+        table left the pool's ``table_ids`` but is STILL in the venue
+        catalogue is the director's legitimate off-pool hand (the manual
+        PATCH allows off-pool soft placements, ADR-0790) — the next solve
+        honors it byte-identical: no repair, no moved correction, no
+        re-notification."""
         tournament_id, event_id = await _make_tournament(
             db_session, tables=("t1", "t2")
         )
         fixture = await _the_fixture(db_session, event_id)
+        pin_time = BASE - timedelta(minutes=5)
+        start = BASE + timedelta(minutes=7)  # off-grid: a rewrite would show
         await _pin_directly(
             db_session,
             fixture,
             table_id="t1",
-            start=BASE + timedelta(minutes=5),
-            pinned_at=BASE - timedelta(minutes=5),
+            start=start,
+            pinned_at=pin_time,
         )
         await _remove_table(
             db_session, tournament_id, event_id, "t1", from_catalogue=False
@@ -844,14 +1096,78 @@ class TestBrokenPinRepair:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         await db_session.refresh(fixture)
-        assert fixture.table_id == "t2"
-        assert fixture.scheduled_start == BASE
-        assert fixture.pinned_at == BASE
-        assert fixture.call_notified_count == 2
+        assert fixture.table_id == "t1"  # the off-pool pin, honored
+        assert fixture.scheduled_start == start
+        assert fixture.pinned_at == pin_time  # not refreshed: nothing repaired
+        assert fixture.call_notified_count == 1  # told once, never re-told
+        assert await _call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
+        ledger = (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        ).scalar_one()
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 0
+        assert ledger.fixtures_pinned == 1  # echoed verbatim
+
+    async def test_an_off_pool_catalogue_pin_is_honored_and_auto_called(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pre-live SILENT pin (count 0) on a spare catalogue table outside
+        the pool survives the live solve byte-identical — and, being imminent
+        and untold, the same apply delivers its *match_called*
+        (notify-without-re-pin): the two fixes composed."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, tables=("t1", "t2")
+        )
+        fixture = await _the_fixture(db_session, event_id)
+        silent_pin_time = BASE - timedelta(minutes=45)
+        start = BASE + timedelta(minutes=7)  # off-grid: a rewrite would show
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t2",
+            start=start,
+            pinned_at=silent_pin_time,
+            notified=0,  # placed silently while planning; never announced
+        )
+        await _remove_table(
+            db_session, tournament_id, event_id, "t2", from_catalogue=False
+        )
+        _freeze_clocks(monkeypatch, BASE)
+
+        await _request_and_run_solve(db_session, solver_queue, tournament_id)
+
+        await db_session.refresh(fixture)
+        assert fixture.table_id == "t2"  # the off-pool pin, honored…
+        assert fixture.scheduled_start == start
+        assert fixture.pinned_at == silent_pin_time  # …and not re-pinned
+        assert fixture.call_notified_count == 1  # …but finally delivered
         rows = await _call_notifications(db_session)
         assert len(rows) == 2
-        assert all(row.title == "Your match moved to T2" for row in rows)
+        assert all(
+            row.title == "You're up soon — T2" and "09:07" in row.body for row in rows
+        )
         assert len(_fanout_jobs(fake_notifications_queue)) == 2
+
+        ledger = (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        ).scalar_one()
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 0
+        assert ledger.fixtures_pinned == 1  # echoed verbatim
 
     async def test_the_moved_correction_copy_renders_the_new_table_label_and_time(
         self,
@@ -861,7 +1177,9 @@ class TestBrokenPinRepair:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The moved sentence names the NEW table and HH:MM — asserted whole,
-        per recipient, with the opponent's name."""
+        per recipient, with the opponent's name. The table is removed from
+        the CATALOGUE only (the pool still names it): catalogue departure
+        alone is the physics that breaks a pin."""
         tournament_id, event_id = await _make_tournament(
             db_session, tables=("t1", "t2")
         )
@@ -873,7 +1191,7 @@ class TestBrokenPinRepair:
             start=BASE + timedelta(minutes=5),
             pinned_at=BASE - timedelta(minutes=5),
         )
-        await _remove_table(db_session, tournament_id, event_id, "t1")
+        await _remove_table(db_session, tournament_id, event_id, "t1", from_pools=False)
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)

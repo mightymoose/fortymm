@@ -13,6 +13,7 @@ import {
   estimatedMatchMinutes,
   fixtureTier,
   fmtBoardClock,
+  isDecided,
   notifiedLabel,
   tierSentence,
 } from './timeline'
@@ -154,9 +155,28 @@ describe('tierSentence', () => {
     ).toBe('Pinned — placed by the director')
   })
 
-  it("says a started bar's actual state", () => {
-    expect(tierSentence('started', 'in_progress', told)).toBe('In progress')
+  it('does NOT claim live play for an in_progress match — materialized means scoreable, not being played', () => {
+    // Go-live materializes EVERY round-robin fixture into an `in_progress`
+    // match, so "In progress" here would call a match hours out live (the
+    // QA-caught lie on the Gantt's aria).
+    expect(tierSentence('started', 'in_progress', told)).toBe(
+      'Underway or up next — scores can be entered',
+    )
+  })
+
+  it("says a decided bar's actual state", () => {
     expect(tierSentence('started', 'completed', untold)).toBe('Completed')
+    expect(tierSentence('started', 'voided', untold)).toBe('Voided')
+  })
+})
+
+describe('isDecided', () => {
+  it('is true only for completed and voided — the statuses that retire a call marker', () => {
+    expect(isDecided(null)).toBe(false)
+    expect(isDecided('pending')).toBe(false)
+    expect(isDecided('in_progress')).toBe(false)
+    expect(isDecided('completed')).toBe(true)
+    expect(isDecided('voided')).toBe(true)
   })
 })
 

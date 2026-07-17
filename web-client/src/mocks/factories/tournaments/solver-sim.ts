@@ -157,12 +157,21 @@ export function pinImminentFixtures<E extends SimEvent>(
   const next = events.map((event) => ({
     ...event,
     fixtures: event.fixtures.map((fixture) => {
-      // Already promised, unplaced, or already under way: nothing to call.
+      // Already promised, unplaced, half-drawn, or DECIDED: nothing to call.
+      // An `in_progress` match is NOT skipped — the server calls those too
+      // (`_due_for_call` + the settled-match filter, `api/app/match_calls.py`):
+      // go-live materializes every round-robin fixture into an `in_progress`
+      // match, so "in progress" means scoreable, not under way — its players
+      // still need to be told when and where. (This sim used to skip them,
+      // which is exactly how the mock worlds stayed green while QA caught the
+      // real board hiding every call.)
       if (
         fixture.pinned_at !== null ||
         fixture.table_id === null ||
         fixture.scheduled_start === null ||
-        fixture.match_status === 'in_progress' ||
+        fixture.entry_a_id === null ||
+        fixture.entry_b_id === null ||
+        fixture.winner_entry_id !== null ||
         fixture.match_status === 'completed' ||
         fixture.match_status === 'voided'
       ) {

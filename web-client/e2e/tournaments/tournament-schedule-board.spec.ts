@@ -104,13 +104,18 @@ test.describe('Tournaments · schedule boards', () => {
     await expect(pom.playerTimelineBoard).not.toBeVisible()
   })
 
-  test('on a LIVE tournament the solve CALLS the imminent fixtures — pinned bars on the board, badged rows on the list', async ({
+  test('on a LIVE tournament the solve CALLS the imminent fixtures — and the badges survive materialization (every match is in_progress from go-live)', async ({
     page,
   }) => {
     // LIVE is what arms the calling pass (ADR "the schedule is solved; the call
     // is pinned"): pre-live solves plan silently, a live solve promises — and
     // the stub's mock worker pins whatever lands within the ~10-minute
     // call-ahead window of the day's first ball.
+    //
+    // LIVE is also what MATERIALIZES (#788): every ready fixture is an
+    // `in_progress` match from the first live second, so every called fixture
+    // is tier `started` — the exact state in which QA caught the real board
+    // hiding every called badge and reading every bar as "In progress".
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
       ...DRAWN_SEED,
       status: 'live',
@@ -119,33 +124,45 @@ test.describe('Tournaments · schedule boards', () => {
     await pom.runScheduler.click()
     await expect(pom.solveStripState('succeeded')).toBeVisible({ timeout: 15_000 })
 
-    // The server now holds real pins: pinned_at set, one notification counted.
+    // The server now holds real pins: pinned_at set, one notification counted —
+    // on fixtures whose matches are ALL already in_progress (materialized).
     const fixtures = [
       ...store.fixturesOf(EVENT.JOURNEY),
       ...store.fixturesOf(EVENT.POOLS),
     ]
+    expect(fixtures.every((f) => f.match_status === 'in_progress')).toBe(true)
     const called = fixtures.filter((f) => f.pinned_at !== null)
     expect(called.length).toBeGreaterThan(0)
     expect(called.every((f) => f.call_notified_count === 1)).toBe(true)
-    const estimates = fixtures.filter(
-      (f) => f.pinned_at === null && f.scheduled_start !== null,
-    )
-    expect(estimates.length).toBeGreaterThan(0)
 
     // The LIST (the default view) says which rows are promises: one called-at
-    // badge per pin, `est` on every still-movable time — never blurred.
+    // badge per pin, VISIBLE — the badge rides the pin, never the tier (the
+    // QA-caught gap: it used to vanish the moment the match materialized).
     await expect(pom.calledBadges).toHaveCount(called.length)
+    await expect(pom.calledBadges.first()).toBeVisible()
     await expect(pom.calledBadges.first()).toContainText('Called 09:00')
-    await expect(pom.estMarks).toHaveCount(estimates.length)
     // One call each, no corrections yet: the `notified n×` counter stays off.
     await expect(pom.notifiedMarkers).toHaveCount(0)
+    // No `est` marks while live: every row's match is materialized (tier
+    // `started`), and `est` is the plan-tier word alone.
+    await expect(pom.estMarks).toHaveCount(0)
 
     await expectAxeClean(page, 'schedule tab — list view with called badges')
 
-    // The boards encode the same promise as the called tier, on the bar itself.
+    // The boards: tier visuals stay honest (started outranks the pin — no bar
+    // pretends to be a plan), and the promise rides the bar's own marker/aria
+    // instead of the tier.
     await pom.setScheduleView('Gantt')
-    await expect(pom.calledBars).toHaveCount(called.length)
-    await expect(pom.calledBars.first()).toHaveAttribute('data-tier', 'called')
+    await expect(pom.timelineBars.first()).toHaveAttribute('data-tier', 'started')
+    await expect(pom.calledBars).toHaveCount(0)
+    const calledBar = pom.timelineBar(called[0].id)
+    await expect(calledBar).toHaveAttribute('aria-label', /Called 09:00/)
+    // …and the started-tier words claim scoreability, never live play — the
+    // other half of the QA finding (every bar read "In progress", hours out).
+    await expect(calledBar).toHaveAttribute(
+      'aria-label',
+      /Underway or up next — scores can be entered/,
+    )
 
     await expectAxeClean(page, 'schedule tab — Gantt view with called bars')
   })
@@ -168,9 +185,12 @@ test.describe('Tournaments · schedule boards', () => {
         (r) => r.method === 'PATCH' && r.path.endsWith('/placement'),
       )
 
-    // An untold, unplaced fixture straight off the server's own draw.
+    // An untold, unplaced fixture straight off the server's own draw — whose
+    // match is ALREADY `in_progress` (go-live materialized it, #788), so the
+    // badge this test ends on is the tier-independent one QA found missing.
     const fixture = store.fixturesOf(EVENT.JOURNEY)[0]
     expect(fixture.call_notified_count).toBe(0)
+    expect(fixture.match_status).toBe('in_progress')
 
     await pom.placeTrigger(fixture.id).click()
     await pom.placeSave(fixture.id).click()

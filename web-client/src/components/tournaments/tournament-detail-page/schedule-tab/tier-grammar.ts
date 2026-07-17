@@ -27,6 +27,8 @@ export const TIER_GRAMMAR: Record<
   started: {
     className:
       'border border-[color:var(--serve-500)]/70 bg-[color:var(--serve-500)]/15 text-[color:var(--fg-2)]',
-    label: 'In play or finished',
+    // NOT "in play": an `in_progress` match is materialized (scoreable), not
+    // necessarily being played — go-live makes every round-robin fixture one.
+    label: 'Underway, up next, or finished',
   },
 }

@@ -57,7 +57,10 @@ describe('TimelineBar', () => {
     expect(tip).not.toHaveTextContent('notified')
   })
 
-  it('renders a started bar as fact, reading its actual state', () => {
+  it('does not claim live play on an in_progress bar — materialized means scoreable, not being played', () => {
+    // Go-live materializes EVERY round-robin fixture into an `in_progress`
+    // match, so a started bar whose scheduled start is hours away must not
+    // read "In progress" to a screen reader.
     page.render({
       bar: buildTimelineBarData({
         tier: 'started',
@@ -65,7 +68,68 @@ describe('TimelineBar', () => {
       }),
     })
     expect(page.getTier('fx-a-1')).toBe('started')
-    expect(page.getBar('fx-a-1')).toHaveAccessibleName(/In progress\.$/)
+    expect(page.getBar('fx-a-1')).toHaveAccessibleName(
+      /Underway or up next — scores can be entered\.$/,
+    )
+  })
+
+  it('keeps the called-at marker on a TOLD in_progress bar — the promise survives materialization', async () => {
+    // The QA-caught case: while live every fixture's match is `in_progress`,
+    // so a called match is tier `started` from the first second — and the
+    // director must still see what the players were told.
+    page.render({
+      bar: buildTimelineBarData({
+        tier: 'started',
+        status: 'in_progress',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 1,
+      }),
+    })
+    const bar = page.getBar('fx-a-1')
+    expect(page.getTier('fx-a-1')).toBe('started')
+    expect(bar).toHaveAccessibleName(
+      /Underway or up next — scores can be entered\. Called 08:50\.$/,
+    )
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).toHaveTextContent('Called 08:50')
+  })
+
+  it('marks a pinned-untold in_progress bar `Pinned` — the pin holds, and still claims no call', async () => {
+    page.render({
+      bar: buildTimelineBarData({
+        tier: 'started',
+        status: 'in_progress',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 0,
+      }),
+    })
+    const bar = page.getBar('fx-a-1')
+    expect(bar).toHaveAccessibleName(/Pinned\.$/)
+    expect(bar).not.toHaveAccessibleName(/Called|notified/)
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).toHaveTextContent('Pinned')
+    expect(tip).not.toHaveTextContent('Called')
+  })
+
+  it('retires the call marker once the match is decided — no stale promise on a completed bar', async () => {
+    page.render({
+      bar: buildTimelineBarData({
+        tier: 'started',
+        status: 'completed',
+        pinnedAt: '2026-06-13T08:50:00',
+        callNotifiedCount: 2,
+      }),
+    })
+    const bar = page.getBar('fx-a-1')
+    expect(bar).toHaveAccessibleName(/Completed\.$/)
+    expect(bar).not.toHaveAccessibleName(/Called|notified|Pinned/)
+    page.focusBar('fx-a-1')
+    const tip = await page.findTooltip()
+    expect(tip).not.toHaveTextContent('Called')
+    expect(tip).not.toHaveTextContent('notified')
+    expect(tip).not.toHaveTextContent('Pinned')
   })
 
   it('positions and sizes itself from the window origin and the estimated duration', () => {
