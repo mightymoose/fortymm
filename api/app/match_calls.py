@@ -110,6 +110,8 @@ from app import db as db_module
 from app import queue as queue_module
 from app.models import (
     Match,
+    MatchGame,
+    MatchResult,
     MatchStatus,
     Notification,
     Tournament,
@@ -246,6 +248,44 @@ async def _go_live_on_call(
         update(Match)
         .where(Match.id.in_(ids), Match.status == MatchStatus.pending)
         .values(status=MatchStatus.in_progress)
+    )
+
+
+async def _un_call_pristine_match(db: AsyncSession, match_id: uuid.UUID | None) -> None:
+    """Revert a linked match ``in_progress → pending`` — the ADR's reverse
+    transition, fired when the director *un-places* a called fixture (the clear
+    branch of :func:`apply_manual_placement`): the pin is lifted and the
+    entrants get *match_call_cancelled*, so without this the match would sit
+    ``in_progress`` with no pin — the exact ambiguous state the ADR eliminated,
+    reached from the other side, and it would show as a phantom actionable row.
+
+    Guarded twice, both in the same locked transaction as the clear/cancel:
+
+    * **only ``in_progress → pending``** (``Match.status == in_progress`` in the
+      WHERE), so a match that is already ``pending`` (a silent clear that never
+      called anyone) or ``completed``/``voided`` is left alone;
+    * **only when the match is pristine** — no ``MatchGame`` rows (a game row is
+      born only when a score is written) and no ``MatchResult`` rows. A match
+      with any play stays ``in_progress``: the play is real and the players
+      still owe a score. The two ``NOT EXISTS`` correlate on ``Match.id`` and
+      ride the single ``UPDATE``, so the pristine check and the flip are atomic.
+
+    Rides the caller's open transaction; does **not** commit. A fixture with no
+    materialized match (``match_id IS NULL``) is a no-op.
+    """
+    if match_id is None:
+        return
+    has_game = select(MatchGame.id).where(MatchGame.match_id == Match.id).exists()
+    has_result = select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
+    await db.execute(
+        update(Match)
+        .where(
+            Match.id == match_id,
+            Match.status == MatchStatus.in_progress,
+            ~has_game,
+            ~has_result,
+        )
+        .values(status=MatchStatus.pending)
     )
 
 
@@ -556,7 +596,10 @@ async def apply_manual_placement(
       interval, so it cannot stay promised. If the players had been called,
       both entrants get the *match_call_cancelled* correction (reason: the
       schedule changed) — they were told to go to a table that no longer
-      expects them. Pre-live or never-told clears are silent.
+      expects them. Pre-live or never-told clears are silent. A cleared match
+      that was called (``in_progress``) and is still **pristine** — no game
+      scores, no results — reverts ``in_progress → pending``
+      (:func:`_un_call_pristine_match`); one with any play stays ``in_progress``.
 
     ``call_notified_count`` keeps its one invariant — "how many times the
     players were told" — incrementing once per correction batch actually
@@ -578,6 +621,11 @@ async def apply_manual_placement(
             fanout = await _tell_both_entrants(
                 db, tournament, fixture, build=_cancelled_by_schedule_change
             )
+        # Un-call: a called match with the pin now lifted would otherwise sit
+        # in_progress with no pin — the ambiguous state the ADR eliminated.
+        # Revert it to pending, but only if pristine (no play). Guarded to
+        # in_progress → pending inside the helper, in this same transaction.
+        await _un_call_pristine_match(db, fixture.match_id)
         await db.flush()
         return fanout
 

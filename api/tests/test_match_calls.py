@@ -42,6 +42,9 @@ from app.models import (
     DrawType,
     EventFormat,
     Match,
+    MatchGame,
+    MatchGameScore,
+    MatchResult,
     MatchSettings,
     MatchStatus,
     Notification,
@@ -1527,6 +1530,133 @@ class TestCallFlipsMatchLive:
         await db_session.commit()
 
         assert fanout  # a moved correction was sent
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
+
+
+class TestClearRevertsMatchToPending:
+    """The reverse transition (ADR "the reverse transition is a pristine
+    un-call"): a director un-places a called (``in_progress``) match, lifting
+    the pin and sending *match_call_cancelled*; the match reverts to ``pending``
+    — but only if pristine (no game scores, no results). Any play keeps it
+    ``in_progress`` — the play is real and the players still owe a score."""
+
+    async def test_clearing_a_pristine_called_match_reverts_it_to_pending(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Call a match (``in_progress``) → clear its placement while it is
+        pristine → it is ``pending`` again, folding out of the actionable
+        attention bucket (which gates on ``in_progress``)."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        _freeze_clocks(monkeypatch, BASE)
+        fixture = await _the_fixture(db_session, event_id)
+        # Pre-state: a called, live match (pinned, told).
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=5),
+            notified=1,
+        )
+        match_id = await _link_match(
+            db_session, tournament_id, fixture, status=MatchStatus.in_progress
+        )
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+
+        fanout = await match_calls.apply_manual_placement(
+            db_session, tournament, fixture, table_id=None, scheduled_start=None
+        )
+        await db_session.commit()
+
+        assert fanout  # both entrants were told the call was cancelled
+        assert fixture.pinned_at is None  # the pin was lifted
+        assert await _match_status(db_session, match_id) is MatchStatus.pending
+
+    async def test_clearing_a_match_with_a_scored_game_stays_in_progress(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Call a match → score at least one game → clear its placement → the
+        match stays ``in_progress`` (NOT reverted): the play is real."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        _freeze_clocks(monkeypatch, BASE)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=5),
+            notified=1,
+        )
+        match_id = await _link_match(
+            db_session, tournament_id, fixture, status=MatchStatus.in_progress
+        )
+        # A game was scored — play has begun.
+        db_session.add(
+            MatchGame(
+                match_id=match_id,
+                game_number=1,
+                score=MatchGameScore(side_1_points=11, side_2_points=7),
+            )
+        )
+        await db_session.commit()
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+
+        await match_calls.apply_manual_placement(
+            db_session, tournament, fixture, table_id=None, scheduled_start=None
+        )
+        await db_session.commit()
+
+        assert fixture.pinned_at is None  # the pin is still lifted…
+        # …but the match stays live: the play is real.
+        assert await _match_status(db_session, match_id) is MatchStatus.in_progress
+
+    async def test_clearing_a_match_with_a_posted_result_stays_in_progress(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A clear on a match carrying a posted result also stays
+        ``in_progress`` — a result is play too."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        _freeze_clocks(monkeypatch, BASE)
+        fixture = await _the_fixture(db_session, event_id)
+        await _pin_directly(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE + timedelta(minutes=5),
+            pinned_at=BASE - timedelta(minutes=5),
+            notified=1,
+        )
+        match_id = await _link_match(
+            db_session, tournament_id, fixture, status=MatchStatus.in_progress
+        )
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+        db_session.add(
+            MatchResult(
+                match_id=match_id,
+                submitted_by_user_id=tournament.created_by_user_id,
+                games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 7}],
+            )
+        )
+        await db_session.commit()
+
+        await match_calls.apply_manual_placement(
+            db_session, tournament, fixture, table_id=None, scheduled_start=None
+        )
+        await db_session.commit()
+
         assert await _match_status(db_session, match_id) is MatchStatus.in_progress
 
 
