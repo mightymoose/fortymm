@@ -238,7 +238,7 @@ export const EventEditor = ({
         side="right"
         className="w-full gap-0 p-0 sm:w-[820px] sm:max-w-[820px]"
       >
-        <SheetHeader className="border-b border-[color:var(--border-subtle)]">
+        <SheetHeader className="mb-0 border-b border-[color:var(--border-subtle)] px-6 pt-6 pb-5">
           <SheetDescription
             data-testid="event-editor-overline"
             className="text-[11px] font-semibold tracking-[0.14em] uppercase"
