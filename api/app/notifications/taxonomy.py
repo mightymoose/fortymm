@@ -23,6 +23,10 @@ class NotificationCategory(StrEnum):
     TOURNAMENT = "tournament"
     OPPONENT = "opponent"
     RESULT_CONFIRM = "result_confirm"
+    # Tournament-day table calls (ADR 2026-07-16 "the call is pinned"): one
+    # prefs category shared by the called / moved / cancelled message kinds
+    # built in ``app.notifications.match_calls``.
+    MATCH_CALLS = "match_calls"
 
 
 class NotificationChannel(StrEnum):

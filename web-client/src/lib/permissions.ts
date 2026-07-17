@@ -19,6 +19,11 @@ export const PERM = {
   TOURNAMENT_CREATE: 'tournament.create',
   TOURNAMENT_ENTER: 'tournament.enter',
   NOTIFICATIONS_BROADCAST: 'notifications.broadcast',
+  // Gates the Administration area's schedule-solve ledger page — its own grant
+  // (like notifications.broadcast) so an operator can hand out ledger read
+  // access without also handing out the RBAC-management keys. Mirrors
+  // api/app/admin_schedule_solves.py:SCHEDULING_VIEW_PERMISSION.
+  SCHEDULING_VIEW: 'scheduling.view',
 } as const
 
 export type PermissionName = (typeof PERM)[keyof typeof PERM]

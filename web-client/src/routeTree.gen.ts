@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SimulatorRouteImport } from './routes/simulator'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as AppRouteRouteImport } from './routes/_app/route'
@@ -33,6 +32,7 @@ import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$use
 import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
 import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
 import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
+import { Route as AppAdminScheduleSolvesRouteImport } from './routes/_app/admin.schedule-solves'
 import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
 import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
 import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
@@ -42,11 +42,6 @@ import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/m
 import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 
-const SimulatorRoute = SimulatorRouteImport.update({
-  id: '/simulator',
-  path: '/simulator',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
@@ -163,6 +158,11 @@ const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AppAdminRoute,
 } as any)
+const AppAdminScheduleSolvesRoute = AppAdminScheduleSolvesRouteImport.update({
+  id: '/schedule-solves',
+  path: '/schedule-solves',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
   id: '/roles',
   path: '/roles',
@@ -211,7 +211,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/admin': typeof AppAdminRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
   '/notifications': typeof AppNotificationsRouteWithChildren
@@ -224,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -244,7 +244,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/dashboard': typeof AppDashboardRoute
   '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
@@ -254,6 +253,7 @@ export interface FileRoutesByTo {
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -276,7 +276,6 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
-  '/simulator': typeof SimulatorRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/notifications': typeof AppNotificationsRouteWithChildren
@@ -289,6 +288,7 @@ export interface FileRoutesById {
   '/_app/admin/broadcast': typeof AppAdminBroadcastRoute
   '/_app/admin/permissions': typeof AppAdminPermissionsRoute
   '/_app/admin/roles': typeof AppAdminRolesRoute
+  '/_app/admin/schedule-solves': typeof AppAdminScheduleSolvesRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/matches/new': typeof AppMatchesNewRoute
   '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
@@ -311,7 +311,6 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/admin'
     | '/dashboard'
     | '/notifications'
@@ -324,6 +323,7 @@ export interface FileRouteTypes {
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
+    | '/admin/schedule-solves'
     | '/admin/users'
     | '/matches/new'
     | '/notifications/settings'
@@ -344,7 +344,6 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/dashboard'
     | '/settings'
     | '/login/sent'
@@ -354,6 +353,7 @@ export interface FileRouteTypes {
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
+    | '/admin/schedule-solves'
     | '/admin/users'
     | '/matches/new'
     | '/notifications/settings'
@@ -375,7 +375,6 @@ export interface FileRouteTypes {
     | '/_app'
     | '/confirm-email'
     | '/design-system'
-    | '/simulator'
     | '/_app/admin'
     | '/_app/dashboard'
     | '/_app/notifications'
@@ -388,6 +387,7 @@ export interface FileRouteTypes {
     | '/_app/admin/broadcast'
     | '/_app/admin/permissions'
     | '/_app/admin/roles'
+    | '/_app/admin/schedule-solves'
     | '/_app/admin/users'
     | '/_app/matches/new'
     | '/_app/notifications/settings'
@@ -410,7 +410,6 @@ export interface RootRouteChildren {
   AppRouteRoute: typeof AppRouteRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DesignSystemRoute: typeof DesignSystemRoute
-  SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
@@ -419,13 +418,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/simulator': {
-      id: '/simulator'
-      path: '/simulator'
-      fullPath: '/simulator'
-      preLoaderRoute: typeof SimulatorRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/design-system': {
       id: '/design-system'
       path: '/design-system'
@@ -587,6 +579,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminUsersRouteImport
       parentRoute: typeof AppAdminRoute
     }
+    '/_app/admin/schedule-solves': {
+      id: '/_app/admin/schedule-solves'
+      path: '/schedule-solves'
+      fullPath: '/admin/schedule-solves'
+      preLoaderRoute: typeof AppAdminScheduleSolvesRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/admin/roles': {
       id: '/_app/admin/roles'
       path: '/roles'
@@ -650,6 +649,7 @@ interface AppAdminRouteChildren {
   AppAdminBroadcastRoute: typeof AppAdminBroadcastRoute
   AppAdminPermissionsRoute: typeof AppAdminPermissionsRoute
   AppAdminRolesRoute: typeof AppAdminRolesRoute
+  AppAdminScheduleSolvesRoute: typeof AppAdminScheduleSolvesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
 }
@@ -658,6 +658,7 @@ const AppAdminRouteChildren: AppAdminRouteChildren = {
   AppAdminBroadcastRoute: AppAdminBroadcastRoute,
   AppAdminPermissionsRoute: AppAdminPermissionsRoute,
   AppAdminRolesRoute: AppAdminRolesRoute,
+  AppAdminScheduleSolvesRoute: AppAdminScheduleSolvesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
 }
@@ -738,7 +739,6 @@ const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
   DesignSystemRoute: DesignSystemRoute,
-  SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,

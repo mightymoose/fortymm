@@ -18,21 +18,22 @@
 //      needs BOTH bounds. A rule that constrains nobody is not a rule.
 //   2. **`between` runs low → high.** `Rating in [1600–1200]` is satisfiable by no
 //      player alive, and it saved without a murmur.
-//   3. **A rating is a rating.** 0–3000, whole points — the range the simulator's
-//      own validator already states in exactly these words ("Rating must be
+//   3. **A rating is a rating.** 0–3000, whole points — the range the simulator
+//      prototype's own validator stated in exactly these words ("Rating must be
 //      0–3000."), reused rather than re-invented a second way.
 
 import { z } from 'zod'
 
 import type { Predicate } from './types'
 
-/** The bounds a rating can honestly take. Not invented here: `simulator/data.ts`
- * validates a player's rating against the same 0–3000, and two ranges for one
- * number is one range too many. `999999999` was accepted before this. */
+/** The bounds a rating can honestly take. Not invented here: the simulator
+ * prototype (since removed; its boards live on in the schedule tab) validated a
+ * player's rating against the same 0–3000, and two ranges for one number is one
+ * range too many. `999999999` was accepted before this. */
 export const RATING_MIN = 0
 export const RATING_MAX = 3000
 
-/** En dash, matching the copy the simulator already shows. */
+/** En dash, matching the copy the simulator prototype showed. */
 const RANGE_MESSAGE = `Rating must be ${RATING_MIN}–${RATING_MAX}.`
 
 /** The value of a rating rule, as Zod: present, whole, and in range. `null` — the

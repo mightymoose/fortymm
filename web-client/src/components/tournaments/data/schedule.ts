@@ -21,12 +21,14 @@
 import type { MatchStatus } from '@/api/matches'
 
 import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
+import { fixtureTier, isTold, timeOfDay, type TimelineTier } from './timeline'
 import type {
   Entrant,
   Fixture,
   Slot,
   Tournament,
   TournamentEvent,
+  TournamentStatus,
   TournamentTable,
 } from './types'
 
@@ -69,6 +71,18 @@ export interface ScheduleMatch {
    * `completed`/`voided` — its placement is frozen server-side, so the control is hidden
    * rather than offered and refused (ADR-0790). */
   placeable: boolean
+  /** How firm the time is — the boards' `estimate` / `called` / `started` vocabulary
+   * (`fixtureTier`), so the LIST reads the same tier system the bars draw: an estimate
+   * says `est`, a call carries its called-at badge, a started match reads as its status.
+   * The list must not blur a promise into a plan any more than a bar may. */
+  tier: TimelineTier
+  /** When the fixture was **called** (`null` = never): the promise's own timestamp,
+   * shown on the row so a director sees what they told the players (ADR "the schedule
+   * is solved; the call is pinned"). */
+  pinnedAt: string | null
+  /** How many call/correction notifications the players have received — `0` until
+   * called; `> 1` means a correction already spent their attention once. */
+  callNotifiedCount: number
 }
 
 /**
@@ -139,6 +153,9 @@ function toScheduleMatch(
     suggestedTableIds: pool?.tableIds ?? [],
     placeable:
       fixture.matchStatus === null || !FROZEN_STATUSES.has(fixture.matchStatus),
+    tier: fixtureTier(fixture),
+    pinnedAt: fixture.pinnedAt,
+    callNotifiedCount: fixture.callNotifiedCount,
   }
 }
 
@@ -263,11 +280,69 @@ export function composeScheduledStart(date: string, time: string): string {
   return `${date}T${time}:00`
 }
 
-/** The `HH:MM` time-of-day of a naive placement timestamp — for prefilling the picker and
- * showing the placement. Tolerant of a bare date or a seconds-bearing stamp; `''` when
- * there is no time (an unscheduled fixture). */
-export function timeOfDay(scheduledStart: string | null): string {
-  if (!scheduledStart) return ''
-  const time = scheduledStart.split('T')[1]
-  return time ? time.slice(0, 5) : ''
+/** The `HH:MM` time-of-day helper lives in `./timeline.ts` now (this module already
+ * imports from there, so the dependency could only point that way); re-exported
+ * here because the schedule's readers are its natural audience. */
+export { timeOfDay }
+
+/**
+ * What a placement write would DO to the players, before it is sent (ADR "the schedule
+ * is solved; the call is pinned": any placement action that would notify gets a
+ * consequence-stating confirm) — the sum type the Schedule tab's submit path branches
+ * on. One of:
+ *
+ * - `silent` — nobody is told: the tournament is not live (free rearranging while
+ *   planning), the fixture has a TBD/withdrawn side (a promise to nobody is not a
+ *   promise — the server stores the columns, pins nothing, tells nobody), or the
+ *   write clears a placement the players were never told about.
+ * - `call` — live, both sides known, and the players were never told: placing it
+ *   **is** calling it — both players will be notified.
+ * - `correction-move` — live, and the players were already told a table/time: moving
+ *   it sends both a correction.
+ * - `correction-cancel` — live, told, and the write CLEARS the placement: both players
+ *   are told the match is off that table.
+ */
+export type PlacementConsequenceKind =
+  | 'silent'
+  | 'call'
+  | 'correction-move'
+  | 'correction-cancel'
+
+/**
+ * Judge one placement write — a mirror of the server's own transition
+ * (`apply_manual_placement`, `api/app/match_calls.py`), branch for branch:
+ *
+ * - **Told-ness is `isTold` (`./timeline.ts`)** — `pinnedAt` AND the count, never the
+ *   count alone: a call that was later cancelled keeps its count but drops its pin —
+ *   re-placing that fixture live is a fresh CALL, not a "moved" correcting a promise
+ *   nobody holds.
+ * - **Anything less than a full placement is a clear**: a half-placement (a table with
+ *   no time) cannot stay promised, so the server unpins it — and, live + told, sends
+ *   the cancelled correction. The gate must price that write as the cancel it is.
+ * - **A TBD/withdrawn side never notifies**: the columns store softly, no pin, no one
+ *   told — silent, whatever the status.
+ *
+ * Note the pin itself is NOT gated here: every full placement pins, in every status
+ * (a director's hand is a commitment). Live only decides whether anyone is *told* —
+ * and told is all this confirm prices.
+ */
+export function placementConsequence(input: {
+  tournamentStatus: TournamentStatus
+  /** The fixture as it stands — its sides and what its players were already told. */
+  match: Pick<ScheduleMatch, 'a' | 'b' | 'pinnedAt' | 'callNotifiedCount'>
+  /** The placement the write would store, whole (ADR-0790). */
+  write: { tableId: string | null; scheduledStart: string | null }
+}): PlacementConsequenceKind {
+  if (input.tournamentStatus !== 'live') return 'silent'
+  const told = isTold(input.match)
+  // The server's clear branch: any half-placement lifts the pin with the columns.
+  if (input.write.tableId === null || input.write.scheduledStart === null) {
+    return told ? 'correction-cancel' : 'silent'
+  }
+  // The server's TBD branch: a full placement onto a fixture with no second player
+  // stores softly and tells nobody.
+  if (input.match.a.kind !== 'entrant' || input.match.b.kind !== 'entrant') {
+    return 'silent'
+  }
+  return told ? 'correction-move' : 'call'
 }

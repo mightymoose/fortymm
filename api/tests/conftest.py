@@ -37,6 +37,19 @@ def fake_solver_queue(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _solver_job_database(monkeypatch, postgres_url):
+    """Jobs on the synchronous fake solver queue run INLINE at enqueue time and
+    open their own engine from ``DATABASE_URL`` (``run_schedule_solve`` — now
+    enqueued by every go-live and every tournament-match completion, not just
+    the solve-specific test files). Point that env var at the test database so
+    the inline run reads the same Postgres as the test — where it exits as a
+    stale no-op, the row it was enqueued for not yet being committed — instead
+    of dialing the compose default. Free: the autouse ``rating_strategies`` →
+    ``db_session`` chain already makes every test require ``postgres_url``."""
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+
+
+@pytest.fixture(autouse=True)
 def fake_ratings_queue(monkeypatch):
     """Async-style RQ queue against fakeredis: enqueues are recorded but the
     job body never runs. The recompute job opens its own DB engine via
@@ -203,15 +216,17 @@ async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrateg
     return {"glicko2": glicko2, "manual": manual}
 
 
-# Display labels mirror the migration 0009 seed (and the former client-side
-# CATEGORY_META / CHANNEL_META). Migration 0009 inserts these in real
-# deployments; tests build via ``Base.metadata.create_all`` so we re-seed here.
+# Display labels mirror the migration seeds — 0009 for the original five
+# categories (and the former client-side CATEGORY_META / CHANNEL_META), 0015
+# for match_calls. The migrations insert these in real deployments; tests
+# build via ``Base.metadata.create_all`` so we re-seed here.
 NOTIFICATION_TYPE_LABELS: dict[NotificationCategory, tuple[str, str]] = {
     NotificationCategory.MATCH_REMINDER: ("Match reminders", "Match"),
     NotificationCategory.RATING_CHANGE: ("Rating changes", "Rating"),
     NotificationCategory.TOURNAMENT: ("Tournament news", "Tourney"),
     NotificationCategory.OPPONENT: ("Challenges & friends", "Social"),
     NotificationCategory.RESULT_CONFIRM: ("Score acceptances", "Scores"),
+    NotificationCategory.MATCH_CALLS: ("Match calls", "Calls"),
 }
 NOTIFICATION_CHANNEL_LABELS: dict[ChannelEnum, str] = {
     ChannelEnum.IN_APP: "In-app",

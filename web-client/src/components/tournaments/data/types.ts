@@ -7,6 +7,7 @@
 import type { MatchStatus } from '@/api/matches'
 
 import type { PredicateOp } from './options'
+import type { ScheduleSolve } from './solve'
 
 export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 
@@ -117,6 +118,10 @@ export interface Pool {
  *   **unscheduled**. A *naive* wall-clock timestamp string (no timezone), in the venue's
  *   frame — a prediction, not a commitment, so an off-prediction start is normal, not an
  *   error. Carried as the string it arrives as (like the slot's `date`/`start`/`end`).
+ * - `pinnedAt` — when the fixture was **called** (ADR "the schedule is solved, the
+ *   call is pinned"): `null` means the placement is still an estimate the solver may
+ *   move freely. When set, the placement is a promise — the players were notified,
+ *   and no later solve rearranges it. Naive wall-clock, like `scheduledStart`.
  *
  * Parsed at the boundary by `./fixtures` — this interface is what comes out.
  */
@@ -138,6 +143,14 @@ export interface Fixture {
   /** The placement's predicted start (ADR-0790): a naive wall-clock timestamp string, or
    * `null` when **unscheduled**. A prediction, not a commitment. */
   scheduledStart: string | null
+  /** When this fixture was **called** — pinned and its players notified — or `null`
+   * while the placement is still an estimate (ADR "the schedule is solved, the call
+   * is pinned"). Carried for the call markers a later slice renders; nothing here
+   * writes it. */
+  pinnedAt: string | null
+  /** How many call/correction notifications this fixture's players have received.
+   * `0` for a never-called fixture. Read-only, like `pinnedAt`. */
+  callNotifiedCount: number
 }
 
 /**
@@ -338,4 +351,10 @@ export interface Tournament {
   address: Address
   tableIds: string[]
   events: TournamentEvent[]
+  /** The latest run of the schedule solver — the ledger row the Schedule tab's
+   * solve strip renders — or `null` when no solve has ever been requested (the
+   * designed "no solve yet" state, the one every tournament is born in). Parsed at
+   * the boundary by `./solve`; read it, never write it — a new row appears only
+   * through `POST …/schedule/solves` (or the server's own triggers). */
+  latestScheduleSolve: ScheduleSolve | null
 }

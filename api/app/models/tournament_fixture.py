@@ -159,6 +159,24 @@ class TournamentFixture(Base):
     scheduled_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
+    #: When this fixture was **called** — the moment its placement stopped being an
+    #: estimate and became a promise (ADR "the schedule is solved, the call is
+    #: pinned"). ``NULL`` = unpinned: the solver may still move it freely. Set (with
+    #: both players notified, in one transaction) it becomes a hard constraint in
+    #: every later solve. Naive wall-clock in the venue's frame, like
+    #: ``scheduled_start`` above — the same deliberate ADR-0790 exemption from the
+    #: "datetimes are always timezone-aware" rule; do NOT "fix" this to
+    #: ``timezone=True``.
+    pinned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    #: How many times the players were told about this fixture's placement — the
+    #: initial call plus every "moved"/"cancelled" correction. 0 = never notified.
+    #: A count, not a flag, because the UI prices a director's re-drag by exactly
+    #: this ("both players were told Table 3 — moving sends a correction").
+    call_notified_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

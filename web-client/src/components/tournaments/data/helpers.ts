@@ -294,6 +294,10 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     },
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [],
+    // A brand-new tournament has never been solved — and `Tournament` is the READ
+    // model besides: `draftToCreateBody` does not propagate this, exactly as it
+    // drops `status`.
+    latestScheduleSolve: null,
   }
 }
 

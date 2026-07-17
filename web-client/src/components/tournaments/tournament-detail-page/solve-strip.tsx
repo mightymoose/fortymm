@@ -1,0 +1,248 @@
+import { useState } from 'react'
+import {
+  CalendarClock,
+  CircleCheck,
+  CircleX,
+  Loader2,
+  Play,
+  TriangleAlert,
+} from 'lucide-react'
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { fmtDateRel } from '@/lib/dates'
+
+import {
+  TRIGGER_LABEL,
+  VERDICT_LABEL,
+  fmtWallTime,
+  runSchedulerNotice,
+  solveInFlight,
+  solveStripState,
+  type RunSchedulerNotice,
+  type ScheduleSolve,
+} from '../data/solve'
+
+export interface SolveStripProps {
+  /** The latest run of the schedule solver, or `null` when none was ever
+   * requested — the designed "no plan yet" state, never an error. */
+  solve: ScheduleSolve | null
+  /** Owner? The Run-scheduler button is theirs alone — hidden, never disabled,
+   * for a viewer (ADR-0015; the API independently 403s a non-owner). */
+  canEdit: boolean
+  /** Fire the solve request. Must reject with the `ApiError` on refusal — the
+   * strip owns the inline notice (`runSchedulerNotice`), so the mutation behind
+   * this must not also toast. */
+  onRun: () => Promise<void>
+}
+
+/** One visual grammar for the five states: an icon in the state's tint, a
+ * headline, and a quieter line under it. */
+const Line = ({
+  icon,
+  tint,
+  title,
+  children,
+}: {
+  icon: React.ReactNode
+  tint: string
+  title: string
+  children?: React.ReactNode
+}) => (
+  <div className="flex min-w-0 items-start gap-3">
+    <span className={`mt-0.5 shrink-0 ${tint}`}>{icon}</span>
+    <div className="min-w-0">
+      <div className="text-[14px] font-semibold text-[color:var(--fg-1)]">
+        {title}
+      </div>
+      {children && (
+        <div className="mt-0.5 text-[12px] text-[color:var(--fg-3)]">
+          {children}
+        </div>
+      )}
+    </div>
+  </div>
+)
+
+/** The latest solve, rendered as its designed state. Split from the strip so the
+ * strip's `switch` reads as the sum type it renders. */
+const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: boolean }) => {
+  const state = solveStripState(solve)
+  switch (state.kind) {
+    case 'none':
+      return (
+        <div data-testid="solve-strip-none">
+          <Line
+            icon={<CalendarClock size={18} />}
+            tint="text-[color:var(--fg-3)]"
+            title="No schedule plan yet"
+          >
+            {canEdit
+              ? 'Run the scheduler to place every match on a table — estimates the solver keeps fresh, promises only when a match is called.'
+              : 'The organizer has not run the scheduler yet.'}
+          </Line>
+        </div>
+      )
+    case 'solving':
+      return (
+        <div data-testid="solve-strip-solving">
+          <Line
+            icon={<Loader2 size={18} className="animate-spin" />}
+            tint="text-[color:var(--ball-500)]"
+            title="Solving the schedule…"
+          >
+            {TRIGGER_LABEL[state.trigger]}.
+          </Line>
+        </div>
+      )
+    case 'succeeded': {
+      const wall = fmtWallTime(state.wallTimeMs)
+      return (
+        <div data-testid="solve-strip-succeeded">
+          <Line
+            icon={<CircleCheck size={18} />}
+            tint="text-[color:var(--serve-500)]"
+            title={
+              state.finishedAt
+                ? `Schedule solved ${fmtDateRel(state.finishedAt)}`
+                : 'Schedule solved'
+            }
+          >
+            {VERDICT_LABEL[state.verdict]}
+            {wall ? ` — solved in ${wall}` : ''} · {TRIGGER_LABEL[state.trigger]}.
+          </Line>
+        </div>
+      )
+    }
+    case 'infeasible':
+      // A DESIGNED outcome, not an error banner: the solver *proved* the plan
+      // impossible, which is exactly what a pre-live run is for.
+      return (
+        <div data-testid="solve-strip-infeasible">
+          <Line
+            icon={<TriangleAlert size={18} />}
+            tint="text-[color:var(--warn)]"
+            title="The day doesn't fit"
+          >
+            The matches can't all fit inside their windows on the tables
+            available. Add tables, widen a pool window, or trim an event's field —
+            then run the scheduler again.
+          </Line>
+        </div>
+      )
+    case 'failed':
+      return (
+        <div data-testid="solve-strip-failed">
+          <Line
+            icon={<CircleX size={18} />}
+            tint="text-[color:var(--loss)]"
+            title="The scheduler hit a problem"
+          >
+            The run broke before it could finish — the schedule is unchanged. Run
+            it again.
+            {/* The server's own account, as detail under the client's headline —
+                the actionable content, the draw-panel precedent. */}
+            {state.error && (
+              <span className="mt-0.5 block font-mono text-[11px] text-[color:var(--fg-3)]">
+                {state.error}
+              </span>
+            )}
+          </Line>
+        </div>
+      )
+    default: {
+      const exhaustive: never = state
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * The Schedule tab's **solve strip** (ADR "the schedule is solved; the call is
+ * pinned"): what the latest run of the placement solver has to say, plus the
+ * owner's **Run scheduler** button.
+ *
+ * Every status is a *designed* state of one sum type (`solveStripState`) —
+ * including `infeasible`, which is the point of pre-live solves, and "no solve
+ * yet", which is the state every tournament is born in. Raw wire strings never
+ * reach this surface: triggers and verdicts render through the copy tables in
+ * `../data/solve`, and a refused run renders through `runSchedulerNotice`. The one
+ * exception is a `failed` run's `error` sentence, shown as detail under the
+ * client's own headline because it is the actionable content.
+ *
+ * The button is **withheld while a solve is in flight** (queued/running): the
+ * server would absorb the click anyway (one solve per tournament), so offering it
+ * would be offering a no-op. `submitting` guards the gap before the queued row
+ * arrives — the double-click family (#436).
+ */
+export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
+  // The last refusal, in words. Cleared when a new attempt starts — a notice
+  // about the click before last is worse than none. (The `LifecycleActions`
+  // pattern, which is the page's other inline-refusal surface.)
+  const [notice, setNotice] = useState<RunSchedulerNotice | null>(null)
+  // The strip's OWN in-flight latch: set synchronously on click, so the second
+  // click of a double-click cannot land in a render gap (#436 family). It spans
+  // the whole `onRun` promise, so it also covers the mutation's own in-flight
+  // window — no prop needed for that.
+  const [submitting, setSubmitting] = useState(false)
+
+  const busy = submitting || solveInFlight(solve)
+
+  const run = async () => {
+    if (busy) return
+    setSubmitting(true)
+    setNotice(null)
+    try {
+      await onRun()
+    } catch (error) {
+      // `mutateAsync` rejects; this notice IS the error surface (no toast).
+      setNotice(runSchedulerNotice(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <section data-testid="solve-strip" className="mb-6">
+      <Card className="gap-0 p-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          {/* The state is data that changes under polling; announce it politely
+              rather than making a reader re-scan the page. */}
+          <div aria-live="polite" className="min-w-0">
+            <SolveState solve={solve} canEdit={canEdit} />
+          </div>
+          {canEdit && (
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="run-scheduler"
+              disabled={busy}
+              onClick={run}
+            >
+              {busy ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Play size={14} />
+              )}
+              Run scheduler
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {/* The refusal, where the click was — an `Alert` (the app talking back),
+          never a toast that leaves in four seconds. */}
+      {notice && (
+        <Alert
+          variant="destructive"
+          data-testid="run-scheduler-notice"
+          className="mt-2.5"
+        >
+          <AlertTitle>{notice.title}</AlertTitle>
+          <AlertDescription>{notice.description}</AlertDescription>
+        </Alert>
+      )}
+    </section>
+  )
+}

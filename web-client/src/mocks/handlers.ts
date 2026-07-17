@@ -34,6 +34,10 @@ import {
   validateScore,
   type SeedMatch,
 } from './match-store'
+import {
+  buildAdminSolveLedgerSeed,
+  pageAdminScheduleSolves,
+} from './factories/tournaments/tournament.factory'
 import { mockUuid } from './mock-uuid'
 import { notificationHandlers } from './notifications-store'
 import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
@@ -48,6 +52,7 @@ import {
   findTournament,
   listTournaments,
   placeFixture as placeTournamentFixture,
+  requestScheduleSolve as requestTournamentScheduleSolve,
   transitionTournament,
   uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
@@ -72,7 +77,8 @@ export const mockSession = sessionResponse({
     // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
     // tester who can self-register into a singles event, and
     // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
-    // permission-gated) tool renders under `npm run dev`.
+    // permission-gated) tool renders under `npm run dev`, and SCHEDULING_VIEW
+    // so the Scheduling item appears and the solve-ledger page loads.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
@@ -80,10 +86,14 @@ export const mockSession = sessionResponse({
       PERM.TOURNAMENT_CREATE,
       PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
+      PERM.SCHEDULING_VIEW,
     ],
   },
 })
 export const mockHealthy = healthCheck()
+
+/** The dev world's cross-tournament solve ledger (see the handler below). */
+const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
 
 export const mockPlayers = [
   player({ username: 'nguyen.t', rating: 1842 }),
@@ -1594,6 +1604,28 @@ export const handlers = [
     })
   }),
 
+  // The Administration area's solve ledger (`/admin/schedule-solves`). A fixed
+  // 34-row seed rather than a projection off `tournaments-store`: the ledger is
+  // a cross-tournament *history*, and the store only keeps each tournament's
+  // latest solve — a projection would render a two-row page that can never
+  // paginate. The seed references the store's seeded tournaments, so the
+  // Tournament links land on detail pages that exist. Paging + the
+  // `tournament_id` filter go through the same `pageAdminScheduleSolves` the
+  // e2e stubs use. (No permission branch here — the dev session holds
+  // `scheduling.view`; tests exercise the 403 with a `server.use` override,
+  // as for the other admin endpoints.)
+  http.get('*/v1/admin/schedule-solves', async ({ request }) => {
+    await delay(200)
+    const url = new URL(request.url)
+    return HttpResponse.json(
+      pageAdminScheduleSolves(mockAdminSolveLedger, {
+        tournament_id: url.searchParams.get('tournament_id'),
+        page: Number(url.searchParams.get('page') ?? '1'),
+        page_size: Number(url.searchParams.get('page_size') ?? '25'),
+      }),
+    )
+  }),
+
   // ----- tournaments (admin) ---------------------------------------------
   // Dev-only handlers backed by `tournaments-store`. The seed includes rows
   // owned by the dev user (editable, with events + pools) and one owned by
@@ -1801,6 +1833,36 @@ export const handlers = [
         )
       }
       return HttpResponse.json(result.fixture)
+    },
+  ),
+  // The schedule solver (ADR "the schedule is solved; the call is pinned").
+  // Registered before the bare `:tournamentId` routes, like the fixtures route
+  // above. One verb, no body: POST queues a run — the owner's Run-scheduler
+  // button — and answers **202** with the ledger row that will carry the outcome.
+  // The outcome itself is read off the detail's `latest_schedule_solve`, which the
+  // store's read tick walks queued → running → succeeded (see `tournaments-store`).
+  // The 422 is CODED (`no_drawn_events`, the ADR-0968 shape): the client switches
+  // on the code and owns its copy; the message is the fallback sentence.
+  http.post(
+    '*/v1/tournaments/:tournamentId/schedule/solves',
+    async ({ params }) => {
+      await delay(250)
+      const result = requestTournamentScheduleSolve(String(params.tournamentId))
+      if (!result.ok) {
+        if (result.status === 422) {
+          return HttpResponse.json(
+            { detail: { code: result.code, message: result.message } },
+            { status: 422 },
+          )
+        }
+        return detail(
+          result.status === 403
+            ? 'Only the creator can run the scheduler.'
+            : 'Tournament not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.solve, { status: 202 })
     },
   ),
   http.patch(

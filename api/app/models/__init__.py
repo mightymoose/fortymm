@@ -20,6 +20,12 @@ from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
 from app.models.role_permission import RolePermission
+from app.models.schedule_solve import (
+    ScheduleSolve,
+    ScheduleSolveStatus,
+    ScheduleSolveTrigger,
+    SolverVerdict,
+)
 from app.models.tournament import (
     DrawType,
     EventFormat,
@@ -60,6 +66,10 @@ __all__ = [
     "RatingStrategy",
     "Role",
     "RolePermission",
+    "ScheduleSolve",
+    "ScheduleSolveStatus",
+    "ScheduleSolveTrigger",
+    "SolverVerdict",
     "Tournament",
     "TournamentEntry",
     "TournamentEntryStatus",

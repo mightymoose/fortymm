@@ -11,6 +11,7 @@ import {
   buildSchedule,
   composeScheduledStart,
   matchLabel,
+  placementConsequence,
   scheduleStatusLabel,
   sideLabel,
   timeOfDay,
@@ -62,6 +63,53 @@ describe('buildSchedule', () => {
   it('is empty when no draw has been cut anywhere', () => {
     const tournament = buildTournament({ events: [buildEvent({ fixtures: [] })] })
     expect(buildSchedule(tournament, buildTables()).isEmpty).toBe(true)
+  })
+
+  it('speaks the boards’ tier vocabulary on every match — with the call’s own timestamp and cost', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          fixtures: [
+            buildFixture({
+              id: 'fx-est',
+              poolId: 'p-a',
+              tableId: 't1',
+              scheduledStart: at('09:00'),
+            }),
+            buildFixture({
+              id: 'fx-called',
+              poolId: 'p-a',
+              round: 2,
+              tableId: 't1',
+              scheduledStart: at('10:00'),
+              pinnedAt: at('09:50'),
+              callNotifiedCount: 2,
+            }),
+            buildFixture({
+              id: 'fx-live',
+              poolId: 'p-a',
+              round: 3,
+              matchId: 'm-live',
+              matchStatus: 'in_progress',
+              tableId: 't1',
+              scheduledStart: at('11:00'),
+              pinnedAt: at('10:50'),
+            }),
+          ],
+        }),
+      ],
+    })
+    const { tables } = buildSchedule(tournament, buildTables())
+    const byId = new Map(tables[0].matches.map((m) => [m.fixtureId, m]))
+    // The same started > called > estimate precedence the bars draw with.
+    expect(byId.get('fx-est')!.tier).toBe('estimate')
+    expect(byId.get('fx-called')!.tier).toBe('called')
+    expect(byId.get('fx-live')!.tier).toBe('started')
+    // The call's facts ride along verbatim, for the list row's badge.
+    expect(byId.get('fx-called')!.pinnedAt).toBe(at('09:50'))
+    expect(byId.get('fx-called')!.callNotifiedCount).toBe(2)
+    expect(byId.get('fx-est')!.pinnedAt).toBeNull()
+    expect(byId.get('fx-est')!.callNotifiedCount).toBe(0)
   })
 
   it('resolves a table from the catalogue, and shows a dangling ref rather than dropping it', () => {
@@ -169,5 +217,92 @@ describe('placement helpers', () => {
       buildTables(),
     ).awaiting
     expect(matchLabel(match)).toBe('player.1 vs player.4')
+  })
+})
+
+// ADR "the schedule is solved; the call is pinned": while LIVE a placement notifies,
+// so the submit path prices it; pre-live it is free rearranging. A branch-for-branch
+// mirror of the server's `apply_manual_placement` — told-ness is pin AND count, any
+// half-placement is a clear, and a TBD side never notifies.
+describe('placementConsequence', () => {
+  /** A told fixture between two known entrants, and the full placement a director
+   * would move it to — each test overrides the one fact its branch turns on. */
+  const judge = (over: {
+    tournamentStatus?: 'draft' | 'published' | 'live' | 'archived'
+    match?: Partial<Parameters<typeof placementConsequence>[0]['match']>
+    write?: Partial<Parameters<typeof placementConsequence>[0]['write']>
+  }) =>
+    placementConsequence({
+      tournamentStatus: over.tournamentStatus ?? 'live',
+      match: {
+        a: { kind: 'entrant', name: 'player.1' },
+        b: { kind: 'entrant', name: 'player.4' },
+        pinnedAt: '2026-06-13T09:50:00',
+        callNotifiedCount: 1,
+        ...over.match,
+      },
+      write: { tableId: 't1', scheduledStart: at('10:30'), ...over.write },
+    })
+
+  it('is silent whenever the tournament is not live — planning is free, told or not', () => {
+    for (const tournamentStatus of ['draft', 'published', 'archived'] as const) {
+      expect(judge({ tournamentStatus })).toBe('silent')
+      expect(
+        judge({ tournamentStatus, write: { tableId: null, scheduledStart: null } }),
+      ).toBe('silent')
+    }
+  })
+
+  it('reads a live full placement of an UNTOLD fixture as a CALL', () => {
+    expect(judge({ match: { pinnedAt: null, callNotifiedCount: 0 } })).toBe('call')
+  })
+
+  it('reads a live move of a TOLD fixture as a correction, and a clear as a cancellation', () => {
+    expect(judge({ match: { callNotifiedCount: 3 } })).toBe('correction-move')
+    expect(
+      judge({
+        match: { callNotifiedCount: 3 },
+        write: { tableId: null, scheduledStart: null },
+      }),
+    ).toBe('correction-cancel')
+  })
+
+  it('treats a HALF-placement as the clear it is — a table with no time cannot stay promised', () => {
+    // The server unpins on anything less than a full placement; told, that is the
+    // cancelled correction — never a "move" naming a time that was just deleted.
+    expect(judge({ write: { scheduledStart: null } })).toBe('correction-cancel')
+    expect(
+      judge({
+        match: { pinnedAt: null, callNotifiedCount: 0 },
+        write: { scheduledStart: null },
+      }),
+    ).toBe('silent')
+  })
+
+  it('clears an untold fixture silently even live — nobody was promised anything', () => {
+    expect(
+      judge({
+        match: { pinnedAt: null, callNotifiedCount: 0 },
+        write: { tableId: null, scheduledStart: null },
+      }),
+    ).toBe('silent')
+  })
+
+  it('keys told-ness on pin AND count — a cancelled call (count kept, pin gone) is re-placed as a fresh CALL', () => {
+    // `call_notified_count` is "how many times the players were told" and a clear
+    // does not reset it — but the promise it counted is gone with the pin, so the
+    // next live placement CALLS ("moved" would correct a promise nobody holds).
+    expect(judge({ match: { pinnedAt: null, callNotifiedCount: 2 } })).toBe('call')
+  })
+
+  it('never notifies over a TBD or withdrawn side — a promise to nobody is not a promise', () => {
+    expect(
+      judge({ match: { b: { kind: 'tbd' }, pinnedAt: null, callNotifiedCount: 0 } }),
+    ).toBe('silent')
+    expect(
+      judge({
+        match: { a: { kind: 'withdrawn' }, pinnedAt: null, callNotifiedCount: 0 },
+      }),
+    ).toBe('silent')
   })
 })

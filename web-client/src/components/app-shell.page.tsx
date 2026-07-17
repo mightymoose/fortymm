@@ -34,6 +34,7 @@ const NAV_LINK_PATHS = [
   '/admin/permissions',
   '/admin/users',
   '/admin/broadcast',
+  '/admin/schedule-solves',
 ]
 
 /** Trimmed label of a nav link (the icon `<span>` contributes no text). */

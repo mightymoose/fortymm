@@ -2,7 +2,7 @@
 // count is DERIVED from the active entrants, so the two can never disagree, and
 // withdrawing frees the player to enter again.
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createEvent,
@@ -13,6 +13,7 @@ import {
   listTournaments,
   markFixturePlayed,
   placeInStatus,
+  requestScheduleSolve,
   resetTournamentsStore,
   transitionTournament,
   uncutDraw,
@@ -1267,5 +1268,94 @@ describe('the draw type freezes while a draw exists', () => {
 
     expect(result.ok).toBe(true)
     expect(eventOf(ROUND_ROBIN).draw_type).toBe('single-elim')
+  })
+})
+
+// ----- the solve tick's calling pass (ADR "the schedule is solved; the call is
+// pinned"): while a tournament is LIVE, the mock worker's apply also CALLS the
+// imminent fixtures — pinned_at set, one notification counted — so `npm run dev`
+// demos a call, badge and all. Pre-live, a solve plans and notifies no one.
+
+describe('the schedule solve tick — calling on a live tournament', () => {
+  // The mock worker advances at most one step per ~600ms of `Date.now()`; a test
+  // cannot wait, so the clock is driven forward a second per read. The base keeps
+  // GROWING across tests (never reset) because the dwell's last-tick watermark is
+  // module state in the store.
+  let clock = Date.parse('2027-01-01T00:00:00Z')
+  function stepClock() {
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      clock += 1_000
+      return clock
+    })
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  /** Request a solve and read the detail twice — queued → running → succeeded,
+   * exactly the walk the Schedule tab's polling makes. */
+  function solveToCompletion(id: string) {
+    const requested = requestScheduleSolve(id)
+    if (!requested.ok) throw new Error('setup failed: solve refused')
+    findTournament(id) // queued → running
+    return findTournament(id)! // running → succeeded, placements applied
+  }
+
+  it('calls the imminent fixtures — placed within 10 minutes of the day’s first ball — with one notification counted', () => {
+    stepClock()
+    // Summer Slam: one drawn round-robin event, two pools (t1/t2 from 09:00,
+    // t3/t4 from 11:00). LIVE, so the apply may promise.
+    placeInStatus(DRAFT_TOURNAMENT, 'live')
+
+    const detail = solveToCompletion(DRAFT_TOURNAMENT)
+
+    const fixtures = detail.events.flatMap((e) => e.fixtures)
+    const called = fixtures.filter((f) => f.pinned_at !== null)
+    // Pool A's first wave — one fixture per pool table at the window's start —
+    // is inside the call-ahead window; everything later is not.
+    expect(called).toHaveLength(2)
+    for (const fixture of called) {
+      expect(fixture.scheduled_start).toBe('2026-08-22T09:00:00')
+      expect(fixture.pinned_at).toBe('2026-08-22T09:00:00')
+      expect(fixture.call_notified_count).toBe(1)
+    }
+    // The rest of the plan stays an estimate: unpinned, nobody notified.
+    for (const fixture of fixtures.filter((f) => f.pinned_at === null)) {
+      expect(fixture.call_notified_count).toBe(0)
+    }
+    // The ledger row reports the calls it made.
+    expect(detail.latest_schedule_solve).toMatchObject({
+      status: 'succeeded',
+      fixtures_pinned: 2,
+    })
+  })
+
+  it('calls nothing pre-live — a solve plans, it does not notify', () => {
+    stepClock()
+    // Summer Slam stays a draft: same draw, same placements, no promises.
+    const detail = solveToCompletion(DRAFT_TOURNAMENT)
+
+    const fixtures = detail.events.flatMap((e) => e.fixtures)
+    expect(fixtures.some((f) => f.table_id !== null)).toBe(true)
+    expect(fixtures.every((f) => f.pinned_at === null)).toBe(true)
+    expect(fixtures.every((f) => f.call_notified_count === 0)).toBe(true)
+    expect(detail.latest_schedule_solve).toMatchObject({
+      status: 'succeeded',
+      fixtures_pinned: 0,
+    })
+  })
+
+  it('never re-calls what is already promised — a second solve leaves the pins exactly as they were', () => {
+    stepClock()
+    placeInStatus(DRAFT_TOURNAMENT, 'live')
+    solveToCompletion(DRAFT_TOURNAMENT)
+
+    const again = solveToCompletion(DRAFT_TOURNAMENT)
+
+    const called = again.events
+      .flatMap((e) => e.fixtures)
+      .filter((f) => f.pinned_at !== null)
+    expect(called).toHaveLength(2)
+    // Still exactly one notification each: the pass skips pinned fixtures, so a
+    // re-solve cannot quietly spend the players' attention twice.
+    expect(called.every((f) => f.call_notified_count === 1)).toBe(true)
   })
 })

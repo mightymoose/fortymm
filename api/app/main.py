@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -17,7 +18,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app import db, queue
+from app.admin_schedule_solves import router as admin_schedule_solves_router
 from app.dashboard import router as dashboard_router
+from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
 from app.notifications.router import router as notifications_router
 from app.players import router as players_router
@@ -62,7 +65,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 "#837 failure mode: behind a proxy every request shares one "
                 "peer IP)."
             )
-        yield
+        # The pin tick (ADR "the call is pinned"): every ~60s, enqueue a
+        # run_pin_tick job per live tournament. Multiple API replicas each
+        # running this loop are harmless — the tick's pinned_at re-check under
+        # row locks makes the second of any duplicate pair a no-op (see
+        # app.match_calls). Cancelled (and awaited) on shutdown.
+        pin_tick_task = asyncio.create_task(pin_tick_loop())
+        try:
+            yield
+        finally:
+            pin_tick_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pin_tick_task
     finally:
         shutdown_rate_limit_redis()
         await connection.aclose()
@@ -174,6 +188,7 @@ app.include_router(players_router)
 app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
+app.include_router(admin_schedule_solves_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

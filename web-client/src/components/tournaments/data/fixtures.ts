@@ -74,6 +74,13 @@ const fixtureWireSchema = z.object({
    * slot's `date`/`start`/`end` and the event's `created_at` are: this surface does
    * not coerce wire datetimes to `Date` at the boundary. */
   scheduled_start: z.string().nullable(),
+  /** When the fixture was **called** (ADR "the schedule is solved, the call is
+   * pinned"): `null` = an estimate the solver may still move; set = a promise the
+   * players were notified of. Naive wall-clock, like `scheduled_start`. */
+  pinned_at: z.string().nullable(),
+  /** How many call/correction notifications this fixture's players have received —
+   * `0` for a never-called fixture, never absent. */
+  call_notified_count: z.number().int(),
 })
 
 /** The parser: one wire fixture → one domain `Fixture`.
@@ -95,6 +102,8 @@ export const fixtureSchema = fixtureWireSchema.transform(
     matchStatus: f.match_status,
     tableId: f.table_id,
     scheduledStart: f.scheduled_start,
+    pinnedAt: f.pinned_at,
+    callNotifiedCount: f.call_notified_count,
   }),
 )
 

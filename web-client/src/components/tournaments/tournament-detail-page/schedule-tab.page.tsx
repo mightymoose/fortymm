@@ -1,8 +1,16 @@
 import { interactiveElementsIn } from '@/test/read-only'
 import { fireEvent, render, screen, within, type Container } from '@/test/utilities'
 
+import { confirmCallDialogPage } from './confirm-call-dialog.page'
 import { ScheduleTab, type ScheduleTabProps } from './schedule-tab'
 import { buildScheduleTabProps } from './schedule-tab.factory'
+import { boardEmptyPage } from './schedule-tab/board-empty.page'
+import { ganttBoardPage } from './schedule-tab/gantt-board.page'
+import { playerTimelineBoardPage } from './schedule-tab/player-timeline-board.page'
+import { tierLegendPage } from './schedule-tab/tier-legend.page'
+
+/** The tab's view toggle labels, as the user reads them. */
+export type ScheduleViewLabel = 'List' | 'Gantt' | 'Player timeline'
 
 /** Every match row, wherever it is — the id prefix is the only thing that identifies one. */
 const MATCH_TESTID = /^schedule-match-/
@@ -59,6 +67,22 @@ const scoped = (container: Container) => ({
     return container.getByTestId(`schedule-status-${fixtureId}`)
   },
 
+  /** The list row's tier markers (ADR "the schedule is solved; the call is
+   * pinned"): the `est` mark on a scheduled estimate, the called-at badge on a
+   * call, and the `notified n×` counter once a correction has gone out. */
+  queryEst(fixtureId: string) {
+    return container.queryByTestId(`schedule-est-${fixtureId}`)
+  },
+  getCalledBadge(fixtureId: string) {
+    return container.getByTestId(`schedule-called-${fixtureId}`)
+  },
+  queryCalledBadge(fixtureId: string) {
+    return container.queryByTestId(`schedule-called-${fixtureId}`)
+  },
+  queryNotified(fixtureId: string) {
+    return container.queryByTestId(`schedule-notified-${fixtureId}`)
+  },
+
   /** The **Place** / **Move** trigger the owner sees on a match — absent for a non-owner
    * and for a finished (frozen) match. */
   queryPlaceTrigger(fixtureId: string) {
@@ -94,11 +118,76 @@ const scoped = (container: Container) => ({
     return container.queryByTestId(`place-clear-${fixtureId}`)
   },
 
+  /** The solve strip (its own quartet — `solve-strip.page` has the fine-grained
+   * accessors; these are the joints the TAB's tests drive). */
+  getSolveStrip() {
+    return container.getByTestId('solve-strip')
+  },
+  queryStripState(state: 'none' | 'solving' | 'succeeded' | 'infeasible' | 'failed') {
+    return container.queryByTestId(`solve-strip-${state}`)
+  },
+  getRunScheduler() {
+    return container.getByTestId('run-scheduler') as HTMLButtonElement
+  },
+  queryRunScheduler() {
+    return container.queryByTestId('run-scheduler')
+  },
+  clickRunScheduler() {
+    fireEvent.click(container.getByTestId('run-scheduler'))
+  },
+  queryRunNotice() {
+    return container.queryByTestId('run-scheduler-notice')
+  },
+
   /** EVERY interactive control in the tab — the sweep a "a non-owner is offered nothing"
    * guard needs (ADR-0015: no control at all, not a disabled one). */
   getControls() {
     return interactiveElementsIn(container.getByTestId('schedule-tab'))
   },
+  /** The sweep, minus the tab's own **view navigation** — the toggle's items, the
+   * boards' focusable scroll regions and their tooltip-bearing bars, which are
+   * reading affordances a viewer legitimately keeps (the Events tab's "View"
+   * open-target precedent). What must be zero for a non-owner is everything
+   * else: the placement editors, Run scheduler — the controls that *change*
+   * something. */
+  getEditingControls() {
+    return interactiveElementsIn(container.getByTestId('schedule-tab')).filter(
+      (el) =>
+        el.closest(
+          '[data-testid="schedule-view-toggle"], [data-testid="schedule-gantt"], [data-testid="schedule-player-timeline"]',
+        ) === null,
+    )
+  },
+
+  /** The view toggle (List | Gantt | Player timeline) — absent while there is
+   * nothing to schedule at all. */
+  getViewToggle() {
+    return container.getByTestId('schedule-view-toggle')
+  },
+  queryViewToggle() {
+    return container.queryByTestId('schedule-view-toggle')
+  },
+  /** Switch the schedule view. The toggle is a radix single ToggleGroup, so the
+   * items are radios, addressed by the label the user reads. */
+  setView(label: ScheduleViewLabel) {
+    fireEvent.click(
+      within(container.getByTestId('schedule-view-toggle')).getByRole('radio', {
+        name: label,
+      }),
+    )
+  },
+
+  /** The board quartets' own accessors, as named sub-objects (their generic
+   * `getBoard`/`getRow` names would collide if spread flat). */
+  gantt: ganttBoardPage.within(container),
+  players: playerTimelineBoardPage.within(container),
+  boardEmpty: boardEmptyPage.within(container),
+  legend: tierLegendPage.within(container),
+
+  /** The consequence-stating confirm on a NOTIFYING placement (its own quartet —
+   * `confirm-call-dialog.page` has the copy-level accessors; these are the joints
+   * the TAB's regime tests drive). Portals to the body. */
+  callDialog: confirmCallDialogPage.within(container),
 
   within(node: Container = screen) {
     return scoped(node)

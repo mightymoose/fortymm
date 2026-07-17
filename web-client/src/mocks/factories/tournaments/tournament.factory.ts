@@ -9,6 +9,10 @@ type TournamentTable = components['schemas']['TournamentTable']
 type EventResultsRead = components['schemas']['EventResultsRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
+type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
+type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
+type AdminScheduleSolveListResponse =
+  components['schemas']['AdminScheduleSolveListResponse']
 
 /** A single physical table, `T1` on court 1. */
 export function buildTournamentTable(
@@ -66,7 +70,9 @@ export function buildTournamentEntrantReads(
  * the morning of: a planned pairing, both players known, nothing played — so
  * `match_status` is `null` too, moving in lockstep with `match_id`. Its **placement**
  * (ADR-0790) starts empty: `table_id` null is unassigned, `scheduled_start` null is
- * unscheduled. */
+ * unscheduled — and **uncalled**: `pinned_at` null means the placement is still an
+ * estimate the solver may move, and `call_notified_count` 0 means nobody has been
+ * told anything (ADR "the schedule is solved, the call is pinned"). */
 export function buildTournamentFixtureRead(
   overrides: Partial<TournamentFixtureRead> = {},
 ): TournamentFixtureRead {
@@ -82,8 +88,159 @@ export function buildTournamentFixtureRead(
     match_status: null,
     table_id: null,
     scheduled_start: null,
+    pinned_at: null,
+    call_notified_count: 0,
     ...overrides,
   }
+}
+
+/** One row of the tournament's **solve ledger** (`ScheduleSolveRead`, ADR "the
+ * schedule is solved, the call is pinned") — by default a *finished, successful*
+ * manual run: the owner pressed Run scheduler, the solver proved the plan optimal
+ * in under a second, and every one of nine fixtures got a placement.
+ *
+ * The defaults are internally consistent for the `succeeded` status — every stage
+ * reached, so every stage-marking field is set. A fixture that wants an earlier
+ * stage overrides the status *and* nulls the fields that stage has not reached
+ * (`queued`: everything after `requested_at` null; `failed`: `verdict` and the
+ * apply counts null, `error` set) — each `null` is a fact about how far the run
+ * got, not a missing field. */
+export function buildScheduleSolveRead(
+  overrides: Partial<ScheduleSolveRead> = {},
+): ScheduleSolveRead {
+  return {
+    id: 'solve-1',
+    trigger: 'manual',
+    status: 'succeeded',
+    verdict: 'optimal',
+    requested_at: '2026-06-13T09:00:00Z',
+    started_at: '2026-06-13T09:00:01Z',
+    finished_at: '2026-06-13T09:00:02Z',
+    wall_time_ms: 850,
+    fixtures_placed: 9,
+    fixtures_pinned: 0,
+    error: null,
+    ...overrides,
+  }
+}
+
+/** One row of the **admin** solve ledger (`AdminScheduleSolveRead`, the
+ * cross-tournament read backing `/admin/schedule-solves`): every field of
+ * `buildScheduleSolveRead`, plus the operator-only facts the tournament-facing
+ * read omits — the drift guard's `input_fingerprint` (`null` = the run never
+ * snapshotted), the coalescer's `rerun_requested` (a trigger landed while this
+ * run was `running`; always `false` on terminal rows), and the owning
+ * tournament's id + live name. */
+export function buildAdminScheduleSolveRead(
+  overrides: Partial<AdminScheduleSolveRead> = {},
+): AdminScheduleSolveRead {
+  return {
+    ...buildScheduleSolveRead(),
+    input_fingerprint:
+      'a3f1c2e94b7d80561e2f9c4a7d3b8e05a3f1c2e94b7d80561e2f9c4a7d3b8e05',
+    rerun_requested: false,
+    tournament_id: 'bay-area-open-2026',
+    tournament_name: 'Bay Area Open 2026',
+    ...overrides,
+  }
+}
+
+/**
+ * Page a full admin solve ledger the way `/v1/admin/schedule-solves` does:
+ * `tournament_id` narrows, `total` counts the rows matching that same filter,
+ * and the slice is `page`/`page_size`. It does **not** re-sort — the API's
+ * newest-first ordering is the seed's job, exactly as it is the database's.
+ *
+ * Shared by the dev-world MSW handler, the vitest page object and the e2e
+ * `page.route` stub, so all three worlds answer the page's query params with
+ * one implementation instead of three drifting ones.
+ */
+export function pageAdminScheduleSolves(
+  rows: AdminScheduleSolveRead[],
+  params: { tournament_id?: string | null; page?: number; page_size?: number },
+): AdminScheduleSolveListResponse {
+  const page = params.page ?? 1
+  const pageSize = params.page_size ?? 25
+  const filtered = params.tournament_id
+    ? rows.filter((r) => r.tournament_id === params.tournament_id)
+    : rows
+  return {
+    items: filtered.slice((page - 1) * pageSize, page * pageSize),
+    page,
+    page_size: pageSize,
+    total: filtered.length,
+  }
+}
+
+/**
+ * The dev world's solve ledger — enough rows (34) that page 1 truncates at 25
+ * (small fixtures hide acceptance bugs), spread over the seeded tournaments so
+ * the Tournament links land on detail pages that exist under `npm run dev`,
+ * with every terminal shape visible on page 1: succeeded (optimal *and*
+ * feasible), infeasible, failed (with the server's error sentence), a run
+ * still `running` with a re-run already coalesced onto it, and one `queued`.
+ * Newest request first, exactly as the API orders it.
+ */
+export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
+  const tournaments = [
+    { id: 'bay-area-open-2026', name: 'Bay Area Open 2026' },
+    { id: 'summer-slam-2026', name: 'Summer Slam 2026' },
+  ] as const
+  // Newest first: minute 59 down to 26.
+  const runs = Array.from({ length: 34 }, (_, i) => {
+    const t = tournaments[i % tournaments.length]
+    const minute = String(59 - i).padStart(2, '0')
+    return buildAdminScheduleSolveRead({
+      id: `admin-solve-${i + 1}`,
+      trigger: (['match_completed', 'manual', 'settings_changed', 'pin_tick'] as const)[
+        i % 4
+      ],
+      requested_at: `2026-07-15T10:${minute}:00Z`,
+      started_at: `2026-07-15T10:${minute}:01Z`,
+      finished_at: `2026-07-15T10:${minute}:03Z`,
+      tournament_id: t.id,
+      tournament_name: t.name,
+    })
+  })
+  // Carve the interesting shapes into the newest rows so they sit on page 1.
+  runs[0] = {
+    ...runs[0],
+    status: 'queued',
+    verdict: null,
+    started_at: null,
+    finished_at: null,
+    wall_time_ms: null,
+    fixtures_placed: null,
+    fixtures_pinned: null,
+  }
+  runs[1] = {
+    ...runs[1],
+    status: 'running',
+    verdict: null,
+    finished_at: null,
+    wall_time_ms: null,
+    fixtures_placed: null,
+    fixtures_pinned: null,
+    rerun_requested: true,
+  }
+  runs[2] = {
+    ...runs[2],
+    status: 'failed',
+    verdict: null,
+    wall_time_ms: null,
+    fixtures_placed: null,
+    fixtures_pinned: null,
+    error: 'worker crashed: out of memory in CP-SAT presolve',
+  }
+  runs[3] = {
+    ...runs[3],
+    status: 'infeasible',
+    verdict: 'infeasible',
+    fixtures_placed: null,
+    fixtures_pinned: null,
+  }
+  runs[4] = { ...runs[4], verdict: 'feasible', wall_time_ms: 2400 }
+  return runs
 }
 
 /**
@@ -367,6 +524,11 @@ export function buildTournamentDetailRead(
     created_at: '2026-06-01T09:00:00Z',
     updated_at: '2026-06-10T12:00:00Z',
     events: [buildTournamentEventRead()],
+    // NO SOLVE YET — `null` is the state every tournament is born in, and the state
+    // it stays in until something (go-live, the Run-scheduler button, a completed
+    // match) puts a run on the queue. A fixture that wants a solve on the strip
+    // passes a `buildScheduleSolveRead()` override.
+    latest_schedule_solve: null,
     ...overrides,
   }
 }

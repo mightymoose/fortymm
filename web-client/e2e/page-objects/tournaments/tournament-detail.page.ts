@@ -564,4 +564,163 @@ export class TournamentDetailPage {
   capacityNote(eventName: string): Locator {
     return this.eventCard(eventName).getByTestId('capacity-remaining')
   }
+
+  // ----- the Schedule tab & its solve strip (ADR "the schedule is solved") ---
+
+  /** Open the Schedule tab and wait for its strip to really be on screen — every
+   * "the strip says X" assertion passes vacuously against a tab that has not
+   * rendered yet. */
+  async openScheduleTab() {
+    await this.page.getByRole('tab', { name: 'Schedule' }).click()
+    await expect(this.solveStrip).toBeVisible()
+  }
+
+  /** The solve strip — what the latest run of the placement solver has to say. */
+  get solveStrip(): Locator {
+    return this.page.getByTestId('solve-strip')
+  }
+
+  /** One of the strip's five designed states — present iff the strip is in it. */
+  solveStripState(
+    state: 'none' | 'solving' | 'succeeded' | 'infeasible' | 'failed',
+  ): Locator {
+    return this.page.getByTestId(`solve-strip-${state}`)
+  }
+
+  /** The owner's Run-scheduler button — absent, not disabled, for a viewer. */
+  get runScheduler(): Locator {
+    return this.page.getByTestId('run-scheduler')
+  }
+
+  /** The inline run refusal (the strip's only error surface — never a toast). */
+  get runSchedulerNotice(): Locator {
+    return this.page.getByTestId('run-scheduler-notice')
+  }
+
+  // ----- the schedule boards (Gantt / player timeline, chore 2a) -------------
+
+  /** The tab's view toggle — List | Gantt | Player timeline. Its items are
+   * radios (radix single ToggleGroup). */
+  get scheduleViewToggle(): Locator {
+    return this.page.getByTestId('schedule-view-toggle')
+  }
+
+  async setScheduleView(label: 'List' | 'Gantt' | 'Player timeline') {
+    await this.scheduleViewToggle.getByRole('radio', { name: label }).click()
+  }
+
+  /** The Gantt board (rows = tables), and its labelled scrollable chart region
+   * — the region is the keyboard-focusable scroll container (#1035 family). */
+  get ganttBoard(): Locator {
+    return this.page.getByTestId('schedule-gantt')
+  }
+
+  get ganttRegion(): Locator {
+    return this.page.getByRole('region', { name: 'Schedule by table' })
+  }
+
+  /** One table's Gantt row, by catalogue id (`t1` …). */
+  ganttRow(tableId: string): Locator {
+    return this.page.getByTestId(`gantt-row-${tableId}`)
+  }
+
+  /** The player-timeline board (rows = entrants) and its scroll region. */
+  get playerTimelineBoard(): Locator {
+    return this.page.getByTestId('schedule-player-timeline')
+  }
+
+  get playerRegion(): Locator {
+    return this.page.getByRole('region', { name: 'Schedule by player' })
+  }
+
+  /** Every placed fixture's bar, in either board — focusable buttons. */
+  get timelineBars(): Locator {
+    return this.page.locator('[data-testid^="timeline-bar-"]')
+  }
+
+  /** One fixture's bar, by id — for reading a single bar's tier or its
+   * accessible name (where the call marker rides). */
+  timelineBar(fixtureId: string): Locator {
+    return this.page.getByTestId(`timeline-bar-${fixtureId}`)
+  }
+
+  /** The bars whose tier is **called** — pinned promises (ADR "the schedule is
+   * solved; the call is pinned"), as the `data-tier` hook encodes it. While
+   * LIVE this tier is rare on purpose: materialization (#788) makes a called
+   * fixture's match `in_progress` (tier `started`), and the promise rides the
+   * bar's marker/aria instead. */
+  get calledBars(): Locator {
+    return this.page.locator('[data-testid^="timeline-bar-"][data-tier="called"]')
+  }
+
+  /** The LIST rows' called-at badges (`Called 09:00`) and, past the first call,
+   * their `notified n×` counters — the list-view half of the same marker. */
+  get calledBadges(): Locator {
+    return this.page.locator('[data-testid^="schedule-called-"]')
+  }
+
+  get notifiedMarkers(): Locator {
+    return this.page.locator('[data-testid^="schedule-notified-"]')
+  }
+
+  /** The `est` marks on the list's scheduled-but-still-estimate rows. */
+  get estMarks(): Locator {
+    return this.page.locator('[data-testid^="schedule-est-"]')
+  }
+
+  /** The boards' designed "no placements yet" prompt. */
+  get boardEmptyPrompt(): Locator {
+    return this.page.getByTestId('schedule-board-empty')
+  }
+
+  /** The Gantt's "Not yet scheduled" side rail. */
+  get unscheduledRail(): Locator {
+    return this.page.getByTestId('schedule-unscheduled')
+  }
+
+  /** The open match tooltip (radix portals it to the body). */
+  get matchTooltip(): Locator {
+    return this.page.getByRole('tooltip')
+  }
+
+  // ----- the placement editor & its consequence confirm (ADR "the schedule is
+  // solved; the call is pinned": while live, placing IS calling) --------------
+
+  /** One list row's **Place** / **Move** trigger — the owner's, per fixture. */
+  placeTrigger(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-trigger-${fixtureId}`)
+  }
+
+  /** The open placement editor's time input / Save / Clear, per fixture. */
+  placeTime(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-time-${fixtureId}`)
+  }
+
+  placeSave(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-save-${fixtureId}`)
+  }
+
+  placeClear(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-clear-${fixtureId}`)
+  }
+
+  /** The consequence-stating confirm a NOTIFYING placement is gated by, and its
+   * two buttons — the confirm names the consequence (`Call the match` / `Move
+   * and notify` / `Cancel the call`), never a bare "OK". */
+  get callDialog(): Locator {
+    return this.page.getByTestId('confirm-call-dialog')
+  }
+
+  get callDialogConfirm(): Locator {
+    return this.page.getByTestId('confirm-call-confirm')
+  }
+
+  get callDialogCancel(): Locator {
+    return this.page.getByTestId('confirm-call-cancel')
+  }
+
+  /** One list row's called-at badge, by fixture. */
+  calledBadge(fixtureId: string): Locator {
+    return this.page.getByTestId(`schedule-called-${fixtureId}`)
+  }
 }

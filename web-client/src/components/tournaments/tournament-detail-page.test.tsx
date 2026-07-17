@@ -434,8 +434,16 @@ describe('TournamentDetailPage', () => {
       expect(tournamentDetailPagePage.getActiveTabPanel()).toHaveTextContent(
         'player.1 vs player.4',
       )
-      // …with no Place / Move trigger anywhere.
-      expect(tournamentDetailPagePage.getActiveTabControls()).toHaveLength(0)
+      // …with no Place / Move trigger anywhere: the only controls left are the
+      // view toggle's three items (List | Gantt | Player timeline) — a reading
+      // choice, the Events tab's "View" open-target precedent (ADR-0015).
+      const controls = tournamentDetailPagePage.getActiveTabControls()
+      expect(controls.length).toBeGreaterThan(0)
+      expect(
+        controls.every(
+          (el) => el.closest('[data-testid="schedule-view-toggle"]') !== null,
+        ),
+      ).toBe(true)
     })
 
     it('renders the Events tab with only the read-only "View" open target — no owner or entry affordance', async () => {

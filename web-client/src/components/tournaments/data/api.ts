@@ -20,6 +20,12 @@ import type { components } from '@/api/schema'
 import { entryRefusalNotice } from './entry-refusal'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
+import {
+  parseLatestScheduleSolve,
+  parseScheduleSolve,
+  scheduleRefetchInterval,
+  type ScheduleSolve,
+} from './solve'
 import type { LifecycleEdge } from './lifecycle'
 import type {
   Entrant,
@@ -174,6 +180,13 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     address: t.address,
     tableIds: t.table_catalogue.map((tbl) => tbl.id),
     events: t.events.map(apiToEvent),
+    // PARSED, not cast — the same boundary the fixtures and results cross
+    // (`./solve`, `.claude/rules/parse-at-boundaries.md`): the solve strip switches
+    // on this row's `status`/`trigger`/`verdict` by value, so an enum member this
+    // client does not know must fail HERE, inside the queryFn, rather than fall out
+    // of a `switch` as a blank strip. `null` — no solve ever requested — is the
+    // designed state and parses straight through.
+    latestScheduleSolve: parseLatestScheduleSolve(t.latest_schedule_solve),
   }
 }
 
@@ -388,6 +401,7 @@ export function useTables(id: string): TournamentTable[] {
 // | useCutDraw              | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useUncutDraw            | ['tournaments'], ['tournaments', id]     | onSettled |
 // | usePlaceFixture         | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useRequestScheduleSolve | ['tournaments'], ['tournaments', id]     | onSettled |
 //
 // There are only two keys, because there are only two queries: the list and one
 // tournament's detail (events, entrants, the table catalogue AND every event's draw all
@@ -828,5 +842,84 @@ export function usePlaceFixture(tournamentId: string) {
     },
     onSettled: () => invalidateTournament(qc, tournamentId),
     onError: notifyError('place the match'),
+  })
+}
+
+// ----- the schedule solver (ADR "the schedule is solved; the call is pinned") ----
+//
+// One verb and NO query of its own: `POST …/schedule/solves` queues a run, and the
+// run's *outcome* rides the tournament detail payload the Schedule tab already reads
+// (`latest_schedule_solve`, plus each fixture's refreshed placement) — one BFF
+// endpoint per page, so the invalidation set is the same two keys
+// `invalidateTournament` already covers. Freshness between mutations is POLLING
+// (`useSchedulePolling` below): the solver runs on a worker, behind this page's
+// back, and its finish is not an event this client is told about.
+
+/**
+ * Request a run of the schedule solver — the owner's **Run scheduler** button:
+ * `POST /v1/tournaments/{id}/schedule/solves`, no body. Owner-only.
+ *
+ * The **202** is a request accepted, not work done: one solve is in flight per
+ * tournament, so a click while one is `queued` is absorbed by it (the same ledger
+ * row comes back) and a click while one is `running` flags a re-run. Either way the
+ * honest next step is to re-read the tournament — which `onSettled` does — and let
+ * the strip render the row the detail now carries; the in-flight poll
+ * (`useSchedulePolling`) then carries it to its outcome.
+ *
+ * Reconciles **`onSettled`, not `onSuccess`**, like the draw and placement
+ * mutations: the interesting failure says *this view is stale* — the 422
+ * (`no_drawn_events`) means the draws this page shows are not the draws the server
+ * holds (someone un-cut them), and re-reading is what corrects the tab.
+ *
+ * **No global `onError` toast**, by the `useCutDraw` convention: the solve strip
+ * awaits this through `mutateAsync` and renders every refusal **inline, on the
+ * strip**, in the words `./solve` owns (`runSchedulerNotice`) — the 422 "cut a draw
+ * first" is a designed state there, not an error channel's business.
+ */
+export function useRequestScheduleSolve(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<ScheduleSolve> => {
+      const row = unwrap(
+        'run the scheduler',
+        await api.POST('/v1/tournaments/{tournament_id}/schedule/solves', {
+          params: { path: { tournament_id: tournamentId } },
+        }),
+      )
+      // The response is untrusted like every other payload — parse it, don't cast it.
+      return parseScheduleSolve(row)
+    },
+    // Reconcile on BOTH paths — see the note above.
+    onSettled: () => invalidateTournament(qc, tournamentId),
+  })
+}
+
+/**
+ * Keep the tournament detail fresh while the Schedule tab is on screen — a
+ * subscription to the SAME cache entry every other consumer reads (same key, same
+ * `queryFn`, one fetch), whose only contribution is a `refetchInterval`.
+ *
+ * The cadence is `scheduleRefetchInterval` (`./solve`, pure and unit-tested):
+ * ~3s while a solve is in flight (whatever the status — the director who clicked
+ * Run is watching the strip), ~15s while the tournament is `live` (completions
+ * re-plan the schedule behind this page's back), and none otherwise.
+ *
+ * Mounted by the Schedule tab alone, so the poll lives exactly as long as the tab
+ * is the active one (an inactive tab's content is unmounted) — the rest of the
+ * detail page never polls. `notifyOnChangeProps: []` keeps the subscription
+ * render-silent: the tab re-renders through the `useTournament` data it already
+ * holds, not through this observer.
+ */
+export function useSchedulePolling(tournamentId: string): void {
+  useQuery({
+    ...tournamentDetailQuery(tournamentId),
+    refetchInterval: (query) => {
+      const detail = query.state.data
+      return scheduleRefetchInterval(
+        detail?.tournament.status,
+        detail?.tournament.latestScheduleSolve ?? null,
+      )
+    },
+    notifyOnChangeProps: [],
   })
 }

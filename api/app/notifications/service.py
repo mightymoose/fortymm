@@ -108,6 +108,207 @@ def _parse_channel(value: str) -> NotificationChannel | None:
         return None
 
 
+# ----- preference resolution (module-level, sessionful) ---------------------
+#
+# These are plain functions taking ``db`` (api/CLAUDE.md: "stateless service →
+# just a module-level function") so callers *outside* a request — the match-call
+# pin transaction in ``app.match_calls``, which must resolve a recipient's
+# in-app preference inside the same transaction that sets ``pinned_at`` — can
+# consult exactly the same machinery the worker's ``notify`` uses. The service
+# methods below delegate here, passing their per-request caches where they have
+# them, so the resolution rules cannot fork.
+
+
+async def channel_availability(
+    db: AsyncSession,
+) -> dict[NotificationChannel, bool]:
+    """Which channels the server can deliver on, per ``notification_channels``
+    (the DB row is the source of truth — see ``taxonomy.CHANNEL_AVAILABLE``)."""
+    rows = (
+        (
+            await db.execute(
+                select(NotificationChannelModel).where(
+                    NotificationChannelModel.is_active.is_(True)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    availability: dict[NotificationChannel, bool] = {}
+    for row in rows:
+        channel = _parse_channel(row.key)
+        if channel is not None:
+            availability[channel] = row.is_available
+    return availability
+
+
+async def channel_overrides(
+    db: AsyncSession, user_id: uuid.UUID
+) -> dict[NotificationChannel, bool]:
+    """The user's stored master-toggle overrides (sparse — absent = default)."""
+    return (await channel_overrides_for_users(db, [user_id])).get(user_id, {})
+
+
+async def channel_overrides_for_users(
+    db: AsyncSession, user_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, dict[NotificationChannel, bool]]:
+    """Batch form of :func:`channel_overrides`: one ``IN``-query for a whole
+    recipient batch (a user with no row has no key — same sparse contract)."""
+    overrides: dict[uuid.UUID, dict[NotificationChannel, bool]] = {}
+    if not user_ids:
+        return overrides
+    rows = (
+        (
+            await db.execute(
+                select(NotificationChannelSetting).where(
+                    NotificationChannelSetting.user_id.in_(user_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        channel = _parse_channel(row.channel)
+        if channel is not None:
+            overrides.setdefault(row.user_id, {})[channel] = row.enabled
+    return overrides
+
+
+async def cell_overrides(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    category: NotificationCategory | None = None,
+) -> dict[tuple[NotificationCategory, NotificationChannel], bool]:
+    """The user's stored per-(category, channel) overrides (sparse)."""
+    return (await cell_overrides_for_users(db, [user_id], category)).get(user_id, {})
+
+
+async def cell_overrides_for_users(
+    db: AsyncSession,
+    user_ids: Collection[uuid.UUID],
+    category: NotificationCategory | None = None,
+) -> dict[uuid.UUID, dict[tuple[NotificationCategory, NotificationChannel], bool]]:
+    """Batch form of :func:`cell_overrides`: one ``IN``-query for a whole
+    recipient batch (a user with no row has no key — same sparse contract)."""
+    overrides: dict[
+        uuid.UUID, dict[tuple[NotificationCategory, NotificationChannel], bool]
+    ] = {}
+    if not user_ids:
+        return overrides
+    query = select(NotificationPreference).where(
+        NotificationPreference.user_id.in_(user_ids)
+    )
+    if category is not None:
+        query = query.where(NotificationPreference.category == category.value)
+    rows = (await db.execute(query)).scalars().all()
+    for row in rows:
+        channel = _parse_channel(row.channel)
+        parsed_category = _parse_category(row.category)
+        if channel is not None and parsed_category is not None:
+            overrides.setdefault(row.user_id, {})[(parsed_category, channel)] = (
+                row.enabled
+            )
+    return overrides
+
+
+def _resolve_effective(
+    category: NotificationCategory,
+    candidates: Collection[NotificationChannel],
+    availability: Mapping[NotificationChannel, bool],
+    master_overrides: Mapping[NotificationChannel, bool],
+    per_cell: Mapping[tuple[NotificationCategory, NotificationChannel], bool],
+) -> set[NotificationChannel]:
+    """The resolution rule itself, in one place: master toggle AND per-cell
+    toggle, both resolved against the channel's availability (locked
+    channels/cells per the taxonomy). Pure — the single- and batch-form
+    loaders both delegate here, so the rules cannot fork."""
+    effective: set[NotificationChannel] = set()
+    for channel in candidates:
+        available = availability.get(channel, False)
+        master = resolve_channel_enabled(
+            channel, available, master_overrides.get(channel)
+        )
+        cell = resolve_cell_enabled(
+            category, channel, available, per_cell.get((category, channel))
+        )
+        if master and cell:
+            effective.add(channel)
+    return effective
+
+
+async def effective_channels(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    category: NotificationCategory,
+    candidates: Collection[NotificationChannel],
+    *,
+    availability: Mapping[NotificationChannel, bool] | None = None,
+) -> set[NotificationChannel]:
+    """The subset of ``candidates`` the user's preferences allow for
+    ``category``: master toggle AND per-cell toggle, both resolved against the
+    channel's availability (locked channels/cells per the taxonomy)."""
+    resolved = await effective_channels_for_users(
+        db, [user_id], category, candidates, availability=availability
+    )
+    return resolved[user_id]
+
+
+async def effective_channels_for_users(
+    db: AsyncSession,
+    user_ids: Collection[uuid.UUID],
+    category: NotificationCategory,
+    candidates: Collection[NotificationChannel],
+    *,
+    availability: Mapping[NotificationChannel, bool] | None = None,
+) -> dict[uuid.UUID, set[NotificationChannel]]:
+    """Batch form of :func:`effective_channels`, for callers resolving a whole
+    recipient batch at once (the match-call pin transaction, which holds row
+    locks and must not multiply queries per recipient): availability is loaded
+    once, the overrides arrive in two ``IN``-queries, and each user resolves
+    in memory through the same :func:`_resolve_effective` rule."""
+    if availability is None:
+        availability = await channel_availability(db)
+    master = await channel_overrides_for_users(db, user_ids)
+    cells = await cell_overrides_for_users(db, user_ids, category)
+    return {
+        user_id: _resolve_effective(
+            category,
+            candidates,
+            availability,
+            master.get(user_id, {}),
+            cells.get(user_id, {}),
+        )
+        for user_id in user_ids
+    }
+
+
+def enqueue_notification_job(job: NotificationJob) -> bool:
+    """Hand one notification to the worker, which resolves the recipient's
+    preferences and delivers (see ``app.notifications.jobs``). Fire-and-
+    forget: a Redis hiccup must not fail the originating flow, so enqueue
+    failures are logged and swallowed. Module-level (not a service method) so
+    non-request flows — the match-call fan-out in ``app.match_calls`` — share
+    the exact enqueue the service uses."""
+    # Imported lazily (not at module level) because app.notifications.jobs
+    # imports this service — a top-level import would be a cycle. The
+    # function-level import keeps the job name a single source of truth.
+    from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+
+    try:
+        queue_module.get_notifications_queue().enqueue(
+            DELIVER_NOTIFICATION_JOB,
+            job.model_dump_json(),
+            result_ttl=60,
+            failure_ttl=300,
+        )
+    except Exception:
+        log.exception("Failed to enqueue notification delivery")
+        return False
+    return True
+
+
 class NotificationService:
     def __init__(self, db: AsyncSession, sender: PushSender) -> None:
         self._db = db
@@ -206,6 +407,7 @@ class NotificationService:
         push_category: str | None = None,
         push_data: Mapping[str, str] | None = None,
         collapse_id: str | None = None,
+        channels: Collection[NotificationChannel] | None = None,
     ) -> NotifyResult:
         """Deliver one notification to one user across every channel the user's
         preferences allow for the notification's category.
@@ -214,14 +416,19 @@ class NotificationService:
         ``enqueue_broadcast``). The in-app channel persists a ``Notification``
         row — the durable record the bell/feed read. Push reuses ``send_to_user``
         (best-effort) and email enqueues an RQ job (best-effort). A missing or
-        tombstoned recipient is a no-op."""
+        tombstoned recipient is a no-op.
+
+        ``channels`` narrows the *candidate* set (``None`` = all): a flow that
+        already delivered one channel transactionally (the match-call pin
+        persists its in-app row in the pin transaction, ``app.match_calls``)
+        fans out here with the remainder. Preferences still apply on top —
+        this can only ever subtract channels, never bypass a mute."""
         user = await self._db.get(User, user_id)
         if user is None or user.merged_into_user_id is not None:
             return NotifyResult()
 
-        effective = await self._effective_channels(
-            user_id, category, set(NotificationChannel)
-        )
+        candidates = set(NotificationChannel) if channels is None else set(channels)
+        effective = await self._effective_channels(user_id, category, candidates)
         result = NotifyResult()
 
         if NotificationChannel.IN_APP in effective:
@@ -304,22 +511,7 @@ class NotificationService:
         preferences and delivers (see ``app.notifications.jobs``). Fire-and-
         forget: a Redis hiccup must not fail the originating flow, so enqueue
         failures are logged and swallowed (mirrors ``_enqueue_notification_email``)."""
-        # Imported lazily (not at module level) because app.notifications.jobs
-        # imports this service — a top-level import would be a cycle. The
-        # function-level import keeps the job name a single source of truth.
-        from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
-
-        try:
-            queue_module.get_notifications_queue().enqueue(
-                DELIVER_NOTIFICATION_JOB,
-                job.model_dump_json(),
-                result_ttl=60,
-                failure_ttl=300,
-            )
-        except Exception:
-            log.exception("Failed to enqueue notification delivery")
-            return False
-        return True
+        return enqueue_notification_job(job)
 
     # ----- the in-app feed -------------------------------------------------
 
@@ -692,40 +884,12 @@ class NotificationService:
     async def _channel_overrides(
         self, user_id: uuid.UUID
     ) -> dict[NotificationChannel, bool]:
-        rows = (
-            (
-                await self._db.execute(
-                    select(NotificationChannelSetting).where(
-                        NotificationChannelSetting.user_id == user_id
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        overrides: dict[NotificationChannel, bool] = {}
-        for row in rows:
-            channel = _parse_channel(row.channel)
-            if channel is not None:
-                overrides[channel] = row.enabled
-        return overrides
+        return await channel_overrides(self._db, user_id)
 
     async def _cell_overrides(
         self, user_id: uuid.UUID, category: NotificationCategory | None = None
     ) -> dict[tuple[NotificationCategory, NotificationChannel], bool]:
-        query = select(NotificationPreference).where(
-            NotificationPreference.user_id == user_id
-        )
-        if category is not None:
-            query = query.where(NotificationPreference.category == category.value)
-        rows = (await self._db.execute(query)).scalars().all()
-        overrides: dict[tuple[NotificationCategory, NotificationChannel], bool] = {}
-        for row in rows:
-            channel = _parse_channel(row.channel)
-            parsed_category = _parse_category(row.category)
-            if channel is not None and parsed_category is not None:
-                overrides[(parsed_category, channel)] = row.enabled
-        return overrides
+        return await cell_overrides(self._db, user_id, category)
 
     async def _effective_channels(
         self,
@@ -733,21 +897,12 @@ class NotificationService:
         category: NotificationCategory,
         candidates: Collection[NotificationChannel],
     ) -> set[NotificationChannel]:
-        channel_overrides = await self._channel_overrides(user_id)
-        cell_overrides = await self._cell_overrides(user_id, category)
+        # Availability from the per-request cache (a broadcast to N recipients
+        # would otherwise re-query the same tiny lookup table N times).
         _, availability = await self._channel_order_and_availability()
-        effective: set[NotificationChannel] = set()
-        for channel in candidates:
-            available = availability.get(channel, False)
-            master = resolve_channel_enabled(
-                channel, available, channel_overrides.get(channel)
-            )
-            cell = resolve_cell_enabled(
-                category, channel, available, cell_overrides.get((category, channel))
-            )
-            if master and cell:
-                effective.add(channel)
-        return effective
+        return await effective_channels(
+            self._db, user_id, category, candidates, availability=availability
+        )
 
     async def _device_count(self, user_id: uuid.UUID) -> int:
         return int(

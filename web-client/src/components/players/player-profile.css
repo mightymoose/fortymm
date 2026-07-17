@@ -8,11 +8,11 @@
   /* The radius/shadow scale is declared per *surface* in this codebase — the
    * shared `.fortymm-theme` block (index.css) carries the colour ramps and
    * `--shadow-lg`/`--shadow-glow`, but not these. `.match-details`,
-   * `.fortymm-landing`, `.simulator` and the settings page each declare the same
+   * `.fortymm-landing` and the settings page each declare the same
    * scale over themselves; the profile is the surface that was consuming
    * `var(--r-lg)` and `var(--shadow-sm)` without ever declaring them, so every
    * card below computed to `radius: 0` and inherited Tailwind's much weaker
-   * `--shadow-sm` instead of the house one. (Worth hoisting all five copies into
+   * `--shadow-sm` instead of the house one. (Worth hoisting all four copies into
    * `.fortymm-theme` one day — the login and RBAC surfaces have the same latent
    * hole — but that restyles pages this branch has no business touching.) */
   --r-sm: 6px;

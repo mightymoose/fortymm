@@ -3,6 +3,14 @@ import type { Page, Route } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { PERM } from '../../../src/lib/permissions'
 import {
+  manualPlacementPin,
+  NO_DRAWN_EVENTS_MESSAGE,
+  queuedSolveRow,
+  SOLVE_TICK_DWELL_MS,
+  solveRowInFlight,
+  stepScheduleSolve,
+} from '../../../src/mocks/factories/tournaments/solver-sim'
+import {
   buildEventResultsRead,
   buildPoolStandingsRead,
   buildStandingRowRead,
@@ -20,6 +28,7 @@ type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
 type EventResultsRead = components['schemas']['EventResultsRead']
+type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
  * generated schema's, not a re-typed union of four strings. */
 export type TournamentStatus = TournamentDetailRead['status']
@@ -502,6 +511,13 @@ export interface TournamentsStoreOptions {
    * event's draw. Its rows name the drawable JOURNEY's own two entrants (`entry-1`,
    * `entry-2`), so the FE's name join lands. */
   standings?: boolean
+  /** The tournament's latest **schedule solve** ledger row when the page loads (ADR
+   * "the schedule is solved") — how a spec starts on a `succeeded`, `infeasible` or
+   * `failed` strip without walking the whole run. Built with
+   * `buildScheduleSolveRead(...)`, the same generated-schema-typed factory the MSW
+   * mocks use, so a contract change reds this file. Defaults to `null` — no solve
+   * ever requested, the state every tournament is born in. */
+  latestSolve?: ScheduleSolveRead
 }
 
 /** The options for a tournament that can actually be **started**: every event drawable,
@@ -645,6 +661,30 @@ function goLiveRefusal(tournament: TournamentDetailRead): string | null {
 const DRAW_UNDER_WAY_DETAIL =
   "This event's draw is already under way — at least one fixture has a match " +
   'or a recorded winner — so it can no longer be cut or removed.'
+
+/** Materialize an event's ready fixtures into real **`in_progress` matches** — the
+ * go-live step (#788, `api/app/tournaments.py`), mirroring the MSW store's
+ * `materializeFixtures`: a fixture is ready when both its sides are known (a TBD side
+ * waits), and the mint is idempotent on `match_id`. The match id is deterministic off
+ * the fixture, so the same draw materializes the same way every run.
+ *
+ * ⚠️ This stub used to OMIT the step, and the omission was load-bearing: a live seed's
+ * fixtures stayed matchless, every pinned fixture kept tier `called`, and the board
+ * specs went green against a world the server never serves — live round-robin fixtures
+ * are `in_progress` from the first second, and the QA pass caught the real board hiding
+ * every called badge behind exactly that status. */
+function materializeFixtures(event: TournamentEventRead): TournamentEventRead {
+  const fixtures = event.fixtures.map((fixture) => {
+    const ready = fixture.entry_a_id !== null && fixture.entry_b_id !== null
+    if (!ready || fixture.match_id !== null) return fixture
+    return {
+      ...fixture,
+      match_id: `m-${fixture.id}`,
+      match_status: 'in_progress' as const,
+    }
+  })
+  return { ...event, fixtures }
+}
 
 /** Evidence of play: a fixture with a recorded winner, or one that has become a real
  * match. */
@@ -801,11 +841,25 @@ export class TournamentsStore {
       if (refusal) throw new Error(`cannot seed a draw for ${name}: ${refusal}`)
       this.mutateEvent(event.id, (e) => ({ ...e, fixtures: planDraw(e) }))
     }
+    // A tournament SEEDED live has been through go-live, so its ready fixtures are
+    // `in_progress` matches already (#788) — a live seed whose fixtures stayed
+    // matchless would be a world the server cannot produce (see
+    // `materializeFixtures`).
+    if (this.detail.status === 'live') {
+      this.detail = {
+        ...this.detail,
+        events: this.detail.events.map(materializeFixtures),
+      }
+    }
     // The played-out result (ADR-0788), last: standings are derived from a decided draw, so
     // this rides on the seeded JOURNEY draw above rather than inventing one.
     if (options.standings ?? false) {
       const event = this.eventNamed(EVENT.JOURNEY)
       this.mutateEvent(event.id, (e) => ({ ...e, results: JOURNEY_RESULTS }))
+    }
+    // The seeded solve ledger row, if any — a terminal strip state the spec starts on.
+    if (options.latestSolve) {
+      this.detail = { ...this.detail, latest_schedule_solve: options.latestSolve }
     }
   }
 
@@ -1048,7 +1102,30 @@ export class TournamentsStore {
       return json(route, 200, [this.readDetail()])
     }
     if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}`) {
+      // Walk any in-flight schedule solve one step per detail read — the read the
+      // Schedule tab POLLS — so a spec watches the strip resolve queued → running →
+      // succeeded at the client's own cadence, exactly as the worker would move it.
+      this.tickSolve()
       return json(route, 200, this.readDetail())
+    }
+
+    // The schedule solver's one verb (ADR "the schedule is solved"). Matched before
+    // the transitions/entries routes only for tidiness — its path collides with
+    // nothing.
+    if (
+      method === 'POST' &&
+      path === `/v1/tournaments/${TOURNAMENT_ID}/schedule/solves`
+    ) {
+      return this.requestSolve(route)
+    }
+
+    // The manual placement (ADR-0790) — while LIVE, a pin + a notification
+    // (ADR "the schedule is solved; the call is pinned").
+    const placement = path.match(
+      /^\/v1\/tournaments\/([^/]+)\/fixtures\/([^/]+)\/placement$/,
+    )
+    if (method === 'PATCH' && placement) {
+      return this.placeFixture(route, placement[2], request.postDataJSON())
     }
 
     // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
@@ -1147,7 +1224,12 @@ export class TournamentsStore {
       if (refusal) return json(route, 409, { detail: refusal })
     }
 
-    this.detail = { ...this.detail, status: to }
+    // Go-live materializes every event's ready fixtures into real `in_progress`
+    // matches (#788) — only on `published → live`; publishing and archiving touch
+    // no fixtures.
+    const events =
+      to === 'live' ? this.detail.events.map(materializeFixtures) : this.detail.events
+    this.detail = { ...this.detail, events, status: to }
     // **201**, as the route is declared (`status_code=status.HTTP_201_CREATED` —
     // a transition CREATES a move, it does not update a field), and as the MSW
     // mock answers. A stub that answered 200 would be the one thing this table of
@@ -1187,6 +1269,141 @@ export class TournamentsStore {
     // (`parseFixtures`, `data/api.ts`) before it reconciles off the refetch, so a body
     // of the wrong shape fails here rather than in production.
     return json(route, 201, fixtures)
+  }
+
+  // ----- the schedule solver (ADR "the schedule is solved; the call is pinned") ---
+
+  private solveCounter = 0
+
+  /** The solve ledger row as the SERVER now holds it — for asserting the strip
+   * tracked the state rather than that some markup flickered. */
+  get latestSolve(): ScheduleSolveRead | null {
+    return this.detail.latest_schedule_solve
+  }
+
+  /**
+   * `POST …/schedule/solves` — queue a run of the placement solver. Mirrors the
+   * route's refusals in its order: 403 (not the owner — the strip must not offer
+   * the button, so reaching this is a stale or forged view), then the **coded
+   * 422** (`no_drawn_events`, the ADR-0968 `{code, message}` shape — a stub
+   * answering bare prose would green a client that matched on the sentence).
+   *
+   * One solve in flight per tournament, as on the server: a POST while a run is
+   * `queued`/`running` is absorbed and the SAME row answers — the double-click
+   * spec asserts precisely that no second row is minted.
+   */
+  private async requestSolve(route: Route) {
+    if (!this.detail.can_edit) {
+      return json(route, 403, {
+        detail: 'Only the creator can run the scheduler.',
+      })
+    }
+    if (!this.detail.events.some((e) => e.fixtures.length > 0)) {
+      return json(route, 422, {
+        detail: {
+          code: 'no_drawn_events',
+          message: NO_DRAWN_EVENTS_MESSAGE,
+        },
+      })
+    }
+    const current = this.detail.latest_schedule_solve
+    if (solveRowInFlight(current)) {
+      return json(route, 202, current)
+    }
+    this.solveCounter += 1
+    const solve = queuedSolveRow(`solve-${this.solveCounter}`)
+    this.detail = { ...this.detail, latest_schedule_solve: solve }
+    return json(route, 202, solve)
+  }
+
+  /** When the mock worker last advanced — the dwell below reads it. */
+  private lastSolveTickAt = 0
+
+  /** One step of the mock worker, driven by the detail READS (there is no real
+   * queue here) — `stepScheduleSolve`, the shared sim (`solver-sim.ts`), so this
+   * stub and the MSW store cannot drift apart on what a solve does: `queued` →
+   * `running`, then `running` → `succeeded` with every unplaced pooled fixture
+   * dealt onto its pool's tables (and, while LIVE, the imminent ones called).
+   * Terminal rows never move — a seeded `infeasible`/`failed` strip stays what
+   * the spec seeded.
+   *
+   * **At most one step per dwell** (`SOLVE_TICK_DWELL_MS`). The client's
+   * reconcile can land two detail GETs back-to-back (the list key
+   * prefix-matches the detail key, so one mutation's invalidate refetches it
+   * twice), and a tick per read would walk queued → succeeded inside one
+   * reconcile — the `solving` state would be unobservable, in the spec and in
+   * front of a person. The dwell makes each step land on a DIFFERENT poll,
+   * which is the loop under test. */
+  private tickSolve() {
+    const solve = this.detail.latest_schedule_solve
+    if (!solve || !solveRowInFlight(solve)) return
+    const now = Date.now()
+    if (now - this.lastSolveTickAt < SOLVE_TICK_DWELL_MS) return
+    this.lastSolveTickAt = now
+    const step = stepScheduleSolve(
+      solve,
+      this.detail.events,
+      this.detail.status === 'live',
+    )
+    if (!step) return
+    this.detail = {
+      ...this.detail,
+      events: step.events,
+      latest_schedule_solve: step.solve,
+    }
+  }
+
+  /**
+   * `PATCH …/fixtures/{fixture_id}/placement` — the director's hand, with the
+   * SERVER's transition table (`apply_manual_placement`,
+   * `api/app/match_calls.py`) via the shared `manualPlacementPin`
+   * (`solver-sim.ts`, where the table is documented branch for branch) — one
+   * implementation for this stub and the MSW store alike.
+   *
+   * Refused in the API's order: 403 (not the owner — the tab never offers the
+   * control), 404 (no such fixture), 409 (the match is `completed`/`voided`, so
+   * its placement is history).
+   */
+  private async placeFixture(route: Route, fixtureId: string, body: unknown) {
+    if (!this.detail.can_edit) {
+      return json(route, 403, { detail: 'Only the creator can place matches.' })
+    }
+    const found = this.detail.events
+      .flatMap((e) => e.fixtures)
+      .find((f) => f.id === fixtureId)
+    if (!found) return json(route, 404, { detail: 'fixture not found' })
+    if (found.match_status === 'completed' || found.match_status === 'voided') {
+      return json(route, 409, {
+        detail: 'This match is finished, so its placement can no longer change.',
+      })
+    }
+
+    const patch = body as {
+      table_id?: string | null
+      scheduled_start?: string | null
+    } | null
+    const table_id = patch?.table_id ?? null
+    const scheduled_start = patch?.scheduled_start ?? null
+
+    const updated: TournamentFixtureRead = {
+      ...found,
+      table_id,
+      scheduled_start,
+      ...manualPlacementPin(
+        this.detail.events,
+        found,
+        { table_id, scheduled_start },
+        this.detail.status === 'live',
+      ),
+    }
+    this.detail = {
+      ...this.detail,
+      events: this.detail.events.map((event) => ({
+        ...event,
+        fixtures: event.fixtures.map((f) => (f.id === fixtureId ? updated : f)),
+      })),
+    }
+    return json(route, 200, updated)
   }
 
   /** `DELETE …/events/{event_id}/draw` — un-cut an event's draw. **Idempotent**: an

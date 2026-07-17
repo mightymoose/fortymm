@@ -6,11 +6,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import account_merge
+from app import queue as queue_module
 from app.account_merge import merge_user
 from app.leagues import add_user_to_default_league, get_default_league
 from app.match_voiding import void_match
@@ -27,6 +29,9 @@ from app.models import (
     RatingHistory,
     RatingHistorySource,
     Role,
+    ScheduleSolve,
+    ScheduleSolveStatus,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -1241,6 +1246,253 @@ async def test_the_uncut_is_scoped_to_the_event_that_collided(
         "the un-cut must be scoped to the event whose field double-counted a human — "
         "a sibling event's good draw is not the merge's to throw away"
     )
+
+
+# ----- the merge is a scheduling-input mutation (ADR "the schedule is solved;
+# the call is pinned") ------------------------------------------------------
+#
+# Every arm of the entry-collision resolution changes solver inputs — a
+# withdrawal from a played draw, an un-cut of an unplayed one — so each must
+# funnel into the one coalesced ``request_solve``, exactly as the withdraw and
+# un-cut routes do. Under conftest's autouse *synchronous* fake solver queue
+# the enqueued job runs inline, finds no committed ``queued`` row, and no-ops —
+# so the committed ledger row is exactly what these tests read.
+
+
+async def _solve_rows(
+    db: AsyncSession, tournament_id: uuid.UUID
+) -> list[ScheduleSolve]:
+    return list(
+        (
+            await db.execute(
+                select(ScheduleSolve)
+                .where(ScheduleSolve.tournament_id == tournament_id)
+                .order_by(ScheduleSolve.requested_at, ScheduleSolve.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _all_solve_rows(db: AsyncSession) -> list[ScheduleSolve]:
+    return list((await db.execute(select(ScheduleSolve))).scalars().all())
+
+
+async def _mark_played(db: AsyncSession, fixture: TournamentFixture) -> None:
+    """Give one fixture a ``winner_entry_id`` — the ``draw_has_play`` evidence
+    that flips its event onto the withdrawal arm (no ``Match`` row needed)."""
+    fixture.winner_entry_id = fixture.entry_a_id
+    await db.commit()
+
+
+class _DeadQueue:
+    def enqueue(self, *args: object, **kwargs: object) -> None:
+        raise RedisError("redis is down")
+
+
+async def test_merge_withdrawal_from_a_played_draw_enqueues_one_settings_solve(
+    db_session: AsyncSession,
+):
+    """The withdrawal arm. The guest's colliding entry is seated in a **played**
+    draw, so the merge withdraws it — a scheduling-input mutation the solver must
+    hear about (it is what activates the broken-pin repair for any fixture that
+    promised the withdrawn entrant). Exactly one ``settings_changed`` row, same
+    doctrine as the withdraw route's seated-entrant trigger."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    guest_entry = await _enter(db_session, event, ephemeral)
+    await _enter(db_session, event, verified)
+    await _enter(db_session, event, other)
+
+    before = await _cut(db_session, event)
+    assert len(before) == 3
+    assert await _fixtures_referencing(db_session, guest_entry.id) == 2, (
+        "precondition: the guest really is seated — the solve gate turns on it"
+    )
+    await _mark_played(db_session, before[0])
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    (row,) = await _solve_rows(db_session, event.tournament_id)
+    assert row.trigger is ScheduleSolveTrigger.settings_changed
+    assert row.status is ScheduleSolveStatus.queued
+
+    # And the merge outcome itself is unchanged: the played draw survives whole,
+    # the guest's entry is withdrawn (not deleted) and now belongs to the survivor.
+    assert {f.id for f in await _fixtures_for(db_session, event)} == {
+        f.id for f in before
+    }, "a played draw is never un-cut by the merge"
+    entries = await _entries_for(db_session, event)
+    withdrawn = [e for e in entries if e.id == guest_entry.id]
+    assert [e.status for e in withdrawn] == [TournamentEntryStatus.withdrawn]
+    assert withdrawn[0].user_id == verified.id
+
+
+async def test_merge_withdrawal_of_an_unseated_entry_enqueues_no_solve(
+    db_session: AsyncSession,
+):
+    """The withdrawal arm's gate, negatively. The guest entered AFTER the cut, so
+    their entry seats no fixture — entries reach the solver only through
+    fixtures, so this withdrawal changes no solver input and owes no solve (the
+    withdraw route's exact doctrine: their leaving matters at the re-cut, which
+    triggers on its own)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    await _enter(db_session, event, verified)
+    await _enter(db_session, event, other)
+    before = await _cut(db_session, event)
+    assert len(before) == 1
+    await _mark_played(db_session, before[0])
+    # The collision arrives after the cut: the guest is entered but never seated.
+    guest_entry = await _enter(db_session, event, ephemeral)
+    assert await _fixtures_referencing(db_session, guest_entry.id) == 0
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _solve_rows(db_session, event.tournament_id) == [], (
+        "an entrant with no fixture is invisible to the solver — no solve is owed"
+    )
+    entries = await _entries_for(db_session, event)
+    withdrawn = [e for e in entries if e.id == guest_entry.id]
+    assert [e.status for e in withdrawn] == [TournamentEntryStatus.withdrawn], (
+        "the withdrawal itself still happens; only the solve is gated"
+    )
+
+
+async def test_merge_uncut_enqueues_a_solve_when_a_drawn_sibling_survives(
+    db_session: AsyncSession,
+):
+    """The un-cut arm. The collided event's unplayed draw is destroyed, which
+    frees its tables and windows for the sibling event that is still drawn — so
+    one ``settings_changed`` solve is owed, exactly as the un-cut route's
+    drawn-sibling gate decides it."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+
+    collided = await _make_rr_event(db_session, verified, name="Open Singles")
+    tournament = (
+        await db_session.execute(
+            select(Tournament)
+            .where(Tournament.id == collided.tournament_id)
+            .options(selectinload(Tournament.events))
+        )
+    ).scalar_one()
+    bystander = await _make_rr_event(
+        db_session, verified, tournament=tournament, name="Over 40s"
+    )
+
+    await _enter(db_session, event=collided, user=ephemeral)
+    await _enter(db_session, event=collided, user=verified)
+    await _enter(db_session, event=bystander, user=verified)
+    await _enter(db_session, event=bystander, user=other)
+
+    assert len(await _cut(db_session, collided)) == 1
+    bystander_seats = _seats(await _cut(db_session, bystander))
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    (row,) = await _solve_rows(db_session, tournament.id)
+    assert row.trigger is ScheduleSolveTrigger.settings_changed
+    assert row.status is ScheduleSolveStatus.queued
+    # The merge outcome is unchanged: collided un-cut, bystander untouched.
+    assert await _fixtures_for(db_session, collided) == []
+    assert _seats(await _fixtures_for(db_session, bystander)) == bystander_seats
+
+
+async def test_merge_uncut_of_the_only_drawn_event_enqueues_no_solve(
+    db_session: AsyncSession,
+):
+    """Un-cutting the tournament's ONLY draw leaves nothing to place — a solve
+    row over an empty board is a no-op ledger entry, so none is made (the un-cut
+    route's gate, mirrored)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    await _enter(db_session, event, ephemeral)
+    await _enter(db_session, event, verified)
+    await _enter(db_session, event, other)
+    assert len(await _cut(db_session, event)) == 3
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _fixtures_for(db_session, event) == [], "the un-cut still happened"
+    assert await _solve_rows(db_session, event.tournament_id) == [], (
+        "no drawn event survived the un-cut, so no solve is owed"
+    )
+
+
+async def test_merge_without_a_tournament_collision_enqueues_no_solve(
+    db_session: AsyncSession,
+):
+    """A merge with no entry collision mutates no scheduling input — the guest's
+    entry simply re-points onto the survivor and the cut draw stands — so the
+    solve ledger stays empty."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    await _enter(db_session, event, ephemeral)
+    await _enter(db_session, event, other)
+    before = await _cut(db_session, event)
+    before_seats = _seats(before)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _all_solve_rows(db_session) == []
+    assert _seats(await _fixtures_for(db_session, event)) == before_seats
+
+
+async def test_merge_survives_a_dead_scheduling_queue(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Redis down at the merge moment costs the solve, never the merge — a
+    sign-in must not fail because the scheduler could not hear about it. And no
+    zombie ``queued`` row survives to absorb every later trigger while no job
+    ever runs (``request_solve`` takes its row back out)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    other = await _make_verified(db_session, "pete@example.com")
+    event = await _make_rr_event(db_session, verified)
+
+    guest_entry = await _enter(db_session, event, ephemeral)
+    await _enter(db_session, event, verified)
+    await _enter(db_session, event, other)
+    before = await _cut(db_session, event)
+    await _mark_played(db_session, before[0])
+    monkeypatch.setattr(queue_module, "get_queue", lambda: _DeadQueue())
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    assert await _all_solve_rows(db_session) == [], (
+        "the enqueue failed, so no row may survive — a zombie would absorb "
+        "every later trigger while no job ever runs"
+    )
+    # The merge itself landed whole: draw intact, entry withdrawn onto the survivor.
+    assert {f.id for f in await _fixtures_for(db_session, event)} == {
+        f.id for f in before
+    }
+    entries = await _entries_for(db_session, event)
+    withdrawn = [e for e in entries if e.id == guest_entry.id]
+    assert [e.status for e in withdrawn] == [TournamentEntryStatus.withdrawn]
+    assert withdrawn[0].user_id == verified.id
 
 
 async def test_merge_repoints_rating_history_created_by(

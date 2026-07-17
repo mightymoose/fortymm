@@ -248,6 +248,28 @@ export const mockFixturePlacementEndpoint = (
     ),
   )
 
+/** Resolver for the **schedule solve** endpoint (ADR "the schedule is solved; the
+ * call is pinned") — the ledger row the queue accepted (**202**: the work is
+ * accepted, not done — poll the detail's `latest_schedule_solve` for the outcome),
+ * or an error envelope: a **coded 422** (`no_drawn_events` — nothing anywhere is
+ * drawn, so there is nothing to place), 403 (not the owner), 404, 503 (the queue
+ * itself was unreachable; nothing was queued). No request body: the tournament is
+ * the whole request, and the trigger is always `manual` from this route. */
+export type ScheduleSolveResolver = HttpResponseResolver<
+  { tournamentId: string },
+  never,
+  components['schemas']['ScheduleSolveRead'] | ErrorBody | CodedErrorBody
+>
+
+/** POST /v1/tournaments/{id}/schedule/solves — request a schedule solve. */
+export const mockScheduleSolveEndpoint = (
+  backend: Backend,
+  resolver: ScheduleSolveResolver,
+) =>
+  backend.use(
+    http.post('*/v1/tournaments/:tournamentId/schedule/solves', resolver),
+  )
+
 /** Resolver for the withdraw endpoint — a 204 with no body (including when the
  * entry was already withdrawn: withdrawal is idempotent), or an error envelope
  * on a 403 (someone else's entry) / 404. */

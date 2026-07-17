@@ -1,29 +1,74 @@
-import { CalendarClock, MapPin, Pencil, Plus } from 'lucide-react'
-import { useState } from 'react'
+import {
+  CalendarClock,
+  LayoutGrid,
+  List,
+  MapPin,
+  Pencil,
+  Pin,
+  Plus,
+  Users,
+} from 'lucide-react'
+import { useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
-import { usePlaceFixture } from '../data/api'
+import {
+  usePlaceFixture,
+  useRequestScheduleSolve,
+  useSchedulePolling,
+} from '../data/api'
 import { type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from '../data/draw'
 import { EM_DASH, fmtDateShort, fmtTimeWindow } from '../data/helpers'
 import {
   buildSchedule,
   composeScheduledStart,
   matchLabel,
+  placementConsequence,
   scheduleStatusLabel,
   timeOfDay,
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
-import type { Tournament, TournamentTable } from '../data/types'
+import {
+  buildTimelineBoard,
+  calledAtLabel,
+  isDecided,
+  isTold,
+  notifiedLabel,
+} from '../data/timeline'
+import type { Tournament, TournamentStatus, TournamentTable } from '../data/types'
 import { EmptyState } from '../empty-state'
+import {
+  ConfirmCallDialog,
+  type CallConsequence,
+  type PlacementSummary,
+} from './confirm-call-dialog'
 import { OptionSelect } from './event-editor/option-select'
+import { BoardEmpty } from './schedule-tab/board-empty'
+import { GanttBoard } from './schedule-tab/gantt-board'
+import { PlayerTimelineBoard } from './schedule-tab/player-timeline-board'
+import { TierLegend } from './schedule-tab/tier-legend'
 import { SectionHeader } from './section-header'
+import { SolveStrip } from './solve-strip'
 
 /** The body the placement PATCH takes — the placement whole, `null` to clear. */
 type PlacementBody = { table_id: string | null; scheduled_start: string | null }
+
+/** The tab's three readings of ONE schedule: the placement **list** (the
+ * default — nothing regresses), the **Gantt** board (tables × time) and the
+ * **player timeline** (entrants × time). View choice is component state, the
+ * same mechanism the page's own tabs use (`TournamentDetailPage` holds `tab` in
+ * `useState`) — this page encodes no view state in the URL, so the toggle
+ * invents no new URL contract. */
+type ScheduleView = 'list' | 'gantt' | 'players'
+
+/** Radix hands `onValueChange` a plain string (and `''` for a re-click on the
+ * active item); narrow it rather than cast it. */
+const isScheduleView = (v: string): v is ScheduleView =>
+  v === 'list' || v === 'gantt' || v === 'players'
 
 export interface ScheduleTabProps {
   tournament: Tournament
@@ -62,11 +107,16 @@ const Side = ({ side }: { side: FixtureSide }) => {
 const PlacementControl = ({
   match,
   tables,
+  status,
   onSubmit,
   isPending,
 }: {
   match: ScheduleMatch
   tables: TournamentTable[]
+  /** The tournament's lifecycle status — while `live`, a placement NOTIFIES
+   * (ADR "the schedule is solved; the call is pinned"), so the submit path is
+   * gated by a consequence-stating confirm. */
+  status: TournamentStatus
   onSubmit: (body: PlacementBody) => Promise<void>
   isPending: boolean
 }) => {
@@ -78,6 +128,12 @@ const PlacementControl = ({
   const [time, setTime] = useState(
     () => timeOfDay(match.scheduledStart) || match.window.start,
   )
+  /** The write held at the confirm gate — the body to send iff the director
+   * confirms, with the consequence the dialog states. `null` = no dialog. */
+  const [pending, setPending] = useState<{
+    body: PlacementBody
+    consequence: CallConsequence
+  } | null>(null)
 
   const options = tables.map((t) => ({
     value: t.id,
@@ -101,8 +157,53 @@ const PlacementControl = ({
       /* keep the panel open */
     }
   }
+
+  /** A placement as the dialog would name it — the catalogue label (or the raw id of
+   * a dangling ref, shown never blanked) and the `HH:MM`. */
+  const summarize = (id: string | null, start: string | null): PlacementSummary => ({
+    tableLabel:
+      id === null ? '' : (tables.find((t) => t.id === id)?.label ?? id),
+    time: timeOfDay(start) || null,
+  })
+
+  /**
+   * The gate on the submit path (ADR "the schedule is solved; the call is pinned"):
+   * a write that would NOTIFY is priced before it is sent — held in `pending` behind
+   * a consequence-stating confirm — and a silent one (pre-live, or clearing an
+   * untold fixture) goes straight through, exactly as before.
+   */
+  const request = (body: PlacementBody) => {
+    const kind = placementConsequence({
+      tournamentStatus: status,
+      match,
+      write: { tableId: body.table_id, scheduledStart: body.scheduled_start },
+    })
+    if (kind === 'silent') {
+      void run(body)
+      return
+    }
+    const told = summarize(match.tableId, match.scheduledStart)
+    const to = summarize(body.table_id, body.scheduled_start)
+    const consequence: CallConsequence =
+      kind === 'call'
+        ? { variant: 'call', to }
+        : kind === 'correction-move'
+          ? {
+              variant: 'correction-move',
+              told,
+              to,
+              notifiedCount: match.callNotifiedCount,
+            }
+          : {
+              variant: 'correction-cancel',
+              told,
+              notifiedCount: match.callNotifiedCount,
+            }
+    setPending({ body, consequence })
+  }
+
   const submit = () =>
-    run({
+    request({
       table_id: tableId,
       // A placement's time is a *prediction*: an empty time is a valid table-only
       // placement (`scheduled_start: null`, ADR-0790), not a reason to compose a
@@ -110,7 +211,7 @@ const PlacementControl = ({
       // silent no-op). Only compose when there is a time to compose.
       scheduled_start: time ? composeScheduledStart(match.window.date, time) : null,
     })
-  const clear = () => run({ table_id: null, scheduled_start: null })
+  const clear = () => request({ table_id: null, scheduled_start: null })
 
   if (!editing) {
     return (
@@ -175,6 +276,24 @@ const PlacementControl = ({
       >
         Cancel
       </Button>
+      {/* The confirm on a NOTIFYING write. Confirm releases the held body to the
+          same mutation the silent path uses; Go back (or Escape / the overlay)
+          drops it — nothing is sent, the editor keeps the work. The refetched
+          tournament brings pinned_at / call_notified_count back from the server;
+          nothing here guesses the new count. */}
+      {pending && (
+        <ConfirmCallDialog
+          open
+          matchLabel={label}
+          consequence={pending.consequence}
+          onConfirm={() => {
+            const { body } = pending
+            setPending(null)
+            void run(body)
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   )
 }
@@ -186,6 +305,7 @@ const PlacementControl = ({
 const MatchRow = ({
   match,
   tables,
+  status,
   canEdit,
   onSubmit,
   isPending,
@@ -193,12 +313,18 @@ const MatchRow = ({
 }: {
   match: ScheduleMatch
   tables: TournamentTable[]
+  status: TournamentStatus
   canEdit: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
   showTime: boolean
 }) => {
   const time = timeOfDay(match.scheduledStart)
+  // The list speaks the boards' tier vocabulary (ADR "the schedule is solved; the
+  // call is pinned" — the UI never blurs an estimate into a promise): a scheduled
+  // time that is still the solver's plan says `est`; a called fixture wears its
+  // called-at badge (and, past the first call, what the corrections cost).
+  const notified = notifiedLabel(match.callNotifiedCount)
   return (
     <div
       data-testid={`schedule-match-${match.fixtureId}`}
@@ -208,6 +334,15 @@ const MatchRow = ({
         {showTime && (
           <span className="font-mono text-[12px] tabular-nums text-[color:var(--ball-500)]">
             {time || EM_DASH}
+            {time && match.tier === 'estimate' && (
+              <span
+                data-testid={`schedule-est-${match.fixtureId}`}
+                className="text-[10px] text-[color:var(--fg-3)]"
+              >
+                {' '}
+                · est
+              </span>
+            )}
           </span>
         )}
         <span className="flex items-baseline gap-x-1.5">
@@ -218,6 +353,35 @@ const MatchRow = ({
         <span className="text-[11px] text-[color:var(--fg-3)]">
           · {match.eventName}
         </span>
+        {match.pinnedAt !== null && !isDecided(match.match?.status ?? null) && (
+          <>
+            {/* The badge rides the PIN, not the tier: go-live materializes
+                every round-robin fixture into an `in_progress` match, so a
+                called match is tier `started` from the first live second and
+                must still show what the director promised (the QA-caught
+                gap). Only a decided match (completed/voided, `isDecided`)
+                retires the badge — its promise is no longer outstanding.
+                Pinned is not told: only a fixture whose players were actually
+                NOTIFIED wears the called-at time — a silent pin (a director's
+                pre-live placement, count 0) says `Pinned`, claiming no call
+                and no notification that never happened. */}
+            <span
+              data-testid={`schedule-called-${match.fixtureId}`}
+              className="inline-flex items-center gap-1 self-center rounded-full border border-[color:var(--ball-500)] bg-[color:var(--ball-500)]/20 px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-[color:var(--fg-1)]"
+            >
+              <Pin size={10} aria-hidden className="shrink-0" />
+              {isTold(match) ? calledAtLabel(match.pinnedAt) : 'Pinned'}
+            </span>
+            {notified && (
+              <span
+                data-testid={`schedule-notified-${match.fixtureId}`}
+                className="font-mono text-[10px] tabular-nums text-[color:var(--fg-3)]"
+              >
+                {notified}
+              </span>
+            )}
+          </>
+        )}
         <span
           data-testid={`schedule-status-${match.fixtureId}`}
           className="ml-auto text-[11px] font-medium text-[color:var(--fg-3)]"
@@ -232,6 +396,7 @@ const MatchRow = ({
         <PlacementControl
           match={match}
           tables={tables}
+          status={status}
           isPending={isPending}
           onSubmit={(body) => onSubmit(match.fixtureId, body)}
         />
@@ -286,12 +451,14 @@ const ReservedWindows = ({ tournament }: { tournament: Tournament }) => {
 const TableColumn = ({
   column,
   tables,
+  status,
   canEdit,
   onSubmit,
   isPending,
 }: {
   column: ScheduleTable
   tables: TournamentTable[]
+  status: TournamentStatus
   canEdit: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
@@ -317,6 +484,7 @@ const TableColumn = ({
           key={match.fixtureId}
           match={match}
           tables={tables}
+          status={status}
           canEdit={canEdit}
           onSubmit={onSubmit}
           isPending={isPending}
@@ -346,10 +514,27 @@ const TableColumn = ({
 export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
-  const schedule = buildSchedule(tournament, tables)
+  const requestSolve = useRequestScheduleSolve(tournament.id)
+  // Memoized on the query cache's stable references: the reduction walks every
+  // fixture of every event, so it should re-run when the data changes, not on
+  // every poll-driven re-render.
+  const schedule = useMemo(() => buildSchedule(tournament, tables), [tournament, tables])
+  const [view, setView] = useState<ScheduleView>('list')
+  // Freshness is POLLING while this tab is on screen (ADR "the schedule is
+  // solved"): ~3s while a solve is in flight, ~15s while the tournament is live,
+  // none otherwise. Mounted here — not on the page — so only the Schedule tab
+  // ever polls, and only while it is the active tab.
+  useSchedulePolling(tournament.id)
 
   const onSubmit = (fixtureId: string, body: PlacementBody) =>
     place.mutateAsync({ fixtureId, body }).then(() => undefined)
+
+  // The boards' shared derivation — only paid for when a board is on screen,
+  // and only re-run when the data (or the view) changes.
+  const board = useMemo(
+    () => (view === 'list' ? null : buildTimelineBoard(tournament, tables)),
+    [view, tournament, tables],
+  )
 
   return (
     <div data-testid="schedule-tab">
@@ -362,6 +547,15 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
         }
       />
 
+      {/* The solve strip renders in EVERY schedule state, the empty one included:
+          "no plan yet" over an uncut tournament is exactly where the owner meets
+          the designed 422 ("cut a draw first") if they run it early. */}
+      <SolveStrip
+        solve={tournament.latestScheduleSolve}
+        canEdit={canEdit}
+        onRun={() => requestSolve.mutateAsync().then(() => undefined)}
+      />
+
       {schedule.isEmpty ? (
         <EmptyState
           icon={<CalendarClock size={28} />}
@@ -369,12 +563,53 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
           hint="Cut a draw for an event to see its matches here."
         />
       ) : (
-        <div className="flex flex-col gap-6">
+        <>
+          {/* Three readings of one schedule; the list stays the default so
+              nothing regresses. The legend rides with the boards — the list
+              has no bars to explain. */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            <ToggleGroup
+              type="single"
+              value={view}
+              onValueChange={(v) => {
+                if (isScheduleView(v)) setView(v)
+              }}
+              aria-label="Schedule view"
+              data-testid="schedule-view-toggle"
+              className="w-fit"
+            >
+              <ToggleGroupItem value="list">
+                <List size={14} /> List
+              </ToggleGroupItem>
+              <ToggleGroupItem value="gantt">
+                <LayoutGrid size={14} /> Gantt
+              </ToggleGroupItem>
+              <ToggleGroupItem value="players">
+                <Users size={14} /> Player timeline
+              </ToggleGroupItem>
+            </ToggleGroup>
+            {view !== 'list' && <TierLegend />}
+          </div>
+
+          {board &&
+            (!board.hasBars ? (
+              // Fixtures exist but nothing is placed: the boards' designed
+              // prompt — the Run-scheduler button is right above, on the strip.
+              <BoardEmpty canEdit={canEdit} />
+            ) : view === 'gantt' ? (
+              <GanttBoard board={board} />
+            ) : (
+              <PlayerTimelineBoard board={board} />
+            ))}
+
+          {view === 'list' && (
+            <div className="flex flex-col gap-6">
           {schedule.tables.map((column) => (
             <TableColumn
               key={column.tableId}
               column={column}
               tables={tables}
+              status={tournament.status}
               canEdit={canEdit}
               onSubmit={onSubmit}
               isPending={place.isPending}
@@ -397,6 +632,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
                     key={match.fixtureId}
                     match={match}
                     tables={tables}
+                    status={tournament.status}
                     canEdit={canEdit}
                     onSubmit={onSubmit}
                     isPending={place.isPending}
@@ -407,8 +643,10 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             </section>
           )}
 
-          <ReservedWindows tournament={tournament} />
-        </div>
+              <ReservedWindows tournament={tournament} />
+            </div>
+          )}
+        </>
       )}
     </div>
   )

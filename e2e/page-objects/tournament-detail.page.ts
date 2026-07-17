@@ -1,5 +1,7 @@
 import { Locator, Page } from '@playwright/test'
 
+import { ScheduleTabPage } from './tournament-detail-page/schedule-tab.page'
+
 /**
  * The tournament detail page (`/tournaments/$tournamentId`) — scoped to the
  * lifecycle round-robin spec's load-bearing surfaces: the header's lifecycle
@@ -29,6 +31,15 @@ export class TournamentDetailPage {
    * made over the API), returning to a freshly-loaded Events tab. */
   async reload(tournamentId: string): Promise<void> {
     await this.page.goto(`/tournaments/${tournamentId}`)
+  }
+
+  /** Switch to the **Schedule** tab and return its page object (the
+   * child-composition variant, like `DashboardPage.userMenu`). The tab is
+   * plain component state, so no navigation happens — and once the tournament
+   * is live the tab polls, so its locators converge without reloads. */
+  async openSchedule(): Promise<ScheduleTabPage> {
+    await this.page.getByRole('tab', { name: 'Schedule' }).click()
+    return new ScheduleTabPage(this.page)
   }
 
   // ----- lifecycle (header) -------------------------------------------------

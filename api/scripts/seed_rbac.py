@@ -22,6 +22,7 @@ PERMISSIONS = [
     ("tournament.create", "Create a new tournament."),
     ("tournament.enter", "Enter a tournament event as a player."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
+    ("scheduling.view", "See the schedule-solve ledger in the Administration area."),
 ]
 
 # The default `User` role is *not* listed here: it carries no permissions and
@@ -31,7 +32,12 @@ ROLES = [
     (
         "Administrator",
         "Sees the Administration area and manages roles, permissions, and user assignments.",
-        ["administration.view", "authorization.manage", "notifications.broadcast"],
+        [
+            "administration.view",
+            "authorization.manage",
+            "notifications.broadcast",
+            "scheduling.view",
+        ],
     ),
     (
         "Beta tester",

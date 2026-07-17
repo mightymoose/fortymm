@@ -435,6 +435,7 @@ const NOTIF_CATEGORIES: NotificationCategory[] = [
   'tournament',
   'opponent',
   'result_confirm',
+  'match_calls',
 ]
 
 export function notificationItem(
@@ -525,6 +526,9 @@ const NOTIF_TYPE_INFOS: NotificationTypeInfo[] = [
   { key: 'tournament', label: 'Tournament news', short: 'Tourney' },
   { key: 'opponent', label: 'Challenges & friends', short: 'Social' },
   { key: 'result_confirm', label: 'Score acceptances', short: 'Scores' },
+  // Mirrors the API's seed row (migration 0015): the called / moved / cancelled
+  // corrections of ADR "the schedule is solved; the call is pinned".
+  { key: 'match_calls', label: 'Match calls', short: 'Calls' },
 ]
 
 const NOTIF_CHANNEL_INFOS: NotificationChannelInfo[] = [

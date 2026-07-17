@@ -3,7 +3,7 @@ from collections import defaultdict
 from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +17,14 @@ from app.draws import (
     UnsupportedDrawType,
 )
 from app.leagues import resolve_league
+from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
     DrawType,
     EventFormat,
     Match,
     MatchStatus,
+    ScheduleSolve,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -32,13 +35,21 @@ from app.models import (
 )
 from app.rbac import require_permission, user_has_permission
 from app.results import EventResults, MatchOutcome, PoolInput, results_for
+from app.schedule_solves import (
+    latest_solve,
+    request_solve,
+    tournament_has_drawn_event,
+)
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
     EventEntryRatingIneligible,
     EventEntryState,
     EventResultsRead,
+    MatchSettings,
     PoolStandingsRead,
+    ScheduleSolveRead,
+    Slot,
     StandingRowRead,
     TournamentCreate,
     TournamentDetailRead,
@@ -50,6 +61,7 @@ from app.schemas.tournament import (
     TournamentFixturePlacementUpdate,
     TournamentFixtureRead,
     TournamentRead,
+    TournamentTable,
     TournamentTransitionCreate,
     TournamentUpdate,
     named_list,
@@ -462,6 +474,7 @@ def _serialize_detail(
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
+    latest_schedule_solve: ScheduleSolve | None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
@@ -476,6 +489,15 @@ def _serialize_detail(
                 t,
                 created_by_username=created_by_username,
                 current_user_id=current_user_id,
+            ),
+            # ``None`` is two things by design, exactly as ``results`` above is: on
+            # the DETAIL read it is the fact ("no solve ever requested"); on the LIST
+            # it is "not projected" — the list's cards render no solve strip, so it
+            # skips the ledger query the same way it skips standings.
+            "latest_schedule_solve": (
+                ScheduleSolveRead.model_validate(latest_schedule_solve)
+                if latest_schedule_solve is not None
+                else None
             ),
             "events": [
                 _serialize_event(
@@ -829,6 +851,11 @@ async def list_tournaments(
             fixtures_by_event=event_fixtures,
             game_counts=None,
             rating=ratings[tournament.league_id],
+            # The list projects no solve strip, for the same reason it projects no
+            # standings (``game_counts=None`` above): its cards never render one, so
+            # it skips the ledger read rather than paying a query for a field every
+            # card throws away. The solve strip is a detail-BFF concern.
+            latest_schedule_solve=None,
         )
         for tournament, username in rows
     ]
@@ -942,15 +969,20 @@ async def get_tournament(
     # — what each event's standings are projected from (ADR-0788). One statement for the
     # whole page, and **none at all** until something has been played (an unplayed
     # detail collects no completed match ids), so an unplayed tournament still costs
-    # five and the statement-count pin holds; a played one costs the one extra.
+    # six and the statement-count pin holds; a played one costs the one extra.
     game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
-    # The FIFTH query (and last on an unplayed page): the caller's rating on the
-    # tournament's league, read ONCE for the whole page. It is what every event's
-    # ``entry_state`` is judged against (ADR-0783), and a tournament has exactly one
-    # ladder — so a rating read inside the per-event loop would issue a query per event
-    # to learn the same number, on the page whose whole job is to describe a field of
-    # events.
+    # The FIFTH query: the caller's rating on the tournament's league, read ONCE for
+    # the whole page. It is what every event's ``entry_state`` is judged against
+    # (ADR-0783), and a tournament has exactly one ladder — so a rating read inside
+    # the per-event loop would issue a query per event to learn the same number, on
+    # the page whose whole job is to describe a field of events.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    # The SIXTH (and last): the newest row of the tournament's solve ledger — the
+    # Schedule tab's solve strip (ADR "the schedule is solved, the call is pinned").
+    # One row by the ledger's own index, whatever the day's solve count, so the
+    # statement-count pin stays flat; ``None`` is the designed state of a tournament
+    # nobody has asked to schedule yet.
+    latest_schedule_solve = await latest_solve(db, tournament.id)
     return _serialize_detail(
         tournament,
         created_by_username=username,
@@ -960,6 +992,7 @@ async def get_tournament(
         fixtures_by_event=event_fixtures,
         game_counts=game_counts,
         rating=rating,
+        latest_schedule_solve=latest_schedule_solve,
     )
 
 
@@ -1006,8 +1039,36 @@ async def update_tournament(
     # setattr loop covers the JSONB columns and the scalar fields alike. Absent
     # fields stay untouched; the schema validator already rejected an explicit
     # null on the NOT NULL columns.
+    #
+    # Scheduling-input change detection (ADR "the schedule is solved; the call
+    # is pinned"): of everything this PATCH can touch, the solver reads exactly
+    # one thing — the table catalogue, and of the catalogue only the *ids*
+    # (labels and courts are display; ``_load_solver_inputs`` reduces the
+    # catalogue to ``TableId``s). So the before/after comparison is over the id
+    # list, parsed with the same model the write boundary validated it with: a
+    # rename/address/date-only PATCH triggers nothing, a label-only re-word of
+    # a table triggers nothing, and adding/removing/re-identifying a table
+    # triggers a re-solve.
+    catalogue_ids_before = [
+        TournamentTable.model_validate(table).id for table in tournament.table_catalogue
+    ]
     for key, value in fields.items():
         setattr(tournament, key, value)
+    catalogue_ids_after = [
+        TournamentTable.model_validate(table).id for table in tournament.table_catalogue
+    ]
+    if catalogue_ids_after != catalogue_ids_before and await tournament_has_drawn_event(
+        db, tournament_id
+    ):
+        # Only while it matters: with no cut draw anywhere there is nothing to
+        # place, and the ledger would fill with no-op rows — the drawn-event
+        # gate is the same one the Run-scheduler route asks. Requested inside
+        # this transaction, under the tournament row lock this handler already
+        # holds (the lock order ``request_solve`` requires). A ``None`` return
+        # (Redis down) is deliberately ignored: the edit is the thing the
+        # owner asked for, and the missing solve is recovered by the pin tick
+        # or the Run-scheduler button.
+        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     await db.refresh(tournament)
     # The owner is the current user, so the username and can_edit are known.
@@ -1265,6 +1326,18 @@ async def create_tournament_transition(
     # it can never double-create.
     if payload.to is TournamentStatus.live:
         await materialize_live_draw(db, tournament)
+        # Go-live is a solve trigger (ADR "the schedule is solved; the call is
+        # pinned"): the moment the matches exist, the day's first full plan is
+        # queued — same transaction as the status write, under the tournament
+        # row lock this handler already holds, which is exactly the lock order
+        # ``request_solve`` requires of its callers (tournament →
+        # schedule_solves). A ``None`` return means Redis was down: the enqueue
+        # failed, ``request_solve`` logged it and took its row back out, and
+        # going live proceeds anyway — DELIBERATELY. The transition is the
+        # thing the director asked for; the missing solve is recovered by the
+        # 1-minute pin tick and the owner's Run-scheduler button, so failing
+        # the go-live would trade a self-healing gap for a hard error.
+        await request_solve(db, tournament.id, ScheduleSolveTrigger.go_live)
     await db.commit()
     await db.refresh(tournament)
     # The owner is the current user (``_require_owner`` just said so), so the
@@ -1506,6 +1579,32 @@ async def _enforce_draw_type_frozen(
     raise _draw_type_refusal(event.draw_type)
 
 
+def _event_scheduling_facts(
+    event: TournamentEvent,
+) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int]:
+    """The slice of an event the schedule solver actually reads (ADR "the
+    schedule is solved; the call is pinned"), in a comparable shape — what the
+    event PATCH compares before/after its write to decide whether a re-solve
+    is owed.
+
+    Exactly two facts feed ``_load_solver_inputs``: each pool's identity,
+    window and tables (its *name* is display and deliberately absent — a pool
+    rename must not spend a solve), and ``match_settings.length_games`` (the
+    duration input; ``rated`` is a results rule the solver never sees). Parsed
+    through the same models the write boundary validated the JSONB with
+    (parse, don't validate), and read off the ROW rather than the payload, so
+    "changed" means the row changed — a PATCH that re-sends the values the
+    event already holds compares equal and triggers nothing.
+    """
+    settings = MatchSettings.model_validate(event.match_settings)
+    return (
+        tuple(
+            (pool.id, pool.slot, tuple(pool.table_ids)) for pool in event_pools(event)
+        ),
+        settings.length_games,
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -1568,8 +1667,27 @@ async def update_event(
     # As in update_tournament: model_dump(exclude_unset=True) serializes the
     # nested value-objects (slot/match_settings/predicates/pools) to plain
     # dicts/lists, so one setattr loop covers the JSONB columns and scalars.
+    #
+    # Scheduling-input change detection, the same before/after comparison the
+    # tournament PATCH makes over its catalogue: the solver reads this event's
+    # pools (id, window, tables) and its ``length_games``, and nothing else —
+    # see ``_event_scheduling_facts``. A name/fee/predicates-only PATCH, or a
+    # pool rename, compares equal and triggers nothing.
+    facts_before = _event_scheduling_facts(event)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(event, key, value)
+    if facts_before != _event_scheduling_facts(event) and await event_has_draw(
+        db, event.id
+    ):
+        # Gated on THIS event having a cut draw — stricter than the
+        # tournament-wide gate, because ``_load_solver_inputs`` reads the
+        # pools and settings of *drawn* events only: an undrawn event's pools
+        # are configuration the solver never sees, so editing them owes no
+        # solve even while a sibling event is drawn. Same transaction, same
+        # tournament row lock (the order ``request_solve`` requires); a
+        # ``None`` return (Redis down) deliberately costs the solve, never
+        # the edit — the pin tick and the Run-scheduler button recover it.
+        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     await db.refresh(event)
     # An edited event keeps whatever entrants it already had — reload them rather
@@ -2178,6 +2296,38 @@ async def withdraw_from_event(
     # with no conflict in it.
     if entry.status is TournamentEntryStatus.entered:
         _enforce_registration_open(tournament)
+        # Scheduling-input trigger (ADR "the schedule is solved; the call is
+        # pinned"), inside the ``entered`` arm on purpose: only a withdrawal
+        # that actually changes state owes a solve — the idempotent re-DELETE
+        # below writes nothing and triggers nothing. And only when this
+        # entrant is **seated in a cut draw**: entries reach the solver only
+        # through fixtures, so an entrant with no fixture is invisible to it
+        # (they entered after the cut, or nothing is cut) and their leaving
+        # changes no solver input until a re-cut — which triggers on its own.
+        # One EXISTS decides it, and a seated entrant implies a drawn event by
+        # construction, so no separate ``tournament_has_drawn_event`` gate is
+        # needed. Same transaction, under the tournament row lock this handler
+        # already holds (the order ``request_solve`` requires); a ``None``
+        # return (Redis down) deliberately costs the solve, never the
+        # withdrawal.
+        seated = (
+            await db.execute(
+                select(
+                    exists(
+                        select(TournamentFixture.id).where(
+                            or_(
+                                TournamentFixture.entry_a_id == entry.id,
+                                TournamentFixture.entry_b_id == entry.id,
+                            )
+                        )
+                    )
+                )
+            )
+        ).scalar_one()
+        if seated:
+            await request_solve(
+                db, tournament_id, ScheduleSolveTrigger.settings_changed
+            )
 
     # Idempotent by construction: withdrawing is an assignment, not a decrement,
     # so applying it to an already-withdrawn entry writes the value it already
@@ -2392,6 +2542,15 @@ async def cut_event_draw(
         # client; the sentence is composed in ``_draw_refusal``.
         await db.rollback()
         raise _draw_refusal(error) from None
+    # Scheduling-input trigger (ADR "the schedule is solved; the call is
+    # pinned"): the fixtures just changed wholesale — a re-cut deleted the old
+    # rows (any pins died with them: ``pinned_at`` lives on the fixture, and
+    # the fresh rows are born unplaced and unpinned) and a first cut minted
+    # the day's inputs. No drawn-event gate here: the cut this transaction
+    # holds *is* the drawn event. Same transaction, under the tournament row
+    # lock taken above (the order ``request_solve`` requires); a ``None``
+    # return (Redis down) deliberately costs the solve, never the cut.
+    await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     # Read the draw back through the SAME loader the detail page reads it through, so
     # the fixtures this mutation answers with are byte-for-byte the ones the page will
@@ -2433,7 +2592,21 @@ async def uncut_event_draw(
         db, tournament_id, event_id, current_user
     )
     await _enforce_draw_unplayed(db, event)
+    # Read before the DELETE: whether this verb is about to change anything at
+    # all. The idempotent un-cut of a never-cut draw deletes nothing and must
+    # trigger nothing.
+    had_draw = await event_has_draw(db, event.id)
     await uncut_draw(db, [event.id])
+    if had_draw and await tournament_has_drawn_event(db, tournament_id):
+        # Scheduling-input trigger: fixtures were deleted wholesale (their
+        # pins, if any, died with the rows), which frees this event's tables
+        # and windows for whatever is still drawn. Gated on a drawn event
+        # SURVIVING the un-cut — un-cutting the only draw leaves nothing to
+        # place, and a solve row over an empty board is a no-op ledger entry.
+        # Same transaction, under the tournament row lock (the order
+        # ``request_solve`` requires); a ``None`` return (Redis down)
+        # deliberately costs the solve, never the un-cut.
+        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -2442,14 +2615,20 @@ async def uncut_event_draw(
 #
 # A placement is two nullable columns on a fixture — ``table_id`` (a string ref into
 # the tournament's ``table_catalogue``) and ``scheduled_start`` (a naive, predicted
-# wall-clock time). A human PATCHes them here; a future scheduler slice writes the same
-# two fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
+# wall-clock time). A human PATCHes them here; the schedule solver writes the same two
+# fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
 # on ``TournamentFixtureRead``), so there is deliberately no ``GET …/placement``.
 #
 # The write is **soft**: the placement's constraints (table-in-pool, time-in-window, no
 # double-booking) are flags derived on read, NOT invariants (ADR-0790), so this route
 # stores an out-of-window time and an unknown ``table_id`` without complaint. Its one
 # hard rule is the freeze below.
+#
+# But a manual placement is a **pin** (ADR "the schedule is solved; the call is
+# pinned"): the director's hand is a human commitment every later solve schedules
+# around, and while the tournament is live, placing a fixture IS calling it. The whole
+# pin/notify transition lives in ``app.match_calls.apply_manual_placement``; this route
+# supplies the locks, the freeze, and the re-solve enqueue.
 
 
 async def _get_fixture_or_404(
@@ -2543,12 +2722,32 @@ async def place_fixture(
     venue's local frame — an offset-aware value is a `422`). `null` on either clears
     that half; `(null, null)` unassigns the fixture.
 
-    **The placement is soft.** `scheduled_start` is a *prediction*, and the placement's
-    constraints — the table belongs to the fixture's pool, the time falls inside the
-    pool's window, nothing is double-booked — are flags derived on read, **not**
-    invariants. So an out-of-window time, or a `table_id` that names no table in the
-    catalogue, is **stored, not rejected**. There is no conflict detection here; that is
-    a future scheduler slice.
+    **A manual placement is a pin.** The director's hand is a human commitment the
+    schedule solver plans around, not a suggestion it may undo: a full placement (both
+    halves set, both entrants known) sets `pinned_at`, and every later solve treats the
+    fixture as a fixed interval. While the tournament is **live**, placing a fixture
+    *is* calling it — a first placement notifies both entrants, and re-placing a
+    fixture whose players were already told sends them a "your match moved" correction
+    carrying the new table and time; `call_notified_count` counts exactly those
+    tellings, which is the price to state before a re-drag. Pre-live placements are
+    silent pins: free rearranging while planning, nobody paged. A fixture with a TBD
+    side stores the placement but does **not** pin (a promise to nobody is not a
+    promise) — the solver may still move it.
+
+    **Clearing unpins.** Anything short of a full placement clears `pinned_at`; if the
+    players had been called, both get a cancellation ("the schedule changed"). Pre-live
+    or never-notified clears are silent. The count never resets — it is a history of
+    tellings, and a cancellation is one.
+
+    Every successful write also queues a re-solve (`settings_changed`): the director
+    just changed the solver's inputs, so the board re-plans around the new pin set.
+
+    **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    pinned, and the placement's constraints — the table belongs to the fixture's pool,
+    the time falls inside the pool's window, nothing is double-booked — are flags
+    derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
+    names no table in the catalogue, is **stored, not rejected**; the queued re-solve
+    is what judges the consequences.
 
     **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     history, so its placement can no longer be changed — a `409`. A fixture with no
@@ -2584,9 +2783,30 @@ async def place_fixture(
     # The one hard rule, before anything is written: a played-out fixture keeps its
     # placement. Everything else — an odd time, a dangling table ref — saves.
     _enforce_fixture_placeable(match_status)
-    fixture.table_id = payload.table_id
-    fixture.scheduled_start = payload.scheduled_start
+    # The whole pin/notify transition — columns, ``pinned_at``, in-app rows — on this
+    # open transaction (the atomicity contract of ``app.match_calls``: a call and its
+    # durable record commit together); the returned push/email fan-out is enqueued
+    # only after the commit below. The tournament row lock held above is the lock
+    # every pin writer takes first, so this write serializes with a concurrent pin
+    # tick or guarded apply.
+    fanout = await apply_manual_placement(
+        db,
+        tournament,
+        fixture,
+        table_id=payload.table_id,
+        scheduled_start=payload.scheduled_start,
+    )
+    # Scheduling-input trigger: the director just changed the solver's inputs — a new
+    # pin to plan around, or a freed slot — so the board re-plans (ADR). Same
+    # transaction, under the tournament row lock (the order ``request_solve``
+    # requires); no drawn-event gate, because a fixture in hand means a draw is cut by
+    # definition. A ``None`` return (Redis down) deliberately costs the solve, never
+    # the placement.
+    await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
+    # Post-commit, by design: the pin and its in-app rows are durable; push/email
+    # fan-out is best-effort (``app.match_calls``'s atomicity contract).
+    enqueue_call_fanout(fanout)
     # Read back through the SAME loader the detail page reads fixtures through, so the
     # placed fixture this answers with is byte-for-byte the one the page will show —
     # ``match_status`` live (not the value the freeze just judged, which was a means to
@@ -2594,3 +2814,111 @@ async def place_fixture(
     # lookup always finds it.
     fixtures = (await fixtures_by_event(db, [fixture.event_id]))[fixture.event_id]
     return next(f for f in fixtures if f.id == fixture.id)
+
+
+# ----- the schedule solver (ADR "the schedule is solved; the call is pinned") -----
+#
+# One verb: POST queues a run of the placement solver — the owner's Run-scheduler
+# button. The solve's *outcome* is read on the tournament-detail BFF
+# (``latest_schedule_solve``, plus each fixture's placement and pin facts), one
+# endpoint per page (root CLAUDE.md), so there is deliberately no ``GET`` here.
+
+#: The machine-readable code for "nothing to schedule" — the client switches on it
+#: and owns its copy; the message below is the fallback prose (the
+#: ``tournament_entry_refusals`` / ``sessions.py`` shape).
+NO_DRAWN_EVENTS_CODE = "no_drawn_events"
+
+
+def _no_drawn_events_refusal() -> HTTPException:
+    """The 422 for a schedule solve on a tournament with no cut draw anywhere.
+
+    A 422 rather than a 409, for the same reason ``_draw_refusal`` is: the request is
+    well-formed and authorized, but its content — this tournament, as it stands — has
+    nothing the solver can place, and retrying unchanged fails identically until the
+    director cuts a draw. The detail is the ``{"code": ..., "message": ...}`` shape
+    (``tournament_entry_refusals``): the code is the contract, the message is the
+    fallback.
+
+    One sentence for every arity — a tournament with no events and one with ten
+    undrawn events are refused for the same reason (nothing is drawn), and copy that
+    counted events would have to pluralize correctly in both (#1048, #1059) for a
+    distinction the director cannot act on differently anyway: either way the fix is
+    to cut a draw.
+    """
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": NO_DRAWN_EVENTS_CODE,
+            "message": (
+                "There is nothing to schedule yet: no event of this tournament has "
+                "a draw. The scheduler places a draw's fixtures onto tables, so cut "
+                "at least one event's draw, then run it."
+            ),
+        },
+    )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/schedule/solves",
+    response_model=ScheduleSolveRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_schedule_solve(
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ScheduleSolveRead:
+    """Queue a run of the schedule solver for this tournament — the Run-scheduler
+    button — and answer with the ledger row that will carry its outcome.
+
+    **One solve in flight per tournament**, so this is a request, not a command:
+    if a run is already `queued`, this click is absorbed by it and the existing row
+    comes back (same id — the pending run will see whatever state motivated the
+    click); if one is `running`, its re-run flag is set and the running row comes
+    back (a fresh run follows at its finish). Only when neither exists is a new run
+    queued. The `202` is honest either way — the work is accepted, not done. Poll
+    the tournament detail's `latest_schedule_solve` for the outcome.
+
+    Allowed in **any** tournament status, from the moment any event has a cut draw
+    — exactly as cutting a draw itself is not status-gated. Pre-live solves are the
+    point: an infeasible verdict before going live is how a director learns the day
+    does not fit while there is still time to change it.
+
+    Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
+    event of this tournament has a draw: the solver places a draw's fixtures, so
+    with nothing cut there is nothing to schedule. A `503` means the scheduling
+    queue itself was unreachable; nothing was queued, and the same request is safe
+    to retry.
+
+    Owner-only, like every other tournament mutation: an absent tournament is a
+    `404`, a non-owner a `403`.
+    """
+    # 404 → 403 → 422, the ordering ADR-0017 fixed for this module — and the same
+    # tournament row lock every scheduling-input writer takes, taken FIRST, which is
+    # the lock ``request_solve`` requires of its callers (lock order: tournament →
+    # schedule_solves). Without it, this route's "a draw exists" judgment and its
+    # enqueue would sit in two instants: an un-cut could commit between them and a
+    # solve would be queued for a tournament this route just certified as drawable.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+    # The caller's own refusal, last: nothing drawn means nothing to schedule.
+    if not await tournament_has_drawn_event(db, tournament_id):
+        raise _no_drawn_events_refusal()
+    row = await request_solve(db, tournament_id, ScheduleSolveTrigger.manual)
+    if row is None:
+        # The enqueue itself failed (Redis down) and ``request_solve`` took its row
+        # back out — a zombie row would absorb every later trigger while no job ever
+        # runs. Nothing was queued, so the honest answer is "not available", not a
+        # ledger row that names a run that does not exist.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The scheduling queue is unavailable, so the solve was not queued. "
+                "Try again in a moment."
+            ),
+        )
+    await db.commit()
+    # ``requested_at`` (and the other server defaults) were never round-tripped by
+    # the INSERT, so read the row back rather than serializing expired attributes.
+    await db.refresh(row)
+    return ScheduleSolveRead.model_validate(row)

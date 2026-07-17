@@ -1,0 +1,121 @@
+/* The solve ledger's additions to the shared match-list scaffold
+ * (match-list.css) — scoped under .match-list-page like every other consumer's
+ * cells file (players-cells.css precedent). */
+
+/* The match-list scaffold sizes itself for the app shell
+ * (`height: calc(100vh - var(--topbar-h))`), but this page renders inside the
+ * admin layout, which is 56px shorter (its breadcrumb bar) and provides its own
+ * scroll container. Fit the container instead — otherwise the page always
+ * overflows it by exactly the breadcrumb's height, and in the empty state that
+ * leaves a scrollable region with nothing focusable inside it (axe:
+ * scrollable-region-focusable). The ≤640px media query in match-list.css still
+ * wins (height: auto) for the phone's whole-page scroll. */
+@media (min-width: 641px) {
+  .match-list-page.solve-ledger {
+    height: 100%;
+  }
+}
+
+/* The one status tone the match list never needed: a broken run. Mirrors the
+ * strip's failed tint (--loss) at the pill's contrast recipe. */
+.match-list-page .status-tone-loss {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.12);
+}
+
+.match-list-page .solve-ledger-tournament {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.match-list-page .solve-ledger-tournament-link {
+  color: var(--fg-1);
+  font-weight: 600;
+  text-decoration: none;
+}
+.match-list-page .solve-ledger-tournament-link:hover {
+  text-decoration: underline;
+}
+/* The per-row funnel — quiet until the row is under the pointer or the button
+ * holds focus, so the column reads as names, not buttons. */
+.match-list-page .solve-ledger-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm, 6px);
+  border: none;
+  background: transparent;
+  color: var(--fg-3);
+  opacity: 0;
+  cursor: pointer;
+}
+.match-list-page tr:hover .solve-ledger-filter,
+.match-list-page .solve-ledger-filter:focus-visible {
+  opacity: 1;
+}
+.match-list-page .solve-ledger-filter:hover {
+  background: var(--bg-raised);
+  color: var(--fg-1);
+}
+/* Touch layouts have no hover to reveal it. */
+@media (hover: none) {
+  .match-list-page .solve-ledger-filter {
+    opacity: 1;
+  }
+}
+
+.match-list-page .solve-ledger-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.match-list-page .solve-ledger-chip-clear:hover {
+  color: var(--fg-1);
+}
+
+.match-list-page .solve-ledger-verdict {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+/* The failure expansion — one quiet block under the row it explains. */
+.match-list-page .solve-ledger-detail-row td {
+  background: var(--bg-raised);
+}
+.match-list-page .solve-ledger-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+}
+.match-list-page .solve-ledger-detail-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.match-list-page .solve-ledger-detail-error {
+  font-size: 12px;
+  color: var(--loss);
+  word-break: break-word;
+}
+.match-list-page .solve-ledger-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.match-list-page .solve-ledger-detail-fingerprint .mono {
+  font-size: 12px;
+  color: var(--fg-2);
+  word-break: break-all;
+}
