@@ -11,19 +11,19 @@ import { mapGameScoreValidation, type GameScoreUiState } from './game-score-ui'
 /** Parse the raw pair through the schema and map it to ScorePad props — the same
  * two-step 1b wires into the form. */
 function uiFor(me: string, opp: string): GameScoreUiState {
-  return mapGameScoreValidation(gameScoreSchema.safeParse({ me, opp }), {
-    me,
-    opp,
-  })
+  return mapGameScoreValidation(gameScoreSchema.safeParse({ me, opp }))
 }
 
-/** A hand-built failed parse result carrying one issue with an arbitrary tier —
- * to prove the mapper only reacts to the tiers it knows, rather than treating
- * any leftover issue as the soft hint. */
-function failedResultWithTier(tier: string): GameScoreParseResult {
+/** A hand-built failed parse result carrying one issue with an arbitrary tier
+ * (and optional side path) — to prove the mapper only reacts to the tiers it
+ * knows, rather than treating any leftover issue as the soft hint. */
+function failedResultWithTier(
+  tier: string,
+  path: PropertyKey[] = [],
+): GameScoreParseResult {
   return {
     success: false,
-    error: { issues: [{ code: 'custom', message: 'nope', path: [], params: { tier } }] },
+    error: { issues: [{ code: 'custom', message: 'nope', path, params: { tier } }] },
   } as unknown as GameScoreParseResult
 }
 
@@ -119,10 +119,22 @@ describe('mapGameScoreValidation', () => {
   })
 
   it('ignores an issue whose tier it does not recognize (only both-required raises the hint)', () => {
-    expect(mapGameScoreValidation(failedResultWithTier('mystery'), {
-      me: '',
-      opp: '',
-    })).toEqual({
+    expect(mapGameScoreValidation(failedResultWithTier('mystery'))).toEqual({
+      meInvalid: false,
+      oppInvalid: false,
+      scoreError: null,
+      showBothRequired: false,
+    })
+  })
+
+  it('ignores an unrecognized tier even when its issue targets a side path', () => {
+    // The `both-required` branch keys off the tier, NOT merely "any leftover
+    // issue on a side path": an unknown tier pointed at `['me']` must not redden
+    // that side or raise the hint. (Kills the `tier === 'both-required'` → `true`
+    // mutant, which would treat this issue as the soft hint.)
+    expect(
+      mapGameScoreValidation(failedResultWithTier('mystery', ['me'])),
+    ).toEqual({
       meInvalid: false,
       oppInvalid: false,
       scoreError: null,

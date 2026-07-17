@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useController, useForm, useWatch } from 'react-hook-form'
+import { useController, useForm } from 'react-hook-form'
 import {
   Link,
   Navigate,
@@ -200,13 +200,14 @@ function ScoreEntryInner({
   })
   // Each side is driven through a controller so the #624 keystroke filter
   // (`isAcceptableScoreInput`) can reject a change outright — the value never
-  // updates — while RHF still owns the field. The live values are read back with
-  // `useWatch` and every downstream consumer (dirty tracking, finalize
-  // prediction, `overrunAt`, `toBody`, the copy, the scoreline) reads them.
+  // updates — while RHF still owns the field. `useController` already subscribes
+  // to its field, so the live value is read straight off `field.value` (no
+  // separate `useWatch`), and every downstream consumer (dirty tracking, finalize
+  // prediction, `overrunAt`, `toBody`, the copy, the scoreline) reads it.
   const meField = useController({ control: form.control, name: 'me' })
   const oppField = useController({ control: form.control, name: 'opp' })
-  const me = useWatch({ control: form.control, name: 'me' }) ?? ''
-  const opp = useWatch({ control: form.control, name: 'opp' }) ?? ''
+  const me = meField.field.value ?? ''
+  const opp = oppField.field.value ?? ''
   const submitted = form.formState.submitCount > 0
   const meRef = useRef<HTMLInputElement>(null)
   const oppRef = useRef<HTMLInputElement>(null)
@@ -388,16 +389,16 @@ function ScoreEntryInner({
   // scratch save, else the persisted score, else empty. Input is "dirty"
   // (worth guarding on exit) only when the user has actually typed something
   // that diverges from that baseline: a clean page, or input that merely
-  // matches what's already saved, must not nag. Updating the ref here (rather
-  // than in an effect) keeps the blocker reading the current-render truth.
-  const baselineMe =
-    failedMe != null ? String(failedMe) : persistedMe != null ? String(persistedMe) : ''
-  const baselineOpp =
-    failedOpp != null
-      ? String(failedOpp)
-      : persistedOpp != null
-        ? String(persistedOpp)
-        : ''
+  // matches what's already saved, must not nag. Derived from the SAME helper
+  // that seeds RHF's `values` above, so the seed and the dirty check can't drift
+  // — `keepDirtyValues` must agree with `computeDirty` (ADR-0014). The
+  // decomposed `persistedMe`/`failedMe`/… above stay for the conflict notice,
+  // `keepCommittedScore`, and retry.
+  const { me: baselineMe, opp: baselineOpp } = seedScoreValues(
+    data,
+    gameNumber,
+    ownSave,
+  )
   // Whether the live inputs (me/opp) diverge from the baseline — i.e. there's
   // genuinely-unsaved typing worth guarding on exit. Recomputed by the change
   // handlers below as the user types (a clean page, or input matching the
@@ -435,14 +436,14 @@ function ScoreEntryInner({
   // (`submitted`) — nothing is red while the user first types.
   const parseResult = gameScoreSchema.safeParse({ me, opp })
   const inputsValid = parseResult.success
-  const ui = mapGameScoreValidation(parseResult, { me, opp })
-  // Gate the local Zod verdict behind the first submit. Before then the fields
-  // stay clean even with an illegal or half-typed score; after, `onChange`
-  // re-validation clears the red as the user fixes it.
-  const localScoreError = submitted ? ui.scoreError : null
-  const localMeInvalid = submitted && ui.meInvalid
-  const localOppInvalid = submitted && ui.oppInvalid
-  const localBothRequired = submitted && ui.showBothRequired
+  // Map the parse result to per-side red flags / error line ONLY after the first
+  // submit — before then the fields stay clean even with an illegal or half-typed
+  // score, and the mapper's output is discarded anyway; after, `onChange`
+  // re-validation clears the red as the user fixes it. A single gate here (rather
+  // than one per field) is the whole ADR-0018 "errors-after-first-submit"
+  // posture. `inputsValid` above stays UNGATED — it feeds the finalize prediction
+  // and the overrun block regardless of submit.
+  const ui = submitted ? mapGameScoreValidation(parseResult) : null
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
   // A finalize error that ISN'T an `ApiError` is a transport-level drop:
@@ -547,17 +548,17 @@ function ScoreEntryInner({
   // Single `scoreError` slot, in ADR-0018 precedence: local Zod error (after
   // submit) → overrun (after submit) → finalize API error (409/500) → finalize
   // network drop.
-  const scoreError = localScoreError ?? overrunError ?? finalizeErrorText
+  const scoreError = ui?.scoreError ?? overrunError ?? finalizeErrorText
   // The "both scores required" hint is its own, lower-severity line — the schema
   // emits it (post-submit) when either side is empty, but only show it when
   // there's no harder error to surface.
-  const showBothRequired = localBothRequired && scoreError === null
+  const showBothRequired = (ui?.showBothRequired ?? false) && scoreError === null
   // Per-side red flags: the mapper already paints only the malformed side, both
   // sides for an illegal score, and the empty side for the soft hint (all gated
-  // post-submit via `localMeInvalid`/`localOppInvalid`); a server 422 drift
+  // post-submit — `ui` is null until the first submit); a server 422 drift
   // paints both inputs.
-  const meInvalid = localMeInvalid || finalize422
-  const oppInvalid = localOppInvalid || finalize422
+  const meInvalid = (ui?.meInvalid ?? false) || finalize422
+  const oppInvalid = (ui?.oppInvalid ?? false) || finalize422
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)

@@ -1,5 +1,4 @@
 import type {
-  GameScoreInput,
   GameScoreParseResult,
   GameScoreTier,
 } from './game-score-schema'
@@ -30,12 +29,13 @@ export interface GameScoreUiState {
  * - `illegal` → redden both sides and surface the reason as the hard error,
  * - `both-required` → show the soft hint and redden only the empty side(s).
  *
- * The empty-side flag reads the raw `{ me, opp }` (mirroring the live
- * score-entry logic), so only the field the user hasn't filled goes red.
+ * Pure — a function of the parse result alone. The empty-side flag reads the
+ * `both-required` issue's own `path` (the schema emits it on the empty side, and
+ * on BOTH paths for a wholly-empty pair), exactly like the `malformed` tier, so
+ * only the field the user hasn't filled goes red.
  */
 export function mapGameScoreValidation(
   result: GameScoreParseResult,
-  { me, opp }: GameScoreInput,
 ): GameScoreUiState {
   if (result.success) {
     return {
@@ -50,7 +50,8 @@ export function mapGameScoreValidation(
   let malformedMe = false
   let malformedOpp = false
   let illegal = false
-  let bothRequired = false
+  let bothRequiredMe = false
+  let bothRequiredOpp = false
 
   for (const issue of result.error.issues) {
     // Every issue the schema emits carries a `tier` on `params` (see
@@ -67,14 +68,15 @@ export function mapGameScoreValidation(
       scoreError = issue.message
       illegal = true
     } else if (tier === 'both-required') {
-      bothRequired = true
+      if (issue.path[0] === 'me') bothRequiredMe = true
+      if (issue.path[0] === 'opp') bothRequiredOpp = true
     }
   }
 
   return {
-    meInvalid: malformedMe || illegal || (bothRequired && me === ''),
-    oppInvalid: malformedOpp || illegal || (bothRequired && opp === ''),
+    meInvalid: malformedMe || illegal || bothRequiredMe,
+    oppInvalid: malformedOpp || illegal || bothRequiredOpp,
     scoreError,
-    showBothRequired: bothRequired,
+    showBothRequired: bothRequiredMe || bothRequiredOpp,
   }
 }
