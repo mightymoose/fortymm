@@ -1,7 +1,6 @@
 ---
 name: epic
 description: Drive a change end-to-end through the fortymm arc — /grill-with-docs → /to-chores → /do-chores → /land-the-plane — as a GATED conductor. It sequences the four phases and carries the plan→work-order→PR artifact chain, stopping for your decision at every phase boundary; the merge itself is /land-the-plane's own gated step, and once it lands the arc moves the work order's tickets to Done. Use to run a whole feature/bugfix through the arc from one entry point; use the individual skills when you only want one phase.
-disable-model-invocation: true
 argument-hint: "[the goal to drive — an issue ref, a plan/PRD path, or a one-line description]"
 ---
 

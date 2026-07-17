@@ -3708,8 +3708,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     freshly-cut draw: unassigned to a table, unscheduled. ``pinned_at`` and
     ``call_notified_count`` are its **pin facts** (ADR "the schedule is solved, the
     call is pinned"): unpinned — still an estimate, not a promise — and nobody told.
-    The exact key set is asserted, so a field silently dropped (or a username
-    silently *added*) fails here.
+    ``completed_at`` is the match's actual completion time — null until there is a
+    match to complete. The exact key set is asserted, so a field silently dropped (or
+    a username silently *added*) fails here.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
@@ -3736,6 +3737,7 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
         "scheduled_start",
         "pinned_at",
         "call_notified_count",
+        "completed_at",
     }
     assert fixture["entry_a_id"] == str(entry.id)
     # The facts that are not known yet — each present, each null.
@@ -3749,6 +3751,8 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     # ... and it is unpinned: an estimate the solver may move, told to nobody.
     assert fixture["pinned_at"] is None
     assert fixture["call_notified_count"] == 0
+    # ... and there is no match yet, so no completion time either.
+    assert fixture["completed_at"] is None
 
 
 async def test_a_fixtures_sides_are_entry_ids_the_events_entrants_list_resolves(
@@ -6457,6 +6461,49 @@ async def test_a_called_tournament_match_becomes_scorable(
         read = await client.get(f"/v1/matches/{fixture.match_id}")
         assert read.status_code == 200
         assert read.json()["can_score"] is True
+
+
+async def test_a_completed_matchs_fixture_carries_its_actual_completion_time(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``completed_at`` is ``null`` on a fixture whose match has not finished, and is
+    stamped the instant it does — the Gantt chart's real end anchor for a played slot,
+    as opposed to ``scheduled_start``'s predicted one.
+
+    ``Match.completed_at`` is an ordinary aware UTC column, but this field comes back
+    converted to the same **naive** wall-clock frame ``scheduled_start``/``pinned_at``
+    already live in (ADR-0790), so a client can do simple arithmetic across all three
+    without juggling timezones itself.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "gantt-opp") as (opp_client, opp):
+        tournament_id, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=False
+        )
+        (before,) = await _events_of(client, tournament_id)
+        (fixture_before,) = before["fixtures"]
+        assert fixture_before["completed_at"] is None, (
+            "an in-progress match has not completed yet"
+        )
+
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=False,
+        )
+
+    match = (
+        await db_session.execute(select(Match).where(Match.id == fixture.match_id))
+    ).scalar_one()
+    assert match.completed_at is not None
+    expected_wall_clock = match.completed_at.astimezone().replace(tzinfo=None)
+
+    (after,) = await _events_of(client, tournament_id)
+    (fixture_after,) = after["fixtures"]
+    assert fixture_after["completed_at"] is not None
+    assert datetime.fromisoformat(fixture_after["completed_at"]) == expected_wall_clock
 
 
 async def test_completing_a_round_robin_match_materializes_nothing_new(

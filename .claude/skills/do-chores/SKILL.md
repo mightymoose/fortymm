@@ -1,7 +1,6 @@
 ---
 name: do-chores
 description: Drive a work order written by /to-chores — dispatch each chore to its domain-expert subagent in dependency order, verify, tick it off, and commit per slice. Resumable; leaves the PR to /land-the-plane.
-disable-model-invocation: true
 argument-hint: "[optional path to a work order, else .claude/work-order.md]"
 ---
 

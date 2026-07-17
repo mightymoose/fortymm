@@ -37,6 +37,7 @@ describe('parseFixtures — the happy path', () => {
         scheduledStart: null,
         pinnedAt: null,
         callNotifiedCount: 0,
+        completedAt: null,
       },
     ])
   })
@@ -96,6 +97,20 @@ describe('parseFixtures — the happy path', () => {
     expect(fixture.tableId).toBe('table-3')
     expect(fixture.scheduledStart).toBe('2026-06-09T14:30:00')
   })
+
+  // A decided fixture's actual completion time (as opposed to `scheduled_start`'s
+  // merely predicted one) — carried through as-is, naive wall-clock like the other
+  // two placement stamps.
+  it('carries a decided fixture’s actual completion time through', () => {
+    const [fixture] = parseFixtures([
+      wire({
+        match_status: 'completed',
+        completed_at: '2026-06-09T15:12:00',
+      }),
+    ])
+
+    expect(fixture.completedAt).toBe('2026-06-09T15:12:00')
+  })
 })
 
 // THE point of this module. `schema.d.ts` is a compile-time claim about a server we do
@@ -128,6 +143,8 @@ describe('parseFixtures — the boundary', () => {
     { what: 'a table_id of the wrong type', payload: [wire({ table_id: 7 })] },
     { what: 'an absent scheduled_start', payload: [{ ...(wire() as object), scheduled_start: undefined }] },
     { what: 'a scheduled_start of the wrong type', payload: [wire({ scheduled_start: 7 })] },
+    { what: 'an absent completed_at', payload: [{ ...(wire() as object), completed_at: undefined }] },
+    { what: 'a completed_at of the wrong type', payload: [wire({ completed_at: 7 })] },
     // A draw is a LIST. `null` is not an empty draw: an event with no draw sends `[]`,
     // and a server that sent null would be sending something this client cannot read.
     { what: 'null instead of a list', payload: null },

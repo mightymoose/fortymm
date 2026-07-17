@@ -203,6 +203,7 @@ describe('apiToEvent — the draw', () => {
         scheduledStart: null,
         pinnedAt: null,
         callNotifiedCount: 0,
+        completedAt: null,
       },
       {
         id: 'fx-2',
@@ -218,6 +219,7 @@ describe('apiToEvent — the draw', () => {
         scheduledStart: null,
         pinnedAt: null,
         callNotifiedCount: 0,
+        completedAt: null,
       },
     ])
   })
@@ -256,6 +258,7 @@ describe('apiToEvent — the draw', () => {
       scheduledStart: null,
       pinnedAt: null,
       callNotifiedCount: 0,
+        completedAt: null,
     })
   })
 
@@ -740,6 +743,7 @@ describe('eventToUpdateBody', () => {
           scheduledStart: null,
           pinnedAt: null,
           callNotifiedCount: 0,
+        completedAt: null,
         },
       ],
     })

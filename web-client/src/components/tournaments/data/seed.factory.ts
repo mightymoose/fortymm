@@ -253,6 +253,8 @@ export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
     // when one is set — is still an estimate, and nobody has been notified.
     pinnedAt: null,
     callNotifiedCount: 0,
+    // Not decided yet: no actual completion time.
+    completedAt: null,
     ...overrides,
   }
 }
