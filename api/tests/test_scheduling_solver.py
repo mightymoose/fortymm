@@ -463,8 +463,12 @@ class TestDegenerateAndStability:
         """Feed a solve's own optimal output back as previous_plan: the
         stability tier must reproduce it exactly — the board does not churn
         cosmetically between identical worlds."""
+        # A generous cap, deliberately larger than CAP: the stability claim is
+        # only meaningful against a *proven* optimum, and a loaded CI runner can
+        # hit a short cap mid-proof and honestly answer `feasible` (seen on
+        # GitHub Actions). The instance solves in milliseconds when unloaded.
         snapshot = _random_snapshot(seed=3)
-        first = solve(snapshot, time_cap_s=CAP)
+        first = solve(snapshot, time_cap_s=30.0)
         assert first.verdict is Verdict.optimal
         replay = dataclasses.replace(
             snapshot,
@@ -473,7 +477,7 @@ class TestDegenerateAndStability:
                 for p in first.placements
             ),
         )
-        second = solve(replay, time_cap_s=CAP)
+        second = solve(replay, time_cap_s=30.0)
         assert second.verdict is Verdict.optimal
         assert second.placements == first.placements
 
