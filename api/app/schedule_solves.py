@@ -365,6 +365,42 @@ def _slot_bounds(slot: Slot) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _rest_shadows_for(
+    completed_at: datetime | None,
+    entry_ids: tuple[uuid.UUID, uuid.UUID],
+    entry_user: dict[uuid.UUID, uuid.UUID],
+    base: datetime,
+    now_min: int,
+) -> list[RestShadow]:
+    """The rest obligations a just-completed fixture leaves on its two humans.
+
+    Rest across the completion boundary (``app.scheduling`` module docstring):
+    a just-finished human keeps their ``REST_MIN`` floor even though the
+    completed fixture is dropped from the model. Anchor on the match's stable
+    completion stamp — no stamp (completed via winner alone) means no anchor, so
+    no shadow. Round the anchor UP to the whole minute in the shared offset
+    frame (NOT ``to_min``, which floors) so a grid-snapped start never lands a
+    sub-minute short of the floor, normalizing the aware stamp into the naive
+    wall-clock frame ``now`` and ``base`` live in first. Skip a window that has
+    already closed relative to ``now`` — no future grid start >= now can overlap
+    it (pure waste). One shadow per real human, on user-level ids so rest holds
+    across events.
+    """
+    if completed_at is None:
+        return []
+    completed_local = completed_at.astimezone().replace(tzinfo=None)
+    completed_at_min = math.ceil((completed_local - base).total_seconds() / 60)
+    if completed_at_min + REST_MIN <= now_min:
+        return []
+    return [
+        RestShadow(
+            player_id=PlayerId(str(entry_user[entry_id])),
+            completed_at_min=completed_at_min,
+        )
+        for entry_id in entry_ids
+    ]
+
+
 async def _load_solver_inputs(
     db: AsyncSession,
     tournament_id: uuid.UUID,
@@ -603,39 +639,22 @@ async def _load_solver_inputs(
                 )
             )
             if completed:
-                # Rest across the completion boundary (app.scheduling module
-                # docstring): a just-finished human keeps their REST_MIN floor
-                # even though the completed fixture is dropped from the model.
-                # Anchor on the match's stable completion stamp — no stamp
-                # (completed via winner alone) means no anchor, so no shadow.
-                completed_at = (
-                    match_completed_at.get(fixture.match_id)
-                    if fixture.match_id is not None
-                    else None
-                )
-                if completed_at is not None:
-                    # Round UP to the whole minute in the shared offset frame
-                    # (NOT ``to_min``, which floors): a grid-snapped start then
-                    # never lands a sub-minute short of the floor. Normalize
-                    # the aware stamp into the naive wall-clock frame ``now``
-                    # and ``base`` live in first.
-                    completed_local = completed_at.astimezone().replace(tzinfo=None)
-                    completed_at_min = math.ceil(
-                        (completed_local - base).total_seconds() / 60
+                # A just-finished human keeps their rest floor even though the
+                # completed fixture is dropped from the model (both entries are
+                # non-None — guarded above before this branch is reached).
+                rest_shadows.extend(
+                    _rest_shadows_for(
+                        completed_at=(
+                            match_completed_at.get(fixture.match_id)
+                            if fixture.match_id is not None
+                            else None
+                        ),
+                        entry_ids=(fixture.entry_a_id, fixture.entry_b_id),
+                        entry_user=entry_user,
+                        base=base,
+                        now_min=now_min,
                     )
-                    # Skip a window that has already closed relative to ``now``:
-                    # no future grid start >= now can overlap it (pure waste).
-                    if completed_at_min + REST_MIN > now_min:
-                        # One shadow per real human — user-level ids, so rest
-                        # holds across events. Both entries are set (guarded to
-                        # non-None above before this branch is reached).
-                        for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
-                            rest_shadows.append(
-                                RestShadow(
-                                    player_id=PlayerId(str(entry_user[entry_id])),
-                                    completed_at_min=completed_at_min,
-                                )
-                            )
+                )
                 continue
             if (
                 pin is not None

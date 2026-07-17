@@ -268,6 +268,31 @@ async def _fixture_user_ids(
     return by_entry[entry_a_id], by_entry[entry_b_id]
 
 
+async def _link_match(
+    db: AsyncSession,
+    fixture: TournamentFixture,
+    *,
+    status: MatchStatus,
+    completed_at: datetime | None = None,
+) -> None:
+    """Attach a fresh ``Match`` (with a minted scorer) to ``fixture`` — the
+    shared boilerplate behind completing or running a fixture. Flushes so
+    ``fixture.match_id`` is set; leaves committing to the caller."""
+    league = await get_default_league(db)
+    assert league is not None
+    scorer = await make_user(db, f"scorer-{uuid.uuid4().hex[:8]}")
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
+        league=league,
+        created_by_user_id=scorer.id,
+        status=status,
+        completed_at=completed_at,
+    )
+    db.add(match)
+    await db.flush()
+    fixture.match_id = match.id
+
+
 async def _mark_completed(
     db: AsyncSession,
     fixture: TournamentFixture,
@@ -284,19 +309,9 @@ async def _mark_completed(
     entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
     assert entry_a_id is not None and entry_b_id is not None
     if with_match:
-        league = await get_default_league(db)
-        assert league is not None
-        scorer = await make_user(db, f"scorer-{uuid.uuid4().hex[:8]}")
-        match = Match(
-            match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
-            league=league,
-            created_by_user_id=scorer.id,
-            status=MatchStatus.completed,
-            completed_at=completed_at,
+        await _link_match(
+            db, fixture, status=MatchStatus.completed, completed_at=completed_at
         )
-        db.add(match)
-        await db.flush()
-        fixture.match_id = match.id
     fixture.winner_entry_id = entry_a_id
     await db.commit()
     return await _fixture_user_ids(db, entry_a_id, entry_b_id)
@@ -383,18 +398,7 @@ class TestRestShadows:
     ) -> None:
         tournament_id, event_id = await _make_tournament(db_session)
         target = (await _fixtures_of(db_session, event_id))[0]
-        league = await get_default_league(db_session)
-        assert league is not None
-        scorer = await make_user(db_session, f"scorer-{uuid.uuid4().hex[:8]}")
-        match = Match(
-            match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
-            league=league,
-            created_by_user_id=scorer.id,
-            status=MatchStatus.in_progress,
-        )
-        db_session.add(match)
-        await db_session.flush()
-        target.match_id = match.id
+        await _link_match(db_session, target, status=MatchStatus.in_progress)
         await db_session.commit()
         now = BASE + timedelta(minutes=5)
 
