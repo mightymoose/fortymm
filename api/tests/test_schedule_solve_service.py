@@ -49,6 +49,9 @@ from app.leagues import get_default_league
 from app.models import (
     DrawType,
     EventFormat,
+    Match,
+    MatchSettings,
+    MatchStatus,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -66,7 +69,13 @@ from app.schedule_solves import (
     TIME_CAP_ERROR,
     request_solve,
 )
-from app.scheduling import ScheduleSnapshot, SolveResult, SolveStats, Verdict
+from app.scheduling import (
+    REST_MIN,
+    ScheduleSnapshot,
+    SolveResult,
+    SolveStats,
+    Verdict,
+)
 from app.tournament_draws import cut_draw
 from tests._helpers import make_user
 
@@ -240,6 +249,161 @@ def _hijack_solve(
         return result
 
     monkeypatch.setattr(schedule_solves, "_solve", wrapper)
+
+
+async def _fixture_user_ids(
+    db: AsyncSession, entry_a_id: uuid.UUID, entry_b_id: uuid.UUID
+) -> tuple[str, str]:
+    """The two entries' user-level ids (as the solver stringifies them) — what
+    a fixture's rest shadows are keyed on (rest holds on humans, across
+    events)."""
+    rows = (
+        await db.execute(
+            select(TournamentEntry.id, TournamentEntry.user_id).where(
+                TournamentEntry.id.in_([entry_a_id, entry_b_id])
+            )
+        )
+    ).all()
+    by_entry = {entry_id: str(user_id) for entry_id, user_id in rows}
+    return by_entry[entry_a_id], by_entry[entry_b_id]
+
+
+async def _mark_completed(
+    db: AsyncSession,
+    fixture: TournamentFixture,
+    *,
+    completed_at: datetime | None,
+    with_match: bool = True,
+) -> tuple[str, str]:
+    """Complete ``fixture`` and return its two humans' user ids.
+
+    ``with_match=True`` links a completed ``Match`` carrying ``completed_at``
+    (the rest-shadow anchor); ``with_match=False`` completes it via
+    ``winner_entry_id`` alone — no match, no stamp — the "completed but
+    unanchorable" case that must cast no shadow."""
+    entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
+    assert entry_a_id is not None and entry_b_id is not None
+    if with_match:
+        league = await get_default_league(db)
+        assert league is not None
+        scorer = await make_user(db, f"scorer-{uuid.uuid4().hex[:8]}")
+        match = Match(
+            match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
+            league=league,
+            created_by_user_id=scorer.id,
+            status=MatchStatus.completed,
+            completed_at=completed_at,
+        )
+        db.add(match)
+        await db.flush()
+        fixture.match_id = match.id
+    fixture.winner_entry_id = entry_a_id
+    await db.commit()
+    return await _fixture_user_ids(db, entry_a_id, entry_b_id)
+
+
+class TestRestShadows:
+    """The snapshot builder feeds ``app.scheduling``'s rest floor across the
+    completion boundary: a just-finished human casts a per-human rest shadow so
+    the freed table is not re-called into zero rest (issue #1075). These probe
+    ``_load_solver_inputs`` directly and assert on the built snapshot."""
+
+    async def test_recent_completion_casts_a_shadow_per_human(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        target = (await _fixtures_of(db_session, event_id))[0]
+        # 30m20s past the 09:00 base: the anchor ceils to 31 where the shared
+        # (flooring) ``to_min`` would give 30 — so the assertion is only green
+        # if the builder used its dedicated ceil.
+        completed_wall = BASE + timedelta(minutes=30, seconds=20)
+        user_a, user_b = await _mark_completed(
+            db_session, target, completed_at=completed_wall.astimezone()
+        )
+        # now_min = 35; the window [31, 31+REST_MIN=41) is still open past it.
+        now = BASE + timedelta(minutes=35)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        assert inputs.base == BASE
+        shadows = inputs.snapshot.rest_shadows
+        assert len(shadows) == 2
+        assert {shadow.player_id for shadow in shadows} == {user_a, user_b}
+        assert all(shadow.completed_at_min == 31 for shadow in shadows)
+
+    async def test_completion_without_a_stamp_casts_no_shadow(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        target = (await _fixtures_of(db_session, event_id))[0]
+        target_id = target.id
+        # Completed via winner alone (no match, so completed_at is NULL): there
+        # is no timestamp to anchor rest on, so no shadow — even though the
+        # fixture is genuinely completed.
+        await _mark_completed(db_session, target, completed_at=None, with_match=False)
+        now = BASE + timedelta(minutes=5)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        completed = {
+            fixture.id: fixture.completed for fixture in inputs.snapshot.fixtures
+        }
+        assert completed[str(target_id)] is True  # the completed path was taken
+        assert inputs.snapshot.rest_shadows == ()
+
+    async def test_closed_rest_window_casts_no_shadow(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        target = (await _fixtures_of(db_session, event_id))[0]
+        # Anchor at offset 5; its window closes at 5 + REST_MIN. Set now right
+        # at that edge — completed_at_min + REST_MIN <= now_min — so the shadow
+        # is pure waste and is skipped.
+        completed_wall = BASE + timedelta(minutes=5)
+        await _mark_completed(
+            db_session, target, completed_at=completed_wall.astimezone()
+        )
+        now = BASE + timedelta(minutes=5 + REST_MIN)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        assert inputs.snapshot.rest_shadows == ()
+
+    async def test_in_progress_fixture_casts_no_shadow(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        target = (await _fixtures_of(db_session, event_id))[0]
+        league = await get_default_league(db_session)
+        assert league is not None
+        scorer = await make_user(db_session, f"scorer-{uuid.uuid4().hex[:8]}")
+        match = Match(
+            match_settings=MatchSettings(team_size=1, best_of=3, affects_rating=False),
+            league=league,
+            created_by_user_id=scorer.id,
+            status=MatchStatus.in_progress,
+        )
+        db_session.add(match)
+        await db_session.flush()
+        target.match_id = match.id
+        await db_session.commit()
+        now = BASE + timedelta(minutes=5)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        assert inputs.snapshot.rest_shadows == ()
 
 
 class TestRequestSolveCoalescing:

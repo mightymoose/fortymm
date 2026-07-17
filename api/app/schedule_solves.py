@@ -112,6 +112,7 @@ fingerprint, so their arrival or resolution is drift like any other.
 import hashlib
 import json
 import logging
+import math
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
@@ -142,6 +143,7 @@ from app.models import (
 )
 from app.rq_async import run_async_db_job
 from app.scheduling import (
+    REST_MIN,
     EventId,
     EventSettings,
     FixtureId,
@@ -150,6 +152,7 @@ from app.scheduling import (
     PlayerId,
     PoolId,
     PreviousPlacement,
+    RestShadow,
     ScheduleFixture,
     SchedulePool,
     ScheduleSnapshot,
@@ -446,14 +449,23 @@ async def _load_solver_inputs(
                 withdrawn_entry_ids.add(entry_id)
 
     match_status: dict[uuid.UUID, MatchStatus] = {}
+    # A completed match's stable completion stamp (``None`` for one deemed
+    # completed via ``winner_entry_id`` alone), the anchor a rest shadow needs
+    # to project a just-finished player's rest floor across the completion
+    # boundary. Read alongside ``status`` from the same one query.
+    match_completed_at: dict[uuid.UUID, datetime | None] = {}
     match_ids = [f.match_id for f in fixture_rows if f.match_id is not None]
     if match_ids:
         match_rows = (
             await db.execute(
-                select(Match.id, Match.status).where(Match.id.in_(match_ids))
+                select(Match.id, Match.status, Match.completed_at).where(
+                    Match.id.in_(match_ids)
+                )
             )
         ).all()
-        match_status = {match_id: status for match_id, status in match_rows}
+        for match_id, status, completed_at in match_rows:
+            match_status[match_id] = status
+            match_completed_at[match_id] = completed_at
 
     # Parse the JSONB value-objects once, at this boundary, with the same
     # models the write boundary validated them with (parse, don't validate).
@@ -502,6 +514,8 @@ async def _load_solver_inputs(
     def to_min(moment: datetime) -> int:
         return int((moment - base).total_seconds() // 60)
 
+    now_min = to_min(now)
+
     schedule_pools = tuple(
         SchedulePool(
             id=PoolId(key),
@@ -518,6 +532,7 @@ async def _load_solver_inputs(
     schedule_fixtures: list[ScheduleFixture] = []
     in_progress: list[InProgressMatch] = []
     previous_plan: list[PreviousPlacement] = []
+    rest_shadows: list[RestShadow] = []
     broken_pin_moves: set[uuid.UUID] = set()
     broken_pin_voids: set[uuid.UUID] = set()
     for event, _settings, _pools in parsed_events:
@@ -588,6 +603,39 @@ async def _load_solver_inputs(
                 )
             )
             if completed:
+                # Rest across the completion boundary (app.scheduling module
+                # docstring): a just-finished human keeps their REST_MIN floor
+                # even though the completed fixture is dropped from the model.
+                # Anchor on the match's stable completion stamp — no stamp
+                # (completed via winner alone) means no anchor, so no shadow.
+                completed_at = (
+                    match_completed_at.get(fixture.match_id)
+                    if fixture.match_id is not None
+                    else None
+                )
+                if completed_at is not None:
+                    # Round UP to the whole minute in the shared offset frame
+                    # (NOT ``to_min``, which floors): a grid-snapped start then
+                    # never lands a sub-minute short of the floor. Normalize
+                    # the aware stamp into the naive wall-clock frame ``now``
+                    # and ``base`` live in first.
+                    completed_local = completed_at.astimezone().replace(tzinfo=None)
+                    completed_at_min = math.ceil(
+                        (completed_local - base).total_seconds() / 60
+                    )
+                    # Skip a window that has already closed relative to ``now``:
+                    # no future grid start >= now can overlap it (pure waste).
+                    if completed_at_min + REST_MIN > now_min:
+                        # One shadow per real human — user-level ids, so rest
+                        # holds across events. Both entries are set (guarded to
+                        # non-None above before this branch is reached).
+                        for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
+                            rest_shadows.append(
+                                RestShadow(
+                                    player_id=PlayerId(str(entry_user[entry_id])),
+                                    completed_at_min=completed_at_min,
+                                )
+                            )
                 continue
             if (
                 pin is not None
@@ -622,9 +670,10 @@ async def _load_solver_inputs(
         pools=schedule_pools,
         events=event_settings,
         fixtures=tuple(schedule_fixtures),
-        now_min=to_min(now),
+        now_min=now_min,
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
+        rest_shadows=tuple(rest_shadows),
     )
 
     # The fingerprint payload is the *wall-clock* form of exactly these inputs
