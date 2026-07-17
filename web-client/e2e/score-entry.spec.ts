@@ -314,17 +314,21 @@ test.describe('Score entry', () => {
     await expect(scoreEntry.oppInput).toBeVisible()
   })
 
-  test('keeps the save button disabled until a valid score is entered', async ({
+  test('keeps the save button enabled regardless of score validity', async ({
     page,
   }) => {
     const scoreEntry = await ScoreEntryPage.navigateTo(page)
 
-    await expect(scoreEntry.saveButton).toBeDisabled()
+    // Per ADR-0018 validity never gates the button — only in-flight locks
+    // disable it. Empty inputs: enabled (the old build disabled it here).
+    await expect(scoreEntry.saveButton).toBeEnabled()
 
-    // A drawn game is not a valid table tennis result.
+    // A drawn 11–11 is not a valid table tennis result, but the button stays
+    // enabled (the old build disabled it here too).
     await scoreEntry.enterScores('11', '11')
-    await expect(scoreEntry.saveButton).toBeDisabled()
+    await expect(scoreEntry.saveButton).toBeEnabled()
 
+    // A valid 11–7 is likewise enabled.
     await scoreEntry.enterScores('11', '7')
     await expect(scoreEntry.saveButton).toBeEnabled()
   })
@@ -374,13 +378,27 @@ test.describe('Score entry', () => {
   }) => {
     const scoreEntry = await ScoreEntryPage.navigateTo(page)
 
-    // 11-10 isn't a legal final score — at 10-10 the game enters deuce. The
-    // client catches this so Save stays disabled and never round-trips.
+    // 11-10 isn't a legal final score — at 10-10 the game enters deuce.
     await scoreEntry.enterScores('11', '10')
 
-    await expect(scoreEntry.saveButton).toBeDisabled()
+    // Per ADR-0018 nothing is red before the first submit: no inline error, no
+    // aria-invalid, and the button is enabled (the old build reddened here).
+    await expect(scoreEntry.saveButton).toBeEnabled()
+    await expect(scoreEntry.inlineError).toHaveCount(0)
+    await expect(scoreEntry.meInput).not.toHaveAttribute('aria-invalid', 'true')
+    await expect(scoreEntry.oppInput).not.toHaveAttribute('aria-invalid', 'true')
+
+    // The first submit surfaces the deuce error, reddens BOTH sides, and the
+    // client catches the illegal score so it never round-trips: the URL and
+    // heading stay on game 3 (a valid save advances to game 4).
+    await scoreEntry.saveButton.click()
+
     await expect(scoreEntry.inlineError).toContainText(/deuce/i)
     await expect(scoreEntry.meInput).toHaveAttribute('aria-invalid', 'true')
     await expect(scoreEntry.oppInput).toHaveAttribute('aria-invalid', 'true')
+    await expect(page).toHaveURL(
+      new RegExp(`/matches/${SEED.matchId}/games/3/scores/new$`),
+    )
+    await expect(scoreEntry.heading).toHaveText('Enter game 3 score.')
   })
 })
