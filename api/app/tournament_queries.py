@@ -13,6 +13,7 @@ regardless of how many events there are. A per-event count would be an N+1, and
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -164,6 +165,17 @@ async def fixtures_by_event(
     every load rather than snapshotted, so a slot reflects its match as played; an
     un-materialized fixture joins to ``NULL`` and reports a ``None`` status.
 
+    The same join also carries the match's **actual completion time**
+    (``completed_at``) — the Gantt chart's real end anchor once a slot is played,
+    as opposed to ``scheduled_start``, which stays the solver's *predicted* one
+    forever. ``Match.completed_at`` is a normal timezone-aware UTC column, but
+    ``scheduled_start``/``pinned_at`` are naive wall-clock in the venue's local frame
+    (the ADR-0790 exemption — see ``TournamentFixture.scheduled_start``), so it is
+    converted to that same naive frame here, at the loader, with ``_to_wall_clock``
+    below. Mixed representations across the three timestamps on
+    ``TournamentFixtureRead`` would silently break a client doing simple arithmetic
+    between them (e.g. a Gantt bar's width).
+
     The rows are validated into read models here, at the loader — the same boundary the
     entrants cross — so no ORM instance and no lazily-loadable relationship escapes into
     the serializer.
@@ -175,7 +187,7 @@ async def fixtures_by_event(
         return fixtures
     rows = (
         await db.execute(
-            select(TournamentFixture, Match.status)
+            select(TournamentFixture, Match.status, Match.completed_at)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(TournamentFixture.event_id.in_(fixtures.keys()))
             .order_by(
@@ -185,7 +197,7 @@ async def fixtures_by_event(
             )
         )
     ).all()
-    for fixture, match_status in rows:
+    for fixture, match_status, match_completed_at in rows:
         fixtures[fixture.event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
@@ -201,9 +213,30 @@ async def fixtures_by_event(
                 scheduled_start=fixture.scheduled_start,
                 pinned_at=fixture.pinned_at,
                 call_notified_count=fixture.call_notified_count,
+                completed_at=(
+                    _to_wall_clock(match_completed_at)
+                    if match_completed_at is not None
+                    else None
+                ),
             )
         )
     return fixtures
+
+
+def _to_wall_clock(value: datetime) -> datetime:
+    """Convert an offset-**aware** timestamp to the same naive wall-clock frame
+    ``scheduled_start``/``pinned_at`` already live in (the ADR-0790 exemption).
+
+    Those two columns are never converted on read because they are never anything
+    but naive to begin with — the solver and the pin writer both stamp them with
+    ``app.match_calls._wall_now()``, which is exactly ``datetime.now()`` with no
+    timezone attached (the process's own local clock, standing in for "the venue's
+    clock" until real per-tournament timezones exist). ``Match.completed_at`` is a
+    normal aware UTC column, so producing a value in that same frame means doing the
+    inverse: convert to the process's local timezone, the frame ``_wall_now()``
+    reads from, then drop the offset now that both sides agree what it was.
+    """
+    return value.astimezone().replace(tzinfo=None)
 
 
 async def game_counts_by_match(

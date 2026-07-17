@@ -402,6 +402,133 @@ describe('buildTimelineBoard', () => {
     expect(board.players.find((p) => p.username === 'player.2')!.bars).toEqual([])
   })
 
+  // A decided match draws its ACTUAL end (`completedAt`), not a projection of the
+  // estimate — `startMin` still anchors to `scheduledStart` (we don't try to detect
+  // an actual start, only an actual end).
+  it("draws a completed match's bar to its actual completion time, past the estimate", () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-ran-long',
+          poolId: 'p-a',
+          tableId: 't1',
+          // Bo5 → 35 estimated minutes: 09:00 + 35 = 09:35. The match actually
+          // ran to 10:20 — 80 minutes, not 35.
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'completed',
+          completedAt: '2026-06-13T10:20:00',
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.startMin).toBe(9 * 60) // unchanged: still anchored to scheduledStart
+    expect(bar.durationMin).toBe(80)
+    expect(bar.endMin).toBe(9 * 60 + 80)
+    expect(bar.endClock).toBe('10:20')
+  })
+
+  it("draws a completed match's bar SHORTER than the estimate when it finished early", () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-ran-short',
+          poolId: 'p-a',
+          tableId: 't1',
+          // Bo5 → 35 estimated minutes, but the match finished in 12.
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'completed',
+          completedAt: '2026-06-13T09:12:00',
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.durationMin).toBe(12)
+    expect(bar.endMin).toBe(9 * 60 + 12)
+  })
+
+  it('also uses the actual completion time for a voided match — completedAt is set on decide, not just on a win', () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-voided',
+          poolId: 'p-a',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'voided',
+          completedAt: '2026-06-13T09:05:00',
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.durationMin).toBe(5)
+  })
+
+  it('clamps to a minimum 1-minute bar when completedAt is at or before scheduledStart, rather than a backwards/zero-width bar', () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-bad-stamp',
+          poolId: 'p-a',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'completed',
+          // Untrusted network data: completedAt should always be after
+          // scheduledStart in practice, but don't trust it blindly.
+          completedAt: '2026-06-13T08:55:00',
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.durationMin).toBe(1)
+    expect(bar.endMin).toBe(bar.startMin + 1)
+  })
+
+  it('keeps the estimated duration for a completed match with no completedAt (defensive: should not happen)', () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-no-stamp',
+          poolId: 'p-a',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'completed',
+          completedAt: null,
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.durationMin).toBe(35) // the estimate, Bo5
+  })
+
+  it('keeps the estimated duration for an in-progress (not yet decided) match even when completedAt is somehow set', () => {
+    const event = buildDrawnEvent({
+      fixtures: [
+        buildFixture({
+          id: 'fx-live',
+          poolId: 'p-a',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+          matchId: 'm-1',
+          matchStatus: 'in_progress',
+          completedAt: '2026-06-13T09:05:00',
+        }),
+      ],
+    })
+    const board = boardOf(buildTournament({ events: [event] }))
+    const bar = board.tables.find((r) => r.tableId === 't1')!.bars[0]
+    expect(bar.durationMin).toBe(35) // the estimate, Bo5 — not decided yet
+  })
+
   it('rows no one for an entrant with no fixture, and no row for a withdrawn side', () => {
     const event = buildDrawnEvent({
       entrants: buildEntrants(5),

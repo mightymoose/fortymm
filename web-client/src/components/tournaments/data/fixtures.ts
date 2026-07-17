@@ -81,6 +81,11 @@ const fixtureWireSchema = z.object({
   /** How many call/correction notifications this fixture's players have received —
    * `0` for a never-called fixture, never absent. */
   call_notified_count: z.number().int(),
+  /** The match's **actual** completion time, as opposed to `scheduled_start`'s
+   * *predicted* one: `null` until the match is actually decided (win or void).
+   * Naive wall-clock, like `scheduled_start`/`pinned_at` — kept as the string it
+   * arrives as, same as those two. */
+  completed_at: z.string().nullable(),
 })
 
 /** The parser: one wire fixture → one domain `Fixture`.
@@ -104,6 +109,7 @@ export const fixtureSchema = fixtureWireSchema.transform(
     scheduledStart: f.scheduled_start,
     pinnedAt: f.pinned_at,
     callNotifiedCount: f.call_notified_count,
+    completedAt: f.completed_at,
   }),
 )
 

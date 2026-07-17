@@ -254,6 +254,11 @@ export function axisTicks(startMin: number, endMin: number): AxisTick[] {
  * agree; the boards scroll inside their own container rather than compressing. */
 export const PX_PER_MIN = 3
 
+/** The floor on a bar's drawn duration — never zero-width or backwards, even if
+ * `completedAt` somehow lands at or before `scheduledStart` (it shouldn't, but the
+ * network is untrusted; see the `endMin` note on `TimelineBarData`). */
+const MIN_BAR_DURATION_MIN = 1
+
 // ----- the board -----------------------------------------------------------------
 
 /** One placed fixture as a positioned bar. Positions are minutes since the
@@ -277,8 +282,17 @@ export interface TimelineBarData {
   /** The placement's date (`YYYY-MM-DD`). */
   date: string
   startMin: number
+  /** Where the bar ends. For a **decided** fixture (`completed`/`voided`) with a
+   * `completedAt`, this is the *actual* end (`completedAt`), not a projection —
+   * `startMin` still anchors to `scheduledStart` (we don't try to detect an
+   * actual start), but the bar stops truthfully rather than running the estimate
+   * past a match that has already finished. Every other fixture keeps the
+   * estimated `startMin + durationMin`. */
   endMin: number
-  /** The **estimated** duration (`estimatedMatchMinutes`) — the bar's width. */
+  /** The bar's width in minutes: the **estimated** duration
+   * (`estimatedMatchMinutes`) for an undecided or still-estimate-only fixture, or
+   * the actual `completedAt - scheduledStart` (clamped to `MIN_BAR_DURATION_MIN`)
+   * once the match is decided and has a real completion time. */
   durationMin: number
   startClock: string
   endClock: string
@@ -435,7 +449,19 @@ export function buildTimelineBoard(
     if (fixture.tableId === null || fixture.scheduledStart === null) continue
     const stamp = splitStamp(fixture.scheduledStart)
     const startMin = minutesAt(stamp.date, stamp.time, originDate)
-    const durationMin = estimatedMatchMinutes(event.match.lengthGames)
+    // A decided fixture (`completed`/`voided`) with a real `completedAt` draws
+    // its actual end instead of projecting the estimate past a match that has
+    // already finished — `startMin` still anchors to `scheduledStart` (ADR-0790:
+    // we are not trying to detect an actual start, only an actual end). Guard
+    // against a `completedAt` at or before `scheduledStart`: the network is
+    // untrusted, and a negative/zero-width or backwards bar would be a lie
+    // either way.
+    let durationMin = estimatedMatchMinutes(event.match.lengthGames)
+    if (isDecided(fixture.matchStatus) && fixture.completedAt !== null) {
+      const completedStamp = splitStamp(fixture.completedAt)
+      const completedMin = minutesAt(completedStamp.date, completedStamp.time, originDate)
+      durationMin = Math.max(MIN_BAR_DURATION_MIN, completedMin - startMin)
+    }
     const endMin = startMin + durationMin
     const pool = event.pools.find((p) => p.id === fixture.poolId) ?? null
     const a = sideOf(fixture.entryAId, entrantById)

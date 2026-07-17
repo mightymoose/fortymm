@@ -72,7 +72,9 @@ export function buildTournamentEntrantReads(
  * (ADR-0790) starts empty: `table_id` null is unassigned, `scheduled_start` null is
  * unscheduled — and **uncalled**: `pinned_at` null means the placement is still an
  * estimate the solver may move, and `call_notified_count` 0 means nobody has been
- * told anything (ADR "the schedule is solved, the call is pinned"). */
+ * told anything (ADR "the schedule is solved, the call is pinned"). `completed_at`
+ * null means the match has not actually finished yet, distinct from the placement's
+ * merely *predicted* `scheduled_start`. */
 export function buildTournamentFixtureRead(
   overrides: Partial<TournamentFixtureRead> = {},
 ): TournamentFixtureRead {
@@ -90,6 +92,7 @@ export function buildTournamentFixtureRead(
     scheduled_start: null,
     pinned_at: null,
     call_notified_count: 0,
+    completed_at: null,
     ...overrides,
   }
 }

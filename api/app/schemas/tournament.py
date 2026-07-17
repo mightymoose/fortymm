@@ -526,6 +526,16 @@ class TournamentFixtureRead(BaseModel):
       solver may move freely. When set, the placement is a promise — the players were
       notified, and no later solve will rearrange it. Naive wall-clock in the venue's
       frame, like ``scheduled_start``.
+    * ``completed_at`` — the match's **actual** completion time, as opposed to
+      ``scheduled_start``'s *predicted* one: ``null`` until the match is actually
+      decided (win or void), then the moment it was. This is the value a Gantt-style
+      schedule view should use as a played slot's real end, instead of projecting
+      ``scheduled_start + an estimated duration`` past a match that has already
+      finished. Converted to the same naive wall-clock frame as ``scheduled_start``
+      and ``pinned_at`` (ADR-0790) even though the underlying ``Match.completed_at``
+      column is an ordinary timezone-aware UTC timestamp — so a client can do simple
+      arithmetic across all three fields (e.g. a bar's width) without juggling
+      timezones itself.
 
     The entries are carried as **ids only**. The name and username behind
     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -557,6 +567,11 @@ class TournamentFixtureRead(BaseModel):
     # corrections), the number the UI prices a re-drag with.
     pinned_at: datetime | None
     call_notified_count: int
+    # The match's actual completion time — ``null`` until it is decided — already
+    # converted to the same naive wall-clock frame as ``scheduled_start``/``pinned_at``
+    # above (see the docstring). This is the Gantt chart's real end anchor for a
+    # played slot, as opposed to ``scheduled_start``'s predicted one.
+    completed_at: datetime | None
 
 
 class ScheduleSolveRead(BaseModel):
