@@ -26,6 +26,7 @@ from app.scheduling import (
     PlayerId,
     PoolId,
     PreviousPlacement,
+    RestShadow,
     ScheduleFixture,
     SchedulePool,
     ScheduleSnapshot,
@@ -81,6 +82,7 @@ def _one_pool_snapshot(
     now_min: int = 0,
     in_progress: tuple[InProgressMatch, ...] = (),
     previous_plan: tuple[PreviousPlacement, ...] = (),
+    rest_shadows: tuple[RestShadow, ...] = (),
 ) -> ScheduleSnapshot:
     table_ids = _tables(tables)
     return ScheduleSnapshot(
@@ -91,6 +93,7 @@ def _one_pool_snapshot(
         now_min=now_min,
         in_progress=in_progress,
         previous_plan=previous_plan,
+        rest_shadows=rest_shadows,
     )
 
 
@@ -184,6 +187,14 @@ def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) ->
         by_table.setdefault(match.table_id, []).append((match.start_min, occ_end))
         for player in (fixture.player_a_id, fixture.player_b_id):
             by_player.setdefault(player, []).append((match.start_min, occ_end))
+
+    # A rest shadow is a just-completed match that ended at ``completed_at_min``
+    # and occupies no table — a zero-length player interval, so the shared rest-
+    # floor check below forces that player's next match to start ≥ end + rest.
+    for shadow in snapshot.rest_shadows:
+        by_player.setdefault(shadow.player_id, []).append(
+            (shadow.completed_at_min, shadow.completed_at_min)
+        )
 
     for intervals in by_table.values():
         intervals.sort()
@@ -442,6 +453,106 @@ class TestInProgress:
         result = solve(snapshot, time_cap_s=CAP)
         placed = {p.fixture_id: p for p in result.placements}
         assert placed[FixtureId("F2")].start_min >= 60 + BUCKET_MIN
+
+
+class TestRestShadows:
+    """The 10-minute rest floor must survive a match *ending*, not just a match
+    running (#1075). A completed fixture is dropped from the model, so its
+    player's rest is carried by a per-human ``RestShadow`` instead."""
+
+    def test_shadow_delays_a_freed_players_next_match(self) -> None:
+        """A human who just completed at ``C`` cannot be re-placed before
+        ``C + REST_MIN`` — even onto an idle table that would otherwise take
+        them at ``now``. Without the shadow this fixture starts at 0; with it
+        the earliest legal grid start is exactly ``C + REST_MIN``."""
+        p1, p2 = _players(2)
+        # A wide-open pool: three tables, an empty day, now at 0. The only
+        # thing keeping F1 off the very first slot is P1's rest shadow.
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            rest_shadows=(RestShadow(p1, 0),),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        _assert_hard_constraints(snapshot, result)
+        placed = {p.fixture_id: p for p in result.placements}
+        assert placed[FixtureId("F1")].start_min == REST_MIN  # == 0 + REST_MIN
+
+    def test_shadow_anchored_in_the_past_delays_relative_to_completion(
+        self,
+    ) -> None:
+        """The floor is measured from the completion time the shadow carries,
+        not from ``now``: a match that finished 3 minutes ago still owes 7."""
+        p1, p2 = _players(2)
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            now_min=3,
+            rest_shadows=(RestShadow(p1, 0),),  # finished at 0, rest until 10
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        _assert_hard_constraints(snapshot, result)
+        placed = {p.fixture_id: p for p in result.placements}
+        assert placed[FixtureId("F1")].start_min == REST_MIN  # 0 + REST_MIN, > now
+
+    def test_lone_shadow_player_does_not_crash(self) -> None:
+        """A shadow for a human who is in no active fixture is a harmless lone
+        interval — per-player no-overlap only bites with more than one — so the
+        solve still places the unrelated fixture normally."""
+        p1, p2, ghost = _players(3)
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            rest_shadows=(RestShadow(ghost, 0),),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        _assert_hard_constraints(snapshot, result)
+        placed = {p.fixture_id: p for p in result.placements}
+        assert placed[FixtureId("F1")].start_min == 0  # ghost's rest binds no one
+
+    def test_issue_1075_freed_table_idles_rather_than_recalling(self) -> None:
+        """#1075 shape: 5 players, 2 tables, best-of-5 (35-minute matches), a
+        round-robin of fixtures, and P1 who *just* finished at ``now``. The two
+        tables are used immediately — but by matches that don't involve P1. P1
+        is not re-called within the rest floor; the table that just freed under
+        them idles rather than calling them straight back on.
+
+        Discriminating against the bug directly: the *same* snapshot without the
+        shadow re-calls P1 at ``now`` (start 0); adding the shadow strictly
+        pushes P1's first match to ``>= now + REST_MIN``. That gap is the fix."""
+        p1, p2, p3, p4, p5 = _players(5)
+        players = [p1, p2, p3, p4, p5]
+        pairs = [(players[i], players[j]) for i in range(5) for j in range(i + 1, 5)]
+        fixtures = tuple(_fixture(n, a, b) for n, (a, b) in enumerate(pairs, start=1))
+
+        def p1_earliest(result: SolveResult) -> int:
+            placed = {p.fixture_id: p for p in result.placements}
+            return min(
+                placed[f.id].start_min
+                for f in fixtures
+                if p1 in (f.player_a_id, f.player_b_id)
+            )
+
+        base = _one_pool_snapshot(fixtures, tables=2, length_games=5)
+        without = solve(base, time_cap_s=CAP)
+        _assert_hard_constraints(base, without)
+        # The bug: with nothing carrying P1's just-finished rest, P1 is re-called
+        # at now — zero rest coming out of a completed match.
+        assert p1_earliest(without) == 0
+
+        shadowed = dataclasses.replace(base, rest_shadows=(RestShadow(p1, 0),))
+        result = solve(shadowed, time_cap_s=CAP)
+        _assert_hard_constraints(shadowed, result)
+        # The fix: P1 is held out for the full rest floor.
+        assert p1_earliest(result) >= REST_MIN
+
+        # Both tables are nonetheless busy from the first slot — the day is not
+        # globally stalled, only P1 is held out — and every 0-start is P1-free.
+        placed = {p.fixture_id: p for p in result.placements}
+        fixtures_by_id = {f.id: f for f in fixtures}
+        started_at_zero = [
+            fixtures_by_id[fid] for fid, p in placed.items() if p.start_min == 0
+        ]
+        assert len(started_at_zero) == 2
+        for fixture in started_at_zero:
+            assert p1 not in (fixture.player_a_id, fixture.player_b_id)
 
 
 class TestDegenerateAndStability:

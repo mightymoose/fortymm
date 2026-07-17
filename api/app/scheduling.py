@@ -26,6 +26,18 @@ under an in-progress overrun) make the day **infeasible**, which the solve
 reports rather than papering over — the correction path (re-place / void, ADR)
 is the fix, and it runs *before* the next solve, not inside it.
 
+**Rest across the completion boundary.** A player's 10-minute rest floor
+(:data:`REST_MIN`) is a hard constraint, and it must survive a match *ending*,
+not just a match running. A completed fixture occupies nothing and appears in
+no output — it is dropped from the model like it never was — so a recently-
+completed match instead projects a per-human **rest shadow**: a fixed interval
+``[completed_at, completed_at + REST_MIN]`` on that human's per-player list,
+exactly like the rest padding an in-progress or pinned match carries. That
+keeps the freed table idle rather than re-calling the just-finished player into
+zero rest. A shadow is an orthogonal per-human input (one entry per human, not
+per match), independent of the fixtures; the module adds :data:`REST_MIN` so
+the floor stays this one module's single source of truth.
+
 **Objective**, three strictly separated tiers (minimized):
 
 1. **Makespan** — the max end over every active fixture. The day finishes as
@@ -224,13 +236,31 @@ class PreviousPlacement:
 
 
 @dataclass(frozen=True, slots=True)
+class RestShadow:
+    """A recently-completed match's lingering rest obligation on one human.
+
+    A completed fixture occupies nothing and appears in no output (see
+    :class:`ScheduleFixture`), but the moment it completes its player's rest
+    floor must still hold: they may not be re-called until :data:`REST_MIN`
+    minutes after they finished. This is that per-human obligation, orthogonal
+    to the fixtures — one entry per human who recently finished, carrying only
+    the completion time. The module (not the caller) adds :data:`REST_MIN`, so
+    the floor stays this module's single source of truth."""
+
+    player_id: PlayerId
+    completed_at_min: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduleSnapshot:
     """Everything one solve reads, as one frozen value.
 
     ``table_ids`` is the venue catalogue — the universe every pool's
     ``table_ids`` must live inside. ``now_min`` is the current time in the
     same minute-offset frame as every other time here: unpinned fixtures may
-    not be scheduled before it.
+    not be scheduled before it. ``rest_shadows`` carries the rest obligation
+    of humans who just finished a match — orthogonal to ``fixtures``, whose
+    completed entries stay dropped and unplaced.
     """
 
     table_ids: tuple[TableId, ...]
@@ -240,6 +270,7 @@ class ScheduleSnapshot:
     now_min: int
     in_progress: tuple[InProgressMatch, ...] = ()
     previous_plan: tuple[PreviousPlacement, ...] = ()
+    rest_shadows: tuple[RestShadow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +477,22 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
                 )
             )
         fixed_ends.append(occ_end)
+
+    # Rest shadows: a human who just completed a match rests until
+    # completed_at + REST_MIN. A fixed interval on that player's list projects
+    # the floor across the completion boundary — the completed fixture itself
+    # is dropped and unplaced, but its rest lingers. Fixed (no variable): the
+    # window is a constant, so it needs no makespan/horizon bound, and a player
+    # who appears in nothing but a shadow is a harmless lone interval (per-
+    # player NoOverlap only fires with more than one).
+    for shadow in snapshot.rest_shadows:
+        player_intervals[shadow.player_id].append(
+            model.NewFixedSizeIntervalVar(
+                shadow.completed_at_min,
+                REST_MIN,
+                f"rest_{shadow.player_id}_{shadow.completed_at_min}",
+            )
+        )
 
     # Pins: constants. No window constraint (pins outrank windows), no start
     # variable (a promise does not drift), occupancy every variable respects.
