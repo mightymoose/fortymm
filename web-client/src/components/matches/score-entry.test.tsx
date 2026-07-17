@@ -16,7 +16,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
@@ -138,11 +138,17 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/entry'] }),
   })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  )
+  // Expose the router so a timing test can `vi.spyOn(router, 'navigate')` —
+  // `useNavigate` reads `router.navigate` at call time, so the spy captures the
+  // component's imperative hops (see the #567 synchronous-navigation test).
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+    router,
+  }
 }
 
 // Like `renderScoreEntry`, but also mounts a caller-supplied sibling control
@@ -377,6 +383,63 @@ describe('ScoreEntry — create', () => {
     // Already on game 4 even though the game-3 save is still pending.
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+  })
+
+  it('fires the save + next-game navigation SYNCHRONOUSLY inside the Save tap, not a microtask later (#567)', async () => {
+    // The #567 mobile-keyboard guarantee is a TIMING contract: iOS Safari only
+    // keeps the soft keyboard open across games if the next input's autofocus
+    // fires inside the same tap gesture. Routing the *valid* submit through
+    // RHF's async `handleSubmit` (which `await`s the Zod resolver before its
+    // callback) would defer this navigation into a microtask AFTER the tap,
+    // silently dropping the keyboard — a regression neither jsdom nor Playwright
+    // can feel (neither models the soft keyboard). This locks the timing in
+    // instead: `fireEvent.click` dispatches synchronously and does NOT flush
+    // microtasks, so had the navigation only fired after awaiting the resolver
+    // the spy would still be empty right after the click. It must already have
+    // been called. (The actual keyboard behaviour is only verifiable on device;
+    // this is the closest reliable proxy — it fails against the async-
+    // handleSubmit version.)
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      // Never resolves — the save stays in flight, so any synchronous
+      // navigation can't be piggy-backing on the request settling.
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        () => new Promise<Response>(() => {}),
+      ),
+    )
+
+    const { router } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 3,
+    })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+
+    // Spy AFTER typing so only the submit's imperative hop is captured (the
+    // mount-time `<Navigate>` guards don't fire for this valid game-3 create).
+    const navigateSpy = vi.spyOn(router, 'navigate')
+    const save = screen.getByRole('button', { name: /save game & next/i })
+
+    // Synchronous dispatch. The async `handleSubmit` path would leave this spy
+    // empty here; the synchronous valid path calls `navigate` during the tap.
+    fireEvent.click(save)
+
+    expect(navigateSpy).toHaveBeenCalledTimes(1)
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '/matches/$matchId/games/$gameNumber/scores/new',
+        params: { matchId: 'm-1', gameNumber: '4' },
+        ignoreBlocker: true,
+      }),
     )
   })
 
@@ -742,17 +805,27 @@ describe('ScoreEntry — create', () => {
     })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
-    // 11–10 is illegal (win-by-1). The submit button stays disabled and an
-    // inline hint explains why — no request is made.
+    // 11–10 is illegal (win-by-1). Per ADR-0018 the submit button stays ENABLED
+    // and nothing is red while typing — the error only appears on submit, and
+    // pressing it fires no request (handleSubmit is the only gate).
     await user.type(meInput, '11')
     await user.type(oppInput, '10')
     const save = screen.getByRole('button', { name: /save/i })
-    expect(save).toBeDisabled()
-    expect(screen.getByRole('alert')).toHaveTextContent(/deuce/i)
+    expect(save).toBeEnabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+
+    // The first submit surfaces the illegal-score error and reddens both sides,
+    // without hitting the server.
+    await user.click(save)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/deuce/i)
     expect(meInput).toHaveAttribute('aria-invalid', 'true')
     expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+    expect(posted).toBe(0)
 
-    // Correcting to a legal score clears the hint and re-enables Save.
+    // Correcting to a legal score re-validates live (reValidateMode: onChange)
+    // and clears the error; the button stays enabled throughout.
     await user.clear(oppInput)
     await user.type(oppInput, '9')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
@@ -761,9 +834,9 @@ describe('ScoreEntry — create', () => {
   })
 
   it('explains that both scores are required when only one field is filled (#387)', async () => {
-    // With exactly one score entered, Save is disabled with no reason given.
-    // Surface an inline hint and flag the still-empty field so the disabled
-    // button isn't a silent dead end.
+    // With exactly one score entered, pressing Save (always enabled per
+    // ADR-0018) surfaces the soft hint and flags the still-empty field so the
+    // press isn't a silent no-op. Nothing is red before that first submit.
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -774,21 +847,32 @@ describe('ScoreEntry — create', () => {
       name: 'rita.kovac score',
     })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    const save = screen.getByRole('button', { name: /save/i })
 
-    // Untouched: no hint, no red.
+    // Untouched: no hint, no red, button live.
     expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
+    expect(save).toBeEnabled()
 
+    // One side filled and still no submit → no hint yet (errors-after-submit).
     await user.type(meInput, '11')
-    // One side filled → hint appears, Save disabled, the empty field flagged.
-    expect(screen.getByText(/enter both scores to save this game/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+    expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
+    expect(save).toBeEnabled()
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+
+    // First submit → hint appears and the empty field is flagged; the button
+    // stays live.
+    await user.click(save)
+    expect(
+      await screen.findByText(/enter both scores to save this game/i),
+    ).toBeInTheDocument()
+    expect(save).toBeEnabled()
     expect(oppInput).toHaveAttribute('aria-invalid', 'true')
     expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
 
-    // Filling the second score clears the hint and enables Save.
+    // Filling the second score re-validates live and clears the hint.
     await user.type(oppInput, '9')
     expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /save/i })).toBeEnabled()
+    expect(save).toBeEnabled()
     expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
   })
 
@@ -812,14 +896,19 @@ describe('ScoreEntry — create', () => {
     expect(meInput).toHaveValue('15')
 
     // The illegal-score hint references the typed value, not a mutated one:
-    // 15–12 is a deuce game that doesn't lead by exactly 2.
+    // 15–12 is a deuce game that doesn't lead by exactly 2. The hint appears on
+    // submit (ADR-0018 errors-after-submit); after that, edits re-validate live.
     await user.type(oppInput, '12')
     expect(oppInput).toHaveValue('12')
-    expect(screen.getByRole('alert')).toHaveTextContent(/leads by exactly 2/i)
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /leads by exactly 2/i,
+    )
 
     // A 3rd digit is no longer truncated to a plausible 2-digit score (#624,
     // #771 — the FE input caps at 99, matching the server's per-side cap):
-    // the over-long value is kept verbatim and flagged as malformed instead.
+    // the over-long value is kept verbatim and flagged as malformed instead
+    // (live, since we've already submitted once).
     await user.clear(meInput)
     await user.type(meInput, '100')
     expect(meInput).toHaveValue('100')
@@ -841,13 +930,16 @@ describe('ScoreEntry — create', () => {
       name: 'rita.kovac score',
     })
 
-    // A decimal stays "11.5" — it never becomes "115" — and is flagged.
+    // A decimal stays "11.5" — it never becomes "115" — and is flagged on
+    // submit (ADR-0018 errors-after-submit); thereafter edits re-validate live.
     await user.type(meInput, '11.5')
     expect(meInput).toHaveValue('11.5')
+    await user.click(screen.getByRole('button', { name: /save/i }))
     expect(meInput).toHaveAttribute('aria-invalid', 'true')
-    expect(screen.getByRole('alert')).toHaveTextContent(/whole number/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole number/i)
 
-    // Overflowing digits stay "999999" — not capped to a plausible "999".
+    // Overflowing digits stay "999999" — not capped to a plausible "999" — and
+    // are flagged live (we've already submitted once).
     await user.clear(meInput)
     await user.type(meInput, '999999')
     expect(meInput).toHaveValue('999999')
@@ -2941,12 +3033,14 @@ describe('ScoreEntry — games past the decider', () => {
       '2',
     )
 
-    // The actionable message is shown and the write is never fired (the score
-    // 11-2 is legal, but it would decide the match at game 4 with game 5 scored).
-    expect(
-      screen.getByText(/already decided at game 4/i),
-    ).toBeInTheDocument()
+    // Per ADR-0018 the overrun block, like the Zod errors, surfaces on submit
+    // (not live). Pressing Save shows the actionable message and fires no write
+    // (the score 11-2 is legal, but it would decide the match at game 4 with
+    // game 5 scored) — handleSubmit's onValid returns early on the overrun.
     await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(
+      await screen.findByText(/already decided at game 4/i),
+    ).toBeInTheDocument()
     expect(posted).toBe(false)
   })
 
@@ -3390,6 +3484,184 @@ describe('ScoreEntry — stale finalize hits a posted result (409 → redirect) 
     ).toBeEnabled()
     // And no refetch was triggered — the string 409 doesn't invalidate.
     expect(getCalls).toBe(getsBeforePost)
+  })
+})
+
+// The ADR-0018 posture: the submit button is always enabled (never gated on
+// validity); validation errors appear only after the first submit and then
+// re-validate live; the always-live button means an empty submit must give the
+// soft "enter both scores" feedback rather than silently doing nothing.
+describe('ScoreEntry — submit-gated validation (ADR-0018)', () => {
+  async function renderCreateGame3() {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    const save = () => screen.getByRole('button', { name: /save/i })
+    return { meInput, oppInput, save }
+  }
+
+  it('leaves the submit button enabled with empty and with invalid input', async () => {
+    const user = userEvent.setup()
+    const { meInput, oppInput, save } = await renderCreateGame3()
+
+    // Empty: enabled (the old build disabled it here).
+    expect(save()).toBeEnabled()
+
+    // An illegal 8–5 (no win-by-2, under 11): still enabled — validity never
+    // gates the button.
+    await user.type(meInput, '8')
+    await user.type(oppInput, '5')
+    expect(save()).toBeEnabled()
+  })
+
+  it('shows no error and no red before the first submit, even with an invalid score typed', async () => {
+    const user = userEvent.setup()
+    const { meInput, oppInput } = await renderCreateGame3()
+
+    await user.type(meInput, '8')
+    await user.type(oppInput, '5')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
+  })
+
+  it('first submit with an invalid score surfaces the error and fires no save', async () => {
+    const user = userEvent.setup()
+    let posted = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        posted += 1
+        return HttpResponse.json(inProgressMatch(), { status: 201 })
+      }),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    await user.type(meInput, '8')
+    await user.type(oppInput, '5')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    // The error appears (illegal score) — but no request left the boundary.
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(posted).toBe(0)
+  })
+
+  it('first submit with BOTH fields empty shows the soft hint on both sides', async () => {
+    const user = userEvent.setup()
+    const { meInput, oppInput, save } = await renderCreateGame3()
+
+    await user.click(save())
+
+    // The empty submit is no longer a silent no-op: the soft "enter both scores"
+    // hint shows and BOTH sides are flagged.
+    expect(
+      await screen.findByText(/enter both scores to save this game/i),
+    ).toBeInTheDocument()
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('after a failed submit, fixing the score clears the error live', async () => {
+    const user = userEvent.setup()
+    const { meInput, oppInput, save } = await renderCreateGame3()
+
+    await user.type(meInput, '11')
+    await user.type(oppInput, '10') // illegal
+    await user.click(save())
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+
+    // reValidateMode: 'onChange' — a single keystroke to a legal 11–9 clears the
+    // error without another submit.
+    await user.clear(oppInput)
+    await user.type(oppInput, '9')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('post-submit: a malformed single side reddens only that side; an illegal score reddens both', async () => {
+    const user = userEvent.setup()
+    const { meInput, oppInput, save } = await renderCreateGame3()
+
+    // Malformed `me` (a decimal), legal-looking `opp` — only `me` is flagged.
+    await user.type(meInput, '11.5')
+    await user.type(oppInput, '9')
+    await user.click(save())
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole number/i)
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+
+    // Fix to an illegal 8–5 (both well-formed, no win) — now BOTH sides redden.
+    await user.clear(meInput)
+    await user.type(meInput, '8')
+    await user.clear(oppInput)
+    await user.type(oppInput, '5')
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('a legal score still fires the save and advances to the next game', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json(inProgressMatch(), { status: 201 })
+        },
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+    expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 })
+  })
+
+  it('a match-ending score still finalizes and navigates to the match page', async () => {
+    const user = userEvent.setup()
+    let resultsBody: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(decidingGameMatch()),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        resultsBody = await request.json()
+        return HttpResponse.json(decidingGameMatch())
+      }),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(resultsBody).not.toBeNull()
   })
 })
 

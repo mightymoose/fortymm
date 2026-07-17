@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useController, useForm } from 'react-hook-form'
 import {
   Link,
   Navigate,
@@ -50,13 +52,71 @@ import {
 } from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
+import { isAcceptableScoreInput } from './score-pad/validate-game-score'
 import {
-  isAcceptableScoreInput,
-  validateGameScore,
-} from './score-pad/validate-game-score'
+  gameScoreSchema,
+  type GameScoreInput,
+} from './score-pad/game-score-schema'
+import { mapGameScoreValidation } from './score-pad/game-score-ui'
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
+
+/**
+ * The baseline `{ me, opp }` the inputs read with no local typing — the failed
+ * scratch save, else the persisted score, else empty (#624 keeps everything a
+ * clean digit string, or empty). Seeds React Hook Form's `values` (ADR-0018), so
+ * the form is initialised from the same source the dirty baseline below computes.
+ * Computed at the top of the component (before the loading guard) where the
+ * derived `persistedMe`/`failedMe` aren't in scope yet; the render body recomputes
+ * the same baseline for the dirty check and the conflict notice.
+ */
+function seedScoreValues(
+  data: MatchDetails,
+  gameNumber: number,
+  ownSave: ReturnType<typeof useGameSaveState>,
+): GameScoreInput {
+  const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
+  if (!mySide) return { me: '', opp: '' }
+  const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1
+  const persistedScore =
+    data.games.find((g) => g.game_number === gameNumber)?.score ?? null
+  const persistedMe = persistedScore
+    ? mySideNumber === 1
+      ? persistedScore.side_1_points
+      : persistedScore.side_2_points
+    : null
+  const persistedOpp = persistedScore
+    ? mySideNumber === 1
+      ? persistedScore.side_2_points
+      : persistedScore.side_1_points
+    : null
+  const failedEntry = ownSave?.status === 'error' ? ownSave.variables : null
+  const failedMe = failedEntry
+    ? mySideNumber === 1
+      ? failedEntry.side_1_points
+      : failedEntry.side_2_points
+    : null
+  const failedOpp = failedEntry
+    ? mySideNumber === 1
+      ? failedEntry.side_2_points
+      : failedEntry.side_1_points
+    : null
+  return {
+    me:
+      failedMe != null
+        ? String(failedMe)
+        : persistedMe != null
+          ? String(persistedMe)
+          : '',
+    opp:
+      failedOpp != null
+        ? String(failedOpp)
+        : persistedOpp != null
+          ? String(persistedOpp)
+          : '',
+  }
+}
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -113,11 +173,42 @@ function ScoreEntryInner({
   // silently overwrite it.
   const failedSaves = useFailedGameSaves(matchId)
 
-  // `null` means "user hasn't typed anything yet" — we fall through to the
-  // persisted score in edit mode. Avoids a state-syncing effect when `data`
-  // arrives after first render.
-  const [meTyped, setMeTyped] = useState<string | null>(null)
-  const [oppTyped, setOppTyped] = useState<string | null>(null)
+  // React Hook Form owns the two score fields and their Zod validation — and
+  // nothing else (ADR-0018). Its `values` are seeded from the same baseline the
+  // render body computes (failed scratch → persisted → empty); `keepDirtyValues`
+  // makes a later refetch (e.g. the conflict re-sync) leave the user's typed
+  // entry alone, exactly like the old `meTyped ?? baseline` fall-through did.
+  // `keepSubmitCount` keeps the errors-after-first-submit gate from silently
+  // resetting when a background refetch changes the baseline mid-edit.
+  //
+  // `mode: 'onSubmit'` + `reValidateMode: 'onChange'`: nothing is red while the
+  // user first types; the first submit surfaces the errors; thereafter they
+  // re-validate live so a fix clears the red. The submit button is NEVER gated
+  // on validity (ADR-0018) — `handleSubmit` is the only gate, an invalid submit
+  // fires nothing.
+  const form = useForm<GameScoreInput>({
+    resolver: zodResolver(gameScoreSchema),
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
+    defaultValues: { me: '', opp: '' },
+    values: data ? seedScoreValues(data, gameNumber, ownSave) : undefined,
+    resetOptions: {
+      keepDirtyValues: true,
+      keepSubmitCount: true,
+      keepIsSubmitted: true,
+    },
+  })
+  // Each side is driven through a controller so the #624 keystroke filter
+  // (`isAcceptableScoreInput`) can reject a change outright — the value never
+  // updates — while RHF still owns the field. `useController` already subscribes
+  // to its field, so the live value is read straight off `field.value` (no
+  // separate `useWatch`), and every downstream consumer (dirty tracking, finalize
+  // prediction, `overrunAt`, `toBody`, the copy, the scoreline) reads it.
+  const meField = useController({ control: form.control, name: 'me' })
+  const oppField = useController({ control: form.control, name: 'opp' })
+  const me = meField.field.value ?? ''
+  const opp = oppField.field.value ?? ''
+  const submitted = form.formState.submitCount > 0
   const meRef = useRef<HTMLInputElement>(null)
   const oppRef = useRef<HTMLInputElement>(null)
   // Set when a per-cell clear is confirmed: the dialog otherwise restores focus
@@ -293,35 +384,21 @@ function ScoreEntryInner({
   // `onError` re-sync primed it). Distinct from a plain failed save, which the
   // scoreline/banner just offer to retry.
   const conflict = ownSave?.status === 'error' && isScoreConflict(ownSave.error)
-  const me =
-    meTyped ??
-    (failedMe != null
-      ? String(failedMe)
-      : persistedMe != null
-        ? String(persistedMe)
-        : '')
-  const opp =
-    oppTyped ??
-    (failedOpp != null
-      ? String(failedOpp)
-      : persistedOpp != null
-        ? String(persistedOpp)
-        : '')
 
   // The baseline is what the inputs read with no local typing — the failed
   // scratch save, else the persisted score, else empty. Input is "dirty"
   // (worth guarding on exit) only when the user has actually typed something
   // that diverges from that baseline: a clean page, or input that merely
-  // matches what's already saved, must not nag. Updating the ref here (rather
-  // than in an effect) keeps the blocker reading the current-render truth.
-  const baselineMe =
-    failedMe != null ? String(failedMe) : persistedMe != null ? String(persistedMe) : ''
-  const baselineOpp =
-    failedOpp != null
-      ? String(failedOpp)
-      : persistedOpp != null
-        ? String(persistedOpp)
-        : ''
+  // matches what's already saved, must not nag. Derived from the SAME helper
+  // that seeds RHF's `values` above, so the seed and the dirty check can't drift
+  // — `keepDirtyValues` must agree with `computeDirty` (ADR-0014). The
+  // decomposed `persistedMe`/`failedMe`/… above stay for the conflict notice,
+  // `keepCommittedScore`, and retry.
+  const { me: baselineMe, opp: baselineOpp } = seedScoreValues(
+    data,
+    gameNumber,
+    ownSave,
+  )
   // Whether the live inputs (me/opp) diverge from the baseline — i.e. there's
   // genuinely-unsaved typing worth guarding on exit. Recomputed by the change
   // handlers below as the user types (a clean page, or input matching the
@@ -339,27 +416,34 @@ function ScoreEntryInner({
   // visible and get flagged inline instead of masquerading as a real score.
   const onMeChange = (value: string) => {
     if (!isAcceptableScoreInput(value)) return
-    setMeTyped(value)
+    meField.field.onChange(value)
     setIsDirty(computeDirty(value, opp))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
   const onOppChange = (value: string) => {
     if (!isAcceptableScoreInput(value)) return
-    setOppTyped(value)
+    oppField.field.onChange(value)
     setIsDirty(computeDirty(me, value))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
 
-  // The shared single-game verdict: 1–3-digit well-formedness, the "exactly one
-  // side filled" hint (#387), and the `illegalScoreReason` table-tennis rule.
-  // Now shared with the propose-a-result correction surface via `score-pad`.
-  const validation = validateGameScore(me, opp)
-  const oneSideFilled = validation.oneSideFilled
-  const meMalformed = validation.meMalformed
-  const oppMalformed = validation.oppMalformed
-  const formatError = meMalformed || oppMalformed ? validation.error : null
-  const localScoreError = validation.error
-  const inputsValid = validation.valid
+  // The shared single-game verdict via the Zod schema (ADR-0018): 1–2-digit
+  // well-formedness, the `illegalScoreReason` table-tennis rule, and the soft
+  // "enter both scores" tier. `inputsValid` (a successful parse — both sides
+  // filled, well-formed, legal) still gates the finalize prediction and the
+  // write; `mapGameScoreValidation` routes the failed-parse issues to ScorePad's
+  // per-side red flags / error line, but ONLY after the first submit
+  // (`submitted`) — nothing is red while the user first types.
+  const parseResult = gameScoreSchema.safeParse({ me, opp })
+  const inputsValid = parseResult.success
+  // Map the parse result to per-side red flags / error line ONLY after the first
+  // submit — before then the fields stay clean even with an illegal or half-typed
+  // score, and the mapper's output is discarded anyway; after, `onChange`
+  // re-validation clears the red as the user fixes it. A single gate here (rather
+  // than one per field) is the whole ADR-0018 "errors-after-first-submit"
+  // posture. `inputsValid` above stays UNGATED — it feeds the finalize prediction
+  // and the overrun block regardless of submit.
+  const ui = submitted ? mapGameScoreValidation(parseResult) : null
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
   // A finalize error that ISN'T an `ApiError` is a transport-level drop:
@@ -444,35 +528,37 @@ function ScoreEntryInner({
   // transport-level drop (`finalizeNetworkError`) is the same story: the entered
   // score is perfectly valid, the POST just never reached the server, so the
   // fields stay clean and only the message line explains the failure (#868).
-  const inputsInvalid =
-    localScoreError !== null || finalizeApiError?.status === 422
-  // The message line, though, surfaces every finalize error (409/500 included),
-  // a transport-level drop, and the cross-game overrun block (a legal score that
-  // the board can't take).
+  const finalize422 = finalizeApiError?.status === 422
+  // The cross-game overrun block (a legal score the board can't take) follows
+  // the same after-first-submit gate as the Zod errors (ADR-0018 §4).
   const overrunError =
-    overrunAt !== null
+    submitted && overrunAt !== null
       ? `The match is already decided at game ${overrunAt} — clear the games after it before saving this score.`
       : null
-  const showScoreError =
-    inputsInvalid ||
-    overrunError !== null ||
-    // A 409 is surfaced as the calm redirect notice below, not the red error.
-    (finalizeApiError !== null && !finalizeRedirecting) ||
-    finalizeNetworkError
-  // The "both scores required" hint is its own, lower-severity line — shown only
-  // when exactly one field is filled and there's no harder error to surface.
-  const showBothRequired = oneSideFilled && !showScoreError
-  // Per-side red flags: a format error paints only the malformed side; a
-  // genuine scoring error (illegal score / 422 drift) paints both inputs; the
-  // both-required hint only flags the empty one.
-  const meInvalid =
-    meMalformed ||
-    (formatError === null && inputsInvalid) ||
-    (showBothRequired && me === '')
-  const oppInvalid =
-    oppMalformed ||
-    (formatError === null && inputsInvalid) ||
-    (showBothRequired && opp === '')
+  // A finalize error's message line, surfaced regardless of `submitted` (a
+  // finalize is inherently post-submit): every finalize error (409/500 included)
+  // and a transport-level drop. The negotiation-conflict 409 is shown as the calm
+  // redirect notice below instead, so it's excluded here.
+  const finalizeErrorText =
+    finalizeApiError !== null && !finalizeRedirecting
+      ? (finalizeApiError.detail ?? finalizeApiError.message)
+      : finalizeNetworkError
+        ? "Couldn't post the result — check your connection and try again."
+        : null
+  // Single `scoreError` slot, in ADR-0018 precedence: local Zod error (after
+  // submit) → overrun (after submit) → finalize API error (409/500) → finalize
+  // network drop.
+  const scoreError = ui?.scoreError ?? overrunError ?? finalizeErrorText
+  // The "both scores required" hint is its own, lower-severity line — the schema
+  // emits it (post-submit) when either side is empty, but only show it when
+  // there's no harder error to surface.
+  const showBothRequired = (ui?.showBothRequired ?? false) && scoreError === null
+  // Per-side red flags: the mapper already paints only the malformed side, both
+  // sides for an illegal score, and the empty side for the soft hint (all gated
+  // post-submit — `ui` is null until the first submit); a server 422 drift
+  // paints both inputs.
+  const meInvalid = (ui?.meInvalid ?? false) || finalize422
+  const oppInvalid = (ui?.oppInvalid ?? false) || finalize422
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
@@ -499,12 +585,43 @@ function ScoreEntryInner({
       : { side_1_points: Number(opp), side_2_points: Number(me) }
   }
 
+  // Async handler used ONLY to reveal validation errors on an invalid submit.
+  // React Hook Form's `handleSubmit` returns an async function that `await`s the
+  // Zod resolver before deciding — bumping `submitCount` (which flips
+  // `submitted` on and turns on live re-validation) either way. Its callback is
+  // a no-op: this path never writes and never navigates, so its post-`await`
+  // timing is harmless (there is no autofocus to preserve on the error path).
+  const revealErrors = form.handleSubmit(() => {})
+
+  // The submit gesture, always live (ADR-0018). The button is never disabled on
+  // validity; `onSubmit` is the only gate. It splits by validity SYNCHRONOUSLY:
+  // an invalid / board-illegal submit routes through the async `revealErrors`
+  // (fine — it only surfaces messages), while a valid, board-legal submit runs
+  // the sanctioned write path inline, inside the tap gesture. That synchronous
+  // valid path is load-bearing for #567 (see the fire-and-forget tail below):
+  // iOS Safari only keeps the soft keyboard open across the next game if the
+  // next input's autofocus fires while still inside the tap that triggered it,
+  // and RHF's async `handleSubmit` would defer that navigation into a microtask
+  // AFTER the tap — dropping the keyboard between games.
   function onSubmit() {
-    if (!inputsValid) return
-    // The score is legal on its own but the board can't take it (it would leave
-    // the match decided before its last game). Block the write — the inline
-    // `overrunError` tells the user to clear the trailing games first.
-    if (overrunAt !== null) return
+    // A Zod-invalid score, or a locally-legal score the board can't take (the
+    // cross-game overrun: it would leave the match decided before its last
+    // game): surface the messages but write nothing. `revealErrors` bumps
+    // `submitCount`, so `submitted` turns on and the inline Zod / `overrunError`
+    // lines (both `submitCount`-gated) become visible; live re-validation then
+    // clears them as the user fixes the score. No navigation happens here, so
+    // routing it through the async `handleSubmit` is fine.
+    if (!parseResult.success || overrunAt !== null) {
+      void revealErrors()
+      return
+    }
+    // Valid + board-legal: run the sanctioned write path SYNCHRONOUSLY, inside
+    // the tap, so the next game's autofocus keeps the mobile keyboard open
+    // (#567; see the fire-and-forget tail). This path always either navigates
+    // away or surfaces an ungated banner/finalize-error, so it never needs
+    // `submitCount` — which is why only the invalid/overrun branch above bumps
+    // it, and why the navigating path can't set state after it unmounts.
+    //
     // Ignore a second Save while the per-game save is still in flight (#538):
     // a double-tap would otherwise fire a duplicate create that 409s. This
     // synchronous guard is the only protection now — the mutationFn no longer
@@ -569,7 +686,10 @@ function ScoreEntryInner({
     // the network round-trip — is what keeps the mobile soft keyboard open: a
     // browser only honours the next input's autofocus while still inside the
     // tap that triggered it, so deferring to onSettled dropped focus and closed
-    // the keyboard between games (#567).
+    // the keyboard between games (#567). This is also why `onSubmit` runs this
+    // whole path synchronously instead of through RHF's async `handleSubmit`:
+    // awaiting the Zod resolver would push this `navigate` into a microtask
+    // AFTER the tap, dropping the keyboard the exact same way onSettled did.
     saveMutation.mutate(args)
     navigate({ ...next, ignoreBlocker: true })
   }
@@ -647,10 +767,15 @@ function ScoreEntryInner({
   // guard forces before any further write to this game.
   function keepCommittedScore() {
     // Drop our rejected scratch save; the inputs fall back to the committed
-    // score and the conflict notice clears.
+    // score and the conflict notice clears. `form.reset` to the committed score
+    // clears RHF's dirty flags so the recomputed `values` (now the persisted
+    // score, with the failed scratch gone) don't get kept as our losing entry by
+    // `keepDirtyValues`, and drops `submitCount` so the fresh state starts clean.
     forgetScoreSaves(queryClient, matchId, gameNumber)
-    setMeTyped(null)
-    setOppTyped(null)
+    form.reset({
+      me: persistedMe != null ? String(persistedMe) : '',
+      opp: persistedOpp != null ? String(persistedOpp) : '',
+    })
     setIsDirty(false)
   }
 
@@ -790,29 +915,23 @@ function ScoreEntryInner({
             onKeyDown: (e) => handleKey(e, 'opp'),
           }}
           gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
-          // The scratchpad surfaces the local validation error, the cross-game
-          // overrun block, a finalize API rejection (409/500 too), and — last in
-          // precedence — a transport-level drop's connection copy here;
-          // `showScoreError` gates when any of them shows, in that order. The
-          // connection copy is last because an `ApiError` (a real server verdict)
-          // is always the more specific thing to say; a bare transport failure is
-          // the fallback when the POST never reached the server at all (#868).
-          scoreError={
-            showScoreError
-              ? (localScoreError ??
-                overrunError ??
-                finalizeApiError?.detail ??
-                finalizeApiError?.message ??
-                (finalizeNetworkError
-                  ? "Couldn't post the result — check your connection and try again."
-                  : null))
-              : null
-          }
+          // The single error slot, already resolved in ADR-0018 precedence: the
+          // local Zod error (after submit) → the cross-game overrun block (after
+          // submit) → a finalize API rejection (409/500) → a transport-level
+          // drop's connection copy. The connection copy is last because an
+          // `ApiError` (a real server verdict) is always the more specific thing
+          // to say; a bare transport failure is the fallback when the POST never
+          // reached the server at all (#868).
+          scoreError={scoreError}
           showBothRequired={showBothRequired}
           inputsLocked={inputsLocked}
           subtitle={subtitle}
           submitLabel={submitLabel}
-          canSubmit={inputsValid && overrunAt === null}
+          // Never gated on validity (ADR-0018): the button is always live, and
+          // `handleSubmit` (in `submit`) is the only gate. It's disabled only by
+          // genuine in-flight locks via `inputsLocked` (finalize pending /
+          // 409-redirect window), handled inside ScorePad.
+          canSubmit
           onSubmit={onSubmit}
           onClear={isEdit ? onClear : undefined}
           clearDisabled={deleteMutation.isPending}
