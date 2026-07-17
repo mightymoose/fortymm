@@ -1,7 +1,6 @@
 ---
 name: to-chores
 description: Break an agreed plan into a work order of small, agent-tagged chores grouped under tracer-bullet slices, for the domain-expert subagents to implement. Decompose-only — writes the work order and stops; run /do-chores to drive it.
-disable-model-invocation: true
 argument-hint: "[optional path to a plan/PRD/issue, else uses the plan in context]"
 ---
 
