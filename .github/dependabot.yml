@@ -16,6 +16,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 is the native port and drops the JS compiler API that our
+      # toolchain builds on: typescript-eslint declares `typescript <6.1.0` and
+      # openapi-typescript still calls `ts.factory`, so both `npm run lint` and
+      # `npm run gen:api` die on it. Drop this once typescript-eslint ships a
+      # release whose peer range admits 7.x.
+      - dependency-name: typescript
+        versions:
+          - ">=7.0.0"
     groups:
       web-client-minor-patch:
         update-types:
