@@ -6,8 +6,9 @@ import { TournamentDetailPage } from '../page-objects/tournament-detail.page'
 import { findUserId, guestFromContext, mintGuest } from '../support/match-api'
 import { grantBetaTester } from '../support/rbac-grant'
 import {
+  callFixture,
   enterPlayer,
-  firstFixtureMatchId,
+  firstFixture,
   seedTournament,
 } from '../support/tournament-api'
 
@@ -19,9 +20,11 @@ const EVENT_NAME = 'Open Singles'
  *
  * A director creates a tournament with one singles, round-robin, **unrated**,
  * best-of-1 event drawn across a single pool → publishes → enters two players →
- * cuts the draw → goes live (materializing the one fixture into a real
- * `in_progress` match) → records the result → the standings crown the winner
- * champion at rank #1.
+ * cuts the draw → goes live (materializing the one fixture into a *scheduled*,
+ * born-`pending` match — "Not started", #1073) → CALLS it onto the seeded table
+ * with a full manual placement (which flips it `pending → in_progress` and makes
+ * it scorable) → records the result → the standings crown the winner champion at
+ * rank #1.
  *
  * ## Why unrated is load-bearing
  *
@@ -36,7 +39,11 @@ const EVENT_NAME = 'Open Singles'
  * entrant (director-entry, which has no web UI) — is provisioned over the API
  * (`support/tournament-api.ts`). The load-bearing lifecycle steps are driven
  * through the browser: publishing, the director's own Enter, cutting the draw,
- * going live, recording the result, and reading the standings.
+ * going live, recording the result, and reading the standings. The one exception
+ * is the **call** — flipping the scheduled fixture live via a full placement — run
+ * over the API (`callFixture`), since a placement drag has no simple UI surface to
+ * script here; the spec verifies its *effect* (the "In progress" status) in the
+ * browser.
  *
  * ## RBAC
  *
@@ -97,16 +104,36 @@ test.describe('Tournament — round-robin lifecycle', () => {
 
     // ----- go live: published → live (materializes the fixture) -------------
     await detail.startButton.click()
-    // Now live: the only edge left is End, and the fixture is a real, in-progress
-    // match with a deep-link.
+    // Now live: the only edge left is End. But the fixture is materialized as a
+    // *scheduled* match, not a live one (#1073): it is born `pending`, so it reads
+    // "Not started" and is NOT yet scorable. The materialized fixture already
+    // carries its deep-link (the match exists) — the link shows for a pending
+    // fixture; only the status word differs from a called one.
     await expect(detail.endButton).toBeVisible()
+    await expect(detail.fixtureMatchStatus(eventId)).toHaveText('Not started')
+    await expect(detail.viewMatchLink(eventId)).toBeVisible()
+
+    // ----- call the fixture: a full manual placement flips it live ----------
+    // The director calls the pending fixture onto the tournament's seeded table
+    // (a full placement PATCH is a call while live), which flips its match
+    // `pending → in_progress` and makes it scorable (#1073). We need the fixture
+    // id, not just the match id, to address its placement.
+    const fixture = await firstFixture(director, tournamentId, eventId)
+    await callFixture(director, tournamentId, fixture.id)
+    await detail.reload(tournamentId)
+    // Now the fixture reads live, and its deep-link is still there to follow.
     await expect(detail.fixtureMatchStatus(eventId)).toHaveText('In progress')
     await expect(detail.viewMatchLink(eventId)).toBeVisible()
 
     // ----- record the result, through the score-entry UI --------------------
-    // Learn the materialized match's id over the API, then drive its score entry
-    // in the browser (the pattern score-conflict.spec.ts uses).
-    const matchId = await firstFixtureMatchId(director, tournamentId, eventId)
+    // The called match's id — deep-link the browser into its score entry the way
+    // score-conflict.spec.ts does (learn the URL over the API, drive the surface).
+    const { match_id: matchId } = fixture
+    // Narrow off null (a materialized fixture always carries one) — both the
+    // assertion and the type guard the deep-link below needs.
+    if (matchId === null) {
+      throw new Error('the materialized fixture carries no match id')
+    }
     const score = await ScoreEntryPage.navigateToNew(page, matchId, 1)
     // The director wins 11–5, so they are the sole pool winner → champion. Inputs
     // are labelled by username, so this is correct whichever side each was drawn on.

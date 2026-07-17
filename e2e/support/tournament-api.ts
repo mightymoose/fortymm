@@ -275,6 +275,33 @@ export async function getScheduleDetail(
 }
 
 /**
+ * Read the tournament detail and return the event's **first fixture** — the one
+ * pairing a two-entrant single pool cuts. It carries both its own `id` (needed to
+ * address its placement, i.e. to call it) and the `match_id` it materialized into
+ * at go-live (#788), plus its live `match_status`.
+ *
+ * A spec uses the `id` to call the fixture (`callFixture`) and the `match_id` to
+ * deep-link the browser into the match's score entry the same way
+ * `score-conflict.spec.ts` deep-links a seeded match. Throws if the event has no
+ * fixtures — which would mean the draw was never cut.
+ */
+export async function firstFixture(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<FixtureDetail> {
+  const detail = await getScheduleDetail(viewer, tournamentId)
+  const event = detail.events.find((e) => e.id === eventId)
+  const fixture = event?.fixtures[0]
+  if (!fixture) {
+    throw new Error(
+      `no fixture for event ${eventId} — was the draw cut?`,
+    )
+  }
+  return fixture
+}
+
+/**
  * Read the tournament detail and return the `match_id` of the event's first
  * fixture — the real match a fixture materialized into at go-live (#788).
  *
@@ -288,22 +315,56 @@ export async function firstFixtureMatchId(
   tournamentId: string,
   eventId: string,
 ): Promise<string> {
-  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
-  if (!res.ok()) {
-    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
-  }
-  const detail = (await res.json()) as {
-    events: ReadonlyArray<{
-      id: string
-      fixtures: ReadonlyArray<{ match_id: string | null }>
-    }>
-  }
-  const event = detail.events.find((e) => e.id === eventId)
-  const matchId = event?.fixtures.find((f) => f.match_id !== null)?.match_id
+  const matchId = (await firstFixture(viewer, tournamentId, eventId)).match_id
   if (!matchId) {
     throw new Error(
       `no materialized fixture for event ${eventId} — did the tournament go live?`,
     )
   }
   return matchId
+}
+
+/** A naive wall-clock ISO timestamp (`YYYY-MM-DDTHH:MM:SS`, **no** timezone
+ * suffix) for NOW — the shape `scheduled_start` takes on the wire (ADR-0790). The
+ * `slice(0, 19)` drops the milliseconds and the trailing `Z`, so what remains is
+ * offset-naive; an offset-aware value is a 422 (`_naive_wall_clock`). */
+function naiveNow(): string {
+  return new Date().toISOString().slice(0, 19)
+}
+
+/**
+ * **Call** a fixture to a table by making a full manual placement as the
+ * director (ADR "the schedule is solved; the call is pinned"):
+ * `PATCH …/fixtures/{fixtureId}/placement` with the seeded catalogue table and a
+ * naive wall-clock start.
+ *
+ * A full placement (both halves set, both entrants known) sets `pinned_at`; and
+ * while the tournament is **live**, placing a fixture *is* calling it — the linked
+ * match flips `pending → in_progress`, which is what makes it scorable (#1073). So
+ * this is how the director takes a freshly-materialized (scheduled, "Not started")
+ * fixture live from the API, the same edge a manual drag onto the board is.
+ *
+ * `scheduled_start` defaults to NOW as a naive wall-clock; the placement is *soft*
+ * (an out-of-window time is a flag on read, not a rejection), so a near-now time
+ * against a far-future pool window still calls the match.
+ */
+export async function callFixture(
+  director: Guest,
+  tournamentId: string,
+  fixtureId: string,
+  options: { readonly tableId?: string; readonly scheduledStart?: string } = {},
+): Promise<void> {
+  const res = await director.ctx.patch(
+    `${API}/tournaments/${tournamentId}/fixtures/${fixtureId}/placement`,
+    {
+      headers: { [CSRF_HEADER]: director.csrf },
+      data: {
+        table_id: options.tableId ?? TABLE_ID,
+        scheduled_start: options.scheduledStart ?? naiveNow(),
+      },
+    },
+  )
+  if (res.status() !== 200) {
+    throw new Error(`call fixture failed: ${res.status()} ${await res.text()}`)
+  }
 }
