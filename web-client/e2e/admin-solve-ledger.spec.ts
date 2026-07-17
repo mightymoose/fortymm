@@ -30,23 +30,7 @@ import {
   SolveLedgerPage,
   buildAdminScheduleSolveRead,
 } from './page-objects/admin/solve-ledger.page'
-import { expectAxeCleanExcept, type KnownAxeViolation } from './support/axe'
-
-/** Pre-existing WCAG debt in the shared admin chrome this page merely renders
- * inside: the `AdminBreadcrumbAndCounts` "Administration" eyebrow is
- * 12px `var(--fg-muted)` on `var(--bg-app)` — under the AA contrast ratio on
- * every `/admin/*` page (none of which had axe coverage before this spec).
- * Owned by `src/components/rbac/admin-layout.tsx`; fixing shared chrome inside
- * this change would hide the fix (support/axe.ts's own guidance). Delete this
- * entry when the eyebrow's contrast is fixed. */
-const ADMIN_CHROME_DEBT: KnownAxeViolation[] = [
-  {
-    rule: 'color-contrast',
-    node: 'main > div > div:nth-child(1) > div:nth-child(1) > span:nth-child(1)',
-    owner:
-      'rbac/admin-layout.tsx — AdminBreadcrumbAndCounts eyebrow (fg-muted on bg-app), pre-existing on every admin page',
-  },
-]
+import { expectAxeClean } from './support/axe'
 
 test.describe('Admin · solve ledger', () => {
   test('renders the ledger — designed chips, tournament links, wall time, apply counts, the re-run flag — and expands a failure', async ({
@@ -79,7 +63,7 @@ test.describe('Admin · solve ledger', () => {
       pom.row('solve-3').getByRole('link', { name: 'Bay Area Open 2026' }),
     ).toHaveAttribute('href', '/tournaments/bay-area-open-2026')
 
-    await expectAxeCleanExcept(page, 'solve ledger — table with an expanded failure row', ADMIN_CHROME_DEBT)
+    await expectAxeClean(page, 'solve ledger — table with an expanded failure row')
   })
 
   test('pages via the URL, and the page param round-trips a real reload', async ({
@@ -128,7 +112,7 @@ test.describe('Admin · solve ledger', () => {
     const pom = await SolveLedgerPage.navigateTo(page, { rows: [] })
     await expect(pom.emptyState).toBeVisible()
     await expect(pom.readout).toContainText('Showing 0–0 of 0 runs')
-    await expectAxeCleanExcept(page, 'solve ledger — empty', ADMIN_CHROME_DEBT)
+    await expectAxeClean(page, 'solve ledger — empty')
 
     const one = await SolveLedgerPage.navigateTo(page, {
       rows: [buildAdminScheduleSolveRead({ id: 'solo' })],
@@ -162,6 +146,6 @@ test.describe('Admin · solve ledger', () => {
       page.locator('.app-shell__sidebar').getByRole('link', { name: 'Scheduling' }),
     ).not.toBeVisible()
 
-    await expectAxeCleanExcept(page, 'solve ledger — forbidden', ADMIN_CHROME_DEBT)
+    await expectAxeClean(page, 'solve ledger — forbidden')
   })
 })
