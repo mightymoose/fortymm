@@ -181,7 +181,10 @@ export const TournamentDetailPage = ({
       <Tabs value={tab} onValueChange={setTab}>
         <div className="border-b border-[color:var(--border-subtle)]">
           <div className="mx-auto w-full max-w-[1320px] px-12">
-            <TabsList className="h-auto gap-1 bg-transparent p-0">
+            <TabsList
+              variant="line"
+              className="h-auto p-0 [&_[data-slot=tabs-trigger]]:after:bg-[color:var(--ball-500)]"
+            >
               <TabsTrigger value="events">
                 Events
                 <span className="ml-1.5 rounded-full bg-[color:var(--bg-card)] px-1.5 font-mono text-[11px] tabular-nums">
