@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, select, text, update
+from sqlalchemy import CursorResult, delete, exists, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.match_voiding import void_match
@@ -36,14 +36,18 @@ from app.models import (
     NotificationChannelSetting,
     NotificationPreference,
     RatingHistory,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
+    TournamentEvent,
+    TournamentFixture,
     User,
     UserLeagueRating,
     UserRole,
     UserToken,
 )
+from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_draws import draw_has_play, uncut_draw
 
 # Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
@@ -516,6 +520,12 @@ async def _resolve_entry_collisions(
     top) in every statement here, so none of them can drift from the enum that the
     model, the routes and the partial unique index all follow.
 
+    Both arms mutate **scheduling inputs** (ADR "the schedule is solved; the call
+    is pinned"), so both funnel into :func:`app.schedule_solves.request_solve` —
+    trigger ``settings_changed``, at most once per affected tournament, under
+    tournament row locks taken up front (lock order and per-arm gates in the
+    inline comments). Redis being down costs the solve, never the merge.
+
     Does not commit — runs inside ``merge_user``'s caller's transaction, which is
     what makes the delete and the un-cut one atomic act.
     """
@@ -551,6 +561,40 @@ async def _resolve_entry_collisions(
     if not collided_event_ids:
         return
 
+    # Every mutation below is a **scheduling input** changing (ADR "the schedule
+    # is solved; the call is pinned"): a withdrawal, an entry delete whose
+    # cascade takes fixtures, an un-cut. ``request_solve``'s contract wants the
+    # tournament row lock held first, and the lock ORDER every writer follows is
+    # tournament → schedule_solves → tournament_fixtures — so the collided
+    # tournaments are locked HERE, before any entry mutation flushes (the entry
+    # DELETE's fixture cascade takes fixture row locks, which must never precede
+    # the tournament's). ``merge_user`` holds no tournament lock of its own when
+    # it calls this — the same situation ``on_match_completed`` is in, and the
+    # same remedy: take the lock yourself. Ordered by id so two concurrent
+    # merges touching the same pair of tournaments lock them in one order
+    # instead of deadlocking. (The ownership re-point earlier in ``merge_user``
+    # may already hold some of these rows — re-locking a row this transaction
+    # holds is a no-op, so no inversion is introduced within the merge itself.)
+    # The lock also makes the ``draw_has_play`` partition below read what the
+    # last committed writer wrote, exactly as the cut/un-cut routes read it.
+    event_tournament_ids: dict[uuid.UUID, uuid.UUID] = dict(
+        (
+            await db.execute(
+                select(TournamentEvent.id, TournamentEvent.tournament_id).where(
+                    TournamentEvent.id.in_(collided_event_ids)
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    await db.execute(
+        select(Tournament.id)
+        .where(Tournament.id.in_(sorted(set(event_tournament_ids.values()))))
+        .order_by(Tournament.id)
+        .with_for_update()
+    )
+
     # Partition the collided events by evidence of play (a fixture with a ``match_id``
     # or a ``winner_entry_id`` — the ``draw_has_play`` the cut/un-cut verbs gate on).
     # An **unplayed** event's draw is regenerated (steps 1–3 below); a **played** one's
@@ -561,7 +605,52 @@ async def _resolve_entry_collisions(
     }
     unplayed_event_ids = collided_event_ids - played_event_ids
 
+    # Which tournaments this collision's mutations owe a re-solve. Filled by
+    # both arms below, deduped so a merge that touches two events of one
+    # tournament enqueues at most one solve for it (``request_solve`` would
+    # coalesce the duplicate anyway; no reason to make it).
+    solve_tournament_ids: set[uuid.UUID] = set()
+
     if played_event_ids:
+        # The withdrawal arm's solve gate, read while the guest's entries are
+        # still ``entered``: withdraw_from_event's doctrine, in bulk. Entries
+        # reach the solver only through fixtures, so only a guest entry that is
+        # **seated** in the played draw is a solver input — its withdrawal is
+        # what the broken-pin repair (``app.match_calls``) reacts to. A guest
+        # who entered after the cut sits in no fixture and their leaving
+        # changes no solver input until a re-cut, which triggers on its own.
+        # The seated-EXISTS form is chosen over a per-tournament
+        # ``tournament_has_drawn_event`` gate because a played event has
+        # fixtures BY CONSTRUCTION — that gate would be vacuously true here
+        # and would enqueue for never-seated withdrawals; one EXISTS over the
+        # data already in hand answers the real question.
+        solve_tournament_ids.update(
+            (
+                await db.execute(
+                    select(TournamentEvent.tournament_id)
+                    .distinct()
+                    .join(
+                        TournamentEntry,
+                        TournamentEntry.event_id == TournamentEvent.id,
+                    )
+                    .where(
+                        TournamentEntry.user_id == from_user_id,
+                        TournamentEntry.status == TournamentEntryStatus.entered,
+                        TournamentEntry.event_id.in_(played_event_ids),
+                        exists(
+                            select(TournamentFixture.id).where(
+                                or_(
+                                    TournamentFixture.entry_a_id == TournamentEntry.id,
+                                    TournamentFixture.entry_b_id == TournamentEntry.id,
+                                )
+                            )
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         # Withdraw (soft-delete), never delete: the guest's entry seats fixtures that
         # materialized into played matches, and a hard delete would cascade those away.
         # Withdrawing preserves them AND takes the entry out of ``entered``, so the
@@ -599,6 +688,24 @@ async def _resolve_entry_collisions(
         params,
     )
 
+    # The uncut arm's "was anything actually cut" read, BEFORE the delete: the
+    # guest-entry DELETE below cascades away the fixtures seating them, and the
+    # un-cut then removes the rest — afterwards nothing distinguishes an event
+    # whose draw was just destroyed from one that never had a draw. Only a
+    # destroyed draw owes a solve (uncut_event_draw's ``had_draw`` read, in
+    # bulk): a collided event with no cut has no scheduling inputs to change.
+    drawn_unplayed_event_ids = set(
+        (
+            await db.execute(
+                select(TournamentFixture.event_id)
+                .distinct()
+                .where(TournamentFixture.event_id.in_(unplayed_event_ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     # (2) Drop the guest's losing row.
     await db.execute(
         text(
@@ -626,6 +733,31 @@ async def _resolve_entry_collisions(
     # nothing. It takes the ids straight: the events themselves are never needed, so
     # loading them would be a SELECT run purely to read back the ids we already hold.
     await uncut_draw(db, unplayed_event_ids)
+
+    # The uncut arm's solve gate, AFTER the un-cut — uncut_event_draw's
+    # doctrine: fixtures were deleted wholesale, which frees this event's
+    # tables and windows for whatever is still drawn, so a solve is owed only
+    # where a drawn event SURVIVES (same helper, same reasoning: un-cutting the
+    # tournament's only draw leaves nothing to place, and a solve row over an
+    # empty board is a no-op ledger entry). Checked per tournament, and only
+    # for tournaments the withdrawal arm has not already claimed.
+    for event_id in drawn_unplayed_event_ids:
+        tournament_id = event_tournament_ids[event_id]
+        if tournament_id in solve_tournament_ids:
+            continue
+        if await tournament_has_drawn_event(db, tournament_id):
+            solve_tournament_ids.add(tournament_id)
+
+    # The re-solve every scheduling-input mutation above funnels into — same
+    # transaction, under the tournament row locks taken at the top (the order
+    # ``request_solve`` requires). One enqueue per affected tournament, in id
+    # order for determinism. A ``None`` return (Redis down: ``request_solve``
+    # logged and took its row back out) is DELIBERATELY tolerated — the same
+    # doctrine as go-live: it costs the solve, never the merge. A sign-in must
+    # not fail because the scheduler could not hear about it; the pin tick and
+    # the Run-scheduler button recover the missing solve.
+    for tournament_id in sorted(solve_tournament_ids):
+        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
 
 
 async def _self_play_collision(
