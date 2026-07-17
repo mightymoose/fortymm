@@ -69,6 +69,60 @@ describe('MatchList', () => {
     ).toHaveAttribute('href', '/matches/m-att/games/2/scores/new')
   })
 
+  // #1073: a tournament match is now born `pending` (scheduled) and only turns
+  // `in_progress` (live) when it's called to a table. The status→tone/tab wiring
+  // for `pending` already existed but was dead code (no row was ever pending).
+  // This proves a real `pending` row files under "Up next" with the scheduled
+  // tone — NOT Live, NOT Attention — now that one can actually arrive.
+  it('files a pending match under "Up next" with the scheduled tone, never Live or Attention', async () => {
+    matchListPage.mockEndpoint(
+      matchListResponse({
+        items: [
+          matchListRow({
+            id: 'm-pending',
+            opponent: 'nguyen.t',
+            status: 'pending',
+            status_label: 'Scheduled',
+            attention: null,
+            current_game_number: null,
+          }),
+        ],
+        total: 1,
+        // status_counts / attention_count are computed by the factory from the
+        // rows, mirroring the server: a pending row lands in `pending`, leaving
+        // in_progress (Live) and attention at 0.
+      }),
+    )
+    matchListPage.render('/matches?status=scheduled')
+
+    await matchListPage.findRow('Open match: rita.kovac vs nguyen.t')
+
+    // Projection: the row's status chip takes the *scheduled* tone, not live —
+    // and carries no pulsing live-dot. (Would FAIL if `pending` toned `live`.)
+    const badge = matchListPage.table.rows.getBadge('Scheduled')
+    expect(badge).toHaveClass('status-tone-scheduled')
+    expect(badge).not.toHaveClass('status-tone-live')
+    expect(matchListPage.table.rows.queryLiveDot('Scheduled')).toBeNull()
+
+    // A scheduled (not-yet-called) match has no move to make — no row CTA.
+    expect(
+      matchListPage.table.rows.queryActionLink('Enter score'),
+    ).toBeNull()
+    expect(
+      matchListPage.table.rows.queryActionLink('Review result'),
+    ).toBeNull()
+
+    // Filed under "Up next" (count 1)…
+    expect(matchListPage.filterRow.getTab(/up next/i)).toHaveTextContent('1')
+    // …and NOT under Live: the Live tab and the header LIVE pill both read 0.
+    // (Would FAIL if the pending row were bucketed as in_progress/live.)
+    expect(matchListPage.filterRow.getTab(/live/i)).toHaveTextContent('0')
+    expect(matchListPage.actionBar.getLivePill(0)).toBeInTheDocument()
+    // …and NOT under Attention: attention is its own server dimension and a
+    // born-pending row carries none, so the Attention tab reads 0.
+    expect(matchListPage.filterRow.getTab(/attention/i)).toHaveTextContent('0')
+  })
+
   it('projects raw rows into row view models before handing them to the table (a known opponent renders)', async () => {
     // Wiring only: the projection branches (perspective, score, tone, time) are
     // pinned by match-list-row-view.test.ts — here we only confirm the
