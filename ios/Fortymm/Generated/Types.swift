@@ -782,8 +782,9 @@ internal protocol APIProtocol: Sendable {
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
-    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
-    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    /// match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
+    /// match is born `pending` at go-live and only becomes `in_progress` when called, so
+    /// neither is the freeze trigger).
     ///
     /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
     /// that is not part of it, is a `404`; a non-owner is a `403`.
@@ -2086,8 +2087,9 @@ extension APIProtocol {
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
-    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
-    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    /// match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
+    /// match is born `pending` at go-live and only becomes `in_progress` when called, so
+    /// neither is the freeze trigger).
     ///
     /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
     /// that is not part of it, is a `404`; a non-owner is a `403`.
@@ -21175,8 +21177,9 @@ internal enum Operations {
     ///
     /// **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     /// history, so its placement can no longer be changed — a `409`. A fixture with no
-    /// match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
-    /// is `in_progress` from go-live, so that is not the freeze trigger).
+    /// match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
+    /// match is born `pending` at go-live and only becomes `in_progress` when called, so
+    /// neither is the freeze trigger).
     ///
     /// Owner-only, like every other tournament mutation: an absent tournament, or a fixture
     /// that is not part of it, is a `404`; a non-owner is a `403`.

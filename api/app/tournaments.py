@@ -2673,10 +2673,10 @@ def _enforce_fixture_placeable(match_status: MatchStatus | None) -> None:
     A fixture whose linked match is ``completed`` or ``voided`` is **history**: its
     placement records where and when the match actually happened, so the move is
     refused. A fixture with no match yet (``None``) or a ``pending``/``in_progress`` one
-    is freely (re)placeable — every round-robin match is ``in_progress`` from go-live,
-    so ``in_progress`` is emphatically **not** the freeze trigger; the plan for an
-    unplayed-but-live match is exactly the thing a scheduler moves. Only
-    ``completed``/``voided`` freezes.
+    is freely (re)placeable — a round-robin match is born ``pending`` at go-live and
+    only becomes ``in_progress`` when called, so neither status is the freeze trigger;
+    the plan for a scheduled-or-live-but-unplayed match is exactly the thing a scheduler
+    moves. Only ``completed``/``voided`` freezes.
 
     409, not 403 (this module's refusal-code doctrine, ADR-0017): the caller is the
     owner and the request is well-formed — it is the *fixture* that is past the point
@@ -2751,8 +2751,9 @@ async def place_fixture(
 
     **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
     history, so its placement can no longer be changed — a `409`. A fixture with no
-    match yet, or an `in_progress` one, is freely (re)placeable (every round-robin match
-    is `in_progress` from go-live, so that is not the freeze trigger).
+    match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
+    match is born `pending` at go-live and only becomes `in_progress` when called, so
+    neither is the freeze trigger).
 
     Owner-only, like every other tournament mutation: an absent tournament, or a fixture
     that is not part of it, is a `404`; a non-owner is a `403`.
