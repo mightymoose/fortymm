@@ -8304,6 +8304,16 @@ internal enum Components {
         ///   solver may move freely. When set, the placement is a promise — the players were
         ///   notified, and no later solve will rearrange it. Naive wall-clock in the venue's
         ///   frame, like ``scheduled_start``.
+        /// * ``completed_at`` — the match's **actual** completion time, as opposed to
+        ///   ``scheduled_start``'s *predicted* one: ``null`` until the match is actually
+        ///   decided (win or void), then the moment it was. This is the value a Gantt-style
+        ///   schedule view should use as a played slot's real end, instead of projecting
+        ///   ``scheduled_start + an estimated duration`` past a match that has already
+        ///   finished. Converted to the same naive wall-clock frame as ``scheduled_start``
+        ///   and ``pinned_at`` (ADR-0790) even though the underlying ``Match.completed_at``
+        ///   column is an ordinary timezone-aware UTC timestamp — so a client can do simple
+        ///   arithmetic across all three fields (e.g. a bar's width) without juggling
+        ///   timezones itself.
         ///
         /// The entries are carried as **ids only**. The name and username behind
         /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -8357,6 +8367,8 @@ internal enum Components {
             internal var pinnedAt: Foundation.Date?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/call_notified_count`.
             internal var callNotifiedCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/completed_at`.
+            internal var completedAt: Foundation.Date?
             /// Creates a new `TournamentFixtureRead`.
             ///
             /// - Parameters:
@@ -8373,6 +8385,7 @@ internal enum Components {
             ///   - scheduledStart:
             ///   - pinnedAt:
             ///   - callNotifiedCount:
+            ///   - completedAt:
             internal init(
                 id: Swift.String,
                 poolId: Swift.String? = nil,
@@ -8386,7 +8399,8 @@ internal enum Components {
                 tableId: Swift.String? = nil,
                 scheduledStart: Foundation.Date? = nil,
                 pinnedAt: Foundation.Date? = nil,
-                callNotifiedCount: Swift.Int
+                callNotifiedCount: Swift.Int,
+                completedAt: Foundation.Date? = nil
             ) {
                 self.id = id
                 self.poolId = poolId
@@ -8401,6 +8415,7 @@ internal enum Components {
                 self.scheduledStart = scheduledStart
                 self.pinnedAt = pinnedAt
                 self.callNotifiedCount = callNotifiedCount
+                self.completedAt = completedAt
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -8416,6 +8431,7 @@ internal enum Components {
                 case scheduledStart = "scheduled_start"
                 case pinnedAt = "pinned_at"
                 case callNotifiedCount = "call_notified_count"
+                case completedAt = "completed_at"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.

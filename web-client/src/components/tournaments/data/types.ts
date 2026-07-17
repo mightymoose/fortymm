@@ -122,6 +122,11 @@ export interface Pool {
  *   call is pinned"): `null` means the placement is still an estimate the solver may
  *   move freely. When set, the placement is a promise — the players were notified,
  *   and no later solve rearranges it. Naive wall-clock, like `scheduledStart`.
+ * - `completedAt` — the match's **actual** completion time, as opposed to
+ *   `scheduledStart`'s *predicted* one: `null` until the match is actually decided
+ *   (win or void). Naive wall-clock, like `scheduledStart`/`pinnedAt` — this is what
+ *   a Gantt-style schedule view uses as a played slot's real end, instead of
+ *   projecting the estimated duration past a match that has already finished.
  *
  * Parsed at the boundary by `./fixtures` — this interface is what comes out.
  */
@@ -151,6 +156,9 @@ export interface Fixture {
   /** How many call/correction notifications this fixture's players have received.
    * `0` for a never-called fixture. Read-only, like `pinnedAt`. */
   callNotifiedCount: number
+  /** The match's actual completion time, or `null` until it is decided (win or
+   * void). Naive wall-clock, like `scheduledStart`/`pinnedAt`. Read-only. */
+  completedAt: string | null
 }
 
 /**

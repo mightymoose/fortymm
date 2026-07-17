@@ -1008,6 +1008,7 @@ describe('useCutDraw', () => {
         scheduledStart: null,
         pinnedAt: null,
         callNotifiedCount: 0,
+        completedAt: null,
       },
     ])
   })
