@@ -646,12 +646,12 @@ async def apply_manual_placement(
             else _called_to(table_id, scheduled_start)
         )
         fanout = await _tell_both_entrants(db, tournament, fixture, build=builder)
-        if not was_told:
-            # A live placement of a never-told fixture *is* a call → its
-            # scheduled match goes live (a *moved* correction lands on an
-            # already-live match and needs no flip; :func:`_go_live_on_call`
-            # would no-op it anyway).
-            await _go_live_on_call(db, [fixture.match_id])
+        # A live placement of a never-told fixture *is* a call → its scheduled
+        # match goes live. A *moved* correction lands on an already-live match;
+        # :func:`_go_live_on_call` is guarded (``WHERE status == pending``) so it
+        # no-ops that case — call unconditionally rather than re-guard here, the
+        # same "let the idempotent helper decide" shape as the un-call clear.
+        await _go_live_on_call(db, [fixture.match_id])
     await db.flush()
     return fanout
 
