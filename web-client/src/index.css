@@ -316,6 +316,7 @@ code {
   --border-subtle: var(--ink-600);
   --border-default: var(--ink-500);
 
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 0 1px rgba(255, 122, 26, 0.35),
     0 8px 24px rgba(255, 122, 26, 0.25);
