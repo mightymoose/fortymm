@@ -173,6 +173,15 @@ log = logging.getLogger(__name__)
 #: like ``app.retirement_jobs.RUN_RETIREMENT_SWEEP_JOB``.
 RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
 
+#: Slack, in seconds, added on top of ``get_settings().solver_time_cap_s`` to
+#: get the RQ job's own ``job_timeout``. The job wraps the CP-SAT call with DB
+#: work on both sides (phase (a)'s snapshot + fingerprint, phase (c)'s
+#: row-locked re-read, fingerprint recompute, and fixture writes) — RQ's
+#: watchdog must never be tighter than the solve it is timing, or raising
+#: ``SOLVER_TIME_CAP_S`` to run a large one-off solve (the whole point of the
+#: config) does nothing because RQ kills the job first.
+JOB_TIMEOUT_MARGIN_S = 60
+
 #: What a drift-discarded run records. The run is ``failed`` because it is
 #: honest — this run produced nothing — not because anything broke; the rerun
 #: it requested is the run that will produce something.
@@ -258,7 +267,11 @@ async def request_solve(
     db.add(row)
     await db.flush()
     try:
-        queue_module.get_queue().enqueue(RUN_SCHEDULE_SOLVE_JOB, str(row.id))
+        queue_module.get_queue().enqueue(
+            RUN_SCHEDULE_SOLVE_JOB,
+            str(row.id),
+            job_timeout=int(get_settings().solver_time_cap_s) + JOB_TIMEOUT_MARGIN_S,
+        )
     except RedisError:
         log.exception(
             "Failed to enqueue schedule solve for tournament %s", tournament_id

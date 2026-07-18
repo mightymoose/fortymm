@@ -64,6 +64,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.schedule_solves import (
+    JOB_TIMEOUT_MARGIN_S,
     RUN_SCHEDULE_SOLVE_JOB,
     SUPERSEDED_ERROR,
     TIME_CAP_ERROR,
@@ -474,6 +475,44 @@ class TestRequestSolveCoalescing:
         assert row_a.id != row_b.id
         assert len(await _solve_rows(db_session, tournament_a_id)) == 1
         assert len(await _solve_rows(db_session, tournament_b_id)) == 1
+
+    @pytest.mark.parametrize(
+        "env_value, expected_time_cap_s",
+        [
+            (None, 10.0),
+            # No upper clamp on the solver's own cap (per the issue) — the RQ
+            # job_timeout must track it with margin, not silently stay at
+            # RQ's 180s default and kill the job before the solver's cap.
+            ("1200", 1200.0),
+        ],
+    )
+    async def test_enqueue_passes_a_job_timeout_above_the_time_cap(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected_time_cap_s: float,
+    ) -> None:
+        """The RQ job_timeout must never be tighter than the CP-SAT cap it is
+        timing, or raising ``SOLVER_TIME_CAP_S`` above RQ's ~180s default
+        does nothing — RQ's watchdog kills the job before the solver's own
+        (now-configurable) cap is ever reached."""
+        if env_value is None:
+            monkeypatch.delenv("SOLVER_TIME_CAP_S", raising=False)
+        else:
+            monkeypatch.setenv("SOLVER_TIME_CAP_S", env_value)
+        tournament_id, _event_id = await _make_tournament(db_session)
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+
+        assert row is not None
+        (job,) = solver_queue.jobs
+        assert job.func_name == RUN_SCHEDULE_SOLVE_JOB
+        assert job.timeout == int(expected_time_cap_s) + JOB_TIMEOUT_MARGIN_S
+        assert job.timeout > expected_time_cap_s
 
     async def test_enqueue_failure_takes_the_row_back_out(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
