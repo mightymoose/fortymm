@@ -548,6 +548,52 @@ class TestSolveJob:
         assert {f.id: (f.table_id, f.scheduled_start) for f in again} == placements
         assert len(await _solve_rows(db_session, tournament_id)) == 1
 
+    @pytest.mark.parametrize(
+        "env_value, expected",
+        [
+            (None, 10.0),
+            # No upper clamp — a large one-off value (per the issue) must
+            # pass through untouched.
+            ("1200", 1200.0),
+        ],
+    )
+    async def test_solve_uses_the_configured_time_cap(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected: float,
+    ) -> None:
+        """``get_settings().solver_time_cap_s`` — default or env-overridden —
+        is what actually reaches ``app.scheduling.solve``."""
+        if env_value is None:
+            monkeypatch.delenv("SOLVER_TIME_CAP_S", raising=False)
+        else:
+            monkeypatch.setenv("SOLVER_TIME_CAP_S", env_value)
+        seen: list[float] = []
+        real = schedule_solves._solve
+
+        def wrapper(snapshot: ScheduleSnapshot, time_cap_s: float) -> SolveResult:
+            seen.append(time_cap_s)
+            # Don't actually run the real solver for the full budget — the
+            # cap value reaching the seam is what's under test.
+            return real(snapshot, time_cap_s=1.0)
+
+        monkeypatch.setattr(schedule_solves, "_solve", wrapper)
+
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, row_id)
+
+        assert seen == [expected]
+
     async def test_pinned_fixture_columns_are_untouched_by_apply(
         self, db_session: AsyncSession, solver_queue: Queue
     ) -> None:

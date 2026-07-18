@@ -127,6 +127,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import match_calls, scheduling
 from app import queue as queue_module
+from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
     Match,
@@ -171,10 +172,6 @@ log = logging.getLogger(__name__)
 #: The dotted path RQ resolves in the worker process — enqueued as a string,
 #: like ``app.retirement_jobs.RUN_RETIREMENT_SWEEP_JOB``.
 RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
-
-#: The ADR's hard time cap: mid-tournament we want a good answer now, not a
-#: proof, and FEASIBLE under the cap is accepted.
-SOLVE_TIME_CAP_S = 10.0
 
 #: What a drift-discarded run records. The run is ``failed`` because it is
 #: honest — this run produced nothing — not because anything broke; the rerun
@@ -824,7 +821,7 @@ async def execute_solve(
             await db.commit()
 
         # (b) The solve itself, outside any transaction / open session.
-        result = _solve(inputs.snapshot, time_cap_s=SOLVE_TIME_CAP_S)
+        result = _solve(inputs.snapshot, time_cap_s=get_settings().solver_time_cap_s)
 
         await _apply_result(sessionmaker, solve_id, tournament_id, inputs, result)
     except Exception as exc:  # noqa: BLE001 -- the job's boundary: never leave a row running

@@ -40,6 +40,11 @@ config:
   SESSION_COOKIE_SECURE: "true"
   # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
   FORWARDED_ALLOW_IPS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
+  # Wall-clock cap (seconds) on the CP-SAT tournament solve, consumed by the
+  # `worker` (rq "solver" queue) — see api/app/schedule_solves.py (issue #1103).
+  # Only the worker acts on it, but it lives in the shared ConfigMap alongside
+  # the other simple tunables above.
+  SOLVER_TIME_CAP_S: "10"
 
 postgres:
   user: postgres
