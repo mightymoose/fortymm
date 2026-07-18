@@ -63,6 +63,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.schedule_solves import (
+    JOB_TIMEOUT_MARGIN_S,
     RUN_SCHEDULE_SOLVE_JOB,
     SUPERSEDED_ERROR,
     TIME_CAP_ERROR,
@@ -472,6 +473,44 @@ class TestRequestSolveCoalescing:
         assert len(await _solve_rows(db_session, tournament_a_id)) == 1
         assert len(await _solve_rows(db_session, tournament_b_id)) == 1
 
+    @pytest.mark.parametrize(
+        "env_value, expected_time_cap_s",
+        [
+            (None, 10.0),
+            # No upper clamp on the solver's own cap (per the issue) — the RQ
+            # job_timeout must track it with margin, not silently stay at
+            # RQ's 180s default and kill the job before the solver's cap.
+            ("1200", 1200.0),
+        ],
+    )
+    async def test_enqueue_passes_a_job_timeout_above_the_time_cap(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected_time_cap_s: float,
+    ) -> None:
+        """The RQ job_timeout must never be tighter than the CP-SAT cap it is
+        timing, or raising ``SOLVER_TIME_CAP_S`` above RQ's ~180s default
+        does nothing — RQ's watchdog kills the job before the solver's own
+        (now-configurable) cap is ever reached."""
+        if env_value is None:
+            monkeypatch.delenv("SOLVER_TIME_CAP_S", raising=False)
+        else:
+            monkeypatch.setenv("SOLVER_TIME_CAP_S", env_value)
+        tournament_id, _event_id = await _make_tournament(db_session)
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+
+        assert row is not None
+        (job,) = solver_queue.jobs
+        assert job.func_name == RUN_SCHEDULE_SOLVE_JOB
+        assert job.timeout == int(expected_time_cap_s) + JOB_TIMEOUT_MARGIN_S
+        assert job.timeout > expected_time_cap_s
+
     async def test_enqueue_failure_takes_the_row_back_out(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -544,6 +583,54 @@ class TestSolveJob:
         again = await _fixtures_of(db_session, event_id)
         assert {f.id: (f.table_id, f.scheduled_start) for f in again} == placements
         assert len(await _solve_rows(db_session, tournament_id)) == 1
+
+    @pytest.mark.parametrize(
+        "env_value, expected",
+        [
+            (None, 10.0),
+            # No upper clamp — a large one-off value (per the issue) must
+            # pass through untouched.
+            ("1200", 1200.0),
+        ],
+    )
+    async def test_solve_uses_the_configured_time_cap(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected: float,
+    ) -> None:
+        """``get_settings().solver_time_cap_s`` — default or env-overridden —
+        is what actually reaches ``app.scheduling.solve``."""
+        if env_value is None:
+            monkeypatch.delenv("SOLVER_TIME_CAP_S", raising=False)
+        else:
+            monkeypatch.setenv("SOLVER_TIME_CAP_S", env_value)
+        seen: list[float] = []
+        real = schedule_solves._solve
+
+        def wrapper(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            seen.append(time_cap_s)
+            # Don't actually run the real solver for the full budget — the
+            # cap value reaching the seam is what's under test.
+            return real(snapshot, time_cap_s=1.0, num_search_workers=num_search_workers)
+
+        monkeypatch.setattr(schedule_solves, "_solve", wrapper)
+
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, row_id)
+
+        assert seen == [expected]
 
     async def test_pinned_fixture_columns_are_untouched_by_apply(
         self, db_session: AsyncSession, solver_queue: Queue

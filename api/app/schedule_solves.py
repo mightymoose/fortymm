@@ -128,6 +128,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import match_calls, scheduling
 from app import queue as queue_module
+from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
     Match,
@@ -173,9 +174,14 @@ log = logging.getLogger(__name__)
 #: like ``app.retirement_jobs.RUN_RETIREMENT_SWEEP_JOB``.
 RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
 
-#: The ADR's hard time cap: mid-tournament we want a good answer now, not a
-#: proof, and FEASIBLE under the cap is accepted.
-SOLVE_TIME_CAP_S = 10.0
+#: Slack, in seconds, added on top of ``get_settings().solver_time_cap_s`` to
+#: get the RQ job's own ``job_timeout``. The job wraps the CP-SAT call with DB
+#: work on both sides (phase (a)'s snapshot + fingerprint, phase (c)'s
+#: row-locked re-read, fingerprint recompute, and fixture writes) — RQ's
+#: watchdog must never be tighter than the solve it is timing, or raising
+#: ``SOLVER_TIME_CAP_S`` to run a large one-off solve (the whole point of the
+#: config) does nothing because RQ kills the job first.
+JOB_TIMEOUT_MARGIN_S = 60
 
 
 def _solve_num_workers() -> int:
@@ -279,7 +285,11 @@ async def request_solve(
     db.add(row)
     await db.flush()
     try:
-        queue_module.get_queue().enqueue(RUN_SCHEDULE_SOLVE_JOB, str(row.id))
+        queue_module.get_queue().enqueue(
+            RUN_SCHEDULE_SOLVE_JOB,
+            str(row.id),
+            job_timeout=int(get_settings().solver_time_cap_s) + JOB_TIMEOUT_MARGIN_S,
+        )
     except RedisError:
         log.exception(
             "Failed to enqueue schedule solve for tournament %s", tournament_id
@@ -844,7 +854,7 @@ async def execute_solve(
         # (b) The solve itself, outside any transaction / open session.
         result = _solve(
             inputs.snapshot,
-            time_cap_s=SOLVE_TIME_CAP_S,
+            time_cap_s=get_settings().solver_time_cap_s,
             num_search_workers=_solve_num_workers(),
         )
 
