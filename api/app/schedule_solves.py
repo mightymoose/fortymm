@@ -183,6 +183,29 @@ RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
 #: config) does nothing because RQ kills the job first.
 JOB_TIMEOUT_MARGIN_S = 60
 
+#: How many multiples of ``get_settings().solver_time_cap_s`` a ``running`` row
+#: is allowed to go without a terminal write before it is presumed dead (worker
+#: OOM-killed / SIGKILLed mid-run) rather than merely slow (ADR). A multiple of
+#: the cap, not equal to it: the cap only bounds the solver's own call in phase
+#: (b) — the lease must also cover phases (a) and (c)'s DB round-trips
+#: (snapshot read, apply's locked re-read and writes, notification fan-out),
+#: which run with no cap of their own. A generous multiple keeps a
+#: merely-slow-but-alive run from being reaped out from under itself.
+STALE_RUNNING_LEASE_MULTIPLE = 6
+
+
+def _stale_running_lease_s() -> float:
+    """The lease, in seconds — read lazily off the (possibly operator-raised)
+    solver time cap, like ``_solve_num_workers`` and ``get_settings`` itself,
+    so a large one-off solve's own raised ``SOLVER_TIME_CAP_S`` isn't reaped
+    out from under itself by a lease still sized for the default."""
+    return get_settings().solver_time_cap_s * STALE_RUNNING_LEASE_MULTIPLE
+
+
+#: What a reaped row records — the honest fact that nothing finished it, not
+#: a solver verdict.
+STALE_RUNNING_ERROR = "the solve job stopped responding (worker crashed or was killed)"
+
 
 def _solve_num_workers() -> int:
     """CP-SAT's search-worker portfolio size. Left unset, CP-SAT auto-sizes
@@ -216,6 +239,37 @@ TIME_CAP_ERROR = "time cap exhausted without a solution"
 _solve = scheduling.solve
 
 
+def _is_stale_running(row: ScheduleSolve, *, now: datetime) -> bool:
+    """Whether ``row`` has been ``running`` past its lease — presumed dead
+    rather than merely slow (ADR). ``started_at`` is set in the same
+    transaction the row flips to ``running``, so ``None`` here can only mean
+    the row hasn't actually started running yet."""
+    return (
+        row.status is ScheduleSolveStatus.running
+        and row.started_at is not None
+        and now - row.started_at >= timedelta(seconds=_stale_running_lease_s())
+    )
+
+
+def _reap_stale_running(row: ScheduleSolve, *, now: datetime) -> None:
+    """Mark an already-confirmed-stale, ``FOR UPDATE``-locked ``running`` row
+    as failed (ADR) — the same terminal shape as an ordinary crash's
+    best-effort write (:func:`_finish_failed_best_effort`), so a reaped row is
+    indistinguishable from a normal one to every other reader.
+
+    Callers must confirm :func:`_is_stale_running` themselves, under the lock,
+    immediately before calling — both call sites already do, so this does not
+    re-check (the job may have finished normally in the gap between an
+    earlier, unlocked read and acquiring the lock; that recheck belongs to the
+    caller, not duplicated here). Deliberately does not special-case
+    ``rerun_requested`` — it is left exactly as the row already carries it,
+    mirroring :func:`_finish_failed_best_effort`, which already silently drops
+    it on an ordinary crash (ADR)."""
+    row.status = ScheduleSolveStatus.failed
+    row.error = STALE_RUNNING_ERROR
+    row.finished_at = now
+
+
 async def request_solve(
     db: AsyncSession,
     tournament_id: uuid.UUID,
@@ -227,9 +281,15 @@ async def request_solve(
     * A ``queued`` row exists → return it: the pending run will already see
       whatever state motivated this trigger. The trigger is absorbed — the
       row keeps the trigger that *caused* it.
-    * A ``running`` row exists → set ``rerun_requested`` on it and return it:
-      the job re-queues (trigger ``rerun``) at finish, in the same
+    * A ``running`` row exists and is still within its lease
+      (``_stale_running_lease_s()``) → set ``rerun_requested`` on it and return
+      it: the job re-queues (trigger ``rerun``) at finish, in the same
       transaction as its final status.
+    * A ``running`` row exists but has out-lived its lease → its owning
+      worker is presumed dead (OOM/SIGKILL mid-run, ADR): reap it to
+      ``failed``/``STALE_RUNNING_ERROR`` and fall through to the "neither"
+      branch below, so this trigger gets a fresh row rather than being
+      absorbed by a job that will never finish.
     * Neither → insert a ``queued`` row and enqueue the RQ job with its id.
       Returns ``None`` only when the enqueue itself fails (Redis down): the
       row is taken back out rather than left as a zombie that would absorb
@@ -273,9 +333,20 @@ async def request_solve(
         .first()
     )
     if running is not None:
-        running.rerun_requested = True
-        await db.flush()
-        return running
+        now = datetime.now(UTC)
+        if _is_stale_running(running, now=now):
+            # The row is locked (FOR UPDATE, above) and confirmed stale: the
+            # worker that owned it is presumed dead (ADR). Reap it to a
+            # terminal state and fall through to the "neither queued nor
+            # running" branch below — this trigger gets a fresh row rather
+            # than being absorbed by a job that will never run.
+            # Not flushed here: the fall-through below adds a new row and
+            # flushes once, carrying both this UPDATE and that INSERT.
+            _reap_stale_running(running, now=now)
+        else:
+            running.rerun_requested = True
+            await db.flush()
+            return running
 
     row = ScheduleSolve(
         tournament_id=tournament_id,
@@ -332,15 +403,33 @@ async def latest_solve(
     db: AsyncSession, tournament_id: uuid.UUID
 ) -> ScheduleSolve | None:
     """The newest row of this tournament's solve ledger, or ``None`` when no solve
-    has ever been requested — what the detail BFF's solve strip renders.
+    has ever been requested — what the detail BFF's solve strip renders, and what
+    gates the "Run scheduler" button.
 
     Newest by ``requested_at``, which is what the composite index
     (``ix_schedule_solves_tournament_id_requested_at``) was built to answer; the id
     tie-break only makes the read deterministic for rows minted in the same
     transaction (a drift-discarded run and the rerun it requested share one
     ``now()``), it carries no chronology of its own.
+
+    A row that looks stale-``running`` (ADR "a stale running solve is reaped by
+    the next reader or request") is reaped in place before it is returned: a
+    worker that was hard-killed mid-solve (OOM/SIGKILL) never gets to write a
+    terminal status, and without this a pre-live tournament's "Run scheduler"
+    button would stay disabled forever with the row wedged ``running`` and no
+    trigger left that would ever call :func:`request_solve` again. The first,
+    unlocked read only *suspects* staleness (this function commits nothing on
+    its own path — see below); a second read re-fetches the same row by id
+    ``FOR UPDATE`` and re-checks staleness under the lock, because the worker may
+    have finished normally in the gap between the two reads. Only if it is
+    *still* stale under the lock is it reaped and the write committed — this is
+    the first GET-triggered commit in this codebase, and it is scoped tightly to
+    exactly this one row's ``running`` → ``failed`` transition, not a general
+    write path for this route. Otherwise (never stale, or no longer stale under
+    the lock) nothing is written and the row — freshly re-read where re-read
+    happened — is returned unchanged.
     """
-    return (
+    row = (
         await db.execute(
             select(ScheduleSolve)
             .where(ScheduleSolve.tournament_id == tournament_id)
@@ -348,6 +437,24 @@ async def latest_solve(
             .limit(1)
         )
     ).scalar_one_or_none()
+    if row is None or not _is_stale_running(row, now=datetime.now(UTC)):
+        return row
+
+    locked = (
+        await db.execute(
+            select(ScheduleSolve).where(ScheduleSolve.id == row.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked is None:
+        # Cascaded away (tournament deleted) between the two reads: nothing
+        # left to reap or return correctly — fall back to the stale read.
+        return row
+
+    now = datetime.now(UTC)
+    if _is_stale_running(locked, now=now):
+        _reap_stale_running(locked, now=now)
+        await db.commit()
+    return locked
 
 
 @dataclass(frozen=True, slots=True)

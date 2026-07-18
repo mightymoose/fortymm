@@ -26,7 +26,7 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import fakeredis
@@ -35,6 +35,7 @@ from redis.exceptions import RedisError
 from rq import Queue
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
@@ -67,6 +68,7 @@ from app.schedule_solves import (
     RUN_SCHEDULE_SOLVE_JOB,
     SUPERSEDED_ERROR,
     TIME_CAP_ERROR,
+    latest_solve,
     request_solve,
 )
 from app.scheduling import (
@@ -210,6 +212,29 @@ def _run_recorded_job(queue: Queue, expected_solve_id: uuid.UUID) -> None:
     assert job.func_name == RUN_SCHEDULE_SOLVE_JOB
     assert job.args == (str(expected_solve_id),)
     job.func(*job.args)
+
+
+async def _make_running_solve(
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    *,
+    started_at: datetime,
+    rerun_requested: bool = False,
+) -> uuid.UUID:
+    """A ``running`` schedule-solve row backdated to ``started_at`` — the shape
+    every stale-reap test starts from, varying only how far past the lease it
+    is. Returns the id (the `_make_tournament` convention: tests read it back
+    through `_solve_rows`/`latest_solve` rather than off an expired instance)."""
+    running = ScheduleSolve(
+        tournament_id=tournament_id,
+        trigger=ScheduleSolveTrigger.go_live,
+        status=ScheduleSolveStatus.running,
+        started_at=started_at,
+        rerun_requested=rerun_requested,
+    )
+    db.add(running)
+    await db.commit()
+    return running.id
 
 
 def _commit_concurrently(database_url: str, statement: Executable) -> None:
@@ -473,6 +498,68 @@ class TestRequestSolveCoalescing:
         assert len(await _solve_rows(db_session, tournament_a_id)) == 1
         assert len(await _solve_rows(db_session, tournament_b_id)) == 1
 
+    async def test_running_past_lease_is_reaped_and_a_fresh_row_is_queued(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A ``running`` row whose worker died mid-run (OOM/SIGKILL) without
+        ever writing a terminal status must not wedge the tournament forever
+        (#1102): once its lease expires, a new trigger reaps it to ``failed``
+        and gets a genuinely new row rather than being absorbed as a
+        ``rerun_requested`` flag on a job that will never run."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        stale_started_at = datetime.now(UTC) - timedelta(
+            seconds=schedule_solves._stale_running_lease_s() + 1
+        )
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=stale_started_at
+        )
+
+        result = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.settings_changed
+        )
+        await db_session.commit()
+
+        assert result is not None
+        assert result.id != running_id
+        assert result.status is ScheduleSolveStatus.queued
+        assert result.trigger is ScheduleSolveTrigger.settings_changed
+
+        rows = {row.id: row for row in await _solve_rows(db_session, tournament_id)}
+        assert len(rows) == 2
+        reaped = rows[running_id]
+        assert reaped.status is ScheduleSolveStatus.failed
+        assert reaped.error == schedule_solves.STALE_RUNNING_ERROR
+        assert reaped.finished_at is not None
+        assert reaped.wall_time_ms is None
+
+    async def test_running_within_lease_keeps_todays_behavior(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A ``running`` row that is merely slow — not yet past its lease —
+        must be unaffected by the reaper: the existing coalescing behavior
+        (set ``rerun_requested``, return the same row, enqueue nothing new)
+        stands."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        fresh_started_at = datetime.now(UTC) - timedelta(
+            seconds=schedule_solves._stale_running_lease_s() - 1
+        )
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=fresh_started_at
+        )
+
+        result = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.settings_changed
+        )
+
+        assert result is not None
+        assert result.id == running_id
+        assert result.status is ScheduleSolveStatus.running
+        assert result.rerun_requested is True
+        assert result.error is None
+        assert result.finished_at is None
+        rows = await _solve_rows(db_session, tournament_id)
+        assert len(rows) == 1
+
     @pytest.mark.parametrize(
         "env_value, expected_time_cap_s",
         [
@@ -531,6 +618,117 @@ class TestRequestSolveCoalescing:
 
         assert result is None
         assert await _solve_rows(db_session, tournament_id) == []
+
+
+class TestLatestSolve:
+    """``latest_solve`` feeds the tournament detail BFF's solve strip and, per
+    the "stale running solve" ADR, is one of the two places (the other is
+    :func:`request_solve`'s coalescer) that reaps a stranded ``running`` row
+    whose worker was hard-killed mid-solve (#1102) — the read path a pre-live
+    tournament actually depends on, since nothing else calls ``request_solve``
+    again until the director acts, and the button that would let them is
+    gated on this exact query."""
+
+    async def test_returns_none_when_no_solve_ever_requested(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, _event_id = await _make_tournament(db_session)
+
+        assert await latest_solve(db_session, tournament_id) is None
+
+    async def test_returns_a_non_stale_terminal_row_unchanged(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, _event_id = await _make_tournament(db_session)
+        succeeded = ScheduleSolve(
+            tournament_id=tournament_id,
+            trigger=ScheduleSolveTrigger.manual,
+            status=ScheduleSolveStatus.succeeded,
+            verdict=SolverVerdict.optimal,
+            finished_at=datetime.now(UTC),
+        )
+        db_session.add(succeeded)
+        await db_session.commit()
+
+        result = await latest_solve(db_session, tournament_id)
+
+        assert result is not None
+        assert result.id == succeeded.id
+        assert result.status is ScheduleSolveStatus.succeeded
+
+    async def test_running_within_lease_is_unchanged_and_writes_nothing(
+        self, db_session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        """A ``running`` row that is merely slow — not yet past its lease —
+        must come back untouched, and no write may have happened at all: a
+        fresh, independent session reading the same row confirms it."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        fresh_started_at = datetime.now(UTC) - timedelta(
+            seconds=schedule_solves._stale_running_lease_s() - 1
+        )
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=fresh_started_at
+        )
+
+        result = await latest_solve(db_session, tournament_id)
+
+        assert result is not None
+        assert result.id == running_id
+        assert result.status is ScheduleSolveStatus.running
+        assert result.finished_at is None
+        assert result.error is None
+
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as fresh_db:
+            fresh = (
+                await fresh_db.execute(
+                    select(ScheduleSolve).where(ScheduleSolve.id == running_id)
+                )
+            ).scalar_one()
+            assert fresh.status is ScheduleSolveStatus.running
+            assert fresh.finished_at is None
+
+    async def test_running_past_lease_is_reaped_and_durably_committed(
+        self, db_session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        """The stranded-``running`` row (#1102) is reaped by the very next GET
+        of the tournament detail page. Critically, the write must be durably
+        committed, not just patched onto the in-memory row this call returns:
+        a second, independent session reading the same row afterwards (a
+        stand-in for "someone else reads it next") must also see ``failed``."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        stale_started_at = datetime.now(UTC) - timedelta(
+            seconds=schedule_solves._stale_running_lease_s() + 1
+        )
+        running_id = await _make_running_solve(
+            db_session,
+            tournament_id,
+            started_at=stale_started_at,
+            rerun_requested=True,
+        )
+
+        result = await latest_solve(db_session, tournament_id)
+
+        assert result is not None
+        assert result.id == running_id
+        assert result.status is ScheduleSolveStatus.failed
+        assert result.error == schedule_solves.STALE_RUNNING_ERROR
+        assert result.finished_at is not None
+        assert result.wall_time_ms is None
+        # Mirrors _finish_failed_best_effort: an ordinary crash already drops
+        # rerun_requested silently, and the reaper does not special-case it.
+        assert result.rerun_requested is True
+
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as fresh_db:
+            fresh = (
+                await fresh_db.execute(
+                    select(ScheduleSolve).where(ScheduleSolve.id == running_id)
+                )
+            ).scalar_one()
+            assert fresh.status is ScheduleSolveStatus.failed
+            assert fresh.error == schedule_solves.STALE_RUNNING_ERROR
+            assert fresh.finished_at is not None
 
 
 class TestSolveJob:
