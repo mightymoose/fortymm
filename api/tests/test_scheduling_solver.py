@@ -9,8 +9,10 @@ cap so the suite stays fast and deterministic.
 
 import dataclasses
 import random
+from typing import Any
 
 import pytest
+from ortools.sat.python import cp_model
 
 from app.scheduling import (
     BUCKET_MIN,
@@ -34,6 +36,9 @@ from app.scheduling import (
     TableId,
     Verdict,
     Window,
+    _build_model,
+    _chosen_table,
+    _SolverModel,
     match_minutes,
     solve,
 )
@@ -625,3 +630,153 @@ class TestIncoherentSnapshots:
         placement = PlacedFixture(FixtureId("F1"), TableId("T1"), 0, 25)
         with pytest.raises(dataclasses.FrozenInstanceError):
             placement.start_min = 5  # type: ignore[misc]
+
+
+def _star_chain_snapshot(
+    n_fixtures: int = 4, *, tables: int = 2, with_previous: bool = True
+) -> ScheduleSnapshot:
+    """A *star chain*: one player (``STAR``) is in every fixture, so all matches
+    are mutually exclusive in time no matter which table they land on. The
+    unique optimum chains them back-to-back at ``0, step, 2·step, …`` (``step``
+    = duration + rest), and the ``previous_plan`` puts that chain on the first
+    table. Because every match shares ``STAR``, makespan and wait are fixed by
+    the chain and the only remaining freedom — which fixture takes which slot,
+    on which table — is settled by the stability tier toward the previous plan,
+    making it the *unique* optimum. That uniqueness lets these tests assert an
+    exact board rather than just an objective."""
+    star = PlayerId("STAR")
+    table_ids = _tables(tables)
+    step = match_minutes(3) + REST_MIN
+    fixtures = tuple(
+        _fixture(n, star, PlayerId(f"Q{n}")) for n in range(1, n_fixtures + 1)
+    )
+    previous = tuple(
+        PreviousPlacement(FixtureId(f"F{n}"), table_ids[0], (n - 1) * step)
+        for n in range(1, n_fixtures + 1)
+    )
+    return ScheduleSnapshot(
+        table_ids=table_ids,
+        pools=(SchedulePool(PoolId("A"), table_ids, Window(0, 600)),),
+        events=(EventSettings(EventId("E1"), 3),),
+        fixtures=fixtures,
+        now_min=0,
+        previous_plan=previous if with_previous else (),
+    )
+
+
+def _board(solver: Any, built: _SolverModel) -> set[tuple[str, str, int]]:
+    """The unpinned placements of one solved model as ``(fixture, table, start)``
+    triples — comparable directly against a ``previous_plan``."""
+    return {
+        (
+            str(fixture.id),
+            str(_chosen_table(solver, built.presences[fixture.id], fixture.id)),
+            int(solver.Value(built.starts[fixture.id])),
+        )
+        for fixture in built.unpinned
+    }
+
+
+def _plan_board(
+    placements: tuple[PreviousPlacement, ...] | tuple[PlacedFixture, ...],
+) -> set[tuple[str, str, int]]:
+    return {(str(p.fixture_id), str(p.table_id), p.start_min) for p in placements}
+
+
+def _solve_to_optimal(
+    built: _SolverModel,
+) -> tuple[int, int, set[tuple[str, str, int]]]:
+    """Solve a built model to proven optimality with the production parameters,
+    returning ``(status, objective, board)``. A generous cap: the optimality
+    claim is only meaningful against a proven optimum (a loaded runner can
+    otherwise honestly answer ``feasible`` under a short cap)."""
+    solver = cp_model.CpSolver()
+    solver.parameters.random_seed = 0
+    solver.parameters.max_time_in_seconds = 30.0
+    status = solver.Solve(built.model)
+    return status, int(solver.ObjectiveValue()), _board(solver, built)
+
+
+def _first_solution_board(built: _SolverModel) -> set[tuple[str, str, int]]:
+    """CP-SAT's *first* feasible solution under a single deterministic worker.
+
+    One worker plus a fixed seed makes *which* solution is discovered first
+    reproducible, so the warm-start hint's effect — it seeds the search at the
+    previous plan — is observable. The production ``solve`` deliberately keeps
+    its multi-worker portfolio, whose aggregate branch count and first-solution
+    identity are non-deterministic (a lucky worker can presolve either board in
+    zero branches), so it cannot show this; hence the single-worker probe."""
+    solver = cp_model.CpSolver()
+    solver.parameters.random_seed = 0
+    solver.parameters.num_search_workers = 1
+    solver.parameters.stop_after_first_solution = True
+    solver.parameters.max_time_in_seconds = CAP
+    status = solver.Solve(built.model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    return _board(solver, built)
+
+
+class TestWarmStart:
+    """The solver warm-starts every unpinned fixture's prior ``(table, start)``
+    as a CP-SAT hint. A hint only orders the search; it can never change which
+    solution is optimal — so these tests pin down both halves: correctness is
+    untouched, and the hint is genuinely consumed."""
+
+    def test_warm_started_solve_reproduces_the_previous_plan(self) -> None:
+        """The black-box claim: fed a previous plan that is the unique optimum,
+        the production solve returns exactly it, optimally."""
+        snapshot = _star_chain_snapshot()
+        result = solve(snapshot, time_cap_s=30.0)
+        assert result.verdict is Verdict.optimal
+        assert _plan_board(result.placements) == _plan_board(snapshot.previous_plan)
+
+    def test_warm_start_never_changes_the_optimum(self) -> None:
+        """Correctness guard: the hint can only order the search, never change
+        which board is optimal. Build the real model, solve to optimality, then
+        clear the hints and solve again — identical optimal objective *and*
+        identical board.
+
+        (This deliberately does **not** compare against a ``previous_plan=()``
+        snapshot: the tier weights are computed per instance from the stability
+        span, which is zero without a previous plan, so the two snapshots' raw
+        objectives live on different scales and are never equal. The clean,
+        weight-stable invariant is hinted-vs-hint-cleared on the *same* model.)
+        """
+        snapshot = _star_chain_snapshot()
+        built = _build_model(snapshot)
+        assert isinstance(built, _SolverModel)
+
+        hinted_status, hinted_obj, hinted_board = _solve_to_optimal(built)
+        built.model.ClearHints()
+        cleared_status, cleared_obj, cleared_board = _solve_to_optimal(built)
+
+        assert hinted_status == cp_model.OPTIMAL
+        assert cleared_status == cp_model.OPTIMAL
+        assert hinted_obj == cleared_obj
+        assert hinted_board == cleared_board == _plan_board(snapshot.previous_plan)
+
+    def test_warm_start_hint_is_consumed(self) -> None:
+        """The load-bearing proof that the hint actually drives the search —
+        not merely that the board matches (the stability tier alone forces that
+        even cold, so board equality does not discriminate).
+
+        Take CP-SAT's first feasible solution under one deterministic worker:
+        with the warm-start hints present it is exactly the previous plan (the
+        search begins there); with the hints cleared — which is precisely what
+        the code did before this change — the first solution is a different,
+        stability-suboptimal board. That difference *is* the hint being
+        consumed, and it is why this test goes red if the ``AddHint`` warm start
+        is removed: without it the hinted branch below no longer starts at the
+        previous plan, so ``first == previous`` fails."""
+        snapshot = _star_chain_snapshot()
+        previous = _plan_board(snapshot.previous_plan)
+
+        built = _build_model(snapshot)
+        assert isinstance(built, _SolverModel)
+        # Warm-started: the search starts at — and first reports — the prior plan.
+        assert _first_solution_board(built) == previous
+
+        # Hints cleared (the pre-change behaviour): the first feasible solution
+        # the same deterministic search finds is a *different* board.
+        built.model.ClearHints()
+        assert _first_solution_board(built) != previous

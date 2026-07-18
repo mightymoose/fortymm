@@ -58,6 +58,18 @@ one makespan minute times the ratio): ``W_stability = 1``,
 ``W_wait = max stability swing + 1``, ``W_makespan = W_wait · (max total wait
 swing) + 1``. All fit comfortably in int64 at any realistic instance size.
 
+**Warm start.** Before solving, every unpinned fixture that has a
+``previous_plan`` entry *whose prior table is still in its pool* seeds its prior
+``(table, start)`` back into the model as a CP-SAT hint (``AddHint`` on the
+bucket, the start, and the table presence bools). A mostly-unchanged re-solve
+therefore begins the search *at* the previous plan and only has to repair the
+local delta, rather than rediscovering the whole board from scratch. Fixtures
+with no prior entry — or whose prior table has left the pool (a forced move) —
+get no hint and solve fresh; the solver derives ``same_start``/``kept``/
+``makespan`` from the hinted values itself and repairs any partial
+infeasibility. Crucially a hint only *orders the search* — it can never change
+which solution is optimal, so correctness is untouched and only speed changes.
+
 **Verdict.** CP-SAT's OPTIMAL/FEASIBLE map directly; INFEASIBLE returns an
 empty placement set and *never raises* — infeasibility is the point of
 pre-live solves, a designed outcome, not an error. UNKNOWN (time cap exhausted
@@ -388,15 +400,36 @@ def _validated(
     return pools, events, active, running
 
 
-def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
-    """Place every active fixture: pins echoed verbatim, everything else
-    solved onto its pool's tables inside its pool's window, on the
-    :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
+@dataclass(frozen=True, slots=True)
+class _SolverModel:
+    """The built CP-SAT model plus the index a solve needs to read its answer
+    back out. Internal seam between :func:`_build_model` (construction, warm-
+    start hints included) and :func:`solve` (running the solver, shaping the
+    result) — split so a test can build the *real* model, then observe the
+    hint's effect deterministically (single worker, fixed seed) without
+    touching the production solver parameters. ``model`` carries the hints;
+    ``starts``/``presences`` recover each unpinned fixture's chosen start and
+    table, ``durations`` its ``end_min``, and ``pinned_placements`` are echoed
+    verbatim."""
 
-    Never raises for infeasibility — see :class:`Verdict`. Raises
-    :class:`IncoherentSnapshot` for inputs that reference things they do not
-    contain, and :class:`SchedulingError` if CP-SAT rejects the model (a bug
-    here, not a property of the tournament).
+    model: cp_model.CpModel
+    unpinned: tuple[ScheduleFixture, ...]
+    starts: dict[FixtureId, Any]
+    presences: dict[FixtureId, dict[TableId, Any]]
+    durations: dict[FixtureId, int]
+    pinned_placements: tuple[PlacedFixture, ...]
+
+
+def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
+    """Construct the CP-SAT model for one solve, warm-start hints and all.
+
+    Returns a finished :class:`SolveResult` for the cases that need no solver —
+    nothing to place (trivially optimal) or a structural infeasibility a guard
+    can prove without search — and otherwise a :class:`_SolverModel` carrying
+    the model and the index :func:`solve` reads its answer back out of.
+
+    Raises :class:`IncoherentSnapshot` for inputs that reference things they do
+    not contain (via :func:`_validated`).
     """
     pools, events, active, running = _validated(snapshot)
 
@@ -530,6 +563,8 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
     # variables.
     starts: dict[FixtureId, Any] = {}
     presences: dict[FixtureId, dict[TableId, Any]] = {}
+    buckets: dict[FixtureId, Any] = {}
+    durations: dict[FixtureId, int] = {}
     wait_terms: list[Any] = []
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
@@ -556,6 +591,8 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
             )
         starts[fixture.id] = start
         presences[fixture.id] = by_table
+        buckets[fixture.id] = bucket
+        durations[fixture.id] = duration
         variable_ends.append(start + duration)
         wait_terms.append(start - now)
 
@@ -610,10 +647,55 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
     objective = objective + w_stability * forced_moves
     model.Minimize(objective)
 
+    # Warm start: seed each unpinned fixture's prior (table, start) as a hint so
+    # a mostly-unchanged re-solve begins *at* the previous plan and only repairs
+    # the local delta. A hint whose prior table has left the pool (a forced move)
+    # or that has no prior entry is simply omitted — that fixture solves fresh.
+    # Hints never change which solution is optimal; they only order the search.
+    for fixture in unpinned:
+        prior = previous.get(fixture.id)
+        if prior is None:
+            continue
+        prior_present = presences[fixture.id].get(prior.table_id)
+        if prior_present is None:
+            continue
+        model.AddHint(buckets[fixture.id], prior.start_min // BUCKET_MIN)
+        model.AddHint(starts[fixture.id], prior.start_min)
+        model.AddHint(prior_present, 1)
+        for table, present in presences[fixture.id].items():
+            if table != prior.table_id:
+                model.AddHint(present, 0)
+
+    return _SolverModel(
+        model=model,
+        unpinned=tuple(unpinned),
+        starts=starts,
+        presences=presences,
+        durations=durations,
+        pinned_placements=tuple(pinned_placements),
+    )
+
+
+def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
+    """Place every active fixture: pins echoed verbatim, everything else
+    solved onto its pool's tables inside its pool's window, on the
+    :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
+
+    Never raises for infeasibility — see :class:`Verdict`. Raises
+    :class:`IncoherentSnapshot` for inputs that reference things they do not
+    contain, and :class:`SchedulingError` if CP-SAT rejects the model (a bug
+    here, not a property of the tournament).
+    """
+    built = _build_model(snapshot)
+    if isinstance(built, SolveResult):
+        # Nothing to solve: trivially optimal, or a structural infeasibility a
+        # guard proved without the solver.
+        return built
+
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_cap_s
     solver.parameters.random_seed = 0
-    status = solver.Solve(model)
+    status = solver.Solve(built.model)
     wall_time_ms = int(solver.WallTime() * 1000)
 
     if status == cp_model.MODEL_INVALID:
@@ -626,16 +708,16 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return _no_plan(Verdict.unknown, wall_time_ms)
 
-    placements = list(pinned_placements)
-    for fixture in unpinned:
-        start_value = int(solver.Value(starts[fixture.id]))
-        table = _chosen_table(solver, presences[fixture.id], fixture.id)
+    placements = list(built.pinned_placements)
+    for fixture in built.unpinned:
+        start_value = int(solver.Value(built.starts[fixture.id]))
+        table = _chosen_table(solver, built.presences[fixture.id], fixture.id)
         placements.append(
             PlacedFixture(
                 fixture_id=fixture.id,
                 table_id=table,
                 start_min=start_value,
-                end_min=start_value + duration_of(fixture),
+                end_min=start_value + built.durations[fixture.id],
             )
         )
     placements.sort(key=lambda p: (p.start_min, p.table_id, p.fixture_id))
