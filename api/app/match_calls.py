@@ -289,6 +289,67 @@ async def _un_call_pristine_match(db: AsyncSession, match_id: uuid.UUID | None) 
     )
 
 
+async def _held_resources(
+    db: AsyncSession, tournament_id: uuid.UUID
+) -> tuple[set[str], set[uuid.UUID]]:
+    """The tables and **users** an unfinished (``in_progress``) match in this
+    tournament currently holds — the resource-freedom gate's occupancy read
+    (ADR "a tournament match is called only when its table and players are
+    free", #1106). A started match is a fixed interval the solver pins at its
+    *actual* occupancy; calling a second match onto the same table or the same
+    human would hand the next solve two overlapping fixed intervals and wedge
+    it ``infeasible`` — the exact bug this gate exists to prevent.
+
+    "Held" reads *real* state: a ``Match`` with ``status == in_progress`` (not
+    ``completed``/``voided``) whose fixture carries the ``table_id`` /
+    entrants. Players are held at the **user** level, across events — the same
+    human in two events is one person, as the solver's no-double-booking
+    already treats them (``schedule_solves`` maps entrants → ``PlayerId`` via
+    the user). Runs on the caller's already-locked transaction: one occupancy
+    query, plus one entry→user resolution, per batch.
+    """
+    rows = (
+        await db.execute(
+            select(
+                TournamentFixture.table_id,
+                TournamentFixture.entry_a_id,
+                TournamentFixture.entry_b_id,
+            )
+            .join(Match, Match.id == TournamentFixture.match_id)
+            .where(
+                TournamentFixture.event_id.in_(
+                    select(TournamentEvent.id).where(
+                        TournamentEvent.tournament_id == tournament_id
+                    )
+                ),
+                Match.status == MatchStatus.in_progress,
+            )
+        )
+    ).all()
+    held_tables: set[str] = set()
+    held_entry_ids: set[uuid.UUID] = set()
+    for table_id, entry_a_id, entry_b_id in rows:
+        if table_id is not None:
+            held_tables.add(table_id)
+        for entry_id in (entry_a_id, entry_b_id):
+            if entry_id is not None:
+                held_entry_ids.add(entry_id)
+    held_users: set[uuid.UUID] = set()
+    if held_entry_ids:
+        held_users = set(
+            (
+                await db.execute(
+                    select(TournamentEntry.user_id).where(
+                        TournamentEntry.id.in_(held_entry_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return held_tables, held_users
+
+
 async def call_due_fixtures(
     db: AsyncSession,
     tournament: Tournament,
@@ -342,6 +403,40 @@ async def call_due_fixtures(
 
     if ingredients is None:
         ingredients = await load_copy_ingredients(db, tournament, due)
+
+    # Resource-freedom gate (ADR "…called only when its table and players are
+    # free", #1106). A fixture is *due* by its predicted start, but calling it
+    # onto a table or a human already held by an unfinished in_progress match
+    # would produce two overlapping fixed intervals and wedge the next solve
+    # infeasible. _due_for_call is a per-row predicate blind to cross-row
+    # occupancy, so the gate lives here — one occupancy read under the locks
+    # already held (the authoritative gate, per the ADR). Two due fixtures
+    # contending for the same freshly-free resource within one pass are settled
+    # by earliest predicted start; the loser defers to a later pass.
+    held_tables, held_users = await _held_resources(db, tournament.id)
+    claimed_tables = set(held_tables)
+    claimed_users = set(held_users)
+    free: list[TournamentFixture] = []
+    for fixture in sorted(due, key=lambda f: (f.scheduled_start or datetime.max, f.id)):
+        user_ids = {
+            user.id
+            for user in (
+                ingredients.user_for_entry(fixture.entry_a_id),
+                ingredients.user_for_entry(fixture.entry_b_id),
+            )
+            if user is not None
+        }
+        if fixture.table_id is not None and fixture.table_id in claimed_tables:
+            continue
+        if user_ids & claimed_users:
+            continue
+        if fixture.table_id is not None:
+            claimed_tables.add(fixture.table_id)
+        claimed_users |= user_ids
+        free.append(fixture)
+    due = free
+    if not due:
+        return []
 
     # First pass resolves each due fixture's people, so the whole batch's
     # in-app preferences resolve in one round (the locks are already held).

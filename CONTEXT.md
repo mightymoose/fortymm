@@ -505,6 +505,22 @@ and packs the free ones around them. Before the scheduler, every placement is a 
 one and the distinction is dormant.
 _Avoid_: locked (reserve for other domains), fixed (ambiguous with a *fixture*).
 
+**Call** (scheduler-era):
+**Starting** a tournament **match** — telling both entrants to play and flipping the
+match from *scheduled* (`pending`) to *started* (`in_progress`). Unlike a **placement**,
+which is only a **prediction**, a call is a **promise**: the entrants were told, so the
+solver holds the started match fixed at its actual occupancy. A match is called only when
+its **placement** is *due* **and** its **table** and both its **players** (by **user**,
+so it holds across events) are **free** — i.e. no unfinished started match holds them.
+A match that runs long therefore **stalls** its successors rather than starting a second
+match on the same table or human (which would double-book a physical resource and wedge
+the **schedule** infeasible — #1106, ADR 20260718). Calling is driven by a match
+**completing** (which frees a table and re-solves), not by a clock poll; the pin tick is
+only a backstop for a **Slot** window opening or a tournament's first matches.
+_Avoid_: pin (the call *causes* a pin, but a **manual placement** also pins without a
+call; the pin is the placement's fixedness, the call is the promise to the players),
+notify (the call includes a notification but is the whole state transition, not just it).
+
 ## Dashboard
 
 **First-match**:
