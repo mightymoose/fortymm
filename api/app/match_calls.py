@@ -417,7 +417,7 @@ async def call_due_fixtures(
     # it; the loop mutates these in place (the returned sets are freshly built).
     claimed_tables, claimed_users = await _held_resources(db, tournament.id)
     free: list[TournamentFixture] = []
-    for fixture in sorted(due, key=lambda f: (f.scheduled_start or datetime.max, f.id)):
+    for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):
         user_ids = {
             user.id
             for user in (

@@ -823,6 +823,65 @@ class TestResourceFreedomGate:
         # Exactly the earlier fixture's pair was told.
         assert len(await _call_notifications(db_session)) == 2
 
+    async def test_a_full_disjoint_round_is_all_called_in_one_pass(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A normal simultaneous round — several due fixtures that are mutually
+        disjoint (distinct tables AND distinct players, nothing yet
+        ``in_progress``) — is called in FULL in one pass: the greedy claim loop
+        admits every fixture, none starved. Guards against a regression where
+        the loop over-claims a free round and under-calls it."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, entrants=6, tables=("t1", "t2", "t3")
+        )
+        fixtures = await _all_fixtures(db_session, event_id)
+        # A perfect matching over the six players: three fixtures whose entrants
+        # are pairwise disjoint (round-robin always yields one).
+        chosen: list[TournamentFixture] = []
+        claimed_entries: set[uuid.UUID | None] = set()
+        for fixture in fixtures:
+            pair = {fixture.entry_a_id, fixture.entry_b_id}
+            if pair & claimed_entries:
+                continue
+            chosen.append(fixture)
+            claimed_entries |= pair
+            if len(chosen) == 3:
+                break
+        assert len(chosen) == 3, "round-robin over 6 players has a disjoint triple"
+        # Each on its own table, all imminent, all untold → a full due round.
+        chosen_ids: list[uuid.UUID] = []
+        for offset, (fixture, table) in enumerate(
+            zip(chosen, ("t1", "t2", "t3"), strict=True)
+        ):
+            fixture.table_id = table
+            fixture.scheduled_start = BASE + timedelta(minutes=offset)
+            chosen_ids.append(fixture.id)
+        expected_users = await _users_for_entries(
+            db_session,
+            [
+                entry_id
+                for fixture in chosen
+                for entry_id in (fixture.entry_a_id, fixture.entry_b_id)
+            ],
+        )
+        await db_session.commit()
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        for fixture_id in chosen_ids:
+            called = await db_session.get(TournamentFixture, fixture_id)
+            assert called is not None
+            assert called.pinned_at == BASE  # every disjoint fixture called
+            assert called.call_notified_count == 1
+        rows = await _call_notifications(db_session)
+        assert len(rows) == 6  # two entrants per fixture, all three called
+        assert {row.user_id for row in rows} == expected_users
+
 
 async def _hold_user_in_second_event(
     db: AsyncSession,
