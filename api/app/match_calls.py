@@ -413,9 +413,9 @@ async def call_due_fixtures(
     # already held (the authoritative gate, per the ADR). Two due fixtures
     # contending for the same freshly-free resource within one pass are settled
     # by earliest predicted start; the loser defers to a later pass.
-    held_tables, held_users = await _held_resources(db, tournament.id)
-    claimed_tables = set(held_tables)
-    claimed_users = set(held_users)
+    # Seed the running claim from real held state, then admit due fixtures into
+    # it; the loop mutates these in place (the returned sets are freshly built).
+    claimed_tables, claimed_users = await _held_resources(db, tournament.id)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start or datetime.max, f.id)):
         user_ids = {

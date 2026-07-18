@@ -74,9 +74,18 @@ the solver's no-double-booking already treats them).
   next match at now (assuming your current one ended), but your current match is
   still `in_progress`, so we do not call.
 
-The guard lives in the shared callability predicate (`_due_for_call` and its SQL
-twin `_due_fixture_clauses`), so **every caller** — the guarded apply and the pin
-tick — enforces it identically.
+The guard lives in **`call_due_fixtures`** — the single choke point both the
+guarded apply and the pin tick funnel through — as a **cross-row pass** over the
+due batch, *not* in the per-row `_due_for_call`/`_due_fixture_clauses`. This is
+deliberate and load-bearing: the invariant is inherently cross-row ("at most one
+started match per table/human *across this batch*"), so it cannot be expressed as
+a row-local predicate — `_due_for_call` cannot see a sibling due fixture
+competing for the same freshly-free table. Do not "simplify" the gate by pushing
+it into `_due_for_call`; that reintroduces the bug. (The tick's lock-free
+`_due_fixture_clauses` EXISTS probe stays resource-blind and may therefore take
+the tournament lock on an idle-but-blocked tick only to call nothing — a bounded
+no-op at the 60s backstop cadence, left as-is; the authoritative gate is the
+cross-row pass here.)
 
 ### The invariant: at most one started match per table and per human
 
@@ -121,9 +130,18 @@ its deciding game), never on the clock.
 
 ## Consequences
 
-- **The #1106 wedge is structurally impossible.** The caller cannot create
-  overlapping started matches, so the solver never sees the contradictory fixed
-  intervals that produced the bare `infeasible`.
+- **The #1106 wedge — an *automatically* self-inflicted one — is gone.** The
+  automatic caller can no longer create overlapping started matches, so the idle
+  tournament that motivated this issue never hands the solver the contradictory
+  fixed intervals that produced the bare `infeasible`. This is scoped to the
+  automatic path on purpose: **manual placement stays exempt (see below), so a
+  director *can* still hand-place a fixture onto a busy table or human and
+  recreate the same overlap.** That is a deliberate-human action, not the
+  spontaneous idle-time wedge the issue reported — but it is a live path to the
+  same infeasible state, and if it proves a real hazard the honest fix is to
+  enforce the one-started-match-per-resource invariant at the go-live transition
+  itself (`_go_live_on_call`) with a director-facing override, rather than in the
+  automatic caller alone.
 - **An idle tournament stalls, it does not wedge.** With no scores entered, the
   next match simply waits — the honest behaviour — and a single score resumes the
   cascade.
