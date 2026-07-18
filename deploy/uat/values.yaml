@@ -40,10 +40,11 @@ config:
   SESSION_COOKIE_SECURE: "true"
   # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
   FORWARDED_ALLOW_IPS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
-  # Wall-clock cap (seconds) on the CP-SAT tournament solve, consumed by the
-  # `worker` (rq "solver" queue) — see api/app/schedule_solves.py (issue #1103).
-  # Only the worker acts on it, but it lives in the shared ConfigMap alongside
-  # the other simple tunables above.
+  # Wall-clock cap (seconds) on the CP-SAT tournament solve — see
+  # api/app/schedule_solves.py (issue #1103). The worker's `execute_solve`
+  # reads it for the solve itself, and `request_solve` (which runs in the api
+  # process for nearly every trigger) reads it to size the RQ job_timeout, so
+  # both consume it via this shared ConfigMap.
   SOLVER_TIME_CAP_S: "10"
 
 postgres:
@@ -66,6 +67,18 @@ apnsKeyFile: apns_auth_key.p8
 
 worker:
   queues: solver email ratings notifications
+  # CPU/memory for the CP-SAT solve worker. `cpu` is a bare core count (not
+  # "m" millicores) because it doubles as SOLVE_NUM_WORKERS — CP-SAT's
+  # search-worker portfolio must equal the container's CPU limit or it
+  # auto-sizes off the *node's* core count and gets CFS-throttled (#1115).
+  # 16 cores / 8Gi is a UAT stress setting sized for large-model solves
+  # (hundreds of fixtures x many tables), not necessarily the prod default —
+  # right-size per environment by overriding these values.
+  cpu: "16"
+  memory: 8Gi
+  requests:
+    cpu: "2"
+    memory: 512Mi
 
 # Periodic retirement sweep CronJob (task #9 / ADR 0007 O8). Runs
 # `python -m app.retirement_sweep` on this schedule to auto-accept lapsed

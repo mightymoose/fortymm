@@ -4,15 +4,17 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+import pytest
 from httpx import ASGITransport, AsyncClient, Request
 from rq import Queue
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app import schedule_solves, scheduling
 from app.main import app as fastapi_app
 from app.models import (
     League,
@@ -28,8 +30,30 @@ from app.models import (
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
+
+
+def hijack_solve(
+    monkeypatch: pytest.MonkeyPatch, after_solve: Callable[[], None]
+) -> None:
+    """Interpose on the ``_solve`` seam: run the real solver, then
+    ``after_solve`` — landing work exactly in the gap between a schedule
+    solve job's snapshot and its guarded apply (the drift-guard race
+    window)."""
+    real = scheduling.solve
+
+    def wrapper(
+        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+    ) -> SolveResult:
+        result = real(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
+        after_solve()
+        return result
+
+    monkeypatch.setattr(schedule_solves, "_solve", wrapper)
 
 
 def enqueued_notification_jobs(queue: Queue) -> list[NotificationJob]:
