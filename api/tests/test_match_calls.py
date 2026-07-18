@@ -20,7 +20,7 @@ re-check is the ONLY guard — the fingerprint deliberately excludes the count.
 """
 
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -61,10 +61,9 @@ from app.models import (
     User,
 )
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, request_solve
-from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
-from tests._helpers import make_user
+from tests._helpers import hijack_solve, make_user
 
 DATE = "2030-01-01"
 #: The pool window's start — the tournament's minute-frame origin.
@@ -234,26 +233,6 @@ async def _request_and_run_solve(
     await db.commit()
     _run_recorded_solve(solver_queue, row_id)
     db.expire_all()
-
-
-def _hijack_solve(
-    monkeypatch: pytest.MonkeyPatch, after_solve: Callable[[], None]
-) -> None:
-    """Interpose on the ``_solve`` seam: run the real solver, then
-    ``after_solve`` — landing work exactly in the gap between the job's
-    snapshot and its guarded apply."""
-    real = scheduling.solve
-
-    def wrapper(
-        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
-    ) -> SolveResult:
-        result = real(
-            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
-        )
-        after_solve()
-        return result
-
-    monkeypatch.setattr(schedule_solves, "_solve", wrapper)
 
 
 class TestApplyCallEvaluation:
@@ -1175,7 +1154,7 @@ class TestConcurrentTickAndApply:
         assert row is not None
         row_id = row.id
         await db_session.commit()
-        _hijack_solve(monkeypatch, after_solve=lambda: run_pin_tick(str(tournament_id)))
+        hijack_solve(monkeypatch, after_solve=lambda: run_pin_tick(str(tournament_id)))
         return tournament_id, event_id, row_id
 
     async def test_concurrent_tick_and_apply_call_exactly_once(
@@ -1312,7 +1291,7 @@ class TestConcurrentTickAndApply:
         assert row is not None
         row_id = row.id
         await db_session.commit()
-        _hijack_solve(monkeypatch, after_solve=lambda: run_pin_tick(str(tournament_id)))
+        hijack_solve(monkeypatch, after_solve=lambda: run_pin_tick(str(tournament_id)))
         return tournament_id, event_id, row_id
 
     async def test_concurrent_tick_and_apply_notify_a_silent_pin_exactly_once(

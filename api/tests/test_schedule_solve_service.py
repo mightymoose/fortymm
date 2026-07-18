@@ -26,7 +26,6 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -77,7 +76,7 @@ from app.scheduling import (
     Verdict,
 )
 from app.tournament_draws import cut_draw
-from tests._helpers import make_user
+from tests._helpers import hijack_solve, make_user
 
 DATE = "2030-01-01"
 #: The tournament's minute-frame origin: the (single) pool window's start.
@@ -235,26 +234,6 @@ def _commit_concurrently(database_url: str, statement: Executable) -> None:
     thread.join()
 
 
-def _hijack_solve(
-    monkeypatch: pytest.MonkeyPatch, after_solve: Callable[[], None]
-) -> None:
-    """Interpose on the ``_solve`` seam: run the real solver, then run
-    ``after_solve`` — landing a committed mutation exactly in the gap between
-    the job's snapshot and its guarded apply (the drift window)."""
-    real = scheduling.solve
-
-    def wrapper(
-        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
-    ) -> SolveResult:
-        result = real(
-            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
-        )
-        after_solve()
-        return result
-
-    monkeypatch.setattr(schedule_solves, "_solve", wrapper)
-
-
 async def _fixture_user_ids(
     db: AsyncSession, entry_a_id: uuid.UUID, entry_b_id: uuid.UUID
 ) -> tuple[str, str]:
@@ -319,6 +298,20 @@ async def _mark_completed(
     fixture.winner_entry_id = entry_a_id
     await db.commit()
     return await _fixture_user_ids(db, entry_a_id, entry_b_id)
+
+
+class TestSolveNumWorkers:
+    """``SOLVE_NUM_WORKERS`` (#1115): must stay operator-configurable via env,
+    not baked in at import time, or the chart's per-environment CPU-limit
+    alignment (deploy/uat/templates/worker.yaml) has nothing to actually set."""
+
+    def test_defaults_to_one_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SOLVE_NUM_WORKERS", raising=False)
+        assert schedule_solves._solve_num_workers() == 1
+
+    def test_reads_the_env_var_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOLVE_NUM_WORKERS", "16")
+        assert schedule_solves._solve_num_workers() == 16
 
 
 class TestRestShadows:
@@ -721,7 +714,7 @@ class TestSolveJob:
         row_id = row.id
         await db_session.commit()
 
-        _hijack_solve(
+        hijack_solve(
             monkeypatch,
             after_solve=lambda: _commit_concurrently(
                 postgres_url,
@@ -775,7 +768,7 @@ class TestDriftGuard:
                 .limit(1)
             )
         ).scalar_one()
-        _hijack_solve(
+        hijack_solve(
             monkeypatch,
             after_solve=lambda: _commit_concurrently(
                 postgres_url,
