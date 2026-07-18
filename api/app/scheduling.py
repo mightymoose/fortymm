@@ -654,17 +654,12 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # Hints never change which solution is optimal; they only order the search.
     for fixture in unpinned:
         prior = previous.get(fixture.id)
-        if prior is None:
-            continue
-        prior_present = presences[fixture.id].get(prior.table_id)
-        if prior_present is None:
+        if prior is None or prior.table_id not in presences[fixture.id]:
             continue
         model.AddHint(buckets[fixture.id], prior.start_min // BUCKET_MIN)
         model.AddHint(starts[fixture.id], prior.start_min)
-        model.AddHint(prior_present, 1)
         for table, present in presences[fixture.id].items():
-            if table != prior.table_id:
-                model.AddHint(present, 0)
+            model.AddHint(present, 1 if table == prior.table_id else 0)
 
     return _SolverModel(
         model=model,

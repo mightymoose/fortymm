@@ -654,12 +654,10 @@ def _star_chain_snapshot(
         PreviousPlacement(FixtureId(f"F{n}"), table_ids[0], (n - 1) * step)
         for n in range(1, n_fixtures + 1)
     )
-    return ScheduleSnapshot(
-        table_ids=table_ids,
-        pools=(SchedulePool(PoolId("A"), table_ids, Window(0, 600)),),
-        events=(EventSettings(EventId("E1"), 3),),
-        fixtures=fixtures,
-        now_min=0,
+    return _one_pool_snapshot(
+        fixtures,
+        tables=tables,
+        window=(0, 600),
         previous_plan=previous if with_previous else (),
     )
 
