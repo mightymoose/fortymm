@@ -128,6 +128,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import match_calls, scheduling
 from app import queue as queue_module
+from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
     Match,
@@ -173,19 +174,33 @@ log = logging.getLogger(__name__)
 #: like ``app.retirement_jobs.RUN_RETIREMENT_SWEEP_JOB``.
 RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
 
-#: The ADR's hard time cap: mid-tournament we want a good answer now, not a
-#: proof, and FEASIBLE under the cap is accepted.
-SOLVE_TIME_CAP_S = 10.0
+#: Slack, in seconds, added on top of ``get_settings().solver_time_cap_s`` to
+#: get the RQ job's own ``job_timeout``. The job wraps the CP-SAT call with DB
+#: work on both sides (phase (a)'s snapshot + fingerprint, phase (c)'s
+#: row-locked re-read, fingerprint recompute, and fixture writes) — RQ's
+#: watchdog must never be tighter than the solve it is timing, or raising
+#: ``SOLVER_TIME_CAP_S`` to run a large one-off solve (the whole point of the
+#: config) does nothing because RQ kills the job first.
+JOB_TIMEOUT_MARGIN_S = 60
 
-#: How long a ``running`` row is allowed to go without a terminal write before
-#: it is presumed dead (worker OOM-killed / SIGKILLed mid-run) rather than
-#: merely slow (ADR). A multiple of ``SOLVE_TIME_CAP_S``, not equal to it:
-#: the cap only bounds the solver's own call in phase (b) — the lease must
-#: also cover phases (a) and (c)'s DB round-trips (snapshot read, apply's
-#: locked re-read and writes, notification fan-out), which run with no cap of
-#: their own. A generous multiple keeps a merely-slow-but-alive run from being
-#: reaped out from under itself.
-STALE_RUNNING_LEASE_S = SOLVE_TIME_CAP_S * 6
+#: How many multiples of ``get_settings().solver_time_cap_s`` a ``running`` row
+#: is allowed to go without a terminal write before it is presumed dead (worker
+#: OOM-killed / SIGKILLed mid-run) rather than merely slow (ADR). A multiple of
+#: the cap, not equal to it: the cap only bounds the solver's own call in phase
+#: (b) — the lease must also cover phases (a) and (c)'s DB round-trips
+#: (snapshot read, apply's locked re-read and writes, notification fan-out),
+#: which run with no cap of their own. A generous multiple keeps a
+#: merely-slow-but-alive run from being reaped out from under itself.
+STALE_RUNNING_LEASE_MULTIPLE = 6
+
+
+def _stale_running_lease_s() -> float:
+    """The lease, in seconds — read lazily off the (possibly operator-raised)
+    solver time cap, like ``_solve_num_workers`` and ``get_settings`` itself,
+    so a large one-off solve's own raised ``SOLVER_TIME_CAP_S`` isn't reaped
+    out from under itself by a lease still sized for the default."""
+    return get_settings().solver_time_cap_s * STALE_RUNNING_LEASE_MULTIPLE
+
 
 #: What a reaped row records — the honest fact that nothing finished it, not
 #: a solver verdict.
@@ -232,7 +247,7 @@ def _is_stale_running(row: ScheduleSolve, *, now: datetime) -> bool:
     return (
         row.status is ScheduleSolveStatus.running
         and row.started_at is not None
-        and now - row.started_at >= timedelta(seconds=STALE_RUNNING_LEASE_S)
+        and now - row.started_at >= timedelta(seconds=_stale_running_lease_s())
     )
 
 
@@ -267,7 +282,7 @@ async def request_solve(
       whatever state motivated this trigger. The trigger is absorbed — the
       row keeps the trigger that *caused* it.
     * A ``running`` row exists and is still within its lease
-      (``STALE_RUNNING_LEASE_S``) → set ``rerun_requested`` on it and return
+      (``_stale_running_lease_s()``) → set ``rerun_requested`` on it and return
       it: the job re-queues (trigger ``rerun``) at finish, in the same
       transaction as its final status.
     * A ``running`` row exists but has out-lived its lease → its owning
@@ -341,7 +356,11 @@ async def request_solve(
     db.add(row)
     await db.flush()
     try:
-        queue_module.get_queue().enqueue(RUN_SCHEDULE_SOLVE_JOB, str(row.id))
+        queue_module.get_queue().enqueue(
+            RUN_SCHEDULE_SOLVE_JOB,
+            str(row.id),
+            job_timeout=int(get_settings().solver_time_cap_s) + JOB_TIMEOUT_MARGIN_S,
+        )
     except RedisError:
         log.exception(
             "Failed to enqueue schedule solve for tournament %s", tournament_id
@@ -942,7 +961,7 @@ async def execute_solve(
         # (b) The solve itself, outside any transaction / open session.
         result = _solve(
             inputs.snapshot,
-            time_cap_s=SOLVE_TIME_CAP_S,
+            time_cap_s=get_settings().solver_time_cap_s,
             num_search_workers=_solve_num_workers(),
         )
 

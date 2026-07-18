@@ -84,6 +84,10 @@ services:
       SESSION_COOKIE_SECURE: "false"
       # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
       FORWARDED_ALLOW_IPS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8
+      # Wall-clock cap (seconds) on the CP-SAT tournament solve (issue #1103).
+      # request_solve() reads this to size the RQ job_timeout, so the api
+      # service needs it too, not just the worker that runs the solve itself.
+      SOLVER_TIME_CAP_S: ${SOLVER_TIME_CAP_S:-10}
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,6 +110,8 @@ services:
       <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
+      # Wall-clock cap (seconds) on the CP-SAT tournament solve (issue #1103).
+      SOLVER_TIME_CAP_S: ${SOLVER_TIME_CAP_S:-10}
     depends_on:
       redis:
         condition: service_healthy

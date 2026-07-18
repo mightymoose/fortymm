@@ -56,20 +56,30 @@ Two things this decision does **not** need to build:
 
 ## Decision
 
-### A fixed 60-second lease, tied to the solver's own time cap
+### A 60-second-by-default lease, tied to the solver's own time cap
 
 ```python
-SOLVE_TIME_CAP_S = 10.0
-STALE_RUNNING_LEASE_S = SOLVE_TIME_CAP_S * 6  # 60.0
+STALE_RUNNING_LEASE_MULTIPLE = 6
+
+
+def _stale_running_lease_s() -> float:
+    return get_settings().solver_time_cap_s * STALE_RUNNING_LEASE_MULTIPLE
 ```
 
-`SOLVE_TIME_CAP_S` bounds only phase (b), the CP-SAT call itself; phases (a)
-and (c) do unbounded (if normally fast) DB work outside that cap. 6× gives
-comfortable headroom for that DB work under load while still being short
-enough that a genuinely wedged tournament self-heals within roughly one
-polling cycle. Not env-configurable (unlike `SOLVE_NUM_WORKERS`, which varies
-by deployment's CPU limit) — this is a correctness constant, not a
-deployment-shape knob.
+The solver's own time cap bounds only phase (b), the CP-SAT call itself;
+phases (a) and (c) do unbounded (if normally fast) DB work outside that cap.
+6× gives comfortable headroom for that DB work under load while still being
+short enough that a genuinely wedged tournament self-heals within roughly one
+polling cycle.
+
+*Amendment (landed alongside PR #1126, which made the solver time cap itself
+operator-configurable via `SOLVER_TIME_CAP_S`): the lease is read lazily off
+`get_settings().solver_time_cap_s` rather than a fixed 60.0 constant, so a
+large one-off solve run under a raised cap (e.g. 1200s) isn't reaped out from
+under itself by a lease still sized for the 10s default. The multiplier
+(`STALE_RUNNING_LEASE_MULTIPLE = 6`) is the fixed, non-configurable part —
+mirrors `SOLVE_NUM_WORKERS`'s "read lazily" idiom, not its "operator sets an
+absolute value" one.*
 
 ### Reaping happens at the two places that already look at the `running` row
 
