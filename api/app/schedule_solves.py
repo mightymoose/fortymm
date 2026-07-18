@@ -237,21 +237,19 @@ def _is_stale_running(row: ScheduleSolve, *, now: datetime) -> bool:
 
 
 def _reap_stale_running(row: ScheduleSolve, *, now: datetime) -> None:
-    """Mark an already ``FOR UPDATE``-locked ``running`` row as failed because
-    its lease expired (ADR) — the same terminal shape as an ordinary crash's
+    """Mark an already-confirmed-stale, ``FOR UPDATE``-locked ``running`` row
+    as failed (ADR) — the same terminal shape as an ordinary crash's
     best-effort write (:func:`_finish_failed_best_effort`), so a reaped row is
     indistinguishable from a normal one to every other reader.
 
-    Re-checks staleness under the lock before mutating: the caller may have
-    only tested with an earlier or unlocked ``now``, and by the time the lock
-    is held the job may have already finished normally — in which case this is
-    a no-op and the caller's normal flow proceeds against the now-terminal
-    row. Deliberately does not special-case ``rerun_requested`` — it is left
-    exactly as the row already carries it, mirroring
-    :func:`_finish_failed_best_effort`, which already silently drops it on an
-    ordinary crash (ADR)."""
-    if not _is_stale_running(row, now=now):
-        return
+    Callers must confirm :func:`_is_stale_running` themselves, under the lock,
+    immediately before calling — both call sites already do, so this does not
+    re-check (the job may have finished normally in the gap between an
+    earlier, unlocked read and acquiring the lock; that recheck belongs to the
+    caller, not duplicated here). Deliberately does not special-case
+    ``rerun_requested`` — it is left exactly as the row already carries it,
+    mirroring :func:`_finish_failed_best_effort`, which already silently drops
+    it on an ordinary crash (ADR)."""
     row.status = ScheduleSolveStatus.failed
     row.error = STALE_RUNNING_ERROR
     row.finished_at = now
@@ -327,8 +325,9 @@ async def request_solve(
             # terminal state and fall through to the "neither queued nor
             # running" branch below — this trigger gets a fresh row rather
             # than being absorbed by a job that will never run.
+            # Not flushed here: the fall-through below adds a new row and
+            # flushes once, carrying both this UPDATE and that INSERT.
             _reap_stale_running(running, now=now)
-            await db.flush()
         else:
             running.rerun_requested = True
             await db.flush()

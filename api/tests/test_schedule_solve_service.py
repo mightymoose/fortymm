@@ -213,6 +213,29 @@ def _run_recorded_job(queue: Queue, expected_solve_id: uuid.UUID) -> None:
     job.func(*job.args)
 
 
+async def _make_running_solve(
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    *,
+    started_at: datetime,
+    rerun_requested: bool = False,
+) -> uuid.UUID:
+    """A ``running`` schedule-solve row backdated to ``started_at`` — the shape
+    every stale-reap test starts from, varying only how far past the lease it
+    is. Returns the id (the `_make_tournament` convention: tests read it back
+    through `_solve_rows`/`latest_solve` rather than off an expired instance)."""
+    running = ScheduleSolve(
+        tournament_id=tournament_id,
+        trigger=ScheduleSolveTrigger.go_live,
+        status=ScheduleSolveStatus.running,
+        started_at=started_at,
+        rerun_requested=rerun_requested,
+    )
+    db.add(running)
+    await db.commit()
+    return running.id
+
+
 def _commit_concurrently(database_url: str, statement: Executable) -> None:
     """Commit ``statement`` through a separate engine on its own loop + thread
     — a genuinely concurrent writer, independent of every session the test or
@@ -486,15 +509,9 @@ class TestRequestSolveCoalescing:
         stale_started_at = datetime.now(UTC) - timedelta(
             seconds=schedule_solves.STALE_RUNNING_LEASE_S + 1
         )
-        running = ScheduleSolve(
-            tournament_id=tournament_id,
-            trigger=ScheduleSolveTrigger.go_live,
-            status=ScheduleSolveStatus.running,
-            started_at=stale_started_at,
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=stale_started_at
         )
-        db_session.add(running)
-        await db_session.commit()
-        running_id = running.id
 
         result = await request_solve(
             db_session, tournament_id, ScheduleSolveTrigger.settings_changed
@@ -525,21 +542,16 @@ class TestRequestSolveCoalescing:
         fresh_started_at = datetime.now(UTC) - timedelta(
             seconds=schedule_solves.STALE_RUNNING_LEASE_S - 1
         )
-        running = ScheduleSolve(
-            tournament_id=tournament_id,
-            trigger=ScheduleSolveTrigger.go_live,
-            status=ScheduleSolveStatus.running,
-            started_at=fresh_started_at,
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=fresh_started_at
         )
-        db_session.add(running)
-        await db_session.commit()
 
         result = await request_solve(
             db_session, tournament_id, ScheduleSolveTrigger.settings_changed
         )
 
         assert result is not None
-        assert result.id == running.id
+        assert result.id == running_id
         assert result.status is ScheduleSolveStatus.running
         assert result.rerun_requested is True
         assert result.error is None
@@ -615,15 +627,9 @@ class TestLatestSolve:
         fresh_started_at = datetime.now(UTC) - timedelta(
             seconds=schedule_solves.STALE_RUNNING_LEASE_S - 1
         )
-        running = ScheduleSolve(
-            tournament_id=tournament_id,
-            trigger=ScheduleSolveTrigger.go_live,
-            status=ScheduleSolveStatus.running,
-            started_at=fresh_started_at,
+        running_id = await _make_running_solve(
+            db_session, tournament_id, started_at=fresh_started_at
         )
-        db_session.add(running)
-        await db_session.commit()
-        running_id = running.id
 
         result = await latest_solve(db_session, tournament_id)
 
@@ -655,16 +661,12 @@ class TestLatestSolve:
         stale_started_at = datetime.now(UTC) - timedelta(
             seconds=schedule_solves.STALE_RUNNING_LEASE_S + 1
         )
-        running = ScheduleSolve(
-            tournament_id=tournament_id,
-            trigger=ScheduleSolveTrigger.go_live,
-            status=ScheduleSolveStatus.running,
+        running_id = await _make_running_solve(
+            db_session,
+            tournament_id,
             started_at=stale_started_at,
             rerun_requested=True,
         )
-        db_session.add(running)
-        await db_session.commit()
-        running_id = running.id
 
         result = await latest_solve(db_session, tournament_id)
 
