@@ -700,10 +700,12 @@ def _first_solution_board(built: _SolverModel) -> set[tuple[str, str, int]]:
 
     One worker plus a fixed seed makes *which* solution is discovered first
     reproducible, so the warm-start hint's effect — it seeds the search at the
-    previous plan — is observable. The production ``solve`` deliberately keeps
-    its multi-worker portfolio, whose aggregate branch count and first-solution
-    identity are non-deterministic (a lucky worker can presolve either board in
-    zero branches), so it cannot show this; hence the single-worker probe."""
+    previous plan — is observable. Production ``solve`` defaults to one worker
+    too, but a deployment can raise ``num_search_workers`` (``SOLVE_NUM_WORKERS``,
+    #1115) — under a multi-worker portfolio, aggregate branch count and
+    first-solution identity are non-deterministic (a lucky worker can presolve
+    either board in zero branches), so it cannot show this; hence this test
+    pins a single worker explicitly rather than relying on the default."""
     solver = cp_model.CpSolver()
     solver.parameters.random_seed = 0
     solver.parameters.num_search_workers = 1
