@@ -21,11 +21,18 @@ spec:
           command: ["rq", "worker", "--url", "{{ .Values.config.REDIS_URL }}", {{ range $i, $q := splitList " " .Values.worker.queues }}{{ if $i }}, {{ end }}{{ $q | quote }}{{ end }}]
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: {{ .Values.worker.requests.cpu }}
+              memory: {{ .Values.worker.requests.memory }}
             limits:
-              cpu: 2000m
-              memory: 1Gi
+              cpu: {{ .Values.worker.cpu }}
+              memory: {{ .Values.worker.memory }}
+          env:
+            # CP-SAT's search-worker count — kept equal to the CPU limit above
+            # (single source of truth: .Values.worker.cpu) so the solver never
+            # oversubscribes the container's cgroup quota. See #1115 and the
+            # comment on SOLVE_NUM_WORKERS in api/app/schedule_solves.py.
+            - name: SOLVE_NUM_WORKERS
+              value: {{ .Values.worker.cpu | quote }}
           envFrom:
             {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
           volumeMounts:

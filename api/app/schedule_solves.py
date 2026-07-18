@@ -114,6 +114,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
@@ -175,6 +176,17 @@ RUN_SCHEDULE_SOLVE_JOB = "app.schedule_solves.run_schedule_solve"
 #: The ADR's hard time cap: mid-tournament we want a good answer now, not a
 #: proof, and FEASIBLE under the cap is accepted.
 SOLVE_TIME_CAP_S = 10.0
+
+#: CP-SAT's search-worker portfolio size. Left unset, CP-SAT auto-sizes off
+#: the *node's* core count (``os.cpu_count()``), not the worker container's
+#: cgroup CPU limit, so under a k8s/compose CPU limit it oversubscribes and
+#: gets CFS-throttled (#1115). Defaulting to 1 keeps solves deterministic and
+#: never oversubscribed; deployments with a larger CPU limit raise this via
+#: env to match (the chart keeps the two in step — see
+#: deploy/uat/templates/worker.yaml). Note ``num_search_workers > 1`` makes
+#: CP-SAT non-deterministic — the ``random_seed = 0`` in app.scheduling no
+#: longer pins the result once more than one worker is searching.
+SOLVE_NUM_WORKERS = int(os.environ.get("SOLVE_NUM_WORKERS", "1"))
 
 #: What a drift-discarded run records. The run is ``failed`` because it is
 #: honest — this run produced nothing — not because anything broke; the rerun
@@ -824,7 +836,11 @@ async def execute_solve(
             await db.commit()
 
         # (b) The solve itself, outside any transaction / open session.
-        result = _solve(inputs.snapshot, time_cap_s=SOLVE_TIME_CAP_S)
+        result = _solve(
+            inputs.snapshot,
+            time_cap_s=SOLVE_TIME_CAP_S,
+            num_search_workers=SOLVE_NUM_WORKERS,
+        )
 
         await _apply_result(sessionmaker, solve_id, tournament_id, inputs, result)
     except Exception as exc:  # noqa: BLE001 -- the job's boundary: never leave a row running

@@ -243,8 +243,12 @@ def _hijack_solve(
     the job's snapshot and its guarded apply (the drift window)."""
     real = scheduling.solve
 
-    def wrapper(snapshot: ScheduleSnapshot, time_cap_s: float) -> SolveResult:
-        result = real(snapshot, time_cap_s=time_cap_s)
+    def wrapper(
+        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+    ) -> SolveResult:
+        result = real(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
         after_solve()
         return result
 
@@ -651,7 +655,9 @@ class TestSolveJob:
         row_id = row.id
         await db_session.commit()
 
-        def exhausted(snapshot: ScheduleSnapshot, time_cap_s: float) -> SolveResult:
+        def exhausted(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
             return SolveResult(
                 verdict=Verdict.unknown,
                 placements=(),
@@ -684,7 +690,9 @@ class TestSolveJob:
         row_id = row.id
         await db_session.commit()
 
-        def broken(snapshot: ScheduleSnapshot, time_cap_s: float) -> SolveResult:
+        def broken(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
             raise RuntimeError("the solver caught fire")
 
         monkeypatch.setattr(schedule_solves, "_solve", broken)

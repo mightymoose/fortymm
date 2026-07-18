@@ -61,6 +61,18 @@ apnsKeyFile: apns_auth_key.p8
 
 worker:
   queues: solver email ratings notifications
+  # CPU/memory for the CP-SAT solve worker. `cpu` is a bare core count (not
+  # "m" millicores) because it doubles as SOLVE_NUM_WORKERS — CP-SAT's
+  # search-worker portfolio must equal the container's CPU limit or it
+  # auto-sizes off the *node's* core count and gets CFS-throttled (#1115).
+  # 16 cores / 8Gi is a UAT stress setting sized for large-model solves
+  # (hundreds of fixtures x many tables), not necessarily the prod default —
+  # right-size per environment by overriding these values.
+  cpu: "16"
+  memory: 8Gi
+  requests:
+    cpu: "2"
+    memory: 512Mi
 
 # Periodic retirement sweep CronJob (task #9 / ADR 0007 O8). Runs
 # `python -m app.retirement_sweep` on this schedule to auto-accept lapsed

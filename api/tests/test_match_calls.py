@@ -244,8 +244,12 @@ def _hijack_solve(
     snapshot and its guarded apply."""
     real = scheduling.solve
 
-    def wrapper(snapshot: ScheduleSnapshot, time_cap_s: float) -> SolveResult:
-        result = real(snapshot, time_cap_s=time_cap_s)
+    def wrapper(
+        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+    ) -> SolveResult:
+        result = real(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
         after_solve()
         return result
 

@@ -671,7 +671,11 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     )
 
 
-def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
+def solve(
+    snapshot: ScheduleSnapshot,
+    time_cap_s: float = 10.0,
+    num_search_workers: int = 1,
+) -> SolveResult:
     """Place every active fixture: pins echoed verbatim, everything else
     solved onto its pool's tables inside its pool's window, on the
     :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
@@ -680,6 +684,12 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
     :class:`IncoherentSnapshot` for inputs that reference things they do not
     contain, and :class:`SchedulingError` if CP-SAT rejects the model (a bug
     here, not a property of the tournament).
+
+    ``num_search_workers`` must stay within the caller's CPU budget — CP-SAT
+    spawns that many search threads regardless of how many cores are actually
+    available, and a value above the caller's CPU limit gets CFS-throttled.
+    The default of 1 is also what keeps ``random_seed = 0`` below pinning the
+    result: CP-SAT's parallel portfolio is not deterministic across workers.
     """
     built = _build_model(snapshot)
     if isinstance(built, SolveResult):
@@ -689,6 +699,7 @@ def solve(snapshot: ScheduleSnapshot, time_cap_s: float = 10.0) -> SolveResult:
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_cap_s
+    solver.parameters.num_search_workers = num_search_workers
     solver.parameters.random_seed = 0
     status = solver.Solve(built.model)
     wall_time_ms = int(solver.WallTime() * 1000)
