@@ -1045,39 +1045,24 @@ async def _apply_result(
                         # A called match holds its table, but its start can be
                         # pushed LATER on a re-solve when a predecessor overruns
                         # (ADR "a called match holds its table and slides
-                        # later"). Compare the solver's returned start to the
-                        # stored one on the SAME floored-minute basis the
-                        # snapshot pinned it at (``to_min`` floors), so a
-                        # genuinely-unchanged pin — off-grid start included — is
-                        # byte-stable and moves no one.
-                        stored_start = fixture.scheduled_start
-                        stored_start_min = (
-                            None
-                            if stored_start is None
-                            else int((stored_start - fresh.base).total_seconds() // 60)
-                        )
+                        # later"). The solver floors a pin at its stored start,
+                        # so it can only echo that start or return a strictly
+                        # later minute. An unchanged pin — off-grid start
+                        # included — is byte-stable and moves no one; a slid pin
+                        # falls through to the shared moved-repair path below,
+                        # which persists the later start, renews ``pinned_at``,
+                        # and fires the SAME "moved" correction (its
+                        # ``table_id`` write is a no-op, since the solver never
+                        # re-tables a pin).
+                        new_start = fresh.base + timedelta(minutes=placement.start_min)
                         if (
-                            stored_start_min is None
-                            or placement.start_min <= stored_start_min
+                            fixture.scheduled_start is None
+                            or new_start <= fixture.scheduled_start
                         ):
-                            # Unchanged: the solver floors a pin at its stored
-                            # start, so it can only echo it or slide later. A
-                            # promise's columns are never rewritten, not even
-                            # with their own bytes, and nobody is told.
+                            # Unchanged: a promise's columns are never rewritten,
+                            # not even with their own bytes, and nobody is told.
                             pinned += 1
                             continue
-                        # Slid later on its (invariant) table — the solver never
-                        # re-tables a pin, so ``table_id`` is left untouched.
-                        # Persist the new start, renew ``pinned_at``, and route
-                        # it through the SAME "moved" correction a broken-pin
-                        # move fires: every persisted pin change carries one.
-                        fixture.scheduled_start = fresh.base + timedelta(
-                            minutes=placement.start_min
-                        )
-                        fixture.pinned_at = apply_now
-                        moved_repairs.append(fixture)
-                        placed += 1
-                        continue
                     repaired_pin = fixture.pinned_at is not None
                     fixture.table_id = str(placement.table_id)
                     fixture.scheduled_start = fresh.base + timedelta(

@@ -392,12 +392,11 @@ def _slide_pin_later(
             PlacedFixture(
                 fixture_id=placement.fixture_id,
                 table_id=placement.table_id,
-                start_min=placement.start_min
-                + (extra_min if placement.fixture_id == target_id else 0),
-                end_min=placement.end_min
-                + (extra_min if placement.fixture_id == target_id else 0),
+                start_min=placement.start_min + bump,
+                end_min=placement.end_min + bump,
             )
             for placement in result.placements
+            for bump in (extra_min if placement.fixture_id == target_id else 0,)
         )
         return SolveResult(
             verdict=result.verdict, placements=placements, stats=result.stats
