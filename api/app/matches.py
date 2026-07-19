@@ -79,6 +79,7 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
+    CannotAcceptOwnProposalError,
     MatchClosedError,
     MatchNotFoundError,
     MatchNotScorableError,
@@ -86,17 +87,22 @@ from app.result_acceptance import (
     OpponentNotFoundError,
     PostedGamesNotDecisiveError,
     RatedNeedsRegisteredOpponentError,
+    ResultNotFoundError,
     ScoreConflictError,
     ScoreNotAllowedError,
     SelfMatchError,
-    StandingResultConflictError,
     UndecidedBoardError,
-    accept_standing_result,
+    accept_result,
     side_win_counts,
 )
 from app.result_chain import standing_result
+
+# Re-exported for ``tests/test_ratings.py``, which loads the finalize eager-load
+# superset via ``app.matches.match_rating_eager_options`` (the propose/accept
+# paths that consume it now live in the services). Redundant alias marks the
+# intentional re-export so ruff doesn't flag it as unused.
+from app.result_proposal import match_rating_eager_options as match_rating_eager_options
 from app.result_proposal import (
-    match_rating_eager_options,
     propose_result,
 )
 from app.schemas.match import (
@@ -1019,52 +1025,38 @@ async def accept_match_result(
     negotiation state (or a 404 if no result with that id exists on the match).
     The proposing side already consented by proposing, so only a participant on
     the *opposing* side may accept."""
-    match = await _load_match_for_scoring(
-        db,
-        match_id,
-        current_user.id,
-        lock=True,
-        options=match_rating_eager_options(),
-    )
-
-    # The path ``result_id`` must exist on this match at all (404); the live
-    # standing-proposal check (409 with the moved-on state) is owned by
-    # ``accept_standing_result`` so it runs identically from a worker.
-    if not any(r.id == result_id for r in match.results):
-        raise HTTPException(status_code=404, detail="Result not found.")
-
-    # The proposing side already consented by proposing; only the opposing side
-    # accepts. A participant on the submitter's side (in singles, the submitter
-    # themselves) can't accept their own proposal. Only meaningful while the
-    # targeted result is still standing — a superseded/absent one falls through
-    # to the core's conflict signal below.
-    standing = standing_result(match)
-    if standing is not None and standing.id == result_id:
-        submitter_side = my_side(match, standing.submitted_by_user_id)
-        if submitter_side is not None and any(
-            p.user_id == current_user.id for p in submitter_side.players
-        ):
-            raise HTTPException(
-                status_code=409, detail="You can't accept your own proposal."
-            )
-
+    # The whole accept path — the blocking row lock (serializing against a
+    # concurrent transition, #365), the result-exists 404 gate, the submitter-side
+    # self-accept guard, the live standing-proposal check, ``finalize_match`` (mark
+    # completed, stamp ``side.won``, apply ratings, advance any tournament draw),
+    # and the commit — is owned by the service. ``load_match=_load_match_for_scoring``
+    # injects the router's monkeypatchable load seam (mapping a missing/foreign
+    # match to its 404) so the #835 row-lock race tests still barrier on it.
     try:
-        await accept_standing_result(
+        reloaded = await accept_result(
             db,
-            match,
+            match_id,
+            current_user.id,
             result_id=result_id,
-            accepted_by_user_id=current_user.id,
+            load_match=_load_match_for_scoring,
         )
-    except StandingResultConflictError:
-        raise _negotiation_conflict(match, current_user.id) from None
-    except PostedGamesNotDecisiveError:
+    except ResultNotFoundError as exc:
+        # The path ``result_id`` isn't a result on this match at all.
+        raise HTTPException(status_code=404, detail="Result not found.") from exc
+    except CannotAcceptOwnProposalError as exc:
+        # A participant on the submitter's side can't accept their own proposal.
+        raise HTTPException(
+            status_code=409, detail="You can't accept your own proposal."
+        ) from exc
+    except NegotiationConflictError as exc:
+        # The targeted result is no longer the live standing proposal (superseded,
+        # already accepted, or none standing). The 409 carries the viewer-relative
+        # moved-on state from the loaded match.
+        raise _negotiation_conflict(exc.match, current_user.id) from exc
+    except PostedGamesNotDecisiveError as exc:
         raise HTTPException(
             status_code=409, detail="The posted games no longer decide this match."
-        ) from None
+        ) from exc
 
-    await db.commit()
-
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)

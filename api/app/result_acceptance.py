@@ -28,10 +28,13 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from app.match_scoring import _MatchWriteLoader
 
 from app.models import (
     Match,
@@ -123,6 +126,30 @@ class PostedGamesNotDecisiveError(Exception):
     board is decided, and the board is frozen while it stands), but the core
     stays total rather than silently stamping no winner. The router maps this to
     the existing 409 ``"The posted games no longer decide this match."``."""
+
+
+class ResultNotFoundError(Exception):
+    """Raised by :func:`accept_result` when the target ``result_id`` is not a
+    result on the loaded match at all (as opposed to being present but no longer
+    the live standing proposal, which is :class:`StandingResultConflictError`).
+    The HTTP adapter maps this to the existing 404 ``"Result not found."``. Never
+    an ``HTTPException`` — the caller adapts it to its transport."""
+
+    def __init__(self) -> None:
+        super().__init__("Result not found.")
+
+
+class CannotAcceptOwnProposalError(Exception):
+    """Raised by :func:`accept_result` when the accepting user is a participant on
+    the *submitter's* side of the standing proposal. The proposing side already
+    consented by proposing, so only a participant on the opposing side may accept
+    (in singles, the submitter themselves can't accept their own proposal). The
+    HTTP adapter maps this to the existing 409 ``"You can't accept your own
+    proposal."``. Never an ``HTTPException`` — the caller adapts it to its
+    transport."""
+
+    def __init__(self) -> None:
+        super().__init__("You can't accept your own proposal.")
 
 
 class MatchNotFoundError(Exception):
@@ -496,3 +523,107 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
     await on_match_completed(db, match)
+
+
+async def _reload_accepted_match(db: AsyncSession, match_id: uuid.UUID) -> Match:
+    """Reload the just-accepted match with the full read eager-load chain.
+
+    Returns a non-optional :class:`Match`: the row was committed one statement
+    earlier in the same session, so its absence is a genuine invariant violation,
+    not a client-handleable ``None`` (``api/CLAUDE.md``)."""
+    # Imported lazily: ``app.match_queries`` imports this module at its top
+    # (``_games_to_win`` / ``side_win_counts``), so a module-level import here
+    # would be a cycle. This leaf stays importable before its higher-level
+    # collaborators finish loading.
+    from app.match_queries import match_eager_options
+
+    match = (
+        await db.execute(
+            select(Match).where(Match.id == match_id).options(*match_eager_options())
+        )
+    ).scalar_one_or_none()
+    if match is None:
+        raise RuntimeError(f"just-accepted match {match_id} vanished before reload")
+    return match
+
+
+async def accept_result(
+    db: AsyncSession,
+    match_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    result_id: uuid.UUID,
+    load_match: "_MatchWriteLoader | None" = None,
+) -> Match:
+    """Accept a standing proposal — the second verb of the propose/accept
+    negotiation — and return the reloaded, finalized domain :class:`Match`.
+
+    Loads under the blocking match row lock (so this serializes against a
+    concurrent propose/accept transition, #365) with the finalize eager-load
+    superset, then runs the two adapter-independent guards the router used to run
+    inline: the target ``result_id`` must be a result on the match at all
+    (:class:`ResultNotFoundError` → the historical 404), and — while it's still
+    the live standing proposal — the accepting user must not be on the submitter's
+    side (:class:`CannotAcceptOwnProposalError` → the historical 409; the
+    proposing side already consented by proposing). It then delegates to
+    :func:`accept_standing_result`, translating its
+    :class:`StandingResultConflictError` into :class:`NegotiationConflictError`
+    (carrying the loaded ``match`` so an adapter can rebuild the viewer-relative
+    moved-on snapshot) and letting :class:`PostedGamesNotDecisiveError` propagate.
+    Finally it commits and returns the reloaded match.
+
+    ``load_match`` defaults to the FastAPI-free :func:`load_match_for_write`; the
+    HTTP handler injects ``matches._load_match_for_scoring`` so the router's
+    monkeypatchable, ``HTTPException``-mapping load seam (the #835 row-lock race
+    test barriers on it) stays the one it exercises. Never raises
+    ``HTTPException`` — the caller adapts it to its transport."""
+    # Lazy imports: ``app.match_scoring`` and ``app.result_proposal`` both import
+    # this module at their top, and ``app.match_queries`` does too, so
+    # module-level imports of their symbols here would be cycles. These are only
+    # needed at call time, so this leaf stays importable ahead of them.
+    from app.match_queries import my_side
+    from app.match_scoring import load_match_for_write
+    from app.result_proposal import match_rating_eager_options
+
+    if load_match is None:
+        load_match = load_match_for_write
+
+    match = await load_match(
+        db,
+        match_id,
+        user_id,
+        lock=True,
+        options=match_rating_eager_options(),
+    )
+
+    # The path ``result_id`` must exist on this match at all (404); the live
+    # standing-proposal check (409 with the moved-on state) is owned by
+    # ``accept_standing_result`` below so it runs identically from a worker.
+    if not any(r.id == result_id for r in match.results):
+        raise ResultNotFoundError
+
+    # The proposing side already consented by proposing; only the opposing side
+    # accepts. A participant on the submitter's side (in singles, the submitter
+    # themselves) can't accept their own proposal. Only meaningful while the
+    # targeted result is still standing — a superseded/absent one falls through
+    # to the core's conflict signal below.
+    standing = standing_result(match)
+    if standing is not None and standing.id == result_id:
+        submitter_side = my_side(match, standing.submitted_by_user_id)
+        if submitter_side is not None and any(
+            p.user_id == user_id for p in submitter_side.players
+        ):
+            raise CannotAcceptOwnProposalError
+
+    try:
+        await accept_standing_result(
+            db,
+            match,
+            result_id=result_id,
+            accepted_by_user_id=user_id,
+        )
+    except StandingResultConflictError as exc:
+        raise NegotiationConflictError(match) from exc
+
+    await db.commit()
+    return await _reload_accepted_match(db, match_id)
