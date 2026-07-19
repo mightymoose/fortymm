@@ -218,7 +218,8 @@ export function infeasibilityReasonFromWire(
 }
 
 /** The per-reason parser: the wire arm plus the snake→camel mapping, one Zod
- * pipeline. Exported so the admin ledger's wire schema reuses the same arm set. */
+ * pipeline. Embedded in `scheduleSolveWireSchema` below, which the admin ledger's
+ * wire schema `.extend()`s — so both surfaces parse reasons through this one arm. */
 export const infeasibilityReasonSchema =
   infeasibilityReasonWireSchema.transform(infeasibilityReasonFromWire)
 
@@ -508,6 +509,16 @@ export function infeasibilityReasonCopy(
       return exhaustive
     }
   }
+}
+
+/** A stable-enough React key for one infeasibility reason: its `kind`, the pool
+ * it names when it has one, and the list index (two `no_single_cause`s never
+ * coexist, but the index keeps the key total). Shared so every surface that
+ * lists the reasons keys them the same way by import, not by convention. */
+export function infeasibilityReasonKey(reason: InfeasibilityReason, i: number): string {
+  return 'poolName' in reason
+    ? `${reason.kind}:${reason.poolName}:${i}`
+    : `${reason.kind}:${i}`
 }
 
 // ----- polling ----------------------------------------------------------------

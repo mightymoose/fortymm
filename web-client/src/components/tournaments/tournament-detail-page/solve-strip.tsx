@@ -18,10 +18,10 @@ import {
   VERDICT_LABEL,
   fmtWallTime,
   infeasibilityReasonCopy,
+  infeasibilityReasonKey,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
-  type InfeasibilityReason,
   type RunSchedulerNotice,
   type ScheduleSolve,
 } from '../data/solve'
@@ -66,12 +66,6 @@ const Line = ({
     </div>
   </div>
 )
-
-/** A stable-enough React key for one infeasibility reason: its `kind`, the pool
- * it names when it has one, and the list index (two `no_single_cause`s never
- * coexist, but the index keeps the key total). */
-const reasonKey = (reason: InfeasibilityReason, i: number) =>
-  'poolName' in reason ? `${reason.kind}:${reason.poolName}:${i}` : `${reason.kind}:${i}`
 
 /** The latest solve, rendered as its designed state. Split from the strip so the
  * strip's `switch` reads as the sum type it renders. */
@@ -141,7 +135,7 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
                 {state.reasons.map((reason, i) => {
                   const copy = infeasibilityReasonCopy(reason)
                   return (
-                    <li key={reasonKey(reason, i)}>
+                    <li key={infeasibilityReasonKey(reason, i)}>
                       <span className="text-[color:var(--fg-2)]">
                         {copy.sentence}
                       </span>{' '}

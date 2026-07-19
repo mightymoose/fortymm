@@ -722,9 +722,6 @@ async def _load_solver_inputs(
                 window_start=pool.slot.start,
                 window_end=pool.slot.end,
             )
-    for event, settings, _pools in parsed_events:
-        for fixture in fixtures_by_event[event.id]:
-            fixture_best_of[str(fixture.id)] = settings.length_games
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
@@ -755,7 +752,7 @@ async def _load_solver_inputs(
     rest_shadows: list[RestShadow] = []
     broken_pin_moves: set[uuid.UUID] = set()
     broken_pin_voids: set[uuid.UUID] = set()
-    for event, _settings, _pools in parsed_events:
+    for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
             if fixture.pool_id is None:
                 # Un-pooled (single-elim / a KO stage): no pool, no window —
@@ -809,6 +806,10 @@ async def _load_solver_inputs(
                         start_min=to_min(fixture.scheduled_start),
                     )
             fixture_id = FixtureId(str(fixture.id))
+            # Only placeable (pooled, both-sides-known) fixtures reach here, and
+            # only such a fixture can surface in a WindowTooShortForMatch reason —
+            # so this is exactly the set the apply resolves best_of for.
+            fixture_best_of[fixture_id] = settings.length_games
             schedule_fixtures.append(
                 ScheduleFixture(
                     id=fixture_id,

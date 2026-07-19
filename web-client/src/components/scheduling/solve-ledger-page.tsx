@@ -10,7 +10,7 @@ import {
   TRIGGER_LABEL,
   fmtWallTime,
   infeasibilityReasonCopy,
-  type InfeasibilityReason,
+  infeasibilityReasonKey,
 } from '@/components/tournaments/data/solve'
 import { fmtDateTimeShort } from '@/lib/dates'
 
@@ -35,14 +35,6 @@ import '@/components/matches/match-list/match-list.css'
 import './solve-ledger.css'
 
 const COLUMN_COUNT = 8
-
-/** A stable-enough React key for one infeasibility reason (the solve strip's own
- * rule, so the two surfaces key the list the same way): its `kind`, the pool it
- * names when it has one, and the list index. */
-const reasonKey = (reason: InfeasibilityReason, i: number) =>
-  'poolName' in reason
-    ? `${reason.kind}:${reason.poolName}:${i}`
-    : `${reason.kind}:${i}`
 
 /** The strip's tints, as the match-list pill tone classes this table borrows.
  * Keyed over the sum type so a new tone is a compile error until it has a
@@ -371,7 +363,7 @@ function LedgerRow({
                   {solve.infeasibilityReasons.map((reason, i) => {
                     const copy = infeasibilityReasonCopy(reason)
                     return (
-                      <li key={reasonKey(reason, i)}>
+                      <li key={infeasibilityReasonKey(reason, i)}>
                         <span className="solve-ledger-detail-reason-sentence">
                           {copy.sentence}
                         </span>{' '}
