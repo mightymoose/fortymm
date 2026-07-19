@@ -429,27 +429,84 @@ class TestInfeasibility:
             ),
         )
 
-    def test_over_capacity_counts_pinned_fixtures_too(self) -> None:
-        """Capacity is about *all* demand on the pool's tables: a pin occupies
-        table-time like anything else, so a pool that is only over capacity once
-        the pin is counted still reports it."""
+    def test_over_capacity_excludes_pinned_fixtures(self) -> None:
+        """Capacity is scoped to *unpinned* demand only: a pin is not constrained
+        to its pool's tables or window (ADR-0790), so it must not be summed into
+        the pigeonhole bound. Here the lone unpinned fixture fits the window on
+        its own (25 <= 45), so the pool is never reported as over capacity even
+        though pinned + unpinned would exceed it. This is the completeness
+        trade-off: with a single shared table the pin's occupancy genuinely does
+        leave no room, so CP-SAT proves it infeasible and it surfaces as the
+        honest NoSingleCause residual, never a false PoolOverCapacity."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
-            _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # 25 min pinned
+            _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # 25 min pinned [0,25]
             _fixture(2, p3, p4),  # 25 min unpinned
         )
-        # One table, a 40-minute window: two 25-minute matches (50) can't fit 40.
-        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 40))
+        # One table, a 45-minute window. Unpinned alone (25) fits 45, so no
+        # PoolOverCapacity — but with the pin holding T1 for [0,25] the unpinned
+        # 25-min match can't also fit before 45, so CP-SAT proves infeasibility.
+        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 45))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
-        assert result.reasons == (
-            PoolOverCapacity(
-                pool_id=PoolId("A"),
-                required_min=50,  # pinned 25 + unpinned 25
-                capacity_min=40,
-                table_count=1,
+        by_kind = _reasons_by_kind(result)
+        assert "pool_over_capacity" not in by_kind
+        assert result.reasons == (NoSingleCause(required_min=50, available_min=45),)
+
+    def test_no_tables_pool_with_only_a_pinned_fixture_is_not_flagged(self) -> None:
+        """Regression: a pool with no tables whose only fixture is *pinned* to a
+        catalogue table owned by another pool (a supported off-pool director
+        placement, ADR-0790) must not fire PoolHasNoTables — that arm is about a
+        pool's *unpinned* fixtures having nowhere to go, and this pool has none.
+        The pinned fixture is honored on its table and the day solves."""
+        p1, p2, p3, p4 = _players(4)
+        catalogue = _tables(1)  # T1 belongs to pool B; pool A owns no tables
+        snapshot = ScheduleSnapshot(
+            table_ids=catalogue,
+            pools=(
+                SchedulePool(PoolId("A"), (), Window(0, 480)),  # no tables
+                SchedulePool(PoolId("B"), catalogue, Window(0, 480)),
             ),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                # F1 lives in the no-tables pool A but is pinned onto T1 (pool B's
+                # table) — an off-pool placement the director is allowed to make.
+                _fixture(1, p1, p2, pool="A", pin=Pin(TableId("T1"), 0)),
+                _fixture(2, p3, p4, pool="B"),  # unpinned, plenty of room
+            ),
+            now_min=0,
         )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        by_kind = _reasons_by_kind(result)
+        assert "pool_has_no_tables" not in by_kind
+        assert result.reasons == ()
+
+    def test_off_pool_pin_does_not_push_a_pool_over_capacity(self) -> None:
+        """Regression: a pool owning one table with a comfortable window and a
+        single unpinned fixture that fits (25 <= 60) must not be reported over
+        capacity just because it *also* owns a fixture pinned to an outside table
+        whose duration would overflow the window if naively summed in
+        (25 + 45 = 70 > 60). Pins are not bound to the pool's tables/window, so
+        only the unpinned demand counts — and it fits, so the day solves."""
+        p1, p2, p3, p4 = _players(4)
+        catalogue = _tables(2)  # T1 is pool A's; T2 is the outside table
+        snapshot = ScheduleSnapshot(
+            table_ids=catalogue,
+            pools=(SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 60)),),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                _fixture(1, p1, p2, pool="A"),  # 25 min unpinned, fits T1 in [0,60]
+                # F2 is pool A's but pinned onto T2 (outside A's tables); 45 min.
+                _fixture(2, p3, p4, pool="A", pin=Pin(TableId("T2"), 0)),
+            ),
+            now_min=0,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        by_kind = _reasons_by_kind(result)
+        assert "pool_over_capacity" not in by_kind
+        assert result.reasons == ()
 
     def test_tight_shared_window_is_no_single_cause(self) -> None:
         """Every certain guard passes — each match fits its window, two tables

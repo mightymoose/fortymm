@@ -335,14 +335,19 @@ class WindowTooShortForMatch:
 
 @dataclass(frozen=True, slots=True)
 class PoolOverCapacity:
-    """A pool whose aggregate active-fixture match-time (``required_min``)
+    """A pool whose aggregate *unpinned*-fixture match-time (``required_min``)
     exceeds the table-minutes its window offers (``capacity_min`` =
     ``window_span × table_count``). A pigeonhole bound: it is a *necessary*
     condition for the pool to fit, so a violation proves the day cannot —
     without naming which fixtures collide (that is the CP-SAT conflict core,
-    out of scope here). Deliberately conservative: it undercounts demand
-    (ignores rest padding) rather than ever overcounting, so it never *falsely*
-    reports over-capacity."""
+    out of scope here). Scoped to unpinned fixtures only: pins/in-progress are
+    not constrained to this pool's tables or window (ADR-0790), so counting them
+    could invent a false over-capacity. Deliberately conservative — it excludes
+    pins and undercounts demand (ignores rest padding) rather than ever
+    overcounting, so it never *falsely* reports over-capacity. The trade-off is
+    completeness: a pool that fits its unpinned fixtures but only overflows once
+    in-window pins are layered in is left to CP-SAT and surfaces as
+    ``NoSingleCause``."""
 
     pool_id: PoolId
     required_min: int
@@ -570,17 +575,25 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # A day that cannot possibly be placed should explain every certain cause at
     # once (the director fixes them together), not just the first one hit. Three
     # certain, per-structure causes need no solver to prove:
-    #   * PoolHasNoTables — a pool with active fixtures but no tables to use,
+    #   * PoolHasNoTables — a pool with unpinned fixtures but no tables to use,
     #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
-    #   * PoolOverCapacity — a pool's demand exceeds window_span × table_count.
+    #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables.
     # We dedupe to the *most specific* cause per pool: a no-tables or window-too-
     # short pool is already unplaceable, so we don't also pile on over-capacity
     # for it. Bucket bounds for the pools that *do* fit are recorded on the way,
     # so the window is walked once; they are only consumed when no reason fires
     # (the clean case populates every unpinned fixture).
-    active_by_pool: defaultdict[PoolId, list[ScheduleFixture]] = defaultdict(list)
-    for fixture in active:
-        active_by_pool[fixture.pool_id].append(fixture)
+    #
+    # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
+    # are deliberately not constrained to their pool's tables or window (ADR-0790:
+    # an off-pool or out-of-window pin is a supported director action), so
+    # counting them against a pool's window×tables would invent false
+    # infeasibility. Only unpinned fixtures are constrained to their pool's tables
+    # inside its window by construction, so only they can prove a certain
+    # structural cause that can never false-fire.
+    unpinned_by_pool: defaultdict[PoolId, list[ScheduleFixture]] = defaultdict(list)
+    for fixture in unpinned:
+        unpinned_by_pool[fixture.pool_id].append(fixture)
 
     reasons: list[InfeasibilityReason] = []
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
@@ -613,20 +626,30 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
 
     # Per-pool (in snapshot order for determinism), most-specific cause wins.
     for pool in snapshot.pools:
-        pool_fixtures = active_by_pool.get(pool.id)
-        if not pool_fixtures:
-            continue  # a pool with no demand cannot be a cause
+        pool_unpinned = unpinned_by_pool.get(pool.id)
+        if not pool_unpinned:
+            continue  # no unpinned demand: no arm can prove a cause here
         if not pool.table_ids:
+            # A no-tables pool with ≥1 unpinned fixture: that fixture has nowhere
+            # to go. A no-tables pool whose only fixtures are pinned/in-progress
+            # (placed off-pool by the director) is fine — it never reaches here.
             reasons.append(PoolHasNoTables(pool_id=pool.id))
             continue  # dominates any capacity claim for this pool
         if pool.id in pools_short_window:
             continue  # window-too-short already dominates this pool
-        # Capacity is a pigeonhole *necessary* condition: sum the match-time of
-        # every active (non-completed) fixture on this pool — pinned included,
-        # since a pin occupies table-time too — against the table-minutes the
-        # window offers. Undercounting (we ignore rest padding) keeps it
-        # conservative, so it never *falsely* reports over-capacity.
-        required_min = sum(duration_of(f) for f in pool_fixtures)
+        # Capacity is a pigeonhole *necessary* condition over *unpinned* demand:
+        # sum the match-time of this pool's unpinned fixtures (the only ones
+        # constrained to its tables inside its window) against the table-minutes
+        # the window offers. Pins/in-progress are excluded — they are not bound
+        # to this pool's tables or window (ADR-0790), so counting them could
+        # invent a false over-capacity. Dropping them keeps the bound truly
+        # conservative: a pin only ever adds contention, so unpinned-alone
+        # overflowing is a genuine, necessary infeasibility, while unpinned-alone
+        # fitting is never falsely flagged. Completeness trade-off: a pool that
+        # fits its unpinned fixtures but tips over only once in-window pins are
+        # layered in is not reported here — that case is infeasible only if
+        # CP-SAT proves it, surfacing as the honest NoSingleCause residual.
+        required_min = sum(duration_of(f) for f in pool_unpinned)
         table_count = len(pool.table_ids)
         capacity_min = (pool.window.end_min - pool.window.start_min) * table_count
         if required_min > capacity_min:
