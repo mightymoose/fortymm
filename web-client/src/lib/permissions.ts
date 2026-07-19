@@ -24,6 +24,12 @@ export const PERM = {
   // access without also handing out the RBAC-management keys. Mirrors
   // api/app/admin_schedule_solves.py:SCHEDULING_VIEW_PERMISSION.
   SCHEDULING_VIEW: 'scheduling.view',
+  // Gates the Administration area's API-token page — its own grant (like
+  // notifications.broadcast / scheduling.view) so an operator can hand out the
+  // ability to mint a personal opaque bearer token without also handing out the
+  // RBAC-management keys. Mirrors the server's `api_token.manage` permission,
+  // which fronts `POST /v1/api-tokens`.
+  API_TOKEN_MANAGE: 'api_token.manage',
 } as const
 
 export type PermissionName = (typeof PERM)[keyof typeof PERM]
