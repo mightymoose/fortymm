@@ -50,6 +50,8 @@ from app.matches import _notify_result_posted
 from app.models import Match, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
+from app.player_matches import paginated_player_matches
+from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
@@ -72,6 +74,7 @@ from app.result_acceptance import (
 )
 from app.result_proposal import propose_result as propose_result_core
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
+from app.schemas.player import PlayerMatchListResponse, PlayerRead
 from app.services.match_service import MatchService
 
 log = logging.getLogger(__name__)
@@ -81,6 +84,19 @@ log = logging.getLogger(__name__)
 # ``ToolError``. The per-match ``best_of`` range is still enforced inside the
 # ``match_scoring`` entry points (``ScoreNotAllowedError``).
 GameNumber = Annotated[int, Field(ge=1, le=7)]
+
+# Argument bounds for the read tools, mirroring the HTTP query-param caps so the
+# two surfaces can't drift on what a valid page/limit is (``app.players``:
+# ``MAX_LIMIT`` = 50 for the typeahead, ``LIST_MAX_PAGE_SIZE`` = 100 for the
+# per-player match list). An out-of-range value is a schema-level validation
+# error at the transport, not a tool-body ``ToolError``.
+SearchLimit = Annotated[int, Field(ge=1, le=50)]
+MatchPage = Annotated[int, Field(ge=1)]
+MatchPageSize = Annotated[int, Field(ge=1, le=100)]
+
+# The default page size ``list_my_matches`` uses when the caller names none,
+# matching the HTTP per-player list default (``app.players.LIST_DEFAULT_PAGE_SIZE``).
+MY_MATCHES_DEFAULT_PAGE_SIZE = 25
 
 
 @asynccontextmanager
@@ -357,6 +373,55 @@ async def enter_game_score(
         except _SCORE_WRITE_ERRORS as exc:
             raise _map_score_write_tool_error(exc) from exc
         return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def search_players(
+    query: str,
+    limit: SearchLimit = SEARCH_DEFAULT_LIMIT,
+) -> list[PlayerRead]:
+    """Search registered players by username as the authenticated API-token
+    caller — the opponent picker's typeahead.
+
+    Mirrors ``GET /v1/players/search``: it reuses the shared
+    ``search_players_by_username`` query so the MCP and HTTP surfaces can never
+    drift. ``query`` is matched as a case-insensitive substring; the caller is
+    always excluded, as are tombstoned (merged-away) users, and results are
+    ordered alphabetically and capped at ``limit`` (default 10). A blank
+    ``query`` matches nothing and returns an empty list. Each hit carries the
+    player's rating in the default league (``null`` for an unrated player). Use a
+    hit's ``id`` as ``create_match``'s ``opponent_user_id``.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        return await search_players_by_username(
+            db, query=query, current_user_id=user_id, limit=limit
+        )
+
+
+@mcp.tool
+async def list_my_matches(
+    page: MatchPage = 1,
+    page_size: MatchPageSize = MY_MATCHES_DEFAULT_PAGE_SIZE,
+) -> PlayerMatchListResponse:
+    """List the authenticated API-token caller's OWN match history, newest first.
+
+    Reuses the same ``paginated_player_matches`` read the HTTP
+    ``GET /v1/players/{id}/matches`` endpoint serves — scoped to the caller — so
+    the MCP and HTTP surfaces can never drift. Unlike the global
+    ``GET /v1/matches`` feed (every platform match, by design), this returns only
+    matches the CALLER is a side of. The history is all-inclusive (ADR-0008):
+    any status, rated or not, solo "No opponent" matches included. Each row is
+    projected onto the caller's side — ``games`` read ``mine``/``theirs``,
+    ``result`` is ``W``/``L`` only once a match is decided (``null`` while it is
+    pending / in play / awaiting acceptance / voided), and ``rating_change`` is
+    the delta the match moved for the caller (``null`` unless decided and rated).
+    ``page`` (1-based) and ``page_size`` (default 25) page through the history;
+    ``total`` is the all-inclusive count.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        return await paginated_player_matches(db, user_id, page, page_size)
 
 
 @mcp.tool

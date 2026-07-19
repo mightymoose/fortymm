@@ -783,3 +783,156 @@ async def test_propose_undecided_board_raises_tool_error(
                     ],
                 },
             )
+
+
+# ----- search_players / list_my_matches read tools -------------------------
+
+
+async def test_search_and_list_my_matches_tools_are_registered(
+    db_session: AsyncSession,
+) -> None:
+    """Both read verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-reads-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"search_players", "list_my_matches"} <= names
+
+
+async def test_search_players_finds_opponent_and_excludes_caller(
+    db_session: AsyncSession,
+) -> None:
+    """A username-fragment search returns matching players and never the caller
+    themselves, mirroring ``GET /v1/players/search``."""
+    me = await make_user(db_session, "mcp-search-zephyr-self")
+    rival = await make_user(db_session, "mcp-search-zephyr-rival")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        found = await client.call_tool_mcp("search_players", {"query": "zephyr-rival"})
+
+    assert found.isError is False
+    assert found.structuredContent is not None
+    players = found.structuredContent["result"]
+    ids = {p["id"] for p in players}
+    assert str(rival.id) in ids
+    assert str(me.id) not in ids
+
+
+async def test_search_players_blank_query_returns_empty(
+    db_session: AsyncSession,
+) -> None:
+    """A blank query matches nothing — the same as the underlying service."""
+    me = await make_user(db_session, "mcp-search-blank")
+    await make_user(db_session, "mcp-search-blank-other")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        found = await client.call_tool_mcp("search_players", {"query": "   "})
+
+    assert found.isError is False
+    assert found.structuredContent is not None
+    assert found.structuredContent["result"] == []
+
+
+async def test_search_create_score_negotiate_then_list_my_matches(
+    db_session: AsyncSession,
+) -> None:
+    """The whole match flow over MCP ONLY: A searches for B, creates a rated
+    best-of-3, scores a decisive board, proposes it; B accepts → completed;
+    finally A's ``list_my_matches`` shows the completed match, won, against B."""
+    a = await make_user(db_session, "mcp-flow-alice")
+    b = await make_user(db_session, "mcp-flow-bob-quartz")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        # A finds B by a username fragment; A is excluded from her own search.
+        found = await client_a.call_tool_mcp("search_players", {"query": "bob-quartz"})
+        assert found.isError is False
+        assert found.structuredContent is not None
+        hit_ids = {p["id"] for p in found.structuredContent["result"]}
+        assert str(b.id) in hit_ids
+        assert str(a.id) not in hit_ids
+
+        # A creates a rated best-of-3 against B via the tool.
+        created = await client_a.call_tool_mcp(
+            "create_match",
+            {"best_of": 3, "rated": True, "opponent_user_id": str(b.id)},
+        )
+        assert created.isError is False
+        assert created.structuredContent is not None
+        match_id = created.structuredContent["id"]
+
+        # A scores a decisive 2-0 board, then proposes it.
+        for game in _DECISIVE_BOARD:
+            entered = await client_a.call_tool_mcp(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": game["game_number"],
+                    "side_1_points": game["side_1_points"],
+                    "side_2_points": game["side_2_points"],
+                },
+            )
+            assert entered.isError is False
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        standing_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    # B accepts the standing proposal → the match completes.
+    async with _mcp_client(token_b) as client_b, client_b:
+        accepted = await client_b.call_tool_mcp(
+            "accept_result", {"match_id": match_id, "result_id": standing_id}
+        )
+        assert accepted.isError is False
+        assert accepted.structuredContent is not None
+        assert accepted.structuredContent["status"] == "completed"
+
+    # A's own match list now shows the completed match, projected onto her side.
+    async with _mcp_client(token_a) as client_a, client_a:
+        listed = await client_a.call_tool_mcp("list_my_matches", {})
+
+    assert listed.isError is False
+    assert listed.structuredContent is not None
+    rows = {row["id"]: row for row in listed.structuredContent["items"]}
+    assert match_id in rows
+    assert rows[match_id]["status"] == "completed"
+    assert rows[match_id]["result"] == "W"
+    assert rows[match_id]["opponent"]["id"] == str(b.id)
+
+
+async def test_list_my_matches_returns_only_the_callers_matches(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """``list_my_matches`` is scoped to the caller — a match the caller is NOT a
+    side of (unlike the global ``GET /v1/matches`` feed) never appears."""
+    me = await make_user(db_session, "mcp-mine-owner")
+    raw = await _mint(db_session, me)
+
+    # A match the caller owns (created via the tool), and a wholly-separate match
+    # between two other players seeded over HTTP that the caller is absent from.
+    other = await start_session(api_client, db_session)
+    other_opponent = await make_user(db_session, "mcp-mine-other-rival")
+    foreign_match_id = await _create_match(api_client, other_opponent)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match",
+            {"best_of": 3, "rated": True, "opponent_user_id": str(other.id)},
+        )
+        assert created.structuredContent is not None
+        mine_match_id = created.structuredContent["id"]
+
+        listed = await client.call_tool_mcp("list_my_matches", {})
+
+    assert listed.isError is False
+    assert listed.structuredContent is not None
+    listed_ids = {row["id"] for row in listed.structuredContent["items"]}
+    assert mine_match_id in listed_ids
+    assert foreign_match_id not in listed_ids
