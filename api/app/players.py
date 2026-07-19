@@ -18,6 +18,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.player_matches import paginated_player_matches
+from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
 from app.player_summary import (
     load_player_ratings,
     summarize_one_player,
@@ -42,10 +43,9 @@ from app.sql import escape_like
 
 router = APIRouter(prefix="/v1")
 
-# Sizes for the two opponent-picker endpoints. The recent grid shows six
-# chips; the typeahead caps its dropdown well below the full roster.
+# Sizes for the opponent-picker endpoints. The recent grid shows six chips; the
+# typeahead's cap (SEARCH_DEFAULT_LIMIT) lives with its query in app.player_search.
 RECENT_DEFAULT_LIMIT = 6
-SEARCH_DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 
 # Pagination caps for the `/players` list + per-player matches endpoint.
@@ -138,26 +138,13 @@ async def search_players(
     client never has to fetch and filter the whole roster. An empty query
     matches nothing.
     """
-    term = q.strip()
-    if not term:
-        return []
-
-    pattern = f"%{escape_like(term)}%"
-    result = await db.execute(
-        select(User)
-        .where(
-            User.id != current_user.id,
-            # Exclude tombstoned (merged-away) guests so ghosts never surface.
-            User.merged_into_user_id.is_(None),
-            User.username.ilike(pattern, escape="\\"),
-        )
-        .order_by(User.username)
-        .limit(limit)
+    return await search_players_by_username(
+        db,
+        query=q,
+        current_user_id=current_user.id,
+        league_id=league_id,
+        limit=limit,
     )
-    users = result.scalars().all()
-    league = await resolve_league(db, league_id)
-    ratings = await load_player_ratings(db, league.id, (user.id for user in users))
-    return _serialize(users, ratings)
 
 
 # ---------------------------------------------------------------------------
