@@ -1,12 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@/test/utilities'
 
+import { infeasibilityReasonCopy } from '@/components/tournaments/data/solve'
+
 import {
   buildAdminScheduleSolveRead,
   buildLedgerRows,
   buildLedgerVariety,
 } from './solve-ledger-page.factory'
 import { solveLedgerPage } from './solve-ledger-page.page'
+
+// The exact copy the two surfaces share — reused (not re-hardcoded) so the test
+// pins the admin ledger to the ONE `infeasibilityReasonCopy`, exactly as the
+// factory's `sv-infeasible` row carries these two reasons.
+const windowReasonCopy = infeasibilityReasonCopy({
+  kind: 'window_too_short_for_match',
+  poolName: 'Pool A',
+  windowStart: '09:00',
+  windowEnd: '10:00',
+  bestOf: 5,
+  neededMin: 75,
+  windowSpanMin: 60,
+})
+const noSingleCauseCopy = infeasibilityReasonCopy({
+  kind: 'no_single_cause',
+  requiredMin: 420,
+  availableMin: 480,
+})
 
 describe('SolveLedgerPage', () => {
   it('renders a ledger row per run with every column in the designed vocabulary', async () => {
@@ -78,6 +98,10 @@ describe('SolveLedgerPage', () => {
       'worker crashed: out of memory in CP-SAT presolve',
     )
     expect(detail).toHaveTextContent('deadbeef'.repeat(8))
+    // A failed run carries NO infeasibility reasons — the expansion never bleeds
+    // the infeasible surface's "day doesn't fit" wording into a broken run.
+    expect(detail).not.toHaveTextContent(windowReasonCopy.sentence)
+    expect(detail).not.toHaveTextContent(noSingleCauseCopy.sentence)
     expect(
       within(failed).getByRole('button', { name: 'Hide run details' }),
     ).toHaveAttribute('aria-expanded', 'true')
@@ -100,11 +124,43 @@ describe('SolveLedgerPage', () => {
     expect(detail).toHaveTextContent("The day doesn't fit")
     expect(detail).toHaveTextContent('Input fingerprint')
 
+    // Both resolved reasons render their sentence AND remedy — the SAME copy the
+    // Schedule-tab strip shows (reused from `infeasibilityReasonCopy`, so the two
+    // surfaces cannot drift).
+    expect(detail).toHaveTextContent(windowReasonCopy.sentence)
+    expect(detail).toHaveTextContent(windowReasonCopy.remedy)
+    expect(detail).toHaveTextContent(noSingleCauseCopy.sentence)
+    expect(detail).toHaveTextContent(noSingleCauseCopy.remedy)
+    // An infeasible run carries no failed `error` sentence.
+    expect(detail).not.toHaveTextContent('worker crashed')
+
     // A succeeded (or in-flight) run has no story to expand.
     const succeeded = await solveLedgerPage.findRow('sv-succeeded')
     expect(
       within(succeeded).queryByRole('button', { name: /run details/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('keeps the headline-only expansion for an infeasible row with no resolved reasons', async () => {
+    solveLedgerPage.render([
+      buildAdminScheduleSolveRead({
+        id: 'sv-bare',
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasibility_reasons: [],
+      }),
+    ])
+    const user = solveLedgerPage.user()
+
+    const bare = await solveLedgerPage.findRow('sv-bare')
+    await user.click(
+      within(bare).getByRole('button', { name: 'Show run details' }),
+    )
+    const detail = solveLedgerPage.queryDetail('sv-bare')
+    expect(detail).toHaveTextContent("The day doesn't fit")
+    expect(detail).toHaveTextContent('Input fingerprint')
+    // No reason list is rendered when the (normally ≥1) list is somehow empty.
+    expect(detail?.querySelector('.solve-ledger-detail-reasons')).toBeNull()
   })
 
   it('renders the designed empty state when no solver has ever run', async () => {

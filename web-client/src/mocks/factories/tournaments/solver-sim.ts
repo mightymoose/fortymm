@@ -57,6 +57,8 @@ export function queuedSolveRow(id: string): ScheduleSolveRead {
     fixtures_placed: null,
     fixtures_pinned: null,
     error: null,
+    // Always a list; a queued run has reached no infeasibility.
+    infeasibility_reasons: [],
   }
 }
 

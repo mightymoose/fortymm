@@ -7,6 +7,7 @@ deliberately omits."""
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +74,7 @@ async def _add_solve(
     started_at: datetime | None = None,
     input_fingerprint: str | None = None,
     rerun_requested: bool = False,
+    infeasibility_reasons: list[dict[str, Any]] | None = None,
 ) -> uuid.UUID:
     row = ScheduleSolve(
         tournament_id=tournament_id,
@@ -83,6 +85,7 @@ async def _add_solve(
         started_at=started_at,
         input_fingerprint=input_fingerprint,
         rerun_requested=rerun_requested,
+        infeasibility_reasons=infeasibility_reasons,
     )
     db.add(row)
     await db.flush()
@@ -172,6 +175,57 @@ async def test_rows_carry_the_operator_only_facts(
     assert item["rerun_requested"] is True
     assert item["tournament_id"] == str(tournament_id)
     assert item["tournament_name"] == "Winter Masters"
+    # A non-infeasible row carries an empty list, never a null.
+    assert item["infeasibility_reasons"] == []
+
+
+async def test_infeasible_row_carries_resolved_reasons(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An ``infeasible`` ledger row's admin read carries the resolved reasons,
+    parsed from the raw JSONB into the typed union at the boundary — the same
+    ``ScheduleSolveRead`` field the detail BFF exposes."""
+    admin = await _admin_session(api_client, db_session)
+    tournament_id = await _make_tournament(db_session, admin, "Spring Open")
+    await _add_solve(
+        db_session,
+        tournament_id,
+        requested_at=T0,
+        status=ScheduleSolveStatus.infeasible,
+        verdict=SolverVerdict.infeasible,
+        infeasibility_reasons=[
+            {
+                "kind": "window_too_short_for_match",
+                "pool_name": "Pool A",
+                "window_start": "09:00",
+                "window_end": "09:10",
+                "best_of": 5,
+                "needed_min": 45,
+                "window_span_min": 10,
+            },
+            {"kind": "no_single_cause", "required_min": 600, "available_min": 480},
+        ],
+    )
+    await db_session.commit()
+
+    response = await api_client.get(URL)
+    assert response.status_code == 200
+    (item,) = response.json()["items"]
+    reasons = item["infeasibility_reasons"]
+    assert [r["kind"] for r in reasons] == [
+        "window_too_short_for_match",
+        "no_single_cause",
+    ]
+    window = reasons[0]
+    assert window["pool_name"] == "Pool A"
+    assert window["best_of"] == 5
+    assert window["needed_min"] == 45
+    assert window["window_span_min"] == 10
+    assert reasons[1] == {
+        "kind": "no_single_cause",
+        "required_min": 600,
+        "available_min": 480,
+    }
 
 
 async def test_tournament_id_filter_narrows_rows_and_total(

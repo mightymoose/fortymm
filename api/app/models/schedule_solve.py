@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -13,7 +14,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -139,6 +140,12 @@ class ScheduleSolve(Base):
     input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Why a ``failed`` run failed. ``NULL`` on every other status.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Structured reasons an ``infeasible`` solve did not fit, kept raw here; a
+    #: later boundary parses this into Pydantic models. ``NULL`` on every other
+    #: status.
+    infeasibility_reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     #: The coalesced enqueue's second arm: a trigger that lands while this row is
     #: ``running`` cannot be absorbed by a queued row (there isn't one) and must
     #: not enqueue a second job (one solve in flight per tournament) — so it sets

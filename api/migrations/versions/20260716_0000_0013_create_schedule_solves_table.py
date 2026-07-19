@@ -107,6 +107,10 @@ def upgrade() -> None:
         sa.Column("input_fingerprint", sa.Text(), nullable=True),
         # Why a ``failed`` run failed. NULL on every other status.
         sa.Column("error", sa.Text(), nullable=True),
+        # Structured reasons an ``infeasible`` solve did not fit — raw JSONB
+        # here, parsed into Pydantic at a later boundary. NULL on every other
+        # status.
+        sa.Column("infeasibility_reasons", postgresql.JSONB(), nullable=True),
     )
     # The admin page's one read: "this tournament's solves, newest first".
     op.create_index(
