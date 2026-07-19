@@ -109,6 +109,7 @@ function tournamentIn(status: TournamentStatus): {
       draw_type: 'single-elim',
       max_players: 16,
       entry_fee: 10,
+      timezone: 'America/Chicago',
       slot: { date: '2026-08-22', start: '09:00', end: '12:00' },
       match_settings: { rated: false, length_games: 3 },
     })
@@ -118,6 +119,7 @@ function tournamentIn(status: TournamentStatus): {
       draw_type: 'single-elim',
       max_players: 16,
       entry_fee: 10,
+      timezone: 'America/Chicago',
       slot: { date: '2026-08-23', start: '09:00', end: '12:00' },
       match_settings: { rated: false, length_games: 3 },
     })
@@ -219,6 +221,7 @@ describe('enterEvent, against the event itself', () => {
       draw_type: 'single-elim',
       max_players: 1,
       entry_fee: 0,
+      timezone: 'America/Chicago',
       slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
       match_settings: { rated: true, length_games: 3 },
     })
@@ -240,6 +243,7 @@ describe('enterEvent, against the event itself', () => {
       draw_type: 'single-elim',
       max_players: 1,
       entry_fee: 0,
+      timezone: 'America/Chicago',
       slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
       match_settings: { rated: true, length_games: 3 },
     })
@@ -265,6 +269,7 @@ describe('enterEvent, against the event itself', () => {
       draw_type: 'single-elim',
       max_players: 1,
       entry_fee: 0,
+      timezone: 'America/Chicago',
       slot: { date: '2026-06-14', start: '09:00', end: '10:00' },
       match_settings: { rated: true, length_games: 3 },
     })
@@ -544,6 +549,7 @@ describe('the rest of the event surface still holds', () => {
       draw_type: 'single-elim',
       max_players: 16,
       entry_fee: 10,
+      timezone: 'America/Chicago',
       slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
       match_settings: { rated: false, length_games: 3 },
     })
@@ -573,6 +579,7 @@ describe('the rest of the event surface still holds', () => {
       draw_type: 'single-elim',
       max_players: null,
       entry_fee: 0,
+      timezone: 'America/Chicago',
       slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
       match_settings: { rated: false, length_games: 3 },
     })

@@ -11,6 +11,7 @@ export function buildPoolCardProps(
   return {
     pool: buildPool(),
     tables: buildTables(6),
+    timezone: 'America/Chicago',
     canEdit: true,
     removal: { kind: 'allowed' },
     onChange: () => {},

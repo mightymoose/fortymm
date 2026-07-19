@@ -7782,6 +7782,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/entry_fee`.
             internal var entryFee: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/timezone`.
+            internal var timezone: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/match_settings`.
@@ -7798,6 +7800,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -7808,6 +7811,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
+                timezone: Swift.String,
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate]? = nil,
@@ -7818,6 +7822,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -7829,6 +7834,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -7856,6 +7862,10 @@ internal enum Components {
                     Swift.Double.self,
                     forKey: .entryFee
                 )
+                self.timezone = try container.decode(
+                    Swift.String.self,
+                    forKey: .timezone
+                )
                 self.slot = try container.decode(
                     Components.Schemas.Slot.self,
                     forKey: .slot
@@ -7878,6 +7888,7 @@ internal enum Components {
                     "draw_type",
                     "max_players",
                     "entry_fee",
+                    "timezone",
                     "slot",
                     "match_settings",
                     "predicates",
@@ -7901,6 +7912,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
             internal var entryFee: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/timezone`.
+            internal var timezone: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/match_settings`.
@@ -8000,6 +8013,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -8019,6 +8033,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
+                timezone: Swift.String,
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate],
@@ -8038,6 +8053,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -8058,6 +8074,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -8139,6 +8156,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/entry_fee`.
             internal var entryFee: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/timezone`.
+            internal var timezone: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/slot`.
             internal struct SlotPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/slot/value1`.
@@ -8191,6 +8210,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -8201,6 +8221,7 @@ internal enum Components {
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double? = nil,
+                timezone: Swift.String? = nil,
                 slot: Components.Schemas.TournamentEventUpdate.SlotPayload? = nil,
                 matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload? = nil,
                 predicates: [Components.Schemas.Predicate]? = nil,
@@ -8211,6 +8232,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -8222,6 +8244,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -8249,6 +8272,10 @@ internal enum Components {
                     Swift.Double.self,
                     forKey: .entryFee
                 )
+                self.timezone = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .timezone
+                )
                 self.slot = try container.decodeIfPresent(
                     Components.Schemas.TournamentEventUpdate.SlotPayload.self,
                     forKey: .slot
@@ -8271,6 +8298,7 @@ internal enum Components {
                     "draw_type",
                     "max_players",
                     "entry_fee",
+                    "timezone",
                     "slot",
                     "match_settings",
                     "predicates",

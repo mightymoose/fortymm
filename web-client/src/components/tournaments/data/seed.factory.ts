@@ -126,6 +126,7 @@ export function buildEvent(
     drawType: 'rr-then-ko',
     maxPlayers: 64,
     entryFee: 45,
+    timezone: 'America/Chicago',
     entrants: buildEntrants(52),
     entryState: { state: 'open' },
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },

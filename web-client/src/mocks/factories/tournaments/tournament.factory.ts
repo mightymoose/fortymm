@@ -457,6 +457,7 @@ export function buildTournamentEventRead(
     draw_type: 'rr-then-ko',
     max_players: 64,
     entry_fee: 45,
+    timezone: 'America/Chicago',
     entrants: [],
     entry_state: { state: 'open' },
     fixtures: [],

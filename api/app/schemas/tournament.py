@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import date, datetime
 from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AfterValidator,
@@ -148,6 +149,46 @@ class Address(BaseModel):
     region: str
     postal: str
     country: str
+
+
+def _is_iana_timezone(value: str) -> str:
+    """Refuse a timezone that names no real IANA zone (422 at the boundary).
+
+    A tournament's times are wall-clock *intents* anchored to real instants by this
+    zone (ADR "tournament times are timezone-aware instants"): the solver composes
+    ``(date, start, end, timezone)`` into an instant with stdlib ``zoneinfo``, and a
+    display renders it to a venue-local label. A string that ``ZoneInfo`` cannot load
+    would detonate deep in that composition — every read and every solve — so it is
+    refused *here*, once, rather than let a bad zone reach the column and fail far from
+    its source (parse-at-boundaries, api/CLAUDE.md).
+
+    ``ZoneInfo`` raises ``ZoneInfoNotFoundError`` (a ``KeyError``) for an unknown key
+    and ``ValueError`` for a malformed one (an empty string, a path-traversal attempt);
+    both are the same "not a zone" fault to a caller, so both become one 422.
+    """
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"{value!r} is not a known IANA timezone (e.g. 'America/Chicago')."
+        ) from exc
+    return value
+
+
+EventTimezone = Annotated[str, Field(min_length=1), AfterValidator(_is_iana_timezone)]
+"""An event's venue timezone: an IANA zone name (e.g. ``America/Chicago``) that
+ANCHORS the event's wall-clock ``Slot`` windows to real instants (ADR "tournament
+times are timezone-aware instants").
+
+It does **not** reshape those windows — a ``Slot`` stays ``{date, start, end}``
+wall-clock strings — it is the frame they are read in. ``min_length=1`` gives the empty
+string a
+clean under-the-field message and a real ``minLength`` in the OpenAPI schema; the
+``AfterValidator`` then refuses any string that is not a loadable zone, so an unknown or
+malformed zone is a 422 rather than a value the solver/display cannot compose.
+
+Shared verbatim by the create and update schemas so the rule cannot drift between the
+two verbs, exactly as ``EventMaxPlayers`` and ``EventPools`` are."""
 
 
 class Slot(BaseModel):
@@ -694,6 +735,11 @@ class TournamentEventRead(BaseModel):
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
     # Numeric(8,2) column coerces cleanly into float at the read boundary.
     entry_fee: float
+    # The venue timezone (IANA name) that ANCHORS this event's wall-clock windows to
+    # real instants (ADR "tournament times are timezone-aware instants"). It rides on
+    # the read so a client (and later the display BFF) knows the frame every ``Slot``
+    # of this event is stated in; the ``Slot`` strings themselves are unchanged.
+    timezone: str
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate]
@@ -936,6 +982,14 @@ class TournamentEventCreate(BaseModel):
     # the row.
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee
+    # Required and validated: the event's wall-clock windows are meaningless without a
+    # zone to anchor them (ADR "tournament times are timezone-aware instants"), so a
+    # create must name one and it must be a real IANA zone (an unknown zone is a 422).
+    # The client derives the default from the browser
+    # (``Intl.DateTimeFormat().resolvedOptions().timeZone``) and sends it explicitly —
+    # there is no server default, because "the event's venue is UTC" is a guess no
+    # single-venue tournament would want silently made for it.
+    timezone: EventTimezone
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
@@ -973,6 +1027,10 @@ class TournamentEventUpdate(BaseModel):
     draw_type: DrawType | None = None
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee | None = None
+    # The same validated IANA zone create requires — correcting the venue timezone is a
+    # supported edit (ADR: "picked Chicago, the venue is Denver"). Its column is NOT
+    # NULL, so an explicit ``null`` is rejected below; an unknown zone is still a 422.
+    timezone: EventTimezone | None = None
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
@@ -987,6 +1045,7 @@ class TournamentEventUpdate(BaseModel):
         "format",
         "draw_type",
         "entry_fee",
+        "timezone",
         "slot",
         "match_settings",
         "predicates",

@@ -143,6 +143,13 @@ def upgrade() -> None:
         # never zero or negative.
         sa.Column("max_players", sa.Integer(), nullable=True),
         sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
+        # The venue timezone (IANA name, e.g. ``America/Chicago``) that anchors this
+        # event's wall-clock ``slot`` windows to real instants (ADR "tournament times
+        # are timezone-aware instants"). NOT NULL with no server default: every event
+        # names its venue frame, and the client supplies a browser-derived default at
+        # create — "UTC" is a guess no single-venue tournament wants made silently.
+        # Added here in place per the pre-deploy convention, not as a chained ALTER.
+        sa.Column("timezone", sa.String(length=64), nullable=False),
         sa.CheckConstraint(
             "max_players > 0", name="ck_tournament_events_max_players_positive"
         ),

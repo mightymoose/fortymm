@@ -57,6 +57,13 @@ if (!window.ResizeObserver) {
   } as unknown as typeof ResizeObserver
 }
 
+// jsdom doesn't implement Element.scrollIntoView; cmdk (the searchable Command
+// palette behind the timezone combobox) scrolls the active item into view as
+// the list filters, so provide an inert stub.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {}
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()

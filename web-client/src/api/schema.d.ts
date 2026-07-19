@@ -3681,6 +3681,8 @@ export interface components {
             max_players?: number | null;
             /** Entry Fee */
             entry_fee: number;
+            /** Timezone */
+            timezone: string;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
@@ -3708,6 +3710,8 @@ export interface components {
             max_players: number | null;
             /** Entry Fee */
             entry_fee: number;
+            /** Timezone */
+            timezone: string;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
@@ -3772,6 +3776,8 @@ export interface components {
             max_players?: number | null;
             /** Entry Fee */
             entry_fee?: number | null;
+            /** Timezone */
+            timezone?: string | null;
             slot?: components["schemas"]["Slot"] | null;
             match_settings?: components["schemas"]["MatchSettings"] | null;
             /** Predicates */

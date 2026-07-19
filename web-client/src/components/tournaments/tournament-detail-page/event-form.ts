@@ -8,6 +8,7 @@ import {
   poolNameSchema,
   type EventSection,
 } from '../data/event-validation'
+import { browserTimezone } from '../data/helpers'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
 import { eligibilityIssues } from '../data/predicate-validation'
 import type {
@@ -118,6 +119,13 @@ export const eventSchema = z.object({
   ]),
   maxPlayers: maxPlayersSchema,
   entryFee: entryFeeSchema,
+  // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`
+  // on the server and required here to mirror it — a non-empty string is the whole
+  // client-side rule: whether it names a *known* zone is the server's to judge (an
+  // unknown one is a 422), and re-listing every IANA name here to pre-empt that
+  // would be a second copy of the tz database to drift. The picker only ever offers
+  // real zones, so this floor is a backstop, not the gate.
+  timezone: z.string().trim().min(1, { error: 'Choose a timezone.' }),
   slot: slotSchema,
   match: z.object({
     rated: z.boolean(),
@@ -163,6 +171,12 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   // …and with NO fee, which is not the same as a free one. `NaN` is the blank box,
   // and blank stays a required error until they say which they meant.
   entryFee: NaN,
+  // The browser's resolved zone (ADR 20260719): the venue's, in the single-venue
+  // common case, and a starting point the director can correct otherwise. This
+  // const only backs the `event === null` projection below — the real new-event
+  // path is `emptyEvent` (`data/helpers`), which sets the same browser default on
+  // the event the editor is handed.
+  timezone: browserTimezone(),
   slot: { date: '', start: '', end: '' },
   match: { rated: true, lengthGames: 5 },
   predicates: [],
@@ -179,6 +193,7 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     drawType: event.drawType,
     maxPlayers: event.maxPlayers,
     entryFee: event.entryFee,
+    timezone: event.timezone,
     slot: event.slot,
     match: event.match,
     predicates: event.predicates,
@@ -202,7 +217,8 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
-  if (errors.name || errors.maxPlayers || errors.entryFee) return 'basics'
+  if (errors.name || errors.maxPlayers || errors.entryFee || errors.timezone)
+    return 'basics'
   if (errors.predicates) return 'eligibility'
   // A pool with a cleared name (`poolNameSchema`). RHF reports it per row
   // (`errors.pools[2].name`) *and* sets the array key, so the truthiness of `pools` is

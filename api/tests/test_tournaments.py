@@ -145,6 +145,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "draw_type": "rr-then-ko",
         "max_players": 64,
         "entry_fee": 45,
+        "timezone": "America/Chicago",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
@@ -416,6 +417,8 @@ async def test_create_event_round_trips_jsonb(
     # entrants list is empty (an empty list, not a missing key).
     assert body["entered"] == 0
     assert body["entrants"] == []
+    # The venue timezone that anchors this event's wall-clock windows round-trips.
+    assert body["timezone"] == "America/Chicago"
     assert body["slot"] == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     assert body["match_settings"] == {"rated": True, "length_games": 5}
     assert body["predicates"] == [
@@ -429,6 +432,112 @@ async def test_create_event_round_trips_jsonb(
             "table_ids": ["t1", "t2"],
         }
     ]
+
+
+async def test_create_event_with_an_unknown_timezone_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+):
+    # An event's wall-clock windows are anchored to real instants by its venue
+    # timezone (ADR "tournament times are timezone-aware instants"), so a string that
+    # names no real IANA zone is refused at the boundary (422) — it can never reach the
+    # column, where the solver/display would fail to compose an instant from it.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(timezone="Mars/Olympus_Mons"),
+    )
+    assert response.status_code == 422
+
+    # And nothing was created: the detail read still shows no events.
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert detail["events"] == []
+
+
+async def test_create_event_requires_a_timezone(
+    authed_client: tuple[AsyncClient, User],
+):
+    # There is no server default: the client supplies a browser-derived zone, so an
+    # omitted ``timezone`` is a 422 rather than a silently-UTC event.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    payload = _event_payload()
+    del payload["timezone"]
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events", json=payload
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_event_updates_the_timezone(
+    authed_client: tuple[AsyncClient, User],
+):
+    # Correcting the venue timezone (picked Chicago, the venue is Denver) is a
+    # supported edit and round-trips through the detail BFF.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"timezone": "America/Denver"},
+    )
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "America/Denver"
+
+    # It round-trips through the tournament-detail read.
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    (detail_event,) = detail["events"]
+    assert detail_event["timezone"] == "America/Denver"
+
+
+async def test_patch_event_with_an_unknown_timezone_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"timezone": "Not/AZone"},
+    )
+    assert response.status_code == 422
+
+    # The stored timezone is unchanged.
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    (detail_event,) = detail["events"]
+    assert detail_event["timezone"] == "America/Chicago"
+
+
+async def test_patch_event_explicit_null_timezone_returns_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    # ``timezone`` backs a NOT NULL column, so an explicit ``null`` is rejected (422),
+    # exactly like ``name``/``slot`` — "omitted" (leave unchanged) and "cleared" differ.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"timezone": None},
+    )
+    assert response.status_code == 422
 
 
 async def test_create_event_persists_the_rating_predicate(
@@ -730,6 +839,7 @@ async def test_event_negative_entry_fee_violates_db_check(
         draw_type=DrawType.single_elim,
         max_players=8,
         entry_fee=-1,
+        timezone="America/Chicago",
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],

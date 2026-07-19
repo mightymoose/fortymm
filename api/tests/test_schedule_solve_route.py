@@ -149,6 +149,7 @@ async def _make_tournament(
         draw_type=DrawType.round_robin,
         max_players=None,
         entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         pools=[

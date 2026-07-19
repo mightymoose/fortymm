@@ -61,6 +61,15 @@ export function isUnrated(entrant: Entrant): boolean {
  * definition, shared by the formatters here and by `ReadOnlyValue`. */
 export const EM_DASH = '—'
 
+/** The browser's resolved IANA timezone (e.g. `America/Chicago`) — the frame a
+ * **new** event's wall-clock windows default to being anchored in (ADR 20260719).
+ * A single call to `Intl`, so a test can mock `Intl.DateTimeFormat` and watch the
+ * default follow. The director can change it in the editor's timezone picker; the
+ * server does every bit of the actual timezone arithmetic. */
+export function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
 /** Parse a date-only `YYYY-MM-DD` string into a local-midnight Date. */
 function parseDateOnly(iso: string): Date {
   const [y, m, d] = iso.split('-').map(Number)
@@ -312,6 +321,10 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     drawType: 'single-elim',
     maxPlayers: 32,
     entryFee: 30,
+    // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):
+    // a new event pre-fills from the browser's resolved zone, which for the common
+    // single-venue case is exactly the venue's. They can correct it in the editor.
+    timezone: browserTimezone(),
     // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
     entrants: [],

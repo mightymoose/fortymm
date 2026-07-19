@@ -1,6 +1,10 @@
+import { afterEach, vi } from 'vitest'
+
 import {
+  browserTimezone,
   daysBetween,
   effectiveDateRange,
+  emptyEvent,
   fmtDateRange,
   fmtTimeWindow,
   fmtVenueLine,
@@ -272,5 +276,45 @@ describe('findPoolConflicts', () => {
       buildPool({ slot: { date: '2026-06-14', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
     ])
     expect(conflicts).toEqual([])
+  })
+})
+
+/** Point `Intl.DateTimeFormat().resolvedOptions().timeZone` at `zone` for the span
+ * of a test — the browser's resolved zone is the default a new event pre-fills from
+ * (ADR 20260719), and the only way to prove that default *follows the browser* is to
+ * move the browser. Restored in `afterEach`. */
+function stubBrowserZone(zone: string) {
+  const real = Intl.DateTimeFormat
+  vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
+    (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) => {
+      const fmt = new real(...args)
+      const opts = fmt.resolvedOptions()
+      vi.spyOn(fmt, 'resolvedOptions').mockReturnValue({ ...opts, timeZone: zone })
+      return fmt
+    },
+  )
+}
+
+describe('browserTimezone', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('reads the browser-resolved IANA zone', () => {
+    stubBrowserZone('Asia/Tokyo')
+    expect(browserTimezone()).toBe('Asia/Tokyo')
+  })
+})
+
+describe('emptyEvent', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it("defaults a new event's timezone to the browser's resolved zone", () => {
+    stubBrowserZone('Europe/Paris')
+    expect(emptyEvent(buildTournament()).timezone).toBe('Europe/Paris')
+  })
+
+  it('mints a new-prefixed id and no draw', () => {
+    const event = emptyEvent(buildTournament())
+    expect(event.id.startsWith('new')).toBe(true)
+    expect(event.fixtures).toEqual([])
   })
 })

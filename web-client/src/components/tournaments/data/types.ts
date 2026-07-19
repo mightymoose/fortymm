@@ -306,6 +306,14 @@ export interface TournamentEvent {
    * reader must handle the no-cap branch rather than dividing by it. */
   maxPlayers: number | null
   entryFee: number
+  /** The IANA timezone (e.g. `America/Chicago`) that **anchors** this event's
+   * wall-clock windows to real instants (ADR 20260719 — "tournament times are
+   * timezone-aware instants"). `NOT NULL` on the server: a new event pre-fills it
+   * from the browser's resolved zone (`browserTimezone`, `./helpers`), and every
+   * displayed window carries it as a label so the director sees the frame the
+   * `slot` times are in. The server does all timezone arithmetic; the client only
+   * carries the name and shows it. */
+  timezone: string
   /** The registration count. Server-derived from the active entries — it is
    * `entrants.length`, never a stored counter, so the count and the list it
    * counts cannot disagree. Read it; never write it. */

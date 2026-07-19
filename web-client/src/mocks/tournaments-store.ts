@@ -199,6 +199,7 @@ function seed(): StoredTournament[] {
           draw_type: 'rr-then-ko',
           max_players: 64,
           entry_fee: 45,
+          timezone: 'America/Chicago',
           entrants: otherEntrants('ev-open-singles', 52),
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
           match_settings: { rated: true, length_games: 5 },
@@ -235,6 +236,7 @@ function seed(): StoredTournament[] {
           draw_type: 'rr-then-ko',
           max_players: 48,
           entry_fee: 30,
+          timezone: 'America/Los_Angeles',
           entrants: [],
           slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
           match_settings: { rated: true, length_games: 3 },
@@ -257,6 +259,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           max_players: 16,
           entry_fee: 60,
+          timezone: 'America/Los_Angeles',
           entrants: otherEntrants('ev-champ-singles', 16),
           slot: { date: '2026-06-14', start: '13:00', end: '18:00' },
           match_settings: { rated: true, length_games: 7 },
@@ -288,6 +291,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           max_players: 24,
           entry_fee: 20,
+          timezone: 'America/Los_Angeles',
           entrants: otherEntrants('ev-u1200', 9),
           slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
           match_settings: { rated: true, length_games: 3 },
@@ -349,6 +353,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           max_players: 32,
           entry_fee: 25,
+          timezone: 'America/Los_Angeles',
           entrants: [],
           slot: { date: '2026-06-14', start: '10:00', end: '15:00' },
           match_settings: { rated: false, length_games: 3 },
@@ -404,6 +409,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           max_players: 16,
           entry_fee: 20,
+          timezone: 'America/New_York',
           entrants: otherEntrants('ev-slam-open', 8),
           slot: { date: '2026-08-22', start: '09:00', end: '13:00' },
           match_settings: { rated: true, length_games: 5 },
@@ -462,6 +468,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           max_players: 32,
           entry_fee: 40,
+          timezone: 'America/Los_Angeles',
           entrants: otherEntrants('ev-cc-open', 28),
           slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
           match_settings: { rated: true, length_games: 5 },
@@ -1093,6 +1100,9 @@ export function createEvent(
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
+    // The IANA timezone anchoring the windows (ADR 20260719): `NOT NULL` on the
+    // server, so the create body always carries it.
+    timezone: body.timezone,
     // A brand-new event has no entrants, so its derived count is 0. There is no
     // `entered` to set — that's the point.
     entrants: [],
@@ -1150,6 +1160,9 @@ export function updateEvent(
     max_players:
       'max_players' in patch ? (patch.max_players ?? null) : event.max_players,
     entry_fee: patch.entry_fee ?? event.entry_fee,
+    // The timezone is `NOT NULL`, so like the other required columns an explicit
+    // `null` is a no-op and an absent key leaves it (ADR 20260719).
+    timezone: patch.timezone ?? event.timezone,
     // Entrants are not in the PATCH body — an editor edit never touches the
     // registrations, so the derived count survives the edit untouched.
     entrants: event.entrants,
