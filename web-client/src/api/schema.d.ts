@@ -11,7 +11,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Session Endpoint */
+        /**
+         * Get Session Endpoint
+         * @description Return the current session, resolving the caller **bearer-first**.
+         *
+         *     An ``Authorization: Bearer <token>`` header (a personal API token minted at
+         *     ``POST /v1/api-tokens``) takes precedence over the session cookie: an API
+         *     client gets *its token's* user back and **no ``Set-Cookie``** — we never hand
+         *     an external tool a browser session. The session cookie is consulted only when
+         *     the bearer doesn't resolve a live user.
+         *
+         *     For a cookie-authenticated caller the endpoint self-heals a dropped CSRF
+         *     cookie (reissuing it without rotating the session), and a cookie that resolves
+         *     to a merged-away guest raises the structured ``session_merged`` 401 instead of
+         *     silently swapping identities.
+         *
+         *     Only when *neither* credential resolves a user (no/garbage cookie and no valid
+         *     bearer) does it mint a fresh guest and Set-Cookie it — the zero-friction first
+         *     visit.
+         */
         get: operations["get_session_endpoint_v1_session_get"];
         put?: never;
         post?: never;
@@ -4124,7 +4142,9 @@ export interface operations {
     get_session_endpoint_v1_session_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
