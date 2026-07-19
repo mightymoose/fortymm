@@ -21,6 +21,7 @@ lifecycle yourself"). The verifier does the same.
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -36,11 +37,17 @@ from app.mappers.match_extras_mapper import (
     empty_extras,
     serialize_match_extras,
 )
+from app.match_creation import create_match as create_match_core
 from app.match_queries import match_eager_options, singles_user_ids
 from app.match_serialization import _is_participant, _serialize_details
-from app.models import Match
+from app.models import Match, User
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
+from app.result_acceptance import (
+    OpponentNotFoundError,
+    RatedNeedsRegisteredOpponentError,
+    SelfMatchError,
+)
 from app.schemas.match import MatchDetails
 from app.services.match_service import MatchService
 
@@ -110,6 +117,17 @@ def _authenticated_user_id() -> uuid.UUID:
     return uuid.UUID(raw_user_id)
 
 
+async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
+    """Load the live ``User`` the caller authenticated as, so the creation
+    service has the ``creator`` row it needs. The transport already resolved
+    this id from a live, non-tombstoned token, so a missing row is an internal
+    invariant break — the tool surfaces it as a ``ToolError`` rather than a
+    silent ``None``."""
+    return (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+
+
 async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
     """Load the eager ``Match`` ORM row the serializer needs, mirroring the HTTP
     ``GET /v1/matches/{match_id}`` read path's eager-load chain."""
@@ -164,3 +182,53 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             await _view_extras(service, match) if is_participant else empty_extras()
         )
         return _serialize_details(match, user_id, extras, domain_match)
+
+
+@mcp.tool
+async def create_match(
+    best_of: Literal[1, 3, 5, 7],
+    opponent_user_id: uuid.UUID | None = None,
+    league_id: uuid.UUID | None = None,
+    rated: bool = True,
+) -> MatchDetails:
+    """Start a match as the authenticated API-token caller and return it.
+
+    Mirrors ``POST /v1/matches``: it reuses the shared creation service and
+    serializer, so the MCP and HTTP surfaces can never drift. ``best_of`` is the
+    total games to play and must be one of 1, 3, 5, or 7. ``opponent_user_id`` is
+    optional — omit it for a solo match, which gets a player-less "No opponent"
+    sentinel side (still scorable) and is always unrated, so it must be created
+    with ``rated=False``. ``league_id`` is optional; when omitted the match binds
+    to the default league. Returns the created ``MatchDetails`` from the
+    creator's perspective (the same view ``get_match`` reads back).
+
+    Raises a ``ToolError`` when the opponent is yourself, when
+    ``opponent_user_id`` matches no live registered player, or when a rated match
+    is requested with no registered opponent.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        creator = await _load_user(db, user_id)
+        if creator is None:
+            raise ToolError("Not authenticated.")
+        try:
+            created = await create_match_core(
+                db,
+                creator=creator,
+                opponent_user_id=opponent_user_id,
+                league_id=league_id,
+                best_of=best_of,
+                rated=rated,
+            )
+        except SelfMatchError as err:
+            raise ToolError("You cannot start a match against yourself.") from err
+        except OpponentNotFoundError as err:
+            raise ToolError(
+                f"No live registered player found with id {opponent_user_id}."
+            ) from err
+        except RatedNeedsRegisteredOpponentError as err:
+            raise ToolError(
+                "A rated match needs a registered opponent. Pass an "
+                "opponent_user_id, or set rated=False for a solo match."
+            ) from err
+        return _serialize_details(created, creator.id)

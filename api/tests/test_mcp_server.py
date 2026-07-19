@@ -232,3 +232,120 @@ async def test_get_match_non_participant_sees_scorecard_without_extras(
     )
     assert body["recent_form"] == []
     assert body["head_to_head"] is None
+
+
+# ----- create_match tool ---------------------------------------------------
+
+
+async def test_create_match_is_registered(db_session: AsyncSession) -> None:
+    """The write verb is exposed alongside the read verb over the transport."""
+    user = await make_user(db_session, "mcp-create-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+
+    assert "create_match" in {tool.name for tool in tools}
+
+
+async def test_create_solo_match_is_retrievable_via_get_match(
+    db_session: AsyncSession,
+) -> None:
+    """A solo ``create_match`` (no opponent, ``rated=False``) returns a
+    ``MatchDetails`` with two sides — side 2 the player-less sentinel — and the
+    created match is then readable back through ``get_match``."""
+    me = await make_user(db_session, "mcp-solo-creator")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match", {"best_of": 3, "rated": False}
+        )
+        assert created.isError is False
+        body = created.structuredContent
+        assert body is not None
+        match_id = body["id"]
+
+        read_back = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    # Creator's perspective: side 1 is mine, side 2 is the player-less sentinel.
+    my_side, opp_side = body["sides"]
+    assert my_side["is_current_user_side"] is True
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["is_current_user_side"] is False
+    assert opp_side["players"] == []
+    assert body["best_of"] == 3
+    assert body["affects_rating"] is False
+    # get_match reads the same match back.
+    assert read_back.isError is False
+    assert read_back.structuredContent is not None
+    assert read_back.structuredContent["id"] == match_id
+
+
+async def test_create_rated_without_opponent_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match with no opponent surfaces the domain rule as a ``ToolError``
+    with an actionable message."""
+    me = await make_user(db_session, "mcp-rated-noopp")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="registered opponent"):
+            await client.call_tool("create_match", {"best_of": 3, "rated": True})
+
+
+async def test_create_self_match_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """Passing your own id as the opponent surfaces ``SelfMatchError`` as a
+    ``ToolError``."""
+    me = await make_user(db_session, "mcp-self-match")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="against yourself"):
+            await client.call_tool(
+                "create_match",
+                {"best_of": 3, "rated": False, "opponent_user_id": str(me.id)},
+            )
+
+
+async def test_create_match_unknown_opponent_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match against an id that matches no live player surfaces
+    ``OpponentNotFoundError`` as a ``ToolError``."""
+    me = await make_user(db_session, "mcp-unknown-opp")
+    raw = await _mint(db_session, me)
+    ghost = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=ghost):
+            await client.call_tool(
+                "create_match",
+                {"best_of": 5, "rated": True, "opponent_user_id": ghost},
+            )
+
+
+async def test_create_rated_match_against_registered_opponent(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match against a real registered opponent is created and rated."""
+    me = await make_user(db_session, "mcp-rated-creator")
+    opponent = await make_user(db_session, "mcp-rated-rival")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match",
+            {"best_of": 5, "rated": True, "opponent_user_id": str(opponent.id)},
+        )
+
+    assert created.isError is False
+    body = created.structuredContent
+    assert body is not None
+    assert body["affects_rating"] is True
+    my_side, opp_side = body["sides"]
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["players"][0]["user_id"] == str(opponent.id)
