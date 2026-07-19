@@ -68,6 +68,160 @@ export type ScheduleSolveTrigger = z.infer<typeof scheduleSolveTriggerSchema>
 export type ScheduleSolveStatus = z.infer<typeof scheduleSolveStatusSchema>
 export type SolverVerdict = z.infer<typeof solverVerdictSchema>
 
+// ----- why the day doesn't fit: the resolved infeasibility reasons ------------
+//
+// An `infeasible` solve no longer speaks in one opaque "Doesn't fit" — the API
+// resolves the causes to names/numbers at apply time (the ADR
+// "an-infeasible-solve-explains-itself-with-a-resolved-reason") and ships them
+// as a closed sum type on `ScheduleSolveRead.infeasibility_reasons`: always a
+// list, `[]` off the infeasible path. The `kind` discriminant is *data* the
+// client switches on, so — like `status`/`trigger`/`verdict` — an arm this
+// client has no words for must FAIL the parse here, in the queryFn, not fall
+// out of a `switch` two components later as a blank row (`z.discriminatedUnion`
+// rejects an unknown discriminator). Names + numbers are data (a `pool_name` is
+// like a username); the *sentence* is still the client's, minted in
+// `infeasibilityReasonCopy` below, so "raw API strings never reach the UI" holds.
+
+type PoolHasNoTablesWire =
+  components['schemas']['PoolHasNoTablesRead']
+type WindowTooShortForMatchWire =
+  components['schemas']['WindowTooShortForMatchRead']
+type PoolOverCapacityWire =
+  components['schemas']['PoolOverCapacityRead']
+type NoSingleCauseWire =
+  components['schemas']['NoSingleCauseRead']
+
+/**
+ * One resolved reason an `infeasible` solve carries, in the domain's camelCase
+ * spelling — a discriminated union over `kind`, one arm per structural cause the
+ * solver can name, plus the honestly-labelled residual (`no_single_cause`). The
+ * `kind` string stays snake_case (it is the wire's discriminant, and the copy
+ * module + admin ledger switch on it); every other field is mapped snake→camel
+ * like the rest of this module.
+ *
+ * - **`pool_has_no_tables`** — a pool with fixtures but nowhere to place them.
+ * - **`window_too_short_for_match`** — a single match cannot fit its pool window
+ *   contiguously, whatever the table count.
+ * - **`pool_over_capacity`** — a pool's aggregate match-time exceeds what its
+ *   window × tables can hold (a *certain* pre-check, not a CP-SAT guess).
+ * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–3 all passed: a
+ *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
+ */
+export type InfeasibilityReason =
+  | { kind: 'pool_has_no_tables'; poolName: string }
+  | {
+      kind: 'window_too_short_for_match'
+      poolName: string
+      windowStart: string
+      windowEnd: string
+      bestOf: 1 | 3 | 5 | 7
+      neededMin: number
+      windowSpanMin: number
+    }
+  | {
+      kind: 'pool_over_capacity'
+      poolName: string
+      windowStart: string
+      windowEnd: string
+      requiredMin: number
+      capacityMin: number
+      tableCount: number
+    }
+  | { kind: 'no_single_cause'; requiredMin: number; availableMin: number }
+
+/** The wire arms, as they really arrive: snake_case, `kind` a literal so the
+ * union below can discriminate on it. `satisfies` each against the generated
+ * schema so a field renamed in the API is a compile error here, not a silent
+ * `undefined` at render. */
+const poolHasNoTablesWireSchema = z.object({
+  kind: z.literal('pool_has_no_tables'),
+  pool_name: z.string(),
+}) satisfies z.ZodType<PoolHasNoTablesWire>
+
+const windowTooShortForMatchWireSchema = z.object({
+  kind: z.literal('window_too_short_for_match'),
+  pool_name: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  best_of: z.union([z.literal(1), z.literal(3), z.literal(5), z.literal(7)]),
+  needed_min: z.number().int(),
+  window_span_min: z.number().int(),
+}) satisfies z.ZodType<WindowTooShortForMatchWire>
+
+const poolOverCapacityWireSchema = z.object({
+  kind: z.literal('pool_over_capacity'),
+  pool_name: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  required_min: z.number().int(),
+  capacity_min: z.number().int(),
+  table_count: z.number().int(),
+}) satisfies z.ZodType<PoolOverCapacityWire>
+
+const noSingleCauseWireSchema = z.object({
+  kind: z.literal('no_single_cause'),
+  required_min: z.number().int(),
+  available_min: z.number().int(),
+}) satisfies z.ZodType<NoSingleCauseWire>
+
+/** The four arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
+ * has no arm and throws, which is exactly the boundary rule: a reason this
+ * client cannot render must fail the parse, not blank the row. */
+export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
+  poolHasNoTablesWireSchema,
+  windowTooShortForMatchWireSchema,
+  poolOverCapacityWireSchema,
+  noSingleCauseWireSchema,
+])
+
+/** One wire arm → one domain `InfeasibilityReason`. Annotated `: InfeasibilityReason`
+ * so the union above and the wire arms are one thing — drop or rename a field on
+ * either and this is a compile error. Exhaustive over `kind` (a `never` default),
+ * so a fifth arm added to the API cannot slip through unmapped. */
+export function infeasibilityReasonFromWire(
+  r: z.infer<typeof infeasibilityReasonWireSchema>,
+): InfeasibilityReason {
+  switch (r.kind) {
+    case 'pool_has_no_tables':
+      return { kind: r.kind, poolName: r.pool_name }
+    case 'window_too_short_for_match':
+      return {
+        kind: r.kind,
+        poolName: r.pool_name,
+        windowStart: r.window_start,
+        windowEnd: r.window_end,
+        bestOf: r.best_of,
+        neededMin: r.needed_min,
+        windowSpanMin: r.window_span_min,
+      }
+    case 'pool_over_capacity':
+      return {
+        kind: r.kind,
+        poolName: r.pool_name,
+        windowStart: r.window_start,
+        windowEnd: r.window_end,
+        requiredMin: r.required_min,
+        capacityMin: r.capacity_min,
+        tableCount: r.table_count,
+      }
+    case 'no_single_cause':
+      return {
+        kind: r.kind,
+        requiredMin: r.required_min,
+        availableMin: r.available_min,
+      }
+    default: {
+      const exhaustive: never = r
+      return exhaustive
+    }
+  }
+}
+
+/** The per-reason parser: the wire arm plus the snake→camel mapping, one Zod
+ * pipeline. Exported so the admin ledger's wire schema reuses the same arm set. */
+export const infeasibilityReasonSchema =
+  infeasibilityReasonWireSchema.transform(infeasibilityReasonFromWire)
+
 /**
  * One row of the tournament's **solve ledger**, in the domain's spelling — the
  * latest run of the placement solver, as the detail payload carries it.
@@ -90,6 +244,11 @@ export interface ScheduleSolve {
   fixturesPlaced: number | null
   fixturesPinned: number | null
   error: string | null
+  /** Why the day doesn't fit — **always a list**, never null (`[]` off the
+   * infeasible path; one or more resolved causes on an `infeasible` row). Not a
+   * nullable stage marker like the fields above: the API guarantees the array is
+   * present, and an absent key is a payload we reject rather than read as `[]`. */
+  infeasibilityReasons: InfeasibilityReason[]
 }
 
 /** The wire shape (`ScheduleSolveRead`), as it really arrives: snake_case, every
@@ -109,6 +268,9 @@ export const scheduleSolveWireSchema = z.object({
   fixtures_placed: z.number().int().nullable(),
   fixtures_pinned: z.number().int().nullable(),
   error: z.string().nullable(),
+  // Always present (a non-nullable list); each element is parsed through the
+  // discriminated union, so an unknown arm `kind` fails the whole row.
+  infeasibility_reasons: z.array(infeasibilityReasonSchema),
 })
 
 /** The snake→camel mapping, one wire row → one domain `ScheduleSolve`. Annotated
@@ -131,6 +293,8 @@ export function scheduleSolveFromWire(
     fixturesPlaced: s.fixtures_placed,
     fixturesPinned: s.fixtures_pinned,
     error: s.error,
+    // Already snake→camel-mapped by `infeasibilityReasonSchema`'s transform.
+    infeasibilityReasons: s.infeasibility_reasons,
   }
 }
 
@@ -176,7 +340,15 @@ export type SolveStripState =
       finishedAt: string | null
       trigger: ScheduleSolveTrigger
     }
-  | { kind: 'infeasible'; finishedAt: string | null; trigger: ScheduleSolveTrigger }
+  | {
+      kind: 'infeasible'
+      finishedAt: string | null
+      trigger: ScheduleSolveTrigger
+      /** The resolved causes the day doesn't fit — the same list the ledger row
+       * carries (`≥1` on an infeasible row; the strip renders each via
+       * `infeasibilityReasonCopy`, falling back to its generic sentence if empty). */
+      reasons: InfeasibilityReason[]
+    }
   | {
       kind: 'failed'
       /** The server's own account of why the job broke, or `null`. Shown as
@@ -218,6 +390,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
         kind: 'infeasible',
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,
+        reasons: solve.infeasibilityReasons,
       }
     case 'failed':
       return { kind: 'failed', error: solve.error, trigger: solve.trigger }
@@ -264,6 +437,77 @@ export function fmtWallTime(ms: number | null): string | null {
   if (ms === null) return null
   if (ms < 1000) return `${Math.round(ms)} ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+// ----- copy: the infeasibility reasons → the director's words -----------------
+//
+// ONE shared module, in the spirit of `VERDICT_LABEL`: both the Schedule-tab
+// solve strip (chore 4b) and the admin solve ledger (chore 4c) import
+// `infeasibilityReasonCopy` and render the SAME `sentence` + `remedy`, so the two
+// surfaces cannot drift on how a reason reads. Pure functions, unit-tested here.
+
+/** A pool's table-time, human-sized in the *prose*' spirit of `fmtWallTime`:
+ * a bare `8h` / `1.3h` / `45 min`, WITHOUT a leading "about" — the sentences
+ * below own that word ("… need about {…}"), so the formatter must not double it.
+ * Hours to one decimal when not whole (`75 min → 1.3h`), a whole number when it
+ * is (`480 min → 8h`), and plain minutes under the hour (`45 min`). */
+export function fmtTableTime(min: number): string {
+  if (min < 60) return `${Math.round(min)} min`
+  const hours = Math.round((min / 60) * 10) / 10
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`
+}
+
+/** `1 table` / `5 tables` — sane pluralisation for the reason sentences. */
+export function fmtTables(count: number): string {
+  return `${count} ${count === 1 ? 'table' : 'tables'}`
+}
+
+/** What a caller renders for one reason: the client's own sentence naming the
+ * cause, and a user-facing remedy. Both interpolate the resolved names/numbers;
+ * neither carries a GitHub issue number (the ADR's rule). */
+export interface InfeasibilityReasonCopy {
+  sentence: string
+  remedy: string
+}
+
+/**
+ * Map one resolved reason to its designed copy. Exhaustive over `kind` — a `never`
+ * default makes a fifth arm added to the API a compile error here until it is
+ * given words, so a reason can never reach the UI as a blank line.
+ *
+ * The residual (`no_single_cause`) is deliberately worded to steer the director
+ * *away* from adding tables: by construction there is a table-time surplus, so the
+ * problem is timing, not capacity (the ADR's "don't add tables here").
+ */
+export function infeasibilityReasonCopy(
+  reason: InfeasibilityReason,
+): InfeasibilityReasonCopy {
+  switch (reason.kind) {
+    case 'pool_has_no_tables':
+      return {
+        sentence: `${reason.poolName} has no tables assigned.`,
+        remedy: `Assign at least one table to ${reason.poolName}, then run the scheduler again.`,
+      }
+    case 'window_too_short_for_match':
+      return {
+        sentence: `${reason.poolName}'s ${reason.windowStart}–${reason.windowEnd} window is too short for a best-of-${reason.bestOf} match — it needs ${reason.neededMin} min but the window is only ${reason.windowSpanMin}.`,
+        remedy: `Widen ${reason.poolName}'s window, or use a shorter match format.`,
+      }
+    case 'pool_over_capacity':
+      return {
+        sentence: `${reason.poolName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
+        remedy: `Add a table to ${reason.poolName}, widen its window, or trim the field.`,
+      }
+    case 'no_single_cause':
+      return {
+        sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
+        remedy: `Trim a field, widen a window, or split the event across days — adding tables won't help here.`,
+      }
+    default: {
+      const exhaustive: never = reason
+      return exhaustive
+    }
+  }
 }
 
 // ----- polling ----------------------------------------------------------------

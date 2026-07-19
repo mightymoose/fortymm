@@ -17,9 +17,11 @@ import {
   TRIGGER_LABEL,
   VERDICT_LABEL,
   fmtWallTime,
+  infeasibilityReasonCopy,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
+  type InfeasibilityReason,
   type RunSchedulerNotice,
   type ScheduleSolve,
 } from '../data/solve'
@@ -64,6 +66,12 @@ const Line = ({
     </div>
   </div>
 )
+
+/** A stable-enough React key for one infeasibility reason: its `kind`, the pool
+ * it names when it has one, and the list index (two `no_single_cause`s never
+ * coexist, but the index keeps the key total). */
+const reasonKey = (reason: InfeasibilityReason, i: number) =>
+  'poolName' in reason ? `${reason.kind}:${reason.poolName}:${i}` : `${reason.kind}:${i}`
 
 /** The latest solve, rendered as its designed state. Split from the strip so the
  * strip's `switch` reads as the sum type it renders. */
@@ -117,7 +125,10 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
     }
     case 'infeasible':
       // A DESIGNED outcome, not an error banner: the solver *proved* the plan
-      // impossible, which is exactly what a pre-live run is for.
+      // impossible, which is exactly what a pre-live run is for. The API resolves
+      // the causes to names/numbers, so the strip names each specifically —
+      // falling back to the generic sentence only if the (guaranteed ≥1) list is
+      // somehow empty, so the strip never renders bodyless.
       return (
         <div data-testid="solve-strip-infeasible">
           <Line
@@ -125,9 +136,27 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
             tint="text-[color:var(--warn)]"
             title="The day doesn't fit"
           >
-            The matches can't all fit inside their windows on the tables
-            available. Add tables, widen a pool window, or trim an event's field —
-            then run the scheduler again.
+            {state.reasons.length > 0 ? (
+              <ul className="space-y-1.5">
+                {state.reasons.map((reason, i) => {
+                  const copy = infeasibilityReasonCopy(reason)
+                  return (
+                    <li key={reasonKey(reason, i)}>
+                      <span className="text-[color:var(--fg-2)]">
+                        {copy.sentence}
+                      </span>{' '}
+                      {copy.remedy}
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <>
+                The matches can't all fit inside their windows on the tables
+                available. Add tables, widen a pool window, or trim an event's
+                field — then run the scheduler again.
+              </>
+            )}
           </Line>
         </div>
       )

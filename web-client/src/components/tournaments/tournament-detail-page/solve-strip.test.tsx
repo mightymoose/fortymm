@@ -90,22 +90,56 @@ describe('SolveStrip', () => {
     )
   })
 
-  it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner', () => {
+  it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner, naming EACH resolved cause', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
         status: 'infeasible',
         verdict: 'infeasible',
         fixturesPlaced: null,
         fixturesPinned: null,
+        infeasibilityReasons: [
+          { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+          {
+            kind: 'pool_over_capacity',
+            poolName: 'Pool A',
+            windowStart: '09:00',
+            windowEnd: '12:30',
+            requiredMin: 480,
+            capacityMin: 420,
+            tableCount: 4,
+          },
+        ],
       }),
     })
     const text = solveStripPage.getStateText('infeasible')
     expect(text).toContain("The day doesn't fit")
-    // Actionable, in venue vocabulary — never the solver's.
-    expect(text).toContain('Add tables, widen a pool window')
+    // BOTH reasons' sentences, named specifically…
+    expect(text).toContain('Pool B has no tables assigned.')
+    expect(text).toContain("Pool A can't fit all its matches")
+    // …AND both remedies.
+    expect(text).toContain('Assign at least one table to Pool B')
+    expect(text).toContain('Add a table to Pool A, widen its window, or trim the field.')
+    // The specific list REPLACES the generic sentence.
+    expect(text).not.toContain('The matches can\'t all fit inside their windows')
+    // The raw enum never reaches the UI.
     expect(text).not.toContain('infeasible')
     // And it is a state, not a refusal: no notice rings.
     expect(solveStripPage.queryNotice()).toBeNull()
+  })
+
+  it('falls back to the generic sentence if an infeasible row carries no reasons — the strip never renders bodyless', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibilityReasons: [],
+      }),
+    })
+    const text = solveStripPage.getStateText('infeasible')
+    expect(text).toContain("The day doesn't fit")
+    expect(text).toContain('Add tables, widen a pool window')
   })
 
   it('renders a failed run under our headline, with the server\'s account as detail', () => {
@@ -122,6 +156,9 @@ describe('SolveStrip', () => {
     const text = solveStripPage.getStateText('failed')
     expect(text).toContain('The scheduler hit a problem')
     expect(text).toContain('worker crashed: OOM')
+    // A broken job is NOT the infeasible outcome — no resolved reason leaks in.
+    expect(text).not.toContain('has no tables assigned')
+    expect(text).not.toContain("The day doesn't fit")
   })
 
   // ----- the Run-scheduler button --------------------------------------------

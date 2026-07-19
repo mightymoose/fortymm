@@ -6,8 +6,12 @@ import { ChevronDown, ChevronUp, ListFilter, X } from 'lucide-react'
 import { PaginationFooter } from '@/components/pagination-footer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { TRIGGER_LABEL } from '@/components/tournaments/data/solve'
-import { fmtWallTime } from '@/components/tournaments/data/solve'
+import {
+  TRIGGER_LABEL,
+  fmtWallTime,
+  infeasibilityReasonCopy,
+  type InfeasibilityReason,
+} from '@/components/tournaments/data/solve'
 import { fmtDateTimeShort } from '@/lib/dates'
 
 import {
@@ -31,6 +35,14 @@ import '@/components/matches/match-list/match-list.css'
 import './solve-ledger.css'
 
 const COLUMN_COUNT = 8
+
+/** A stable-enough React key for one infeasibility reason (the solve strip's own
+ * rule, so the two surfaces key the list the same way): its `kind`, the pool it
+ * names when it has one, and the list index. */
+const reasonKey = (reason: InfeasibilityReason, i: number) =>
+  'poolName' in reason
+    ? `${reason.kind}:${reason.poolName}:${i}`
+    : `${reason.kind}:${i}`
 
 /** The strip's tints, as the match-list pill tone classes this table borrows.
  * Keyed over the sum type so a new tone is a compile error until it has a
@@ -348,6 +360,28 @@ function LedgerRow({
                   content (the solve strip's precedent). */}
               {solve.error && (
                 <div className="solve-ledger-detail-error mono">{solve.error}</div>
+              )}
+              {/* Why the day doesn't fit — the SAME resolved reasons the Schedule
+                  tab's strip shows, rendered through the one shared
+                  `infeasibilityReasonCopy` so the two surfaces cannot drift.
+                  Only the `infeasible` arm carries reasons (`[]` off that path);
+                  an unexpectedly empty list keeps the headline-only expansion. */}
+              {status === 'infeasible' && solve.infeasibilityReasons.length > 0 && (
+                <ul className="solve-ledger-detail-reasons">
+                  {solve.infeasibilityReasons.map((reason, i) => {
+                    const copy = infeasibilityReasonCopy(reason)
+                    return (
+                      <li key={reasonKey(reason, i)}>
+                        <span className="solve-ledger-detail-reason-sentence">
+                          {copy.sentence}
+                        </span>{' '}
+                        <span className="solve-ledger-detail-reason-remedy">
+                          {copy.remedy}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
               )}
               <div className="solve-ledger-detail-fingerprint">
                 <span className="solve-ledger-detail-label">
