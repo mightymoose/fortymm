@@ -17,9 +17,7 @@ from fastapi import (
 )
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.attention import (
@@ -55,21 +53,22 @@ from app.match_scoring import (
 from app.match_scoring import (
     update_game_score as update_game_score_core,
 )
+
+# Re-exported for ``tests/test_matches.py``, which unit-tests the compaction
+# helper via ``app.matches._compact_games`` (the propose path that consumes it
+# now lives in ``app.result_proposal``). Redundant alias marks the intentional
+# re-export so ruff doesn't flag it as unused.
+from app.match_serialization import _compact_games as _compact_games
 from app.match_serialization import (
-    _compact_games,
     _is_participant,
     _is_scorable,
     _negotiation,
     _serialize_details,
     _side_schema,
     _status_label,
-    _validate_finalize_games,
 )
 from app.models import (
-    League,
     Match,
-    MatchGame,
-    MatchGameScore,
     MatchResult,
     MatchStatus,
     User,
@@ -80,8 +79,10 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
+    MatchClosedError,
     MatchNotFoundError,
     MatchNotScorableError,
+    NegotiationConflictError,
     OpponentNotFoundError,
     PostedGamesNotDecisiveError,
     RatedNeedsRegisteredOpponentError,
@@ -89,11 +90,15 @@ from app.result_acceptance import (
     ScoreNotAllowedError,
     SelfMatchError,
     StandingResultConflictError,
+    UndecidedBoardError,
     accept_standing_result,
-    finalize_match,
     side_win_counts,
 )
 from app.result_chain import standing_result
+from app.result_proposal import (
+    match_rating_eager_options,
+    propose_result,
+)
 from app.schemas.match import (
     MatchCreate,
     MatchDetails,
@@ -123,19 +128,6 @@ MAX_PAGE_SIZE = 100
 # ----- helpers -------------------------------------------------------------
 
 
-# The finalize/score-write superset: everything a read needs, plus the league's
-# rating strategy that ``_apply_rating_update`` reads when a completing match
-# applies ratings. Under async SQLAlchemy a lazy access on the unloaded
-# ``league.rating_strategy`` would raise ``MissingGreenlet`` mid-request, so the
-# two paths that finalize a match must load it up front rather than rely on the
-# shared read chain.
-def match_rating_eager_options() -> tuple[ExecutableOption, ...]:
-    return (
-        *match_eager_options(),
-        selectinload(Match.league).selectinload(League.rating_strategy),
-    )
-
-
 async def _load_match(
     db: AsyncSession,
     match_id: uuid.UUID,
@@ -148,13 +140,6 @@ async def _load_match(
         .options(*(options if options is not None else match_eager_options()))
     )
     return result.scalar_one_or_none()
-
-
-def _all_sides_have_players(match: Match) -> bool:
-    """Solo matches (no opponent picked) carry one player-less sentinel side.
-    The acceptance flow needs a second human, so solo matches skip
-    it entirely; this is the predicate that detects that case."""
-    return len(match.sides) >= 2 and all(side.players for side in match.sides)
 
 
 # One message for every score-write conflict — a concurrent participant already
@@ -599,16 +584,6 @@ async def get_match(
     )
 
 
-# ----- score writes --------------------------------------------------------
-
-
-# A match that has reached one of these states is read-only — never scorable.
-_TERMINAL_STATUSES = {
-    MatchStatus.completed,
-    MatchStatus.voided,
-}
-
-
 # ----- result-acceptance push ---------------------------------------------
 
 # En-dash between scores reads better than a hyphen in notification copy.
@@ -731,69 +706,6 @@ async def _notify_result_posted(
                 collapse_id=f"result-confirm:{match.id}",
             )
         )
-
-
-# ----- finalize-payload validation + apply --------------------------------
-
-
-def _result_games_snapshot(payload: MatchResultsWrite) -> list[dict[str, int]]:
-    """The immutable JSONB snapshot stored on a ``MatchResult`` — the claimed
-    board frozen at post time, ordered by game number. (A typed read-side decode
-    lands with #366, the first consumer of the snapshot.)"""
-    return [
-        {
-            "game_number": g.game_number,
-            "side_1_points": g.side_1_points,
-            "side_2_points": g.side_2_points,
-        }
-        for g in sorted(payload.games, key=lambda g: g.game_number)
-    ]
-
-
-async def _commit_canonical_games(
-    db: AsyncSession,
-    match: Match,
-    payload: MatchResultsWrite,
-) -> None:
-    """Replace ``match.games`` (and the attached score rows) with the canonical
-    payload and set ``side.score`` from it. **Does not change ``match.status``
-    or ``side.won``** — the caller picks whether the result is final
-    (solo/unrated: immediately at /results) or awaiting acceptance (rated),
-    and stamps ``side.won`` via ``_set_side_won`` only at that final moment."""
-    # ``Match.games`` cascades ``all, delete-orphan``; clearing the collection
-    # marks each existing MatchGame (and via MatchGame.score's own cascade,
-    # the MatchGameScore) for delete. We must flush the deletes before
-    # inserting new games at the same numbers, otherwise the
-    # ``uq_match_games_match_id_game_number`` constraint trips during
-    # autoflush.
-    match.games.clear()
-    await db.flush()
-
-    for game in sorted(payload.games, key=lambda g: g.game_number):
-        match.games.append(
-            MatchGame(
-                game_number=game.game_number,
-                score=MatchGameScore(
-                    side_1_points=game.side_1_points,
-                    side_2_points=game.side_2_points,
-                ),
-            )
-        )
-
-    new_wins: dict[int, int] = {1: 0, 2: 0}
-    for g in payload.games:
-        new_wins[1 if g.side_1_points > g.side_2_points else 2] += 1
-    for side in match.sides:
-        side.score = new_wins.get(side.side_number, 0)
-
-
-def _requires_confirmation(match: Match) -> bool:
-    """Only rated matches go through the accept round-trip. Acceptance
-    exists to protect ratings from one-sided claims; an unrated match has no
-    stakes worth a second party's consent, and a solo match has no second
-    human to accept anyway (rated already implies a registered opponent at
-    creation — the player check is defensive)."""
-    return match.match_settings.affects_rating and _all_sides_have_players(match)
 
 
 # ----- scoring endpoints ---------------------------------------------------
@@ -1015,14 +927,24 @@ async def post_match_result(
     fire here. Rated two-human matches leave the result *standing* (unaccepted)
     for the opposing side to accept via
     ``POST /results/{result_id}/acceptance``."""
+    # The whole propose path — the NOWAIT row lock (serializing against a
+    # concurrent transition, #641/#835), the terminal-status gate, board
+    # compaction + the decided-board validator, the first-post-vs-counter
+    # negotiation gates, the canonical-board commit, the self-accept/finalize
+    # (solo/unrated) vs. leave-standing (rated) fork, and the concurrent-counter
+    # IntegrityError race — is owned by the service. ``load_match=
+    # _load_match_for_scoring`` injects the router's monkeypatchable load seam
+    # (mapping a missing/foreign match to its 404) so the row-lock race tests
+    # still barrier on it, and a held ``NOWAIT`` lock surfaces as
+    # ``MatchLockUnavailable`` below.
     try:
-        match = await _load_match_for_scoring(
+        outcome = await propose_result(
             db,
             match_id,
             current_user.id,
-            lock=True,
-            nowait=True,
-            options=match_rating_eager_options(),
+            games=payload.games,
+            supersedes_result_id=payload.supersedes_result_id,
+            load_match=_load_match_for_scoring,
         )
     except MatchLockUnavailable as exc:
         # A concurrent propose is mid-flight (a double-tapped submit). Bail out
@@ -1035,99 +957,25 @@ async def post_match_result(
             detail="A result is already being posted for this match. "
             "Refresh to see the latest.",
         ) from exc
-
-    # A terminal match (completed/voided) is closed to new proposals. A completed
-    # match has an accepted head, so the result-existence gates below would 409 a
-    # first-post against it anyway; but a match voided *before* any result was
-    # posted has no results to gate on — so guard the status explicitly here, or a
-    # first-post would silently un-void it.
-    if match.status in _TERMINAL_STATUSES:
+    except MatchClosedError as exc:
+        # A terminal match (completed/voided) is closed to new proposals.
         raise HTTPException(
             status_code=409, detail="This match is no longer open to results."
-        )
-
-    # NOTE: no ``_enforce_scorable`` here. The scratchpad-scorable guard is now
-    # false the instant any result exists (#715), so a counter — which by design
-    # supersedes an existing result — would 409 before it could supersede.
-    # Propose has its OWN gates below (first-post vs counter) instead.
-
-    # Compact once, upstream of every consumer below (_validate_finalize_games,
-    # _commit_canonical_games, and the immutable _result_games_snapshot), so the
-    # minted board is contiguous (see `_compact_games`). Covers both the first
-    # proposal and the counter — they share this endpoint.
-    payload = payload.model_copy(update={"games": _compact_games(payload.games)})
-
-    # Decided-board hard gate — the strict precondition: an undecided board can't
-    # be a result.
-    try:
-        decided_side = _validate_finalize_games(
-            payload.games, match.match_settings.best_of
-        )
-    except ValueError as exc:
+        ) from exc
+    except UndecidedBoardError as exc:
+        # The strict decided-board precondition failed — an undecided/invalid
+        # board can't be a result.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NegotiationConflictError as exc:
+        # The propose lost the negotiation race (a result already exists, the
+        # counter targeted a stale standing id, or the unique constraint tripped).
+        # The 409 carries the viewer-relative moved-on state from the loaded match.
+        raise _negotiation_conflict(exc.match, current_user.id) from exc
+    except MatchNotFoundError as exc:
+        # The concurrent-counter reload found the match gone — today's 404.
+        raise HTTPException(status_code=404, detail="Match not found.") from exc
 
-    if payload.supersedes_result_id is None:
-        # First proposal: only valid when no result exists yet. A concurrent
-        # first-post (or any existing chain) loses here with the current state.
-        if match.results:
-            raise _negotiation_conflict(match, current_user.id)
-    else:
-        # Counter: must target the live standing proposal. If it was already
-        # accepted or superseded by a concurrent counter, the id won't match —
-        # 409 with the moved-on state.
-        standing = standing_result(match)
-        if standing is None or payload.supersedes_result_id != standing.id:
-            raise _negotiation_conflict(match, current_user.id)
-
-    # Sync the canonical ``match_games`` to the proposed board so the scoreboard
-    # ``games``/``can_score`` rendering stays correct. After the first post the
-    # scratchpad is frozen, so ``match_games`` stays == the standing snapshot.
-    await _commit_canonical_games(db, match, payload)
-
-    result = MatchResult(
-        submitted_by_user_id=current_user.id,
-        games=_result_games_snapshot(payload),
-        supersedes_result_id=payload.supersedes_result_id,
-    )
-    match.results.append(result)
-
-    # Drives the post-commit push: only a rated two-human match leaves the other
-    # side owing an acceptance. Computed before commit; the recipient gets pinged
-    # once the result is durably saved.
-    awaiting_acceptance = _requires_confirmation(match)
-    if not awaiting_acceptance:
-        # Solo / unrated path: no second acceptance needed — the proposer
-        # self-accepts and the match finalizes immediately (stamping
-        # ``completed_at``). A solo match has no second human to accept, so the
-        # proposer's own id is recorded as the acceptor.
-        result.accepted_by_user_id = current_user.id
-        result.accepted_at = datetime.now(UTC)
-        # The one completion path shared with the rated accept (``finalize_match``):
-        # mark completed, stamp ``side.won``, run the rating update, and advance any
-        # tournament draw this match belongs to (#789). Funnelling both sites through
-        # it is what keeps a tournament match's draw from being left un-advanced when
-        # its unrated result self-accepts here instead of at acceptance.
-        await finalize_match(db, match, decided_side)
-    else:
-        # Rated path: the result stays standing (unaccepted) and ``side.won``
-        # stays unset until the opposing side accepts. Status is (re)set to
-        # in_progress.
-        match.status = MatchStatus.in_progress
-
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        # ``uq_match_results_supersedes_result_id``: two concurrent counters
-        # raced to supersede the same parent and the other one won. Reload and
-        # surface the moved-on negotiation state.
-        await db.rollback()
-        reloaded = await _load_match(db, match_id)
-        if reloaded is None:
-            raise HTTPException(status_code=404, detail="Match not found.") from exc
-        raise _negotiation_conflict(reloaded, current_user.id) from exc
-
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
+    reloaded = outcome.match
     extras = await _view_extras(match_service, reloaded)
     details = _serialize_details(reloaded, current_user.id, extras)
     # Record + notify the side that now owes an acceptance. Built after the
@@ -1137,14 +985,14 @@ async def post_match_result(
     # blanket catch, mirroring the fire-and-forget enqueue guards in
     # app.sessions. The session is rolled back so the request's teardown is
     # clean even when the failure was the in-app persist commit.
-    if awaiting_acceptance:
+    if outcome.awaiting_acceptance:
         try:
             await _notify_result_posted(notifications, reloaded, current_user.id)
         except Exception:
             await db.rollback()
             log.exception(
                 "Failed to record result-acceptance notification",
-                extra={"match_id": str(match.id)},
+                extra={"match_id": str(match_id)},
             )
     return details
 

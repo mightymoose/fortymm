@@ -75,6 +75,41 @@ class RatedNeedsRegisteredOpponentError(Exception):
     ``"A rated match needs a registered opponent."``."""
 
 
+class MatchClosedError(Exception):
+    """Raised by :func:`app.result_proposal.propose_result` when the match has
+    reached a terminal status (``completed``/``voided``) and is closed to new
+    proposals. The HTTP adapter maps this to the existing 409
+    ``"This match is no longer open to results."``. Never an ``HTTPException`` —
+    the caller adapts it to its transport."""
+
+
+class UndecidedBoardError(Exception):
+    """Raised by :func:`app.result_proposal.propose_result` when the proposed
+    board fails the strict finalize validator (empty, gappy-past-decider,
+    duplicate/out-of-range game numbers, or still-undecided) — i.e. it can't be
+    a result. Carries the validator's human-readable ``ValueError`` message; the
+    HTTP adapter maps it to the existing 422 ``str`` body. Never an
+    ``HTTPException``."""
+
+
+class NegotiationConflictError(Exception):
+    """Raised by :func:`app.result_proposal.propose_result` when the propose lost
+    the negotiation race: a first post found a result already exists, a counter
+    targeted a ``supersedes_result_id`` that is no longer the live standing
+    proposal, or the ``uq_match_results_supersedes_result_id`` unique constraint
+    tripped at commit (two concurrent counters superseding the same parent).
+
+    Carries the loaded (or reloaded) :class:`Match` so the HTTP adapter can build
+    the exact viewer-relative negotiation snapshot (``_negotiation_conflict`` /
+    ``_negotiation``) it produced before, letting a client that lost the race
+    re-render from the 409 body without an extra round-trip. Never an
+    ``HTTPException`` — the caller adapts it to its transport."""
+
+    def __init__(self, match: Match) -> None:
+        super().__init__("The standing proposal has moved on.")
+        self.match = match
+
+
 class StandingResultConflictError(Exception):
     """Raised when the ``result_id`` handed to :func:`accept_standing_result` is
     no longer the live standing proposal — a concurrent counter superseded it,
