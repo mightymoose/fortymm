@@ -18,6 +18,7 @@ Tools run outside a FastAPI request, so they cannot use the request-scoped
 lifecycle yourself"). The verifier does the same.
 """
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -45,20 +46,35 @@ from app.match_scoring import delete_game_score as delete_game_score_core
 from app.match_scoring import enter_game_score as enter_game_score_core
 from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import _is_participant, _serialize_details
+from app.matches import _notify_result_posted
 from app.models import Match, User
+from app.notifications.dependencies import get_push_sender
+from app.notifications.service import NotificationService
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
+    CannotAcceptOwnProposalError,
+    MatchClosedError,
     MatchNotFoundError,
     MatchNotScorableError,
+    NegotiationConflictError,
     OpponentNotFoundError,
+    PostedGamesNotDecisiveError,
     RatedNeedsRegisteredOpponentError,
+    ResultNotFoundError,
     ScoreConflictError,
     ScoreNotAllowedError,
     SelfMatchError,
+    UndecidedBoardError,
 )
-from app.schemas.match import MatchDetails
+from app.result_acceptance import (
+    accept_result as accept_result_core,
+)
+from app.result_proposal import propose_result as propose_result_core
+from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.services.match_service import MatchService
+
+log = logging.getLogger(__name__)
 
 # A game number bounded to the widest ``best_of`` (7), so an out-of-range value
 # is a schema-level validation error at the transport rather than a tool-body
@@ -381,6 +397,145 @@ async def update_game_score(
             )
         except _SCORE_WRITE_ERRORS as exc:
             raise _map_score_write_tool_error(exc) from exc
+        return await _serialize_written_match(db, reloaded, user_id)
+
+
+# The recovery message every lost-negotiation race shares: the caller's view of
+# the standing result is stale, so it must re-read before it can act again. Names
+# ``get_match`` explicitly so an agent knows exactly which verb re-syncs it.
+_NEGOTIATION_CONFLICT_MESSAGE = (
+    "The standing result changed — call get_match to see the current standing "
+    "result, then accept it or counter again."
+)
+
+
+async def _fire_result_notification(
+    db: AsyncSession, match: Match, poster_id: uuid.UUID
+) -> None:
+    """Best-effort accept/counter notification to the side that now owes a
+    response, mirroring the HTTP ``post_match_result`` handler.
+
+    The result is already committed by :func:`propose_result`, so *nothing* here
+    may fail the tool — not a DB error, not a delivery-side failure. Hence the
+    blanket catch (the same fire-and-forget guard the HTTP handler uses): a
+    notify failure is logged and swallowed, and the session is rolled back so a
+    failed in-app persist leaves the session clean. The ``NotificationService``
+    is constructed exactly as ``get_notification_service`` does (the owned
+    session plus the process-wide push-sender singleton)."""
+    notifications = NotificationService(db, get_push_sender())
+    try:
+        await _notify_result_posted(notifications, match, poster_id)
+    except Exception:
+        await db.rollback()
+        log.exception(
+            "Failed to record result-acceptance notification",
+            extra={"match_id": str(match.id)},
+        )
+
+
+@mcp.tool
+async def propose_result(
+    match_id: uuid.UUID,
+    games: list[MatchResultsGameWrite],
+    supersedes_result_id: uuid.UUID | None = None,
+) -> MatchDetails:
+    """Propose a result for a match as the authenticated API-token caller — the
+    first verb of the propose/accept negotiation — and return the updated match.
+
+    Mirrors ``POST /v1/matches/{match_id}/results``: it reuses the shared
+    ``result_proposal`` core (the NOWAIT row lock, the terminal-status gate, the
+    decided-board validator, the first-post-vs-counter negotiation gates, the
+    canonical-board commit, and the self-accept/finalize vs leave-standing fork)
+    so the MCP and HTTP surfaces can never drift. ``games`` is the canonical board
+    (each game's per-point legality is validated); this one tool serves both the
+    FIRST proposal (omit ``supersedes_result_id``) and a COUNTER/correction (set
+    ``supersedes_result_id`` to the current standing result's id). A solo/unrated
+    match self-accepts and finalizes immediately; a rated two-human match leaves
+    the result *standing* for the opponent to ``accept_result``, and — only then —
+    fires a best-effort accept/counter notification to the opponent (a notify
+    failure never fails this tool). Returns the ``MatchDetails`` from the
+    proposer's perspective (the same view ``get_match`` reads back).
+
+    Raises a ``ToolError`` when the match doesn't exist or you're not a
+    participant, when the match is closed to new results (completed/voided), when
+    the board is undecided/invalid, when another proposal is mid-flight (retry),
+    or when the standing result moved on under you — the last names ``get_match``
+    as the recovery path (re-read the standing result, then accept or counter)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        try:
+            outcome = await propose_result_core(
+                db,
+                match_id,
+                user_id,
+                games=games,
+                supersedes_result_id=supersedes_result_id,
+            )
+        except MatchNotFoundError as exc:
+            raise ToolError("Match not found, or you are not a participant.") from exc
+        except MatchClosedError as exc:
+            raise ToolError(str(exc)) from exc
+        except UndecidedBoardError as exc:
+            raise ToolError(str(exc)) from exc
+        except MatchLockUnavailable as exc:
+            raise ToolError(
+                "Another proposal is in progress for this match, retry."
+            ) from exc
+        except NegotiationConflictError as exc:
+            raise ToolError(_NEGOTIATION_CONFLICT_MESSAGE) from exc
+
+        # Record + notify the side that now owes an acceptance — only for a rated
+        # two-human match that left the result standing, exactly as the HTTP
+        # handler does, and only after the result is committed. Best-effort: a
+        # notify failure can never fail the tool.
+        if outcome.awaiting_acceptance:
+            await _fire_result_notification(db, outcome.match, user_id)
+        return await _serialize_written_match(db, outcome.match, user_id)
+
+
+@mcp.tool
+async def accept_result(
+    match_id: uuid.UUID,
+    result_id: uuid.UUID,
+) -> MatchDetails:
+    """Accept a standing proposal as the authenticated API-token caller — the
+    second verb of the propose/accept negotiation — and return the completed
+    match.
+
+    Mirrors ``POST /v1/matches/{match_id}/results/{result_id}/acceptance``: it
+    reuses the shared ``result_acceptance`` core (the blocking row lock, the
+    result-exists gate, the submitter-side self-accept guard, the live
+    standing-proposal check, and ``finalize_match`` — mark completed, stamp
+    ``side.won``, apply ratings, advance any tournament draw) so the MCP and HTTP
+    surfaces can never drift. ``result_id`` is the concurrency token: it must be
+    the current standing proposal's id (from ``get_match``). Returns the finalized
+    ``MatchDetails`` from the accepting caller's perspective.
+
+    Raises a ``ToolError`` when no result with that id exists on the match, when
+    the match doesn't exist or you're not a participant, when you try to accept
+    your own proposal (only the opposing side may accept), when the agreed board
+    no longer decides a winner, or when the standing result moved on under you
+    (superseded by a counter or already accepted) — the last names ``get_match``
+    as the recovery path (re-read the standing result, then accept or counter)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        try:
+            reloaded = await accept_result_core(
+                db,
+                match_id,
+                user_id,
+                result_id=result_id,
+            )
+        except MatchNotFoundError as exc:
+            raise ToolError("Match not found, or you are not a participant.") from exc
+        except ResultNotFoundError as exc:
+            raise ToolError("No result with that id exists on this match.") from exc
+        except CannotAcceptOwnProposalError as exc:
+            raise ToolError("You can't accept your own proposal.") from exc
+        except PostedGamesNotDecisiveError as exc:
+            raise ToolError("The posted games no longer decide this match.") from exc
+        except NegotiationConflictError as exc:
+            raise ToolError(_NEGOTIATION_CONFLICT_MESSAGE) from exc
         return await _serialize_written_match(db, reloaded, user_id)
 
 

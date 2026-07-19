@@ -26,6 +26,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from rq import Queue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_token_auth import API_TOKEN_CONTEXT
@@ -33,7 +34,7 @@ from app.main import app as fastapi_app
 from app.main import mcp_app
 from app.models import User, UserToken
 from app.token_hashing import hash_token
-from tests._helpers import make_user, start_session
+from tests._helpers import enqueued_notification_jobs, make_user, start_session
 
 MCP_URL = "http://testserver/mcp/"
 
@@ -531,5 +532,254 @@ async def test_enter_game_score_on_frozen_match_raises_scorable_reason(
                     "game_number": 1,
                     "side_1_points": 11,
                     "side_2_points": 7,
+                },
+            )
+
+
+# ----- propose_result / accept_result tools --------------------------------
+
+# A decided best-of-3 board — side 1 clinches 2–0 — for the first proposal, and a
+# different-but-still-decided board (also 2–0 to side 1, different points) for the
+# counter that supersedes it.
+_DECISIVE_BOARD = [
+    {"game_number": 1, "side_1_points": 11, "side_2_points": 7},
+    {"game_number": 2, "side_1_points": 11, "side_2_points": 8},
+]
+_COUNTER_BOARD = [
+    {"game_number": 1, "side_1_points": 11, "side_2_points": 9},
+    {"game_number": 2, "side_1_points": 11, "side_2_points": 6},
+]
+
+
+async def test_propose_and_accept_result_tools_are_registered(
+    db_session: AsyncSession,
+) -> None:
+    """Both negotiation verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-negotiation-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"propose_result", "accept_result"} <= names
+
+
+async def test_propose_awaits_acceptance_notifies_and_accept_completes(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """The headline flow: A proposes a decided board on a rated two-human match →
+    a standing result awaiting B, and B is sent one accept/counter notification.
+    B reads the standing result id via get_match, then accept_result completes the
+    match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-accept-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+
+    assert proposed.isError is False
+    body = proposed.structuredContent
+    assert body is not None
+    # A's own view after proposing: the standing result is theirs and awaits B.
+    assert body["status"] == "in_progress"
+    negotiation = body["negotiation"]
+    assert negotiation["viewer_state"] == "awaiting"
+    standing = negotiation["standing_result"]
+    assert standing is not None
+    assert standing["submitted_by"] == str(a.id)
+    standing_id = standing["id"]
+
+    # B (the opposing side) got exactly one accept/counter notification.
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [b.id]
+    assert jobs[0].link == f"/matches/{match_id}"
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        # B sees the same standing result id through get_match, then accepts it.
+        seen = await client_b.call_tool_mcp("get_match", {"match_id": match_id})
+        assert seen.structuredContent is not None
+        assert seen.structuredContent["negotiation"]["standing_result"]["id"] == (
+            standing_id
+        )
+
+        accepted = await client_b.call_tool_mcp(
+            "accept_result", {"match_id": match_id, "result_id": standing_id}
+        )
+
+    assert accepted.isError is False
+    assert accepted.structuredContent is not None
+    assert accepted.structuredContent["status"] == "completed"
+    assert accepted.structuredContent["negotiation"]["viewer_state"] == "final"
+
+
+async def test_counter_supersedes_standing_proposal(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """After A proposes, B counters with a different decided board targeting the
+    standing id — the counter becomes the new standing result, superseding A's."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-counter-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+    assert proposed.structuredContent is not None
+    first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        countered = await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+
+    assert countered.isError is False
+    body = countered.structuredContent
+    assert body is not None
+    standing = body["negotiation"]["standing_result"]
+    assert standing is not None
+    # A new standing result, submitted by B, that supersedes A's first proposal.
+    assert standing["id"] != first_id
+    assert standing["submitted_by"] == str(b.id)
+
+
+async def test_accept_own_proposal_raises_tool_error(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """The proposing side already consented by proposing; A accepting their own
+    standing proposal is a ``ToolError``."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-own-rival")
+    token_a = await _mint(db_session, a)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        standing_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+        with pytest.raises(ToolError, match="your own proposal"):
+            await client_a.call_tool(
+                "accept_result", {"match_id": match_id, "result_id": standing_id}
+            )
+
+
+async def test_accept_stale_result_id_raises_tool_error_naming_get_match(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Accepting a superseded result id (A's first proposal, after B countered)
+    surfaces the moved-on conflict as a ``ToolError`` naming get_match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-stale-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+    assert proposed.structuredContent is not None
+    first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        # B counters, superseding A's first proposal ...
+        await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+        # ... so accepting the now-stale first id loses the negotiation race.
+        with pytest.raises(ToolError, match="get_match"):
+            await client_b.call_tool(
+                "accept_result", {"match_id": match_id, "result_id": first_id}
+            )
+
+
+async def test_countering_stale_result_id_raises_tool_error_naming_get_match(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A counter that supersedes an id no longer standing (B already countered
+    A's first proposal) surfaces the conflict as a ``ToolError`` naming
+    get_match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-counter-stale-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+
+    # A now tries to counter targeting the stale first id.
+    async with _mcp_client(token_a) as client_a, client_a:
+        with pytest.raises(ToolError, match="get_match"):
+            await client_a.call_tool(
+                "propose_result",
+                {
+                    "match_id": match_id,
+                    "games": _DECISIVE_BOARD,
+                    "supersedes_result_id": first_id,
+                },
+            )
+
+
+async def test_propose_undecided_board_raises_tool_error(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A board that doesn't decide the match (one game on a best-of-3) can't be a
+    result — surfaced as a ``ToolError``."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-undecided-rival")
+    token_a = await _mint(db_session, a)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        with pytest.raises(ToolError):
+            await client_a.call_tool(
+                "propose_result",
+                {
+                    "match_id": match_id,
+                    "games": [
+                        {"game_number": 1, "side_1_points": 11, "side_2_points": 7}
+                    ],
                 },
             )
