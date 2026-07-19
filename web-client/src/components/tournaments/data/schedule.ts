@@ -21,10 +21,11 @@
 import type { MatchStatus } from '@/api/matches'
 
 import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
-import { fixtureTier, isTold, timeOfDay, type TimelineTier } from './timeline'
+import { fixtureTier, fmtFixtureTime, isTold, type TimelineTier } from './timeline'
 import type {
   Entrant,
   Fixture,
+  FixtureTime,
   Slot,
   Tournament,
   TournamentEvent,
@@ -59,8 +60,9 @@ export interface ScheduleMatch {
   match: FixtureMatch | null
   /** The placement's table (`null` = unassigned), a string ref into the catalogue. */
   tableId: string | null
-  /** The placement's predicted start, a naive wall-clock timestamp (`null` = unscheduled). */
-  scheduledStart: string | null
+  /** The placement's predicted start, a `FixtureTime` (`null` = unscheduled) — a
+   * venue-local label + tz abbrev for display, plus a UTC instant for ordering. */
+  scheduledStart: FixtureTime | null
   /** The window whose **date** the placement is fixed to: the fixture's pool Slot, or the
    * event Slot when the fixture is un-pooled (ADR-0790). The time picker chooses within it. */
   window: Slot
@@ -76,10 +78,10 @@ export interface ScheduleMatch {
    * says `est`, a call carries its called-at badge, a started match reads as its status.
    * The list must not blur a promise into a plan any more than a bar may. */
   tier: TimelineTier
-  /** When the fixture was **called** (`null` = never): the promise's own timestamp,
-   * shown on the row so a director sees what they told the players (ADR "the schedule
-   * is solved; the call is pinned"). */
-  pinnedAt: string | null
+  /** When the fixture was **called** (`null` = never): the promise's own time, a
+   * `FixtureTime`, shown on the row so a director sees what they told the players (ADR
+   * "the schedule is solved; the call is pinned"). */
+  pinnedAt: FixtureTime | null
   /** How many call/correction notifications the players have received — `0` until
    * called; `> 1` means a correction already spent their attention once. */
   callNotifiedCount: number
@@ -163,10 +165,15 @@ function toScheduleMatch(
  * yet (a half-placed fixture) sorts to the bottom of its table rather than to the top on
  * an empty-string compare. */
 function byScheduledStart(a: ScheduleMatch, b: ScheduleMatch): number {
-  if (a.scheduledStart === b.scheduledStart) return 0
+  if (a.scheduledStart === null && b.scheduledStart === null) return 0
   if (a.scheduledStart === null) return 1
   if (b.scheduledStart === null) return -1
-  return a.scheduledStart < b.scheduledStart ? -1 : 1
+  // Order by the absolute instant — the tz-agnostic moment, so two events in
+  // different timezones sort by when they actually happen, not by wall-clock.
+  const ai = a.scheduledStart.instant
+  const bi = b.scheduledStart.instant
+  if (ai === bi) return 0
+  return ai < bi ? -1 : 1
 }
 
 /**
@@ -280,10 +287,10 @@ export function composeScheduledStart(date: string, time: string): string {
   return `${date}T${time}:00`
 }
 
-/** The `HH:MM` time-of-day helper lives in `./timeline.ts` now (this module already
- * imports from there, so the dependency could only point that way); re-exported
- * here because the schedule's readers are its natural audience. */
-export { timeOfDay }
+/** The venue-local time formatter (`"6:00 PM CDT"`, ADR "tournament times are
+ * timezone-aware instants") lives in `./timeline.ts` (this module already imports from
+ * there); re-exported here because the schedule's readers are its natural audience. */
+export { fmtFixtureTime }
 
 /**
  * What a placement write would DO to the players, before it is sent (ADR "the schedule

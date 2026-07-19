@@ -1,3 +1,4 @@
+import { buildFixtureTime } from '../../data/seed.factory'
 import type {
   TimelineBoard,
   TimelinePlayerRow,
@@ -54,10 +55,10 @@ export function buildScheduleBoard(
     tableLabel: 'T2',
     startMin: 600,
     endMin: 635,
-    startClock: '10:00',
-    endClock: '10:35',
+    startClock: '10:00 AM',
+    endClock: '10:35 AM',
     tier: 'called',
-    pinnedAt: '2026-06-13T09:50:00',
+    pinnedAt: buildFixtureTime('2026-06-13T09:50:00'),
     callNotifiedCount: 1,
   })
   const started = buildTimelineBarData({
@@ -67,8 +68,8 @@ export function buildScheduleBoard(
     b: 'player.5',
     startMin: 660,
     endMin: 695,
-    startClock: '11:00',
-    endClock: '11:35',
+    startClock: '11:00 AM',
+    endClock: '11:35 AM',
     tier: 'started',
     status: 'in_progress',
   })

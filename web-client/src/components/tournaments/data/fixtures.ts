@@ -26,7 +26,7 @@ import { z } from 'zod'
 
 import type { MatchStatus } from '@/api/matches'
 
-import type { Fixture } from './types'
+import type { Fixture, FixtureTime } from './types'
 
 /** The four match statuses, as the wire's `MatchStatus` enum spells them. `satisfies
  * readonly MatchStatus[]` guards against a typo — every literal here must be a real
@@ -42,6 +42,25 @@ const MATCH_STATUSES = [
 ] as const satisfies readonly MatchStatus[]
 
 export const matchStatusSchema = z.enum(MATCH_STATUSES)
+
+/** The wire shape of one displayed time (`FixtureTimeRead`, ADR "tournament times are
+ * timezone-aware instants"): the server did all the timezone arithmetic, so this is three
+ * plain strings — a UTC `instant` for geometry, a venue-local 12-hour `local_label`, and
+ * its DST-correct `tz_abbrev`. Parsed into the camelCase `FixtureTime` below; the field
+ * that holds it is `.nullable()` (unassigned is a fact, present-but-null), never absent. */
+const fixtureTimeWireSchema = z.object({
+  instant: z.string(),
+  local_label: z.string(),
+  tz_abbrev: z.string(),
+})
+
+const fixtureTimeSchema = fixtureTimeWireSchema.transform(
+  (t): FixtureTime => ({
+    instant: t.instant,
+    localLabel: t.local_label,
+    tzAbbrev: t.tz_abbrev,
+  }),
+)
 
 /** The wire shape (`TournamentFixtureRead`), as it really arrives: snake_case, with
  * five nullable columns that all mean something. Kept separate from the transform
@@ -68,24 +87,22 @@ const fixtureWireSchema = z.object({
    * set it is a **string ref** into the tournament's `table_catalogue` — not a
    * foreign key, the same pattern as `pool_id`. */
   table_id: z.string().nullable(),
-  /** The placement's **predicted** start (ADR-0790): `null` = **unscheduled**. A
-   * *naive* wall-clock timestamp string (no timezone), in the venue's frame — a
-   * prediction, not a commitment. Kept as the string it arrives as, exactly as the
-   * slot's `date`/`start`/`end` and the event's `created_at` are: this surface does
-   * not coerce wire datetimes to `Date` at the boundary. */
-  scheduled_start: z.string().nullable(),
+  /** The placement's **predicted** start (ADR "tournament times are timezone-aware
+   * instants"): `null` = **unscheduled**. When set, a `FixtureTimeRead` — a venue-local
+   * label + tz abbrev for display plus a raw UTC instant for geometry — a prediction, not
+   * a commitment. */
+  scheduled_start: fixtureTimeSchema.nullable(),
   /** When the fixture was **called** (ADR "the schedule is solved, the call is
    * pinned"): `null` = an estimate the solver may still move; set = a promise the
-   * players were notified of. Naive wall-clock, like `scheduled_start`. */
-  pinned_at: z.string().nullable(),
+   * players were notified of. A `FixtureTimeRead`, like `scheduled_start`. */
+  pinned_at: fixtureTimeSchema.nullable(),
   /** How many call/correction notifications this fixture's players have received —
    * `0` for a never-called fixture, never absent. */
   call_notified_count: z.number().int(),
   /** The match's **actual** completion time, as opposed to `scheduled_start`'s
    * *predicted* one: `null` until the match is actually decided (win or void).
-   * Naive wall-clock, like `scheduled_start`/`pinned_at` — kept as the string it
-   * arrives as, same as those two. */
-  completed_at: z.string().nullable(),
+   * A `FixtureTimeRead`, like `scheduled_start`/`pinned_at`. */
+  completed_at: fixtureTimeSchema.nullable(),
 })
 
 /** The parser: one wire fixture → one domain `Fixture`.

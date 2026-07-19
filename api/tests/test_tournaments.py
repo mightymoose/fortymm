@@ -517,11 +517,14 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     )
     assert place.status_code == 200, place.text
     before = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    before_start = datetime.fromisoformat(before["scheduled_start"])
-    # Sanity: as placed, it reads 18:00 in the venue's (old) zone.
+    before_start = datetime.fromisoformat(before["scheduled_start"]["instant"])
+    # Sanity: as placed, it reads 18:00 in the venue's (old) zone — both the raw
+    # instant and the pre-rendered local label agree.
     assert before_start.astimezone(ZoneInfo("America/Chicago")).strftime("%H:%M") == (
         "18:00"
     )
+    assert before["scheduled_start"]["local_label"] == "6:00 PM"
+    assert before["scheduled_start"]["tz_abbrev"] == "CDT"
 
     change = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
@@ -530,11 +533,14 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     assert change.status_code == 200, change.text
 
     after = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    after_start = datetime.fromisoformat(after["scheduled_start"])
-    # Wall-clock preserved: still 18:00, now read in the NEW zone.
+    after_start = datetime.fromisoformat(after["scheduled_start"]["instant"])
+    # Wall-clock preserved: still 18:00, now read in the NEW zone — and the
+    # server-rendered label follows the correction (label + abbrev now Denver's).
     assert after_start.astimezone(ZoneInfo("America/Denver")).strftime("%H:%M") == (
         "18:00"
     )
+    assert after["scheduled_start"]["local_label"] == "6:00 PM"
+    assert after["scheduled_start"]["tz_abbrev"] == "MDT"
     # Instant moved: Denver is an hour behind Chicago, so 18:00-local slid an hour
     # later in absolute time. The two ISO strings are different real moments.
     assert after_start != before_start
@@ -550,7 +556,9 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     )
     assert noop.status_code == 200, noop.text
     unchanged = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    assert datetime.fromisoformat(unchanged["scheduled_start"]) == after_start
+    assert (
+        datetime.fromisoformat(unchanged["scheduled_start"]["instant"]) == after_start
+    )
 
 
 async def test_patch_event_with_an_unknown_timezone_is_422_and_stores_nothing(
@@ -6638,10 +6646,11 @@ async def test_a_completed_matchs_fixture_carries_its_actual_completion_time(
     stamped the instant it does — the Gantt chart's real end anchor for a played slot,
     as opposed to ``scheduled_start``'s predicted one.
 
-    ``Match.completed_at`` is an ordinary aware UTC column, but this field comes back
-    converted to the same **naive** wall-clock frame ``scheduled_start``/``pinned_at``
-    already live in (ADR-0790), so a client can do simple arithmetic across all three
-    without juggling timezones itself.
+    It comes back as a ``FixtureTimeRead`` (chore C1): a UTC-normalized ``instant``
+    for tz-agnostic geometry plus a venue-local display label, the same shape as
+    ``scheduled_start``/``pinned_at``, so a client does no timezone math across the
+    three. ``Match.completed_at`` is an ordinary aware UTC column, and the ``instant``
+    here is that same moment normalized to UTC.
     """
     client, owner = authed_client
     async with opponent_session(db_session, "gantt-opp") as (opp_client, opp):
@@ -6665,12 +6674,15 @@ async def test_a_completed_matchs_fixture_carries_its_actual_completion_time(
         await db_session.execute(select(Match).where(Match.id == fixture.match_id))
     ).scalar_one()
     assert match.completed_at is not None
-    expected_wall_clock = match.completed_at.astimezone().replace(tzinfo=None)
+    expected_instant = match.completed_at.astimezone(UTC)
 
     (after,) = await _events_of(client, tournament_id)
     (fixture_after,) = after["fixtures"]
     assert fixture_after["completed_at"] is not None
-    assert datetime.fromisoformat(fixture_after["completed_at"]) == expected_wall_clock
+    assert (
+        datetime.fromisoformat(fixture_after["completed_at"]["instant"])
+        == expected_instant
+    )
 
 
 async def test_completing_a_round_robin_match_materializes_nothing_new(
@@ -6831,19 +6843,20 @@ def _placement_url(tournament_id: str, fixture_id: str) -> str:
 
 
 def _is_venue_instant(
-    iso: str | None, naive_local: str, tz: str = "America/Chicago"
+    time: dict[str, Any] | None, naive_local: str, tz: str = "America/Chicago"
 ) -> bool:
-    """A placement's ``scheduled_start`` now round-trips as a timezone-aware
-    **instant** (ADR "tournament times are timezone-aware instants"): the
-    director's venue-local wall-clock, anchored to the event zone. Compare
-    instants, not strings — the PATCH echo carries the venue offset while a
-    fresh detail read comes back UTC-normalized, and both name the same moment.
-    (The venue-local display *label* is a separate BFF concern — chore C1.)"""
-    if iso is None:
+    """A placement's ``scheduled_start`` is a ``FixtureTimeRead`` (chore C1): a
+    venue-local display label + tz abbreviation for humans, plus a raw UTC
+    ``instant`` for geometry. This checks that raw ``instant`` round-trips to the
+    director's venue-local wall-clock, anchored to the event zone (ADR "tournament
+    times are timezone-aware instants"). Compare instants, not strings — both the
+    PATCH echo and a fresh detail read come back UTC-normalized, and both name the
+    same moment."""
+    if time is None:
         return False
-    return datetime.fromisoformat(iso) == datetime.fromisoformat(naive_local).replace(
-        tzinfo=ZoneInfo(tz)
-    )
+    return datetime.fromisoformat(time["instant"]) == datetime.fromisoformat(
+        naive_local
+    ).replace(tzinfo=ZoneInfo(tz))
 
 
 async def _fixture_in_detail(
@@ -6905,6 +6918,51 @@ async def test_owner_sets_a_fixture_placement_and_the_detail_reflects_it(
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
     assert placed["table_id"] == "t1"
     assert _is_venue_instant(placed["scheduled_start"], "2026-06-13T10:00:00")
+
+
+async def test_a_pinned_fixture_time_carries_a_venue_local_label_and_a_utc_instant(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Chore C1: every displayed fixture time on the detail BFF is a
+    ``FixtureTimeRead`` — a venue-local display label + timezone abbreviation composed
+    server-side in the **event's** timezone with ``zoneinfo``, alongside the raw UTC
+    instant a client uses for tz-agnostic Gantt geometry. No naive wall-clock string is
+    emitted for a computed time, so no client does any timezone math.
+
+    Placing a fixture with both entrants known is a (silent, pre-live) pin, so this one
+    placement exercises both ``scheduled_start`` and ``pinned_at``: a 6:00 PM local
+    start in the default ``America/Chicago`` zone (June → CDT, UTC-05:00) renders
+    "6:00 PM CDT" and a ``23:00:00+00:00`` instant.
+    """
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": "t1", "scheduled_start": "2026-06-13T18:00:00"},
+    )
+    assert response.status_code == 200, response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+
+    # The predicted start: label + abbrev pre-rendered in the venue zone, plus the raw
+    # UTC instant (6 PM CDT == 23:00 UTC), emitted UTC-normalized (Pydantic's ``Z``).
+    start = placed["scheduled_start"]
+    assert start["local_label"] == "6:00 PM"
+    assert start["tz_abbrev"] == "CDT"
+    assert start["instant"].endswith("Z")  # UTC-normalized, unambiguous
+    assert datetime.fromisoformat(start["instant"]) == datetime(
+        2026, 6, 13, 23, 0, tzinfo=UTC
+    )
+
+    # The pin timestamp is likewise a FixtureTimeRead — a real UTC instant with a
+    # venue-local label — not a bare naive string.
+    pin = placed["pinned_at"]
+    assert pin is not None
+    assert pin["tz_abbrev"] == "CDT"
+    assert pin["instant"].endswith("Z")
+    assert datetime.fromisoformat(pin["instant"]).utcoffset() == timedelta(0)
 
 
 async def test_owner_clears_a_fixture_placement_back_to_null(
@@ -7241,20 +7299,29 @@ async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
     await _go_live_directly(db_session, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
 
-    monkeypatch.setattr(match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 40))
+    monkeypatch.setattr(
+        match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 40, tzinfo=UTC)
+    )
     first = await client.patch(
         url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
     )
-    assert first.json()["pinned_at"] == "2026-06-13T09:40:00"
+    assert datetime.fromisoformat(first.json()["pinned_at"]["instant"]) == datetime(
+        2026, 6, 13, 9, 40, tzinfo=UTC
+    )
 
-    monkeypatch.setattr(match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 50))
+    monkeypatch.setattr(
+        match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 50, tzinfo=UTC)
+    )
     response = await client.patch(
         url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["pinned_at"] == "2026-06-13T09:50:00"  # renewed, not the first pin
+    # renewed, not the first pin
+    assert datetime.fromisoformat(body["pinned_at"]["instant"]) == datetime(
+        2026, 6, 13, 9, 50, tzinfo=UTC
+    )
     assert body["call_notified_count"] == 2
 
     moved = [

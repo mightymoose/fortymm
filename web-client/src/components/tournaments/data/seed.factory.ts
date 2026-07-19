@@ -10,6 +10,7 @@ import type {
   EventEntryState,
   EventResults,
   Fixture,
+  FixtureTime,
   Pool,
   PoolStandings,
   Predicate,
@@ -230,14 +231,56 @@ export function buildIneligibleEvent(
   })
 }
 
+/** Build a domain `FixtureTime` (ADR "tournament times are timezone-aware instants")
+ * from a **naive venue wall-clock** stamp (`YYYY-MM-DDTHH:MM[:SS]`) — the convenient
+ * shape a test writes. The seeds live in one venue frame, so the mock treats the
+ * wall-clock as the UTC `instant` (deterministic tz-agnostic geometry), renders the
+ * `localLabel` as a 12-hour clock, and tags it `CDT` — enough for both the display
+ * labels and the bar geometry the schedule surfaces read. */
+export function buildFixtureTime(naive: string): FixtureTime {
+  const [date, time = '00:00'] = naive.split('T')
+  const [h = 0, m = 0] = time.split(':').map(Number)
+  const hh = String(h).padStart(2, '0')
+  const mm = String(m).padStart(2, '0')
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const h12 = h % 12 || 12
+  return {
+    instant: `${date}T${hh}:${mm}:00Z`,
+    localLabel: `${h12}:${mm} ${ampm}`,
+    tzAbbrev: 'CDT',
+  }
+}
+
+/** A fixture time override: the domain `FixtureTime`, or the convenient naive
+ * wall-clock string a test writes (coerced through `buildFixtureTime`), or `null`. */
+type FixtureTimeInput = FixtureTime | string | null
+
+function coerceFixtureTime(input: FixtureTimeInput): FixtureTime | null {
+  if (input === null) return null
+  return typeof input === 'string' ? buildFixtureTime(input) : input
+}
+
+/** `buildFixture` overrides, with the three placement times accepting a naive
+ * wall-clock string (the shape tests write) as well as a full `FixtureTime`. */
+type FixtureOverrides = Partial<
+  Omit<Fixture, 'scheduledStart' | 'pinnedAt' | 'completedAt'>
+> & {
+  scheduledStart?: FixtureTimeInput
+  pinnedAt?: FixtureTimeInput
+  completedAt?: FixtureTimeInput
+}
+
 /** One fixture of a cut draw (ADR-0786): round 1, position 1 of `Pool A`, between the
  * first two entrants, undecided and not yet a match.
  *
  * Every `null` is a fact, so none of them is a default worth having *silently*: pass
  * `entryBId: null` for a **TBD** side (never a bye — a bye is the ABSENCE of a fixture),
  * `poolId: null` for an un-pooled (knockout) fixture. Placement (ADR-0790) defaults
- * empty: `tableId: null` unassigned, `scheduledStart: null` unscheduled. */
-export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
+ * empty: `tableId: null` unassigned, `scheduledStart: null` unscheduled. The three
+ * placement times take a naive wall-clock string for convenience (`buildFixtureTime`
+ * shapes it into the `FixtureTime` the wire now sends) or a full `FixtureTime`. */
+export function buildFixture(overrides: FixtureOverrides = {}): Fixture {
+  const { scheduledStart, pinnedAt, completedAt, ...rest } = overrides
   return {
     id: 'fx-1',
     poolId: 'p-a',
@@ -249,14 +292,16 @@ export function buildFixture(overrides: Partial<Fixture> = {}): Fixture {
     matchId: null,
     matchStatus: null,
     tableId: null,
-    scheduledStart: null,
+    callNotifiedCount: 0,
+    ...rest,
+    // The placement times last, after `rest`, so the naive-string coercion always
+    // wins over a raw override of the same key.
+    scheduledStart: coerceFixtureTime(scheduledStart ?? null),
     // Uncalled (ADR "the schedule is solved, the call is pinned"): the placement —
     // when one is set — is still an estimate, and nobody has been notified.
-    pinnedAt: null,
-    callNotifiedCount: 0,
+    pinnedAt: coerceFixtureTime(pinnedAt ?? null),
     // Not decided yet: no actual completion time.
-    completedAt: null,
-    ...overrides,
+    completedAt: coerceFixtureTime(completedAt ?? null),
   }
 }
 

@@ -10,6 +10,7 @@ type EventResultsRead = components['schemas']['EventResultsRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
+type FixtureTimeRead = components['schemas']['FixtureTimeRead']
 type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 type AdminScheduleSolveListResponse =
   components['schemas']['AdminScheduleSolveListResponse']
@@ -75,9 +76,47 @@ export function buildTournamentEntrantReads(
  * told anything (ADR "the schedule is solved, the call is pinned"). `completed_at`
  * null means the match has not actually finished yet, distinct from the placement's
  * merely *predicted* `scheduled_start`. */
+/** Build a wire `FixtureTimeRead` (ADR "tournament times are timezone-aware
+ * instants") from a **naive venue wall-clock** stamp (`YYYY-MM-DDTHH:MM[:SS]`) — the
+ * convenient shape a mock/test writes. The mock treats the wall-clock as the UTC
+ * `instant` (deterministic geometry across a single-venue seed), renders `local_label`
+ * as a 12-hour clock, and tags it `CDT`. Shared with the dev-world solver sim and both
+ * store stubs, so all three worlds emit the identical shape the server does. */
+export function buildFixtureTimeRead(naive: string): FixtureTimeRead {
+  const [date, time = '00:00'] = naive.split('T')
+  const [h = 0, m = 0] = time.split(':').map(Number)
+  const hh = String(h).padStart(2, '0')
+  const mm = String(m).padStart(2, '0')
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const h12 = h % 12 || 12
+  return {
+    instant: `${date}T${hh}:${mm}:00Z`,
+    local_label: `${h12}:${mm} ${ampm}`,
+    tz_abbrev: 'CDT',
+  }
+}
+
+/** A wire fixture time override: the full `FixtureTimeRead`, or the convenient naive
+ * wall-clock string (coerced through `buildFixtureTimeRead`), or `null`. */
+type FixtureTimeReadInput = FixtureTimeRead | string | null
+
+function coerceFixtureTimeRead(input: FixtureTimeReadInput): FixtureTimeRead | null {
+  if (input === null) return null
+  return typeof input === 'string' ? buildFixtureTimeRead(input) : input
+}
+
+type TournamentFixtureReadOverrides = Partial<
+  Omit<TournamentFixtureRead, 'scheduled_start' | 'pinned_at' | 'completed_at'>
+> & {
+  scheduled_start?: FixtureTimeReadInput
+  pinned_at?: FixtureTimeReadInput
+  completed_at?: FixtureTimeReadInput
+}
+
 export function buildTournamentFixtureRead(
-  overrides: Partial<TournamentFixtureRead> = {},
+  overrides: TournamentFixtureReadOverrides = {},
 ): TournamentFixtureRead {
+  const { scheduled_start, pinned_at, completed_at, ...rest } = overrides
   return {
     id: 'fx-1',
     pool_id: null,
@@ -89,11 +128,12 @@ export function buildTournamentFixtureRead(
     match_id: null,
     match_status: null,
     table_id: null,
-    scheduled_start: null,
-    pinned_at: null,
     call_notified_count: 0,
-    completed_at: null,
-    ...overrides,
+    ...rest,
+    // The placement times last, so the naive-string coercion wins over a raw override.
+    scheduled_start: coerceFixtureTimeRead(scheduled_start ?? null),
+    pinned_at: coerceFixtureTimeRead(pinned_at ?? null),
+    completed_at: coerceFixtureTimeRead(completed_at ?? null),
   }
 }
 

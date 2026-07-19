@@ -28,6 +28,7 @@ import {
   manualPlacementPin,
   NO_DRAWN_EVENTS_MESSAGE,
   queuedSolveRow,
+  simFixtureTime,
   SOLVE_TICK_DWELL_MS,
   solveRowInFlight,
   stepScheduleSolve,
@@ -1466,7 +1467,11 @@ export function placeFixture(
   const placed: TournamentFixtureRead = {
     ...fixture,
     table_id: body.table_id,
-    scheduled_start: body.scheduled_start,
+    // The wire ships a placement's predicted start as a `FixtureTimeRead` (ADR
+    // "tournament times are timezone-aware instants"); the PATCH body still names a
+    // naive venue wall-clock, so the store composes the read shape the client parses.
+    scheduled_start:
+      body.scheduled_start === null ? null : simFixtureTime(body.scheduled_start),
     ...manualPlacementPin(
       existing.events,
       fixture,

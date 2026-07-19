@@ -432,7 +432,7 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
     assert len(fixtures) == 6
     for fixture in fixtures:
         assert fixture["table_id"] in ("t1", "t2")
-        start = datetime.fromisoformat(fixture["scheduled_start"])
+        start = datetime.fromisoformat(fixture["scheduled_start"]["instant"])
         assert BASE <= start
         assert start + timedelta(minutes=MATCH_MINUTES) <= WINDOW_END
         assert fixture["pinned_at"] is None

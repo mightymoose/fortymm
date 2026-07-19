@@ -504,7 +504,7 @@ describe('ScheduleTab', () => {
       tournament: buildTournament({ events: [buildTieredEvent()] }),
       tables: buildTables(),
     })
-    expect(page.getMatch('fx-est')).toHaveTextContent('09:00 · est')
+    expect(page.getMatch('fx-est')).toHaveTextContent('9:00 AM CDT · est')
     // A call is a promise and a started match is fact — neither is an estimate,
     // so neither says `est`.
     expect(page.queryEst('fx-called')).not.toBeInTheDocument()
@@ -516,7 +516,7 @@ describe('ScheduleTab', () => {
       tournament: buildTournament({ events: [buildTieredEvent()] }),
       tables: buildTables(),
     })
-    expect(page.getCalledBadge('fx-called')).toHaveTextContent('Called 09:50')
+    expect(page.getCalledBadge('fx-called')).toHaveTextContent('Called 9:50 AM CDT')
     expect(page.queryNotified('fx-called')).toHaveTextContent('notified 2×')
     // The estimate has promised nothing.
     expect(page.queryCalledBadge('fx-est')).not.toBeInTheDocument()
@@ -651,7 +651,7 @@ describe('ScheduleTab', () => {
       }),
       tables: buildTables(),
     })
-    expect(page.getCalledBadge('fx-called-once')).toHaveTextContent('Called 09:50')
+    expect(page.getCalledBadge('fx-called-once')).toHaveTextContent('Called 9:50 AM CDT')
     expect(page.queryNotified('fx-called-once')).not.toBeInTheDocument()
   })
 

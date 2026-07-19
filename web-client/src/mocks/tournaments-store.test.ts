@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { buildFixtureTimeRead } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   createEvent,
   createTournament,
@@ -1320,8 +1321,10 @@ describe('the schedule solve tick — calling on a live tournament', () => {
     // is inside the call-ahead window; everything later is not.
     expect(called).toHaveLength(2)
     for (const fixture of called) {
-      expect(fixture.scheduled_start).toBe('2026-08-22T09:00:00')
-      expect(fixture.pinned_at).toBe('2026-08-22T09:00:00')
+      // The wire now carries a `FixtureTimeRead` object (ADR "tournament times are
+      // timezone-aware instants"): a UTC instant for geometry + the venue-local label.
+      expect(fixture.scheduled_start).toEqual(buildFixtureTimeRead('2026-08-22T09:00:00'))
+      expect(fixture.pinned_at).toEqual(buildFixtureTimeRead('2026-08-22T09:00:00'))
       expect(fixture.call_notified_count).toBe(1)
     }
     // The rest of the plan stays an estimate: unpinned, nobody notified.

@@ -15,7 +15,36 @@ import type { components } from '@/api/schema'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
+type FixtureTimeRead = components['schemas']['FixtureTimeRead']
 type Pool = components['schemas']['Pool']
+
+/** Shape a **naive venue wall-clock** stamp (`YYYY-MM-DDTHH:MM[:SS]`) into the wire
+ * `FixtureTimeRead` the server now sends (ADR "tournament times are timezone-aware
+ * instants"). The sim works in one venue frame, so it emits the wall-clock AS the UTC
+ * `instant` (deterministic tz-agnostic geometry), renders `local_label` as a 12-hour
+ * clock, and tags it `CDT`. A duplicate of `buildFixtureTimeRead`
+ * (`tournament.factory.ts`) kept here to hold this module dependency-light — schema
+ * TYPES only, so it loads in the bare Node context the e2e stub store runs in. */
+export function simFixtureTime(naive: string): FixtureTimeRead {
+  const [date, time = '00:00'] = naive.split('T')
+  const [h = 0, m = 0] = time.split(':').map(Number)
+  const hh = String(h).padStart(2, '0')
+  const mm = String(m).padStart(2, '0')
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const h12 = h % 12 || 12
+  return {
+    instant: `${date}T${hh}:${mm}:00Z`,
+    local_label: `${h12}:${mm} ${ampm}`,
+    tz_abbrev: 'CDT',
+  }
+}
+
+/** The naive venue wall-clock a `FixtureTimeRead` carries — the sim's own internal
+ * frame. The sim emits the wall-clock as the instant (`simFixtureTime`), so stripping
+ * the UTC marker round-trips it back for the sim's plain-string arithmetic. */
+function naiveOf(t: FixtureTimeRead): string {
+  return t.instant.replace(/Z$/, '')
+}
 
 /** The slice of an event the sim reads — both stores' event shapes satisfy it
  * structurally, so the functions stay generic over whichever they hold. */
@@ -68,12 +97,12 @@ export function queuedSolveRow(id: string): ScheduleSolveRead {
  * The dwell puts each step on a DIFFERENT poll. */
 export const SOLVE_TICK_DWELL_MS = 600
 
-/** Every placed start in the events, for the sim's wall clock. */
+/** Every placed start in the events, in the sim's naive wall-clock frame. */
 function placedStarts(events: readonly SimEvent[]): string[] {
   return events
     .flatMap((e) => e.fixtures)
     .filter((f) => f.table_id !== null && f.scheduled_start !== null)
-    .map((f) => f.scheduled_start as string)
+    .map((f) => naiveOf(f.scheduled_start as FixtureTimeRead))
 }
 
 /** The sim's naive "now": the earliest placed `scheduled_start` anywhere — the
@@ -117,7 +146,7 @@ export function placeUnplacedFixtures<E extends SimEvent>(
       return {
         ...fixture,
         table_id: table,
-        scheduled_start: `${pool.slot.date}T${hh}:${mm}:00`,
+        scheduled_start: simFixtureTime(`${pool.slot.date}T${hh}:${mm}:00`),
       }
     })
     return { ...event, fixtures }
@@ -177,14 +206,14 @@ export function pinImminentFixtures<E extends SimEvent>(
       ) {
         return fixture
       }
-      const at = stampMinutes(fixture.scheduled_start)
+      const at = stampMinutes(naiveOf(fixture.scheduled_start))
       const imminent =
         at.date === nowAt.date &&
         at.minutes >= nowAt.minutes &&
         at.minutes - nowAt.minutes <= CALL_AHEAD_MIN
       if (!imminent) return fixture
       pinned += 1
-      return { ...fixture, pinned_at: now, call_notified_count: 1 }
+      return { ...fixture, pinned_at: simFixtureTime(now), call_notified_count: 1 }
     }),
   }))
   return { events: next, pinned }
@@ -217,7 +246,7 @@ export function manualPlacementPin<E extends SimEvent>(
   >,
   body: { table_id: string | null; scheduled_start: string | null },
   live: boolean,
-): { pinned_at: string | null; call_notified_count: number } {
+): { pinned_at: FixtureTimeRead | null; call_notified_count: number } {
   const wasTold = fixture.pinned_at !== null && fixture.call_notified_count > 0
   let pinned_at = fixture.pinned_at
   let call_notified_count = fixture.call_notified_count
@@ -229,7 +258,7 @@ export function manualPlacementPin<E extends SimEvent>(
     // TBD side: soft write (ADR-0790), pin nothing, tell nobody.
   } else {
     // The pin — set or refreshed, re-dated to the moment the director made it.
-    pinned_at = wallNow(events, body.scheduled_start)
+    pinned_at = simFixtureTime(wallNow(events, body.scheduled_start))
     if (live) call_notified_count += 1 // called (untold) or moved (told)
   }
   return { pinned_at, call_notified_count }

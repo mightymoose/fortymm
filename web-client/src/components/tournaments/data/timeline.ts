@@ -5,11 +5,16 @@
 // yet. Pure, so it is unit-tested (`./timeline.test.ts`) rather than asserted
 // through a DOM — the `./schedule.ts` shape.
 //
-// Everything here is **naive wall-clock** (ADR-0790): a placement's
-// `scheduledStart` and a pool's Slot live in the venue's own frame, so positions
-// are computed by string/segment arithmetic on `YYYY-MM-DD` + `HH:MM` — day
-// offsets via UTC-midnight subtraction (both sides UTC, so no timezone can leak
-// in), never a local `Date` of a wall-clock instant.
+// Bar **geometry** is instant-based (ADR "tournament times are timezone-aware
+// instants", superseding ADR-0790's naive-wall-clock frame): a placement's
+// `scheduledStart` carries a raw UTC `instant`, and positions are differences of
+// those instants — tz-agnostic arithmetic, no timezone library. A tournament-wide
+// board can hold events in different timezones, so two bars at the same wall-clock
+// are NOT the same instant; only differencing instants separates them honestly.
+// The board's minute axis is anchored to the earliest bar's venue wall-clock (its
+// server-rendered `localLabel`) so the decorative axis still reads in venue time,
+// but every bar shows its OWN `localLabel` + `tzAbbrev` — the client never derives
+// a wall-clock or picks a zone itself.
 
 import type { MatchStatus } from '@/api/matches'
 
@@ -17,6 +22,7 @@ import { TBD_LABEL, WITHDRAWN_LABEL } from './draw'
 import type {
   Entrant,
   Fixture,
+  FixtureTime,
   MatchLength,
   Tournament,
   TournamentEvent,
@@ -103,8 +109,8 @@ export function fixtureTier(fixture: Fixture): TimelineTier {
  * any more. A type predicate, so a teller of a told fixture may read its
  * `pinnedAt` without a cast. */
 export function isTold<
-  F extends { pinnedAt: string | null; callNotifiedCount: number },
->(fixture: F): fixture is F & { pinnedAt: string } {
+  F extends { pinnedAt: FixtureTime | null; callNotifiedCount: number },
+>(fixture: F): fixture is F & { pinnedAt: FixtureTime } {
   return fixture.pinnedAt !== null && fixture.callNotifiedCount > 0
 }
 
@@ -136,24 +142,20 @@ export function isDecided(status: MatchStatus | null): boolean {
   return status !== null && DECIDED_STATUSES.has(status)
 }
 
-/** The `HH:MM` time-of-day of a naive wall-clock timestamp — for prefilling the
- * placement picker, showing a placement, and reading a `pinnedAt` stamp. Tolerant
- * of a bare date or a seconds-bearing stamp; `''` when there is no time (an
- * unscheduled fixture). Lives here (not `./schedule.ts`, which re-exports it)
- * because `./schedule.ts` already imports from this module. */
-export function timeOfDay(scheduledStart: string | null): string {
-  if (!scheduledStart) return ''
-  const time = scheduledStart.split('T')[1]
-  return time ? time.slice(0, 5) : ''
+/** One displayed `FixtureTime` as its venue-local words: `"6:00 PM CDT"` — the
+ * server-rendered `localLabel` and its `tzAbbrev`, side by side (ADR "tournament times
+ * are timezone-aware instants": a schedule surface always labels the timezone). The
+ * client renders these verbatim; it never slices a datetime or picks a zone. */
+export function fmtFixtureTime(time: FixtureTime): string {
+  return `${time.localLabel} ${time.tzAbbrev}`
 }
 
 /** What a call **cost**, made visible (ADR "the schedule is solved; the call is
  * pinned": called fixtures carry a visible called-at / notified-count marker):
- * `Called 08:50` — the wall-clock minute the promise was made. The time is read
- * straight off the naive `pinnedAt` stamp (`timeOfDay`), the same frame every
- * other schedule clock is in. */
-export function calledAtLabel(pinnedAt: string): string {
-  return `Called ${timeOfDay(pinnedAt) || '00:00'}`
+ * `Called 8:50 AM CDT` — the venue wall-clock minute the promise was made, straight
+ * off the server's `pinnedAt` label (`fmtFixtureTime`). */
+export function calledAtLabel(pinnedAt: FixtureTime): string {
+  return `Called ${fmtFixtureTime(pinnedAt)}`
 }
 
 /** The notified-count half of the marker: `notified 2×` — but only once the
@@ -175,7 +177,7 @@ export function notifiedLabel(callNotifiedCount: number): string | null {
 export function tierSentence(
   tier: TimelineTier,
   status: MatchStatus | null,
-  fixture: { pinnedAt: string | null; callNotifiedCount: number },
+  fixture: { pinnedAt: FixtureTime | null; callNotifiedCount: number },
 ): string {
   switch (tier) {
     case 'estimate':
@@ -200,37 +202,51 @@ export function tierSentence(
   }
 }
 
-// ----- wall-clock arithmetic -----------------------------------------------------
+// ----- instant geometry + venue-clock labels -------------------------------------
 
-/** Whole days from `origin` to `date` (both `YYYY-MM-DD`), by UTC-midnight
- * subtraction — both sides in the same fictitious frame, so this is calendar
- * arithmetic, not timezone math (ADR-0790). */
-function dayOffset(date: string, origin: string): number {
-  const [oy, om, od] = origin.split('-').map(Number)
-  const [dy, dm, dd] = date.split('-').map(Number)
-  return Math.round((Date.UTC(dy, dm - 1, dd) - Date.UTC(oy, om - 1, od)) / 86_400_000)
+/** One `FixtureTime`'s absolute moment as epoch milliseconds — the only value the
+ * board's geometry ever reads from a time (positions are *differences* of these).
+ * `NaN` for an unparseable instant, which the board guards against; the string is
+ * untrusted network data. `instant` is offset-bearing UTC (`…Z`), so `Date.parse`
+ * is unambiguous and no timezone leaks in. */
+export function instantMs(time: FixtureTime): number {
+  return Date.parse(time.instant)
 }
 
-/** Minutes from `origin`'s midnight to `date` `HH:MM`. */
-function minutesAt(date: string, time: string, origin: string): number {
-  const [h, m] = time.split(':').map(Number)
-  return dayOffset(date, origin) * 1440 + (h || 0) * 60 + (m || 0)
+/** The venue wall-clock minutes-of-day of a server `localLabel` (`"6:00 PM"` → 1080)
+ * — parsed, not computed: this reads the label the server already rendered in the
+ * venue's timezone, so the board can ANCHOR its minute axis to the earliest bar's
+ * wall-clock. It is not timezone math (no zone, no offset) — a 12-hour clock string
+ * turned into minutes. `0` for a label that does not parse. */
+export function parseLocalLabel(localLabel: string): number {
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(localLabel.trim())
+  if (!m) return 0
+  const hour12 = Number(m[1]) % 12
+  const pm = m[3].toUpperCase() === 'PM'
+  return (pm ? hour12 + 12 : hour12) * 60 + Number(m[2])
 }
 
-/** A board minute as venue wall-clock `HH:MM` (wraps across days). */
+/** A board minute as a venue wall-clock 12-hour label (`"6:00 PM"`), wrapping across
+ * days. Used only for a bar's projected END (`scheduledStart + an estimate`), which
+ * has no server label of its own — the START and any real completion time come
+ * straight from the server (`FixtureTime.localLabel`). */
+export function fmt12(min: number): string {
+  const ofDay = ((Math.round(min) % 1440) + 1440) % 1440
+  const h24 = Math.floor(ofDay / 60)
+  const m = ofDay % 60
+  const ampm = h24 < 12 ? 'AM' : 'PM'
+  const h12 = h24 % 12 || 12
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+/** A board minute as venue wall-clock `HH:MM` (wraps across days) — the decorative
+ * axis ruler's labels, in the origin bar's venue frame (the axis is `aria-hidden`;
+ * every bar states its own timezone-labelled clock). */
 export function fmtBoardClock(min: number): string {
   const ofDay = ((min % 1440) + 1440) % 1440
   const h = Math.floor(ofDay / 60)
   const m = ofDay % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-}
-
-/** A placement timestamp (`YYYY-MM-DDTHH:MM[:SS]`) split into its date and
- * `HH:MM`, tolerantly: a bare date reads as midnight rather than crashing the
- * board over one malformed stamp. */
-function splitStamp(scheduledStart: string): { date: string; time: string } {
-  const [date, time] = scheduledStart.split('T')
-  return { date, time: time ? time.slice(0, 5) : '00:00' }
 }
 
 /** One labelled tick of the time axis. */
@@ -261,9 +277,11 @@ const MIN_BAR_DURATION_MIN = 1
 
 // ----- the board -----------------------------------------------------------------
 
-/** One placed fixture as a positioned bar. Positions are minutes since the
- * board's `originDate` midnight; clocks are the venue's wall-clock words for the
- * same instants. */
+/** One placed fixture as a positioned bar. Positions (`startMin`/`endMin`) are
+ * board minutes on an axis anchored to the earliest bar's venue wall-clock but
+ * SPACED by real instant differences (ADR "tournament times are timezone-aware
+ * instants"); the displayed clocks (`startClock`/`endClock`/`tz`) are the server's
+ * own venue-local words for the bar's own timezone. */
 export interface TimelineBarData {
   fixtureId: string
   eventName: string
@@ -279,7 +297,9 @@ export interface TimelineBarData {
   /** The table's catalogue label, or its raw id when the catalogue no longer
    * lists it (shown, never dropped — the `./schedule.ts` stance). */
   tableLabel: string
-  /** The placement's date (`YYYY-MM-DD`). */
+  /** The placement's **venue** date (`YYYY-MM-DD`), from the fixture's pool/event
+   * Slot — the day the venue is open, not whatever calendar day the UTC instant
+   * happens to land on. */
   date: string
   startMin: number
   /** Where the bar ends. For a **decided** fixture (`completed`/`voided`) with a
@@ -294,13 +314,20 @@ export interface TimelineBarData {
    * the actual `completedAt - scheduledStart` (clamped to `MIN_BAR_DURATION_MIN`)
    * once the match is decided and has a real completion time. */
   durationMin: number
+  /** The bar's start, in the venue's own words (`scheduledStart.localLabel`, e.g.
+   * `"9:00 AM"`) — the server's rendering, not a client-derived clock. */
   startClock: string
+  /** The bar's end in venue words: a **decided** fixture's real `completedAt.localLabel`,
+   * else the projected `startClock + estimate` (`fmt12`). */
   endClock: string
+  /** The bar's DST-correct zone abbreviation (`scheduledStart.tzAbbrev`, e.g. `"CDT"`),
+   * rendered beside the clocks so a multi-timezone board never conflates two frames. */
+  tz: string
   tier: TimelineTier
   /** The materialized match's live status, or `null` while the fixture is still
    * a planned pairing. */
   status: MatchStatus | null
-  pinnedAt: string | null
+  pinnedAt: FixtureTime | null
   /** How many call/correction notifications this fixture's players have received
    * — `0` for a never-called fixture. Carried so a called bar can show what its
    * promise cost (`notifiedLabel`). */
@@ -347,13 +374,16 @@ export interface UnscheduledFixture {
 
 /**
  * The whole board: one visible window, the table rows, the player rows, and the
- * unscheduled rail. The window runs from the earliest pool-window start to the
- * latest placement end (whichever is later than its window), padded to the
- * half-hour — pools' windows alone when nothing is placed yet (the chore's
- * fallback), so an empty board still shows the day it is empty *of*.
+ * unscheduled rail. The window runs from the earliest placed bar to the latest bar
+ * end, padded to the half-hour. It is drawn only once something is placed
+ * (`hasBars`); before that the Schedule tab shows the "run the scheduler" prompt,
+ * so the window is a token hour rather than a reserved-slot projection (the slot
+ * windows are naive venue wall-clock and cannot be placed on the instant axis
+ * without the timezone math this model keeps off the client).
  */
 export interface TimelineBoard {
-  /** The date board minute 0 falls on (its midnight). */
+  /** The **venue** date the earliest bar falls on (`YYYY-MM-DD`) — the day the
+   * board reads as, from that bar's pool/event Slot. */
   originDate: string
   startMin: number
   endMin: number
@@ -407,65 +437,81 @@ export function buildTimelineBoard(
     }
   }
 
-  // ---- the window's raw candidates, as (date, HH:MM) pairs -------------------
-  const starts: { date: string; time: string }[] = []
-  const ends: { date: string; time: string }[] = []
-  for (const event of tournament.events) {
-    if (event.fixtures.length === 0) continue
-    // Pool windows are the day's reserved shape; an un-pooled draw falls back to
-    // the event's own Slot (the same rule a placement's date follows, ADR-0790).
-    const slots =
-      event.pools.length > 0 ? event.pools.map((p) => p.slot) : [event.slot]
-    for (const slot of slots) {
-      starts.push({ date: slot.date, time: slot.start })
-      ends.push({ date: slot.date, time: slot.end })
-    }
-  }
-  for (const { fixture } of all) {
-    if (fixture.scheduledStart === null || fixture.tableId === null) continue
-    // Placements join the origin vote here; their minutes join min/max in the
-    // bars pass below (start AND estimated end), once there is an origin to
-    // count from.
-    starts.push(splitStamp(fixture.scheduledStart))
+  // ---- origin: the earliest placed bar's instant + its venue anchor ----------
+  // Geometry differences INSTANTS (tz-agnostic); the minute axis is anchored to
+  // that earliest bar's venue wall-clock (its server `localLabel`) so the
+  // decorative ruler still reads in venue time. Slot windows are naive wall-clock
+  // and cannot join an instant axis without timezone math, so they no longer size
+  // the board — it is only drawn once at least one bar exists (`hasBars`).
+  const venueDateOf = (ef: EventFixture): string => {
+    const pool = ef.event.pools.find((p) => p.id === ef.fixture.poolId) ?? null
+    return (pool?.slot ?? ef.event.slot).date
   }
 
-  // Origin: the earliest date named anywhere (string compare is date order for
-  // `YYYY-MM-DD`). A tournament with no drawn events has no candidates; the
-  // board is not rendered then, but stay total on principle.
-  const allDates = [...starts, ...ends].map((c) => c.date)
+  let originMs = Number.POSITIVE_INFINITY
+  let originAnchor: EventFixture | null = null
+  for (const ef of all) {
+    const { scheduledStart, tableId } = ef.fixture
+    if (scheduledStart === null || tableId === null) continue
+    const ms = instantMs(scheduledStart)
+    if (Number.isFinite(ms) && ms < originMs) {
+      originMs = ms
+      originAnchor = ef
+    }
+  }
+
+  // The board minute the origin bar sits on: its venue wall-clock, read off the
+  // server's own label (never derived here).
+  const wallMin0 =
+    originAnchor !== null && originAnchor.fixture.scheduledStart !== null
+      ? parseLocalLabel(originAnchor.fixture.scheduledStart.localLabel)
+      : 0
   const originDate =
-    allDates.length > 0
-      ? allDates.reduce((a, b) => (a < b ? a : b))
+    originAnchor !== null
+      ? venueDateOf(originAnchor)
       : (tournament.startDate ?? '2000-01-01')
 
   let min = Number.POSITIVE_INFINITY
   let max = Number.NEGATIVE_INFINITY
-  for (const c of starts) min = Math.min(min, minutesAt(c.date, c.time, originDate))
-  for (const c of ends) max = Math.max(max, minutesAt(c.date, c.time, originDate))
 
   // ---- bars -------------------------------------------------------------------
   const barByFixture = new Map<string, TimelineBarData>()
   for (const { fixture, event, entrantById } of all) {
     if (fixture.tableId === null || fixture.scheduledStart === null) continue
-    const stamp = splitStamp(fixture.scheduledStart)
-    const startMin = minutesAt(stamp.date, stamp.time, originDate)
-    // A decided fixture (`completed`/`voided`) with a real `completedAt` draws
-    // its actual end instead of projecting the estimate past a match that has
-    // already finished — `startMin` still anchors to `scheduledStart` (ADR-0790:
-    // we are not trying to detect an actual start, only an actual end). Guard
-    // against a `completedAt` at or before `scheduledStart`: the network is
-    // untrusted, and a negative/zero-width or backwards bar would be a lie
-    // either way.
+    const startInstant = instantMs(fixture.scheduledStart)
+    if (!Number.isFinite(startInstant)) continue
+    // Board minutes: the origin bar's venue wall-clock plus REAL elapsed minutes
+    // to this bar (instant differencing). Two bars an hour apart sit 60 minutes
+    // apart whatever their timezones.
+    const startMin = wallMin0 + Math.round((startInstant - originMs) / 60_000)
+    // A decided fixture (`completed`/`voided`) with a real `completedAt` draws its
+    // ACTUAL end (an instant difference) instead of projecting the estimate past a
+    // match that has already finished — `startMin` still anchors to
+    // `scheduledStart` (we detect an actual end, not an actual start). Guard a
+    // `completedAt` at/before the start (the network is untrusted) with a
+    // 1-minute floor rather than a backwards/zero-width bar.
     let durationMin = estimatedMatchMinutes(event.match.lengthGames)
-    if (isDecided(fixture.matchStatus) && fixture.completedAt !== null) {
-      const completedStamp = splitStamp(fixture.completedAt)
-      const completedMin = minutesAt(completedStamp.date, completedStamp.time, originDate)
-      durationMin = Math.max(MIN_BAR_DURATION_MIN, completedMin - startMin)
+    const decided = isDecided(fixture.matchStatus) && fixture.completedAt !== null
+    if (decided && fixture.completedAt !== null) {
+      const completedInstant = instantMs(fixture.completedAt)
+      if (Number.isFinite(completedInstant)) {
+        durationMin = Math.max(
+          MIN_BAR_DURATION_MIN,
+          Math.round((completedInstant - startInstant) / 60_000),
+        )
+      }
     }
     const endMin = startMin + durationMin
     const pool = event.pools.find((p) => p.id === fixture.poolId) ?? null
     const a = sideOf(fixture.entryAId, entrantById)
     const b = sideOf(fixture.entryBId, entrantById)
+    // The end reads in the bar's OWN venue frame: a decided fixture's real
+    // completion label, else the projected `start + estimate` (`fmt12` of the
+    // bar's own wall-clock — never a zone the client picked).
+    const endClock =
+      decided && fixture.completedAt !== null
+        ? fixture.completedAt.localLabel
+        : fmt12(parseLocalLabel(fixture.scheduledStart.localLabel) + durationMin)
     barByFixture.set(fixture.id, {
       fixtureId: fixture.id,
       eventName: event.name,
@@ -475,12 +521,13 @@ export function buildTimelineBoard(
       b,
       tableId: fixture.tableId,
       tableLabel: tableById.get(fixture.tableId)?.label ?? fixture.tableId,
-      date: stamp.date,
+      date: (pool?.slot ?? event.slot).date,
       startMin,
       endMin,
       durationMin,
-      startClock: fmtBoardClock(startMin),
-      endClock: fmtBoardClock(endMin),
+      startClock: fixture.scheduledStart.localLabel,
+      endClock,
+      tz: fixture.scheduledStart.tzAbbrev,
       tier: fixtureTier(fixture),
       status: fixture.matchStatus,
       pinnedAt: fixture.pinnedAt,

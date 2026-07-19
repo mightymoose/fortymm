@@ -25,21 +25,35 @@ import { EM_DASH, fmtDateShort, fmtTimeWindow } from '../data/helpers'
 import {
   buildSchedule,
   composeScheduledStart,
+  fmtFixtureTime,
   matchLabel,
   placementConsequence,
   scheduleStatusLabel,
-  timeOfDay,
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
 import {
   buildTimelineBoard,
   calledAtLabel,
+  fmtBoardClock,
   isDecided,
   isTold,
   notifiedLabel,
+  parseLocalLabel,
 } from '../data/timeline'
-import type { Tournament, TournamentStatus, TournamentTable } from '../data/types'
+import type {
+  FixtureTime,
+  Tournament,
+  TournamentStatus,
+  TournamentTable,
+} from '../data/types'
+
+/** A placement's predicted start as the 24-hour `HH:MM` wall-clock the time picker and
+ * the confirm dialog speak — read off the server's venue-local `localLabel` (ADR
+ * "tournament times are timezone-aware instants": the client never re-derives a zone,
+ * it reads the label the server already rendered). `null` for an unscheduled placement. */
+const wallClock24 = (time: FixtureTime | null): string | null =>
+  time === null ? null : fmtBoardClock(parseLocalLabel(time.localLabel))
 import { EmptyState } from '../empty-state'
 import {
   ConfirmCallDialog,
@@ -126,7 +140,7 @@ const PlacementControl = ({
     () => match.tableId ?? match.suggestedTableIds[0] ?? tables[0]?.id ?? '',
   )
   const [time, setTime] = useState(
-    () => timeOfDay(match.scheduledStart) || match.window.start,
+    () => wallClock24(match.scheduledStart) ?? match.window.start,
   )
   /** The write held at the confirm gate — the body to send iff the director
    * confirms, with the consequence the dialog states. `null` = no dialog. */
@@ -159,11 +173,14 @@ const PlacementControl = ({
   }
 
   /** A placement as the dialog would name it — the catalogue label (or the raw id of
-   * a dangling ref, shown never blanked) and the `HH:MM`. */
-  const summarize = (id: string | null, start: string | null): PlacementSummary => ({
+   * a dangling ref, shown never blanked) and the `HH:MM` wall-clock. */
+  const summarize = (
+    id: string | null,
+    wallClock: string | null,
+  ): PlacementSummary => ({
     tableLabel:
       id === null ? '' : (tables.find((t) => t.id === id)?.label ?? id),
-    time: timeOfDay(start) || null,
+    time: wallClock,
   })
 
   /**
@@ -182,8 +199,13 @@ const PlacementControl = ({
       void run(body)
       return
     }
-    const told = summarize(match.tableId, match.scheduledStart)
-    const to = summarize(body.table_id, body.scheduled_start)
+    const told = summarize(match.tableId, wallClock24(match.scheduledStart))
+    // The write's time is the wall-clock the director just picked (`time`), unless the
+    // write clears the placement (`scheduled_start: null`).
+    const to = summarize(
+      body.table_id,
+      body.scheduled_start === null ? null : time,
+    )
     const consequence: CallConsequence =
       kind === 'call'
         ? { variant: 'call', to }
@@ -319,7 +341,11 @@ const MatchRow = ({
   isPending: boolean
   showTime: boolean
 }) => {
-  const time = timeOfDay(match.scheduledStart)
+  // The predicted start in the server's own venue-local words (`fmtFixtureTime` →
+  // `"9:00 AM CDT"`, ADR "tournament times are timezone-aware instants"): the client
+  // shows the label and its timezone verbatim, it never slices a datetime or picks a
+  // zone. `''` when the fixture has no predicted time yet.
+  const time = match.scheduledStart ? fmtFixtureTime(match.scheduledStart) : ''
   // The list speaks the boards' tier vocabulary (ADR "the schedule is solved; the
   // call is pinned" — the UI never blurs an estimate into a promise): a scheduled
   // time that is still the solver's plan says `est`; a called fixture wears its

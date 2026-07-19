@@ -60,7 +60,10 @@ const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
  */
 export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
   const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
-  const when = `${bar.startClock}–${bar.endClock}`
+  // The bar's clock always names its timezone (ADR "a schedule surface always labels
+  // the timezone"): a tournament-wide board can hold events in different venue zones,
+  // so `9:00 AM–9:35 AM CDT` never lets two same-column bars imply the same instant.
+  const when = `${bar.startClock}–${bar.endClock} ${bar.tz}`
   const sentence = tierSentence(bar.tier, bar.status, bar)
   // The call's cost, made visible (the ADR's called-at / notified-count
   // marker) — gated on the pin facts and `isDecided`, NEVER on the tier: a
