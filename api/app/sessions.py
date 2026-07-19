@@ -4,7 +4,7 @@ import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 import redis.exceptions
 from coolname import generate_slug
@@ -582,31 +582,90 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+# Which credential authenticated a request. The session endpoint needs this to
+# decide whether to Set-Cookie: only a cookie-authenticated caller gets a browser
+# session (re)issued — an API-token caller must never be handed one.
+CredentialSource = Literal["bearer", "cookie"]
+
+
+async def _resolve_current_user(
+    db: AsyncSession,
+    *,
+    authorization: str | None,
+    session_cookie: str | None,
+) -> tuple[User, CredentialSource] | None:
+    """Resolve the current user from an ``Authorization: Bearer`` header and/or a
+    session cookie, **bearer-first**, returning ``(user, source)`` or ``None``.
+
+    An explicit bearer credential wins over the ambient session cookie: an API
+    client that presents a personal API token must authenticate as that token's
+    user even when it's also carrying a stray guest cookie (e.g. one minted by an
+    earlier ``GET /v1/session``). The bearer is only skipped when it doesn't
+    resolve a live user — then we fall back to the cookie.
+
+    Preserves the tombstoned-guest handling: a cookie that resolves to a
+    merged-away guest (``merged_into_user_id`` set) raises the structured
+    ``session_merged`` 401 rather than silently falling through. Because the
+    bearer wins, that check is only reached when the bearer did *not* resolve a
+    user — a valid bearer alongside a tombstoned cookie succeeds as the bearer
+    user and never looks at the cookie.
+
+    The single resolver shared by ``get_current_user`` and ``GET /v1/session`` so
+    the two auth entry points can't drift.
+    """
+    if authorization:
+        bearer_user = await _find_api_token_user(db, authorization)
+        if bearer_user is not None:
+            return bearer_user, "bearer"
+    if session_cookie:
+        cookie_user = await _find_session_user(db, session_cookie)
+        if cookie_user is not None:
+            if cookie_user.merged_into_user_id is not None:
+                raise await _merged_session_exception(db, cookie_user)
+            return cookie_user, "cookie"
+    return None
+
+
 @router.get("/v1/session", response_model=SessionResponse)
 async def get_session_endpoint(
     response: Response,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     csrf_cookie: Annotated[str | None, Cookie(alias=CSRF_COOKIE_NAME)] = None,
+    authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
-    user: User | None = None
-    if session_cookie:
-        user = await _find_session_user(db, session_cookie)
-        if user is not None and user.merged_into_user_id is not None:
-            # The cookie's guest was folded into another account. Don't silently
-            # mint a fresh guest (that would quietly swap identities) — tell the
-            # holder so they sign in. A no-cookie / garbage-cookie request still
-            # mints below, preserving the zero-friction first visit.
-            raise await _merged_session_exception(db, user)
-    if user is None:
+    """Return the current session, resolving the caller **bearer-first**.
+
+    An ``Authorization: Bearer <token>`` header (a personal API token minted at
+    ``POST /v1/api-tokens``) takes precedence over the session cookie: an API
+    client gets *its token's* user back and **no ``Set-Cookie``** — we never hand
+    an external tool a browser session. The session cookie is consulted only when
+    the bearer doesn't resolve a live user.
+
+    For a cookie-authenticated caller the endpoint self-heals a dropped CSRF
+    cookie (reissuing it without rotating the session), and a cookie that resolves
+    to a merged-away guest raises the structured ``session_merged`` 401 instead of
+    silently swapping identities.
+
+    Only when *neither* credential resolves a user (no/garbage cookie and no valid
+    bearer) does it mint a fresh guest and Set-Cookie it — the zero-friction first
+    visit.
+    """
+    resolved = await _resolve_current_user(
+        db, authorization=authorization, session_cookie=session_cookie
+    )
+    if resolved is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
-    elif csrf_cookie is None:
-        # Returning session whose (non-HttpOnly) CSRF cookie was dropped —
-        # reissue it so mutations don't permanently 403. Self-heals on the
-        # bootstrap the client makes on every load, without rotating the cookie
-        # (or re-setting the session cookie) when one is already present.
-        _set_csrf_cookie(response)
+    else:
+        user, source = resolved
+        if source == "cookie" and csrf_cookie is None:
+            # Returning cookie session whose (non-HttpOnly) CSRF cookie was
+            # dropped — reissue it so mutations don't permanently 403. Self-heals
+            # on the bootstrap the client makes on every load, without rotating
+            # the cookie (or re-setting the session cookie) when one is already
+            # present. A bearer-authenticated caller gets no cookie of any kind.
+            _set_csrf_cookie(response)
     return await _build_session_response(db, user)
 
 
@@ -658,7 +717,7 @@ async def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
-    """Resolve the authenticated user, cookie first and then a bearer token.
+    """Resolve the authenticated user, **bearer token first** and then the cookie.
 
     Unlike ``GET /v1/session``, this dependency never mints a new session —
     endpoints that create or mutate data require an already-established
@@ -666,28 +725,30 @@ async def get_current_user(
 
     Two credentials are accepted, in a fixed precedence:
 
-    1. **Session cookie** (the browser flow). Resolved directly (rather than via
+    1. **``Authorization: Bearer <token>``** (external tooling). An explicit
+       bearer credential wins over the ambient cookie: the opaque personal API
+       token minted at ``POST /v1/api-tokens`` is looked up by hash, so an API
+       client authenticates as *its* user even when it's also carrying a stray
+       guest cookie. A bearer token whose user is tombstoned does not resolve.
+    2. **Session cookie** (the browser flow), consulted only when the bearer
+       doesn't resolve a live user. Resolved directly (rather than via
        ``get_optional_user``) so it can tell a *tombstoned* guest — whose cookie
        still resolves — apart from no session at all, raising the structured
-       ``session_merged`` 401 for the former. A valid cookie always wins, even
-       when an ``Authorization`` header is also present.
-    2. **``Authorization: Bearer <token>``** (external tooling), consulted only
-       when no valid session cookie resolves a user. The opaque personal API
-       token minted at ``POST /v1/api-tokens`` is looked up by hash; a bearer
-       token whose user is tombstoned does not resolve.
+       ``session_merged`` 401 for the former. Because the bearer wins, that check
+       is only reached when the bearer didn't resolve: a valid bearer alongside a
+       tombstoned cookie succeeds as the bearer user.
 
-    When neither credential resolves a user — no/invalid cookie and a
-    missing/invalid/unknown bearer token — the structured ``session_ended`` 401
-    is raised so the client redirects to sign in (instead of acting as a
-    merged-away ghost, or silently minting a new guest).
+    When neither credential resolves a user — a missing/invalid/unknown bearer
+    token and no/invalid cookie — the structured ``session_ended`` 401 is raised
+    so the client redirects to sign in (instead of acting as a merged-away ghost,
+    or silently minting a new guest).
     """
-    user = await _find_session_user(db, session_cookie) if session_cookie else None
-    if user is not None and user.merged_into_user_id is not None:
-        raise await _merged_session_exception(db, user)
-    if user is None and authorization:
-        user = await _find_api_token_user(db, authorization)
-    if user is None:
+    resolved = await _resolve_current_user(
+        db, authorization=authorization, session_cookie=session_cookie
+    )
+    if resolved is None:
         raise _session_ended_exception()
+    user, _ = resolved
     return user
 
 

@@ -13,6 +13,23 @@ import struct Foundation.Date
 internal protocol APIProtocol: Sendable {
     /// Get Session Endpoint
     ///
+    /// Return the current session, resolving the caller **bearer-first**.
+    ///
+    /// An ``Authorization: Bearer <token>`` header (a personal API token minted at
+    /// ``POST /v1/api-tokens``) takes precedence over the session cookie: an API
+    /// client gets *its token's* user back and **no ``Set-Cookie``** — we never hand
+    /// an external tool a browser session. The session cookie is consulted only when
+    /// the bearer doesn't resolve a live user.
+    ///
+    /// For a cookie-authenticated caller the endpoint self-heals a dropped CSRF
+    /// cookie (reissuing it without rotating the session), and a cookie that resolves
+    /// to a merged-away guest raises the structured ``session_merged`` 401 instead of
+    /// silently swapping identities.
+    ///
+    /// Only when *neither* credential resolves a user (no/garbage cookie and no valid
+    /// bearer) does it mint a fresh guest and Set-Cookie it — the zero-friction first
+    /// visit.
+    ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.
     func getSessionEndpointV1SessionGet(_ input: Operations.GetSessionEndpointV1SessionGet.Input) async throws -> Operations.GetSessionEndpointV1SessionGet.Output
@@ -860,6 +877,23 @@ internal protocol APIProtocol: Sendable {
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
     /// Get Session Endpoint
+    ///
+    /// Return the current session, resolving the caller **bearer-first**.
+    ///
+    /// An ``Authorization: Bearer <token>`` header (a personal API token minted at
+    /// ``POST /v1/api-tokens``) takes precedence over the session cookie: an API
+    /// client gets *its token's* user back and **no ``Set-Cookie``** — we never hand
+    /// an external tool a browser session. The session cookie is consulted only when
+    /// the bearer doesn't resolve a live user.
+    ///
+    /// For a cookie-authenticated caller the endpoint self-heals a dropped CSRF
+    /// cookie (reissuing it without rotating the session), and a cookie that resolves
+    /// to a merged-away guest raises the structured ``session_merged`` 401 instead of
+    /// silently swapping identities.
+    ///
+    /// Only when *neither* credential resolves a user (no/garbage cookie and no valid
+    /// bearer) does it mint a fresh guest and Set-Cookie it — the zero-friction first
+    /// visit.
     ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.
@@ -9168,6 +9202,23 @@ internal enum Components {
 /// API operations, with input and output types, generated from `#/paths` in the OpenAPI document.
 internal enum Operations {
     /// Get Session Endpoint
+    ///
+    /// Return the current session, resolving the caller **bearer-first**.
+    ///
+    /// An ``Authorization: Bearer <token>`` header (a personal API token minted at
+    /// ``POST /v1/api-tokens``) takes precedence over the session cookie: an API
+    /// client gets *its token's* user back and **no ``Set-Cookie``** — we never hand
+    /// an external tool a browser session. The session cookie is consulted only when
+    /// the bearer doesn't resolve a live user.
+    ///
+    /// For a cookie-authenticated caller the endpoint self-heals a dropped CSRF
+    /// cookie (reissuing it without rotating the session), and a cookie that resolves
+    /// to a merged-away guest raises the structured ``session_merged`` 401 instead of
+    /// silently swapping identities.
+    ///
+    /// Only when *neither* credential resolves a user (no/garbage cookie and no valid
+    /// bearer) does it mint a fresh guest and Set-Cookie it — the zero-friction first
+    /// visit.
     ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.
