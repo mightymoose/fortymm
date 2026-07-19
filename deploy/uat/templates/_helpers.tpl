@@ -86,6 +86,37 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # MCP (FastMCP Streamable-HTTP mount at /mcp) — served to clients via
+    # /api/mcp/. This longer, more-specific prefix wins over /api/ above, so the
+    # streaming-friendly settings apply: buffering OFF so SSE frames aren't held,
+    # and a long read timeout so an idle stream isn't cut at nginx's default 60s
+    # (that timeout is a second, independent cause of "session expired" churn).
+    # The api transport is stateless (main.py), so no session affinity is needed.
+    location /api/mcp/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://api_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # A bare /mcp/ hit (not via /api/) reaches the same FastMCP mount directly —
+    # without this it would fall through to `location /` and land on the SPA.
+    location /mcp/ {
+        proxy_pass http://api_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Browser telemetry (Grafana Faro) -> Alloy faro.receiver in the
     # `monitoring` namespace (deploy/observability). resolver + variable
     # upstream so this nginx starts even before the observability release
