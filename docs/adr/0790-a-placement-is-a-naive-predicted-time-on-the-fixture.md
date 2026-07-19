@@ -5,6 +5,14 @@ concurrent worktrees, as the duplicate 0008s in this directory attest)
 
 ## Status
 
+**Partially superseded (2026-07-19)** by
+`20260719-tournament-times-are-timezone-aware-instants.md` on the time *frame*:
+the "left open" question below — modelling a tournament timezone and moving the
+computed placement times onto `timestamptz` — is now decided there. This ADR's
+other rulings still stand: a placement lives on the **fixture** not the match,
+the start time is a soft **prediction** whose constraints are read-derived flags,
+and the schedule is **tournament-scoped**.
+
 Accepted — design for slice D1 of epic #780 (#790), decided before
 implementation. The auto-packing **scheduler** it anticipates is a separate,
 later slice; this ADR fixes only the data model, the owner-only manual
