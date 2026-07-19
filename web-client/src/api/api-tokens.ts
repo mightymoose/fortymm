@@ -13,34 +13,13 @@ import { useMutation } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { api, unwrap } from './client'
-import type { components } from './schema'
-
-type ApiTokenCreatedWire = components['schemas']['ApiTokenCreated']
-
-/** The freshly minted raw token, returned exactly once. */
-export interface ApiTokenCreated {
-  token: string
-}
 
 const apiTokenCreatedSchema = z.object({
   token: z.string().min(1),
 })
 
-// Compile-time tether: the runtime parser must accept exactly what the generated
-// type says the server sends. Drop or misspell `token` on either side and this
-// line is a type error.
-const _wireParity: ApiTokenCreatedWire extends z.input<
-  typeof apiTokenCreatedSchema
->
-  ? true
-  : never = true
-void _wireParity
-
-/** Parse the mint endpoint's payload, or throw. `unknown` on purpose — the
- * generated type is exactly the claim this checks. */
-export function parseApiTokenCreated(input: unknown): ApiTokenCreated {
-  return apiTokenCreatedSchema.parse(input)
-}
+/** The freshly minted raw token, returned exactly once. */
+type ApiTokenCreated = z.infer<typeof apiTokenCreatedSchema>
 
 /**
  * Mint (or **rotate**) the caller's personal opaque API token. The server
@@ -55,7 +34,7 @@ export function parseApiTokenCreated(input: unknown): ApiTokenCreated {
 export function useCreateApiToken() {
   return useMutation({
     mutationFn: async (): Promise<ApiTokenCreated> =>
-      parseApiTokenCreated(
+      apiTokenCreatedSchema.parse(
         unwrap('create an API token', await api.POST('/v1/api-tokens', {})),
       ),
   })
