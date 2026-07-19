@@ -35,6 +35,12 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.base import ExecutableOption
 
+from app.match_errors import (
+    MatchNotFoundError,
+    MatchNotScorableError,
+    ScoreConflictError,
+    ScoreNotAllowedError,
+)
 from app.match_queries import match_eager_options
 from app.match_serialization import (
     _first_decider,
@@ -44,13 +50,7 @@ from app.match_serialization import (
     _score_view,
 )
 from app.models import Match, MatchGame, MatchGameScore, MatchStatus
-from app.result_acceptance import (
-    MatchNotFoundError,
-    MatchNotScorableError,
-    ScoreConflictError,
-    ScoreNotAllowedError,
-    _games_to_win,
-)
+from app.result_acceptance import _games_to_win
 from app.schemas.match import MatchDetailsScore, MatchResultsGameWrite
 
 # ----- load + lock ---------------------------------------------------------
@@ -282,7 +282,7 @@ async def _committed_score(
     ).scalar_one_or_none()
     if reloaded is None:
         return None
-    game = next((g for g in reloaded.games if g.game_number == game_number), None)
+    game = _game_by_number(reloaded, game_number)
     return _score_view(game.score) if game and game.score else None
 
 
@@ -307,7 +307,7 @@ async def _enter_game_score_locked(
 
     Assumes the caller loaded ``match`` under the match row lock and has already
     enforced scorability, ``game_number <= best_of``, and the no-overrun guard."""
-    game = next((g for g in match.games if g.game_number == game_number), None)
+    game = _game_by_number(match, game_number)
     if game is None:
         game = MatchGame(game_number=game_number)
         match.games.append(game)
@@ -361,7 +361,7 @@ async def _update_game_score_locked(
     Assumes the caller loaded ``match`` under the match row lock and has already
     enforced scorability, the score's existence (404), and the no-overrun
     guard on the prospective board."""
-    game = next((g for g in match.games if g.game_number == game_number), None)
+    game = _game_by_number(match, game_number)
     if game is None or game.score is None:
         # The router guards this with a 404 before delegating; reaching here is
         # an invariant violation, not a client-handleable case.
@@ -412,7 +412,7 @@ async def _delete_game_score_locked(
 
     Assumes the caller loaded ``match`` under the match row lock and has already
     enforced scorability and the score's existence (404)."""
-    game = next((g for g in match.games if g.game_number == game_number), None)
+    game = _game_by_number(match, game_number)
     if game is None or game.score is None:
         # The router guards this with a 404 before delegating; reaching here is
         # an invariant violation, not a client-handleable case.

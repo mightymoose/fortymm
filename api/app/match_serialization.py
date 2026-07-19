@@ -12,11 +12,25 @@ modules — never a router — so it stays cycle-free.
 
 import uuid
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.base import ExecutableOption
 
 from app.domain.match.models import Match as MatchModel
 from app.mappers.match_details_mapper import serialize_match_details
-from app.mappers.match_extras_mapper import MatchDetailsExtras, empty_extras
-from app.match_queries import current_game_number, my_side
+from app.mappers.match_extras_mapper import (
+    MatchDetailsExtras,
+    empty_extras,
+    serialize_match_extras,
+)
+from app.match_queries import (
+    current_game_number,
+    match_eager_options,
+    my_side,
+    singles_user_ids,
+)
 from app.models import (
     Match,
     MatchGameScore,
@@ -24,6 +38,9 @@ from app.models import (
     MatchSide,
     MatchStatus,
 )
+
+if TYPE_CHECKING:
+    from app.services.match_service import MatchService
 from app.result_acceptance import (
     _game_winner_side,
     _games_to_win,
@@ -515,4 +532,48 @@ def _serialize_details(
         recent_form=list(extras.recent_form),
         head_to_head=extras.head_to_head,
         data=serialize_match_details(domain_match),
+    )
+
+
+async def load_match_eager(
+    db: AsyncSession,
+    match_id: uuid.UUID,
+    *,
+    options: tuple[ExecutableOption, ...] | None = None,
+) -> Match | None:
+    """Load the eager ``Match`` ORM row the serializer needs (nullable — the
+    read path 404s / raises a ``ToolError`` on absence).
+
+    The canonical read-path loader shared by the HTTP ``GET /v1/matches/{id}``
+    handler and the MCP ``get_match`` tool so the two can't drift on the
+    eager-load chain. ``options`` overrides the default ``match_eager_options()``
+    chain (the router's public-details read passes it through)."""
+    result = await db.execute(
+        select(Match)
+        .where(Match.id == match_id)
+        .options(*(options if options is not None else match_eager_options()))
+    )
+    return result.scalar_one_or_none()
+
+
+async def view_extras(
+    match_service: "MatchService", match: Match
+) -> MatchDetailsExtras:
+    """The participant-only extras block (rating changes, recent form,
+    head-to-head) for an already-loaded ``match``.
+
+    The caller hands the service the primitives it already holds and gets back a
+    domain model; the SQL lives in ``MatchDetailsRepository`` and the wire shapes
+    are built by the extras mapper. Callers gate on participation *before* calling
+    this — a non-participant gets ``empty_extras()`` (see #515). Shared by the
+    HTTP GET and the MCP ``get_match`` tool so the two produce the identical
+    extras assembly."""
+    return serialize_match_extras(
+        await match_service.load_view_extras(
+            match_id=match.id,
+            league_id=match.league_id,
+            status=match.status,
+            created_at=match.created_at,
+            user_ids=singles_user_ids(match),
+        )
     )

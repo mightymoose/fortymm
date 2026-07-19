@@ -12,8 +12,8 @@ from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError, MissingGreenlet
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.match_serialization import load_match_eager as _load_match
 from app.matches import (
-    _load_match,
     match_eager_options,
     match_rating_eager_options,
 )

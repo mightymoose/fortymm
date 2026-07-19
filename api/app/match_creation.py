@@ -24,6 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leagues import resolve_league
+from app.match_errors import (
+    OpponentNotFoundError,
+    RatedNeedsRegisteredOpponentError,
+    SelfMatchError,
+)
 from app.match_queries import match_eager_options
 from app.models import (
     Match,
@@ -32,11 +37,6 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     User,
-)
-from app.result_acceptance import (
-    OpponentNotFoundError,
-    RatedNeedsRegisteredOpponentError,
-    SelfMatchError,
 )
 
 

@@ -34,27 +34,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_token_auth import find_api_token_user
 from app.db import get_sessionmaker
-from app.mappers.match_extras_mapper import (
-    MatchDetailsExtras,
-    empty_extras,
-    serialize_match_extras,
-)
+from app.mappers.match_extras_mapper import empty_extras
 from app.match_creation import create_match as create_match_core
-from app.match_queries import match_eager_options, singles_user_ids
-from app.match_scoring import MatchLockUnavailable
-from app.match_scoring import delete_game_score as delete_game_score_core
-from app.match_scoring import enter_game_score as enter_game_score_core
-from app.match_scoring import update_game_score as update_game_score_core
-from app.match_serialization import _is_participant, _serialize_details
-from app.matches import _notify_result_posted
-from app.models import Match, User
-from app.notifications.dependencies import get_push_sender
-from app.notifications.service import NotificationService
-from app.player_matches import paginated_player_matches
-from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
-from app.repositories.match_details_repository import MatchDetailsRepository
-from app.repositories.match_repository import MatchRepository
-from app.result_acceptance import (
+from app.match_errors import (
     CannotAcceptOwnProposalError,
     MatchClosedError,
     MatchNotFoundError,
@@ -69,6 +51,24 @@ from app.result_acceptance import (
     SelfMatchError,
     UndecidedBoardError,
 )
+from app.match_result_notifications import notify_result_posted
+from app.match_scoring import MatchLockUnavailable
+from app.match_scoring import delete_game_score as delete_game_score_core
+from app.match_scoring import enter_game_score as enter_game_score_core
+from app.match_scoring import update_game_score as update_game_score_core
+from app.match_serialization import (
+    _is_participant,
+    _serialize_details,
+    load_match_eager,
+    view_extras,
+)
+from app.models import Match, User
+from app.notifications.dependencies import get_push_sender
+from app.notifications.service import NotificationService
+from app.player_matches import paginated_player_matches
+from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
+from app.repositories.match_details_repository import MatchDetailsRepository
+from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
     accept_result as accept_result_core,
 )
@@ -175,30 +175,6 @@ async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     ).scalar_one_or_none()
 
 
-async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
-    """Load the eager ``Match`` ORM row the serializer needs, mirroring the HTTP
-    ``GET /v1/matches/{match_id}`` read path's eager-load chain."""
-    result = await db.execute(
-        select(Match).where(Match.id == match_id).options(*match_eager_options())
-    )
-    return result.scalar_one_or_none()
-
-
-async def _view_extras(match_service: MatchService, match: Match) -> MatchDetailsExtras:
-    """Participant-only extras (rating changes, recent form, head-to-head) for an
-    already-loaded ``match`` — the same assembly the HTTP GET uses for a
-    participant caller (#515)."""
-    return serialize_match_extras(
-        await match_service.load_view_extras(
-            match_id=match.id,
-            league_id=match.league_id,
-            status=match.status,
-            created_at=match.created_at,
-            user_ids=singles_user_ids(match),
-        )
-    )
-
-
 @mcp.tool
 async def get_match(match_id: uuid.UUID) -> MatchDetails:
     """Read a single match as the authenticated API-token caller.
@@ -214,7 +190,7 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        match = await _load_match(db, match_id)
+        match = await load_match_eager(db, match_id)
         if match is None:
             raise ToolError(f"No match found with id {match_id}.")
         service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
@@ -225,9 +201,7 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
         # HTTP GET does — a non-participant (spectator) still sees the scorecard,
         # but with empty extras (#515).
         is_participant = _is_participant(match, user_id)
-        extras = (
-            await _view_extras(service, match) if is_participant else empty_extras()
-        )
+        extras = await view_extras(service, match) if is_participant else empty_extras()
         return _serialize_details(match, user_id, extras, domain_match)
 
 
@@ -309,10 +283,6 @@ def _map_score_write_tool_error(exc: Exception) -> ToolError:
         if exc.message == "Match not found.":
             return ToolError("Match not found, or you are not a participant.")
         return ToolError(exc.message)
-    if isinstance(exc, MatchNotScorableError):
-        return ToolError(exc.message)
-    if isinstance(exc, ScoreNotAllowedError):
-        return ToolError(str(exc))
     if isinstance(exc, ScoreConflictError):
         return ToolError(
             "This game's score changed under you — call get_match to see the "
@@ -333,7 +303,7 @@ async def _serialize_written_match(
     history/rivalry/rating extras are always assembled — the same view the HTTP
     score handlers return for the acting user."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
-    extras = await _view_extras(service, match)
+    extras = await view_extras(service, match)
     return _serialize_details(match, user_id, extras)
 
 
@@ -489,7 +459,7 @@ async def _fire_result_notification(
     session plus the process-wide push-sender singleton)."""
     notifications = NotificationService(db, get_push_sender())
     try:
-        await _notify_result_posted(notifications, match, poster_id)
+        await notify_result_posted(notifications, match, poster_id)
     except Exception:
         await db.rollback()
         log.exception(

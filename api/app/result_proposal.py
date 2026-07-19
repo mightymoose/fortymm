@@ -38,6 +38,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
+from app.match_errors import (
+    MatchClosedError,
+    MatchNotFoundError,
+    NegotiationConflictError,
+    UndecidedBoardError,
+)
 from app.match_queries import match_eager_options
 from app.match_scoring import (
     MatchLockUnavailable,  # re-exported for the router adapter
@@ -53,13 +59,7 @@ from app.models import (
     MatchResult,
     MatchStatus,
 )
-from app.result_acceptance import (
-    MatchClosedError,
-    MatchNotFoundError,
-    NegotiationConflictError,
-    UndecidedBoardError,
-    finalize_match,
-)
+from app.result_acceptance import finalize_match
 from app.result_chain import standing_result
 from app.schemas.match import MatchResultsGameWrite
 
