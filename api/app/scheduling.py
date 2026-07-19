@@ -13,18 +13,28 @@ offsets used throughout is the *snapshot builder's* job (a later slice), not
 this module's: every time here is an ``int`` minute offset in one shared frame.
 
 **Two tiers: a plan is an estimate, a call is a promise.** Unpinned fixtures
-are decision variables. Pinned fixtures are **constants**: their
-``(table, start)`` is echoed into the output verbatim and their occupancy is a
-fixed interval every variable must schedule around. A pin is deliberately not
-modeled as "start ≥ pinned start" — a variable the objective is indifferent to
-could drift between solves, and the whole point of a pin is that what we told
-the players never changes. Pins also outrank windows: a pin pushed past its
-pool window by overrun keeps its promised slot (no window constraint is applied
-to pins). The flip side of pins-as-constants is honest: promises that
-physically contradict each other (two pins overlapping on one table, or a pin
-under an in-progress overrun) make the day **infeasible**, which the solve
-reports rather than papering over — the correction path (re-place / void, ADR)
-is the fix, and it runs *before* the next solve, not inside it.
+are free decision variables in both dimensions. A **called** (pinned, not-yet-
+started) fixture holds its *table* as a hard constant — it can never be re-placed
+onto another court — but its *start* is a free variable that can only be pushed
+**later** (``start ≥ pin.start_min``, the promised time as a floor). The start is
+anchored downward at the same weight as an unpinned fixture's wait (see the
+objective below): with no contention it sits exactly at the floor — the promised
+time, no drift — and under contention it slides to the *minimum* legal later
+value, just past the obstruction. The start is deliberately **not** snapped to
+the :data:`BUCKET_MIN` grid: ``pin.start_min`` may itself be off-grid (a manual
+director PATCH, a call tick), and snapping would both re-introduce drift and
+over-delay the slide. Pins still outrank windows: a called match pushed past its
+pool window by overrun keeps running (no window constraint is applied to it).
+
+Because a called match's start can always slide to the horizon, pins essentially
+**stop being a source of infeasibility**: the two promise contradictions that
+used to make a day infeasible — *two called matches promised the same table at
+overlapping times* and *a called match under an in-progress overrun* — now
+auto-resolve by sliding one later on the same table (the apply path notifies the
+player, a separate concern). Infeasibility becomes almost entirely a property of
+*unpinned* fixtures that cannot fit their pool window. A **genuinely in-progress**
+(being-played) match is different: it stays fully fixed in both dimensions —
+reality is not a variable, and a match underway must never move.
 
 **Rest across the completion boundary.** A player's 10-minute rest floor
 (:data:`REST_MIN`) is a hard constraint, and it must survive a match *ending*,
@@ -42,9 +52,11 @@ the floor stays this one module's single source of truth.
 
 1. **Makespan** — the max end over every active fixture. The day finishes as
    early as possible.
-2. **Player wait**, proxied as the sum of ``start − now`` over unpinned
-   fixtures. The true quantity ("wait beyond the rest floor between a player's
-   consecutive matches") needs per-player sequencing variables; total
+2. **Player wait**, proxied as the sum of ``start − now`` over every fixture
+   with a start variable — unpinned *and* called (a called match's slide is
+   anchored down here, at the same weight, so its start bottoms out at the
+   promised floor). The true quantity ("wait beyond the rest floor between a
+   player's consecutive matches") needs per-player sequencing variables; total
    start-lateness is monotone with aggregate waiting around, is linear, and
    keeps the model small. Documented trade-off: it also rewards starting the
    whole day promptly, which is indistinguishable from the real goal on the
@@ -56,7 +68,13 @@ The weights are computed **per instance** so the tiers provably never trade
 (the fixed "10000/10/1" style breaks once total wait can swing by more than
 one makespan minute times the ratio): ``W_stability = 1``,
 ``W_wait = max stability swing + 1``, ``W_makespan = W_wait · (max total wait
-swing) + 1``. All fit comfortably in int64 at any realistic instance size.
+swing) + 1``. The max total wait swing is bounded by the *count* of wait terms
+times the span — and that count is now ``len(unpinned) + len(pinned)``, since a
+called match contributes a wait term too. A called match's ``start − now`` can
+be *negative* when its promised floor is before ``now`` (a call already ticked
+past); a negative term only lowers the total, so bounding the positive swing by
+``count · span`` still holds. All fit comfortably in int64 at any realistic
+instance size.
 
 **Warm start.** Before solving, every unpinned fixture that has a
 ``previous_plan`` entry *whose prior table is still in its pool* seeds its prior
@@ -191,8 +209,11 @@ class EventSettings:
 
 @dataclass(frozen=True, slots=True)
 class Pin:
-    """A called placement — a promise. The solve echoes it back verbatim and
-    schedules everything else around it."""
+    """A called placement — a promise. ``table_id`` is a hard constant the
+    solve never changes; ``start_min`` is the promised time, which the solve
+    treats as a *floor* — a called match may be pushed later on a re-solve (and
+    the apply path then notifies the player), but never moved to another table
+    and never started earlier than promised."""
 
     table_id: TableId
     start_min: int
@@ -289,8 +310,9 @@ class ScheduleSnapshot:
 class PlacedFixture:
     """One line of the output plan. ``end_min`` is always
     ``start_min + match_minutes(...)`` — carried so consumers never re-derive
-    durations. For a pinned fixture, ``(table_id, start_min)`` is the pin,
-    byte for byte."""
+    durations. For a called fixture, ``table_id`` is the pin's table (always)
+    and ``start_min`` is the pin's promised time or a later slid value the
+    solver chose — never earlier than promised."""
 
     fixture_id: FixtureId
     table_id: TableId
@@ -312,8 +334,9 @@ class SolveStats:
 @dataclass(frozen=True, slots=True)
 class SolveResult:
     """A solve's whole answer. Placements cover every active fixture that is
-    not in progress — pins echoed verbatim, unpinned fixtures solved — or are
-    empty when ``verdict`` produced no plan. Deterministically ordered by
+    not in progress — called fixtures on their fixed table at the promised or a
+    slid-later start, unpinned fixtures solved in both dimensions — or are empty
+    when ``verdict`` produced no plan. Deterministically ordered by
     ``(start, table, fixture)``."""
 
     verdict: Verdict
@@ -409,15 +432,20 @@ class _SolverModel:
     hint's effect deterministically (single worker, fixed seed) without
     touching the production solver parameters. ``model`` carries the hints;
     ``starts``/``presences`` recover each unpinned fixture's chosen start and
-    table, ``durations`` its ``end_min``, and ``pinned_placements`` are echoed
-    verbatim."""
+    table, ``durations`` its ``end_min``. A called fixture's start is *also* a
+    variable now (it can slide later on its fixed table), so its solved start is
+    read back from ``pin_starts``; ``pin_tables`` holds its immovable table and
+    ``pin_durations`` its length."""
 
     model: cp_model.CpModel
     unpinned: tuple[ScheduleFixture, ...]
     starts: dict[FixtureId, Any]
     presences: dict[FixtureId, dict[TableId, Any]]
     durations: dict[FixtureId, int]
-    pinned_placements: tuple[PlacedFixture, ...]
+    pinned: tuple[ScheduleFixture, ...]
+    pin_starts: dict[FixtureId, Any]
+    pin_tables: dict[FixtureId, TableId]
+    pin_durations: dict[FixtureId, int]
 
 
 def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
@@ -456,14 +484,26 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for f in in_progress
     }
 
-    # The latest minute anything can end — start-variable and makespan bounds.
+    # The latest minute anything can end — the domain ceiling for every start
+    # variable (a called match's included, since it can now slide) and for the
+    # makespan var. A called match's start is no longer a constant: per-table
+    # no-overlap can force it to slide behind every fixed obstruction on its
+    # table (an in-progress occupancy end) and behind every other called match
+    # promised the same table. The safe worst case is *all* pins stacked end to
+    # end just after the latest fixed obstruction, so fold the total pin duration
+    # on top of the latest occupancy end and the latest pin floor. The old bound
+    # (the largest single ``pin.start_min + duration``) could be too tight for a
+    # pin forced past a *later* obstruction — an artificial INFEASIBLE.
     horizon = now + BUCKET_MIN
     for pool in snapshot.pools:
         horizon = max(horizon, pool.window.end_min)
-    for fixture, pin in pinned:
-        horizon = max(horizon, pin.start_min + duration_of(fixture))
+    latest_obstruction = now
     for end in occupancy_ends.values():
-        horizon = max(horizon, end)
+        latest_obstruction = max(latest_obstruction, end)
+    for _fixture, pin in pinned:
+        latest_obstruction = max(latest_obstruction, pin.start_min)
+    total_pin_duration = sum(duration_of(fixture) for fixture, _ in pinned)
+    horizon = max(horizon, latest_obstruction + total_pin_duration)
 
     # Structural feasibility first: a fixture whose window cannot hold its
     # duration at all needs no solver to refuse. (Whole-or-nothing: one
@@ -486,6 +526,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     player_intervals: defaultdict[PlayerId, list[Any]] = defaultdict(list)
     fixed_ends: list[int] = []
     variable_ends: list[Any] = []
+    # start − now, summed as the player-wait objective tier. Both unpinned and
+    # called fixtures contribute (a called match's slide is anchored here).
+    wait_terms: list[Any] = []
 
     # In-progress matches: fixed occupancy from their *actual* start. Their
     # players rest for REST_MIN after the occupancy end, like everyone else.
@@ -527,33 +570,42 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             )
         )
 
-    # Pins: constants. No window constraint (pins outrank windows), no start
-    # variable (a promise does not drift), occupancy every variable respects.
-    pinned_placements: list[PlacedFixture] = []
+    # Called matches: table hard-fixed, start a free variable pushable only
+    # later. The start lives on `table_intervals[pin.table_id]` alone — no
+    # table-choice presence bools, so a promise can never be re-placed onto
+    # another court — with lower bound `pin.start_min` (never earlier than
+    # promised) and no window constraint (pins outrank windows). It is NOT
+    # snapped to the BUCKET_MIN grid: `pin.start_min` may itself be off-grid,
+    # and snapping would re-introduce drift and over-delay the slide. Occupancy
+    # and the rest-padded per-player interval both key off the start variable,
+    # exactly like an in-progress or unpinned interval; the end is a *variable*
+    # end folded into the makespan bound, not a fixed constant.
+    pin_starts: dict[FixtureId, Any] = {}
+    pin_tables: dict[FixtureId, TableId] = {}
+    pin_durations: dict[FixtureId, int] = {}
     for fixture, pin in pinned:
         duration = duration_of(fixture)
-        end = pin.start_min + duration
+        pin_start = model.NewIntVar(
+            pin.start_min, horizon - duration, f"pin_start_{fixture.id}"
+        )
         table_intervals[pin.table_id].append(
-            model.NewIntervalVar(pin.start_min, duration, end, f"pin_{fixture.id}")
+            model.NewFixedSizeIntervalVar(pin_start, duration, f"pin_{fixture.id}")
         )
         for player in (fixture.player_a_id, fixture.player_b_id):
             player_intervals[player].append(
-                model.NewIntervalVar(
-                    pin.start_min,
-                    duration + REST_MIN,
-                    end + REST_MIN,
-                    f"pin_{fixture.id}_{player}",
+                model.NewFixedSizeIntervalVar(
+                    pin_start, duration + REST_MIN, f"pin_{fixture.id}_{player}"
                 )
             )
-        fixed_ends.append(end)
-        pinned_placements.append(
-            PlacedFixture(
-                fixture_id=fixture.id,
-                table_id=pin.table_id,
-                start_min=pin.start_min,
-                end_min=end,
-            )
-        )
+        variable_ends.append(pin_start + duration)
+        # Anchor the start downward at the *same* weight as an unpinned fixture:
+        # since `pin.start_min` is the variable's floor, this wait term bottoms
+        # out at the promised time (no drift, uncontended) and slides to the
+        # minimum legal later value under contention. No new objective tier.
+        wait_terms.append(pin_start - now)
+        pin_starts[fixture.id] = pin_start
+        pin_tables[fixture.id] = pin.table_id
+        pin_durations[fixture.id] = duration
 
     # Unpinned fixtures: one start variable on the 5-minute grid, one optional
     # interval per candidate table (exactly one present), and a mandatory
@@ -565,7 +617,6 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     presences: dict[FixtureId, dict[TableId, Any]] = {}
     buckets: dict[FixtureId, Any] = {}
     durations: dict[FixtureId, int] = {}
-    wait_terms: list[Any] = []
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
         duration = duration_of(fixture)
@@ -634,10 +685,15 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         kept_literals.append(kept)
 
     # Instance-computed strictly-lexicographic weights — see module docstring.
+    # The wait tier now has one term per unpinned *and* per called fixture, so
+    # the count bounding the max total wait swing is len(unpinned) + len(pinned).
+    # A called match's `pin_start - now` can be negative (a floor before now),
+    # which only lowers the total, so `count * span` still bounds the positive
+    # swing and the tiers provably never trade.
     span = max(1, horizon - now)
     w_stability = 1
     w_wait = w_stability * stability_span + 1
-    w_makespan = w_wait * max(1, len(unpinned)) * span + 1
+    w_makespan = w_wait * max(1, len(unpinned) + len(pinned)) * span + 1
 
     objective = w_makespan * makespan
     for term in wait_terms:
@@ -661,13 +717,21 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for table, present in presences[fixture.id].items():
             model.AddHint(present, 1 if table == prior.table_id else 0)
 
+    # Warm start each called match's slide variable at its promised time so a
+    # re-solve begins at what the player was told and only slides if forced.
+    for fixture, pin in pinned:
+        model.AddHint(pin_starts[fixture.id], pin.start_min)
+
     return _SolverModel(
         model=model,
         unpinned=tuple(unpinned),
         starts=starts,
         presences=presences,
         durations=durations,
-        pinned_placements=tuple(pinned_placements),
+        pinned=tuple(fixture for fixture, _ in pinned),
+        pin_starts=pin_starts,
+        pin_tables=pin_tables,
+        pin_durations=pin_durations,
     )
 
 
@@ -676,9 +740,10 @@ def solve(
     time_cap_s: float = 10.0,
     num_search_workers: int = 1,
 ) -> SolveResult:
-    """Place every active fixture: pins echoed verbatim, everything else
-    solved onto its pool's tables inside its pool's window, on the
-    :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
+    """Place every active fixture: a called match on its fixed table at the
+    promised start or a slid-later one (never earlier), everything else solved
+    onto its pool's tables inside its pool's window, on the :data:`BUCKET_MIN`
+    grid, no earlier than ``now_min``.
 
     Never raises for infeasibility — see :class:`Verdict`. Raises
     :class:`IncoherentSnapshot` for inputs that reference things they do not
@@ -714,7 +779,20 @@ def solve(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return _no_plan(Verdict.unknown, wall_time_ms)
 
-    placements = list(built.pinned_placements)
+    placements: list[PlacedFixture] = []
+    # Called matches: table is the pin's fixed table; start is read back from
+    # the solver (it slid later if forced, else sits at the promised floor).
+    for fixture in built.pinned:
+        pin_start = int(solver.Value(built.pin_starts[fixture.id]))
+        duration = built.pin_durations[fixture.id]
+        placements.append(
+            PlacedFixture(
+                fixture_id=fixture.id,
+                table_id=built.pin_tables[fixture.id],
+                start_min=pin_start,
+                end_min=pin_start + duration,
+            )
+        )
     for fixture in built.unpinned:
         start_value = int(solver.Value(built.starts[fixture.id]))
         table = _chosen_table(solver, built.presences[fixture.id], fixture.id)
