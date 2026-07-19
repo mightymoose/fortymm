@@ -35,6 +35,7 @@ const NAV_LINK_PATHS = [
   '/admin/users',
   '/admin/broadcast',
   '/admin/schedule-solves',
+  '/admin/api-tokens',
 ]
 
 /** Trimmed label of a nav link (the icon `<span>` contributes no text). */

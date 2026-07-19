@@ -87,6 +87,18 @@ export function sessionResponse(
   }
 }
 
+type ApiTokenCreated = components['schemas']['ApiTokenCreated']
+
+/** The `POST /v1/api-tokens` 201 body — the raw token, returned exactly once. */
+export function apiTokenCreated(
+  overrides: Partial<ApiTokenCreated> = {},
+): ApiTokenCreated {
+  return {
+    token: `fmm_${faker.string.alphanumeric(40)}`,
+    ...overrides,
+  }
+}
+
 const ISO = '2026-05-12T09:00:00Z'
 
 let counter = 0

@@ -14,12 +14,14 @@ from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.roles import DEFAULT_ROLE_NAME
 from app.sessions import (
+    API_TOKEN_CONTEXT,
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
     _maybe_merge_prior_session,
 )
+from app.token_hashing import hash_token
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
 
@@ -545,6 +547,102 @@ async def test_authed_endpoint_without_session_401s_session_ended(
     assert detail["code"] == "session_ended"
     assert "email" not in detail
     assert "max-age=0" in response.headers.get("set-cookie", "").lower()
+
+
+# ----- bearer API token authentication -------------------------------------
+
+
+async def _mint_api_token(db_session: AsyncSession, user: User) -> str:
+    """Store an ``api``-context token for ``user`` the way production does — only
+    the sha256 hash lands in the DB — and return the raw token to send as a
+    bearer credential."""
+    raw = "api-raw-" + uuid.uuid4().hex
+    db_session.add(
+        UserToken(
+            user_id=user.id,
+            context=API_TOKEN_CONTEXT,
+            token=hash_token(raw),
+        )
+    )
+    await db_session.commit()
+    return raw
+
+
+async def test_bearer_api_token_authenticates_without_cookie(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A request carrying only a valid ``api``-context bearer token (no session
+    cookie) resolves to that token's user on a ``get_current_user``-protected
+    route."""
+    user = await start_session(api_client, db_session)
+    raw = await _mint_api_token(db_session, user)
+    # Drop the cookies the session mint set, so the bearer header is the only
+    # authenticating credential on the wire (the CSRF hook re-injects a
+    # synthetic csrf pair, which the guard skips on a cookieless session).
+    api_client.cookies.clear()
+
+    response = await api_client.patch(
+        "/v1/me",
+        json={"username": "bearer-renamed"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["user"]["id"] == str(user.id)
+
+
+async def test_unknown_bearer_token_without_cookie_401s(api_client: AsyncClient):
+    """A garbage/unknown bearer token with no cookie falls through to the same
+    ``session_ended`` 401 as no credential at all."""
+    response = await api_client.patch(
+        "/v1/me",
+        json={"username": "nobody"},
+        headers={"Authorization": "Bearer not-a-real-token"},
+    )
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"]["code"] == "session_ended"
+
+
+async def test_valid_cookie_wins_over_bearer_token(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """With BOTH a valid session cookie and a valid (different-user) bearer token
+    present, the cookie's user wins — the bearer header is never consulted."""
+    cookie_user = await start_session(api_client, db_session)
+
+    # A second, distinct user who owns the bearer token.
+    async with make_client() as other_client:
+        bearer_user = await start_session(other_client, db_session)
+    raw = await _mint_api_token(db_session, bearer_user)
+    assert bearer_user.id != cookie_user.id
+
+    response = await api_client.patch(
+        "/v1/me",
+        json={"username": "cookie-wins"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 200, response.text
+    # The COOKIE user is the one acted upon, not the bearer token's user.
+    assert response.json()["data"]["user"]["id"] == str(cookie_user.id)
+
+
+async def test_bearer_token_for_tombstoned_user_401s(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A bearer token whose user was merged away (``merged_into_user_id`` set)
+    does not resolve — it falls through to the ``session_ended`` 401 rather than
+    authenticating as the folded-in ghost."""
+    user = await start_session(api_client, db_session)
+    raw = await _mint_api_token(db_session, user)
+    api_client.cookies.clear()
+    await _tombstone(db_session, user, "owner-tombstone@example.com")
+
+    response = await api_client.patch(
+        "/v1/me",
+        json={"username": "ghost"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"]["code"] == "session_ended"
 
 
 # ----- CSRF double-submit guard ---------------------------------------------

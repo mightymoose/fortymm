@@ -186,6 +186,19 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /v1/users/{user_id}/roles`.
     /// - Remark: Generated from `#/paths//v1/users/{user_id}/roles/put(set_user_roles_v1_users__user_id__roles_put)`.
     func setUserRolesV1UsersUserIdRolesPut(_ input: Operations.SetUserRolesV1UsersUserIdRolesPut.Input) async throws -> Operations.SetUserRolesV1UsersUserIdRolesPut.Output
+    /// Create Api Token
+    ///
+    /// Mint a personal API token for the caller and return it once.
+    ///
+    /// The response carries the raw token a single time — it is never shown again
+    /// and cannot be recovered, so treat it like a password: copy it immediately
+    /// and store it somewhere safe. Creating a token **rotates**: any existing API
+    /// token for this user is revoked, so a user has at most one active token at a
+    /// time. Requires the ``api_token.manage`` permission.
+    ///
+    /// - Remark: HTTP `POST /v1/api-tokens`.
+    /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)`.
+    func createApiTokenV1ApiTokensPost(_ input: Operations.CreateApiTokenV1ApiTokensPost.Input) async throws -> Operations.CreateApiTokenV1ApiTokensPost.Output
     /// List Matches
     ///
     /// - Remark: HTTP `GET /v1/matches`.
@@ -1188,6 +1201,21 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// Create Api Token
+    ///
+    /// Mint a personal API token for the caller and return it once.
+    ///
+    /// The response carries the raw token a single time — it is never shown again
+    /// and cannot be recovered, so treat it like a password: copy it immediately
+    /// and store it somewhere safe. Creating a token **rotates**: any existing API
+    /// token for this user is revoked, so a user has at most one active token at a
+    /// time. Requires the ``api_token.manage`` permission.
+    ///
+    /// - Remark: HTTP `POST /v1/api-tokens`.
+    /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)`.
+    internal func createApiTokenV1ApiTokensPost(headers: Operations.CreateApiTokenV1ApiTokensPost.Input.Headers = .init()) async throws -> Operations.CreateApiTokenV1ApiTokensPost.Output {
+        try await createApiTokenV1ApiTokensPost(Operations.CreateApiTokenV1ApiTokensPost.Input(headers: headers))
     }
     /// List Matches
     ///
@@ -2437,6 +2465,23 @@ internal enum Components {
                 case rerunRequested = "rerun_requested"
                 case tournamentId = "tournament_id"
                 case tournamentName = "tournament_name"
+            }
+        }
+        /// The freshly minted raw token. Returned exactly once.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ApiTokenCreated`.
+        internal struct ApiTokenCreated: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ApiTokenCreated/token`.
+            internal var token: Swift.String
+            /// Creates a new `ApiTokenCreated`.
+            ///
+            /// - Parameters:
+            ///   - token:
+            internal init(token: Swift.String) {
+                self.token = token
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case token
             }
         }
         /// One selectable player in the admin recipient picker.
@@ -13233,6 +13278,175 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.SetUserRolesV1UsersUserIdRolesPut.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Create Api Token
+    ///
+    /// Mint a personal API token for the caller and return it once.
+    ///
+    /// The response carries the raw token a single time — it is never shown again
+    /// and cannot be recovered, so treat it like a password: copy it immediately
+    /// and store it somewhere safe. Creating a token **rotates**: any existing API
+    /// token for this user is revoked, so a user has at most one active token at a
+    /// time. Requires the ``api_token.manage`` permission.
+    ///
+    /// - Remark: HTTP `POST /v1/api-tokens`.
+    /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)`.
+    internal enum CreateApiTokenV1ApiTokensPost {
+        internal static let id: Swift.String = "create_api_token_v1_api_tokens_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/api-tokens/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateApiTokenV1ApiTokensPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateApiTokenV1ApiTokensPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.CreateApiTokenV1ApiTokensPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.CreateApiTokenV1ApiTokensPost.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/api-tokens/POST/responses/201/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/api-tokens/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.ApiTokenCreated)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.ApiTokenCreated {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateApiTokenV1ApiTokensPost.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateApiTokenV1ApiTokensPost.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.CreateApiTokenV1ApiTokensPost.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            internal var created: Operations.CreateApiTokenV1ApiTokensPost.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/api-tokens/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/api-tokens/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateApiTokenV1ApiTokensPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateApiTokenV1ApiTokensPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.CreateApiTokenV1ApiTokensPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.CreateApiTokenV1ApiTokensPost.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

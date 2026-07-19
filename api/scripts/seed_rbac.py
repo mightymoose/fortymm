@@ -23,6 +23,10 @@ PERMISSIONS = [
     ("tournament.enter", "Enter a tournament event as a player."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
     ("scheduling.view", "See the schedule-solve ledger in the Administration area."),
+    (
+        "api_token.manage",
+        "Generate and rotate a personal API token for programmatic bearer auth.",
+    ),
 ]
 
 # The default `User` role is *not* listed here: it carries no permissions and
@@ -37,6 +41,7 @@ ROLES = [
             "authorization.manage",
             "notifications.broadcast",
             "scheduling.view",
+            "api_token.manage",
         ],
     ),
     (

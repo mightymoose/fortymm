@@ -6,7 +6,12 @@ import {
   type RatingRange,
 } from '@/api/players'
 import type { components } from '@/api/schema'
-import { healthCheck, player, sessionResponse } from '@/test/factories'
+import {
+  apiTokenCreated,
+  healthCheck,
+  player,
+  sessionResponse,
+} from '@/test/factories'
 import {
   FORTYMM_LEAGUE_ID,
   USATT_LEAGUE_ID,
@@ -77,8 +82,10 @@ export const mockSession = sessionResponse({
     // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
     // tester who can self-register into a singles event, and
     // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
-    // permission-gated) tool renders under `npm run dev`, and SCHEDULING_VIEW
-    // so the Scheduling item appears and the solve-ledger page loads.
+    // permission-gated) tool renders under `npm run dev`, SCHEDULING_VIEW
+    // so the Scheduling item appears and the solve-ledger page loads, and
+    // API_TOKEN_MANAGE so the API-tokens item appears and its Generate control
+    // renders under `npm run dev`.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
@@ -87,6 +94,7 @@ export const mockSession = sessionResponse({
       PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
       PERM.SCHEDULING_VIEW,
+      PERM.API_TOKEN_MANAGE,
     ],
   },
 })
@@ -1044,6 +1052,14 @@ export const handlers = [
   http.delete('*/v1/session', async () => {
     await delay(150)
     return new HttpResponse(null, { status: 204 })
+  }),
+  // Mint (rotate) the caller's personal API token — the Administration area's
+  // API-tokens page. Returns a fresh raw token each call, mirroring the server's
+  // one-time reveal; the dev world grants API_TOKEN_MANAGE (see mockSession) so
+  // the Generate control renders under `npm run dev`.
+  http.post('*/v1/api-tokens', async () => {
+    await delay(300)
+    return HttpResponse.json(apiTokenCreated(), { status: 201 })
   }),
   // ----- /v1/players list + per-player profile + per-player matches ------
   // BFF endpoints — each returns exactly what its consumer page needs. The

@@ -328,6 +328,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Api Token
+         * @description Mint a personal API token for the caller and return it once.
+         *
+         *     The response carries the raw token a single time — it is never shown again
+         *     and cannot be recovered, so treat it like a password: copy it immediately
+         *     and store it somewhere safe. Creating a token **rotates**: any existing API
+         *     token for this user is revoked, so a user has at most one active token at a
+         *     time. Requires the ``api_token.manage`` permission.
+         */
+        post: operations["create_api_token_v1_api_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/matches": {
         parameters: {
             query?: never;
@@ -1513,6 +1539,14 @@ export interface components {
             tournament_id: string;
             /** Tournament Name */
             tournament_name: string;
+        };
+        /**
+         * ApiTokenCreated
+         * @description The freshly minted raw token. Returned exactly once.
+         */
+        ApiTokenCreated: {
+            /** Token */
+            token: string;
         };
         /**
          * BroadcastRecipient
@@ -4151,7 +4185,9 @@ export interface operations {
     update_current_user_v1_me_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4186,7 +4222,9 @@ export interface operations {
     set_email_v1_me_email_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4221,7 +4259,9 @@ export interface operations {
     resend_email_confirmation_v1_me_email_resend_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4394,7 +4434,9 @@ export interface operations {
     list_permissions_v1_permissions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4425,7 +4467,9 @@ export interface operations {
     create_permission_v1_permissions_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4460,7 +4504,9 @@ export interface operations {
     get_permission_v1_permissions__permission_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 permission_id: string;
             };
@@ -4493,7 +4539,9 @@ export interface operations {
     delete_permission_v1_permissions__permission_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 permission_id: string;
             };
@@ -4524,7 +4572,9 @@ export interface operations {
     update_permission_v1_permissions__permission_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 permission_id: string;
             };
@@ -4561,7 +4611,9 @@ export interface operations {
     list_roles_v1_roles_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4592,7 +4644,9 @@ export interface operations {
     create_role_v1_roles_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4627,7 +4681,9 @@ export interface operations {
     get_role_v1_roles__role_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 role_id: string;
             };
@@ -4660,7 +4716,9 @@ export interface operations {
     delete_role_v1_roles__role_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 role_id: string;
             };
@@ -4691,7 +4749,9 @@ export interface operations {
     update_role_v1_roles__role_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 role_id: string;
             };
@@ -4728,7 +4788,9 @@ export interface operations {
     list_users_v1_users_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4759,7 +4821,9 @@ export interface operations {
     create_user_v1_users_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4794,7 +4858,9 @@ export interface operations {
     get_user_v1_users__user_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 user_id: string;
             };
@@ -4827,7 +4893,9 @@ export interface operations {
     delete_user_v1_users__user_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 user_id: string;
             };
@@ -4858,7 +4926,9 @@ export interface operations {
     set_user_roles_v1_users__user_id__roles_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 user_id: string;
             };
@@ -4892,6 +4962,39 @@ export interface operations {
             };
         };
     };
+    create_api_token_v1_api_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_matches_v1_matches_get: {
         parameters: {
             query?: {
@@ -4902,7 +5005,9 @@ export interface operations {
                 page?: number;
                 page_size?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4933,7 +5038,9 @@ export interface operations {
     create_match_v1_matches_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -4971,7 +5078,9 @@ export interface operations {
                 status?: components["schemas"]["MatchListFilter"] | null;
                 q?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5033,7 +5142,9 @@ export interface operations {
     create_game_score_v1_matches__match_id__games__game_number__scores_new_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 match_id: string;
                 game_number: number;
@@ -5080,7 +5191,9 @@ export interface operations {
     update_game_score_v1_matches__match_id__games__game_number__scores_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 match_id: string;
                 game_number: number;
@@ -5127,7 +5240,9 @@ export interface operations {
     delete_game_score_v1_matches__match_id__games__game_number__scores_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 match_id: string;
                 game_number: number;
@@ -5161,7 +5276,9 @@ export interface operations {
     post_match_result_v1_matches__match_id__results_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 match_id: string;
             };
@@ -5198,7 +5315,9 @@ export interface operations {
     accept_match_result_v1_matches__match_id__results__result_id__acceptance_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 match_id: string;
                 result_id: string;
@@ -5235,7 +5354,9 @@ export interface operations {
                 limit?: number;
                 league_id?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5271,7 +5392,9 @@ export interface operations {
                 limit?: number;
                 league_id?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5307,7 +5430,9 @@ export interface operations {
                 page_size?: number;
                 league_id?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5341,7 +5466,9 @@ export interface operations {
                 league_id?: string | null;
                 range?: "30d" | "90d" | "1y";
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 player_id: string;
             };
@@ -5377,7 +5504,9 @@ export interface operations {
                 league_id?: string | null;
                 range?: "30d" | "90d" | "1y";
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 player_id: string;
             };
@@ -5413,7 +5542,9 @@ export interface operations {
                 page?: number;
                 page_size?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 player_id: string;
             };
@@ -5446,7 +5577,9 @@ export interface operations {
     get_dashboard_v1_dashboard_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5477,7 +5610,9 @@ export interface operations {
     register_device_token_v1_device_tokens_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5512,7 +5647,9 @@ export interface operations {
     send_test_notification_v1_notifications_test_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5543,7 +5680,9 @@ export interface operations {
     list_notifications_v1_notifications_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5574,7 +5713,9 @@ export interface operations {
     get_unread_count_v1_notifications_unread_count_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5605,7 +5746,9 @@ export interface operations {
     mark_notifications_read_v1_notifications_read_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5640,7 +5783,9 @@ export interface operations {
     mark_all_notifications_read_v1_notifications_read_all_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5671,7 +5816,9 @@ export interface operations {
     mark_notification_read_v1_notifications__notification_id__read_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 notification_id: string;
             };
@@ -5704,7 +5851,9 @@ export interface operations {
     get_notification_taxonomy_v1_notification_taxonomy_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5735,7 +5884,9 @@ export interface operations {
     get_notification_preferences_v1_notification_preferences_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5766,7 +5917,9 @@ export interface operations {
     update_notification_preferences_v1_notification_preferences_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5803,7 +5956,9 @@ export interface operations {
             query?: {
                 q?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5834,7 +5989,9 @@ export interface operations {
     broadcast_notification_v1_notifications_broadcast_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5869,7 +6026,9 @@ export interface operations {
     list_tournaments_v1_tournaments_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5900,7 +6059,9 @@ export interface operations {
     create_tournament_v1_tournaments_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
@@ -5935,7 +6096,9 @@ export interface operations {
     get_tournament_v1_tournaments__tournament_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -5968,7 +6131,9 @@ export interface operations {
     delete_tournament_v1_tournaments__tournament_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -5999,7 +6164,9 @@ export interface operations {
     update_tournament_v1_tournaments__tournament_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -6036,7 +6203,9 @@ export interface operations {
     create_tournament_transition_v1_tournaments__tournament_id__transitions_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -6073,7 +6242,9 @@ export interface operations {
     create_event_v1_tournaments__tournament_id__events_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -6110,7 +6281,9 @@ export interface operations {
     delete_event_v1_tournaments__tournament_id__events__event_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6142,7 +6315,9 @@ export interface operations {
     update_event_v1_tournaments__tournament_id__events__event_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6180,7 +6355,9 @@ export interface operations {
     enter_event_v1_tournaments__tournament_id__events__event_id__entries_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6218,7 +6395,9 @@ export interface operations {
     withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6251,7 +6430,9 @@ export interface operations {
     cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6285,7 +6466,9 @@ export interface operations {
     uncut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 event_id: string;
@@ -6317,7 +6500,9 @@ export interface operations {
     place_fixture_v1_tournaments__tournament_id__fixtures__fixture_id__placement_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
                 fixture_id: string;
@@ -6355,7 +6540,9 @@ export interface operations {
     request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tournament_id: string;
             };
@@ -6392,7 +6579,9 @@ export interface operations {
                 page?: number;
                 page_size?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: {
                 session?: string | null;
