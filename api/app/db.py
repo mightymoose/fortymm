@@ -32,9 +32,21 @@ def get_engine() -> AsyncEngine:
     return _engine
 
 
-async def get_session() -> AsyncIterator[AsyncSession]:
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """The process-wide async session factory, engine lazily initialised.
+
+    ``get_session`` is the request-scoped FastAPI dependency; this is the raw
+    factory for callers that own the session lifecycle themselves — an MCP tool
+    or verifier, a script, a REPL — outside any FastAPI request (see
+    ``api/CLAUDE.md``: "outside a request you own the session lifecycle
+    yourself").
+    """
     if _sessionmaker is None:
         get_engine()
     assert _sessionmaker is not None
-    async with _sessionmaker() as session:
+    return _sessionmaker
+
+
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with get_sessionmaker()() as session:
         yield session

@@ -175,7 +175,7 @@ def _serialize_player_match(
         result = "L"
 
     # A result has been proposed but the opponent hasn't accepted it yet — the
-    # same predicate matches.py's ``_status_label`` buckets as "Awaiting
+    # same predicate the ``status_label`` serializer helper buckets as "Awaiting
     # acceptance", read from the one place that defines it (``app.result_chain``,
     # a shared domain module — not the matches router). The FE uses this to
     # render a distinct chip instead of the green "LIVE" one a genuinely-live

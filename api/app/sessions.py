@@ -24,6 +24,7 @@ from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import api_token_auth
 from app import captcha as captcha_module
 from app import queue as queue_module
 from app.account_merge import merge_user
@@ -81,12 +82,11 @@ CSRF_HEADER_NAME = "x-csrf-token"
 CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 SESSION_TOKEN_CONTEXT = "session"
 # Context for personal, opaque API bearer tokens a user mints for external
-# tooling (issue #1130). Namespaced like every other credential type so the
-# api-tokens flow can rotate/resolve its own rows without touching a user's
-# session / login / email-change / merge tokens. Defined here alongside the
-# other context constants so both the mint endpoint (app/api_tokens.py) and the
-# bearer-auth path in get_current_user import the same value.
-API_TOKEN_CONTEXT = "api"
+# tooling (issue #1130). Owned by ``app.api_token_auth`` (router-free, so the
+# HTTP bearer path here and a future MCP TokenVerifier share one resolver);
+# re-exported here so callers that historically imported
+# ``app.sessions.API_TOKEN_CONTEXT`` keep working.
+API_TOKEN_CONTEXT = api_token_auth.API_TOKEN_CONTEXT
 # Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
 # (merged-away) guest, so clients can tell "your session was merged, sign in"
 # apart from an ordinary auth failure and redirect to login (with the owner's
@@ -377,28 +377,19 @@ async def _find_api_token_user(db: AsyncSession, authorization: str) -> User | N
     ``None`` when the header isn't a well-formed bearer credential, its token
     matches no live ``api``-context row, or that row's user is tombstoned.
 
-    Mirrors ``_find_session_user`` for the opaque personal API tokens minted at
+    Owns only the header framing for the opaque personal API tokens minted at
     ``POST /v1/api-tokens`` (issue #1130): the scheme is matched
-    case-insensitively (``Bearer``/``bearer``) and the token is compared by
-    sha256 hash, never in plaintext. Tombstoned (merged-away) users are excluded
-    in the query — ``merged_into_user_id IS NOT NULL`` — so a bearer token for a
-    folded-in guest simply doesn't resolve, the same way the auth-layer session
-    queries keep ghosts from surfacing; the caller then falls through to the
-    ordinary ``session_ended`` 401.
+    case-insensitively (``Bearer``/``bearer``) and split off the raw token, which
+    is then resolved by the shared ``api_token_auth.find_api_token_user`` — the
+    single place the ``hash_token`` → live-user lookup lives, so this HTTP bearer
+    path and the MCP ``TokenVerifier`` can't drift. An unresolved token (unknown
+    or tombstoned) returns ``None`` and the caller falls through to the ordinary
+    ``session_ended`` 401.
     """
     scheme, _, raw_token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not raw_token:
         return None
-    result = await db.execute(
-        select(User)
-        .join(UserToken, UserToken.user_id == User.id)
-        .where(
-            UserToken.token == hash_token(raw_token),
-            UserToken.context == API_TOKEN_CONTEXT,
-            User.merged_into_user_id.is_(None),
-        )
-    )
-    return result.scalar_one_or_none()
+    return await api_token_auth.find_api_token_user(db, raw_token)
 
 
 def _clear_cookie_header() -> dict[str, str]:

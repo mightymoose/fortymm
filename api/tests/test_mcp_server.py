@@ -1,0 +1,938 @@
+"""Transport-auth tests for the mounted FastMCP server (chore 1c).
+
+These drive the **mounted** app over HTTP (httpx ``ASGITransport`` against the
+FastAPI app, wrapped in a FastMCP ``Client`` speaking Streamable HTTP) so the
+``FortymmTokenVerifier`` actually runs at the transport — an in-memory
+``Client(mcp)`` would bypass it. The server exposes **zero tools** for now, so a
+valid token proves only that ``list_tools`` succeeds (empty is fine); the point
+is that missing / invalid / tombstoned-user tokens are rejected **before** any
+tool body, at the transport.
+
+The MCP app carries its own lifespan (the Streamable-HTTP session manager);
+``ASGITransport`` does not fire it, so each test enters ``mcp_app.lifespan``
+explicitly. The verifier resolves tokens against the process-wide engine
+(``DATABASE_URL`` is pointed at the test Postgres by the autouse
+``_solver_job_database`` fixture), so tokens are committed via ``db_session``
+first — the verifier's own connection only sees committed rows.
+"""
+
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.exceptions import ToolError
+from rq import Queue
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api_token_auth import API_TOKEN_CONTEXT
+from app.main import app as fastapi_app
+from app.main import mcp_app
+from app.models import User, UserToken
+from app.token_hashing import hash_token
+from tests._helpers import enqueued_notification_jobs, make_user, start_session
+
+MCP_URL = "http://testserver/mcp/"
+
+
+async def _mint(db_session: AsyncSession, user: User) -> str:
+    """Store an ``api``-context token for ``user`` (only the sha256 hash lands in
+    the DB, as production does) and return the raw token."""
+    raw = "api-raw-" + uuid.uuid4().hex
+    db_session.add(
+        UserToken(user_id=user.id, context=API_TOKEN_CONTEXT, token=hash_token(raw))
+    )
+    await db_session.commit()
+    return raw
+
+
+@asynccontextmanager
+async def _mcp_client(token: str | None) -> AsyncIterator[Client]:
+    """A FastMCP ``Client`` bound to the mounted app over ``ASGITransport``.
+
+    Enters ``mcp_app.lifespan`` so the Streamable-HTTP session manager is
+    running (``ASGITransport`` skips the app lifespan). ``token`` becomes the
+    ``Authorization: Bearer`` header, or is omitted entirely when ``None``.
+    """
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    def _factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+        **kwargs: object,
+    ) -> httpx.AsyncClient:
+        # fastmcp's factory call passes extra kwargs (e.g. follow_redirects)
+        # beyond the McpHttpClientFactory protocol's three; forward them, but
+        # keep our ASGITransport + base_url so the client hits the mounted app.
+        kwargs.pop("transport", None)
+        kwargs.pop("base_url", None)
+        return httpx.AsyncClient(
+            transport=transport,
+            headers=headers,
+            timeout=timeout if timeout is not None else httpx.Timeout(30.0),
+            auth=auth,
+            base_url="http://testserver",
+            **kwargs,  # type: ignore[arg-type]  # httpx kwargs are heterogeneous
+        )
+
+    headers = {"Authorization": f"Bearer {token}"} if token is not None else None
+    client = Client(
+        StreamableHttpTransport(MCP_URL, headers=headers, httpx_client_factory=_factory)
+    )
+    async with mcp_app.lifespan(fastapi_app):
+        yield client
+
+
+async def _assert_rejected(client: Client) -> None:
+    """Connecting/listing tools fails at the transport with a 401.
+
+    The ``pytest.raises`` is held here — inside the ``mcp_app.lifespan`` block —
+    so the 401 is caught before it would otherwise unwind through the session
+    manager's task group and be re-wrapped in an ``ExceptionGroup``.
+    """
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        async with client:
+            await client.list_tools()
+    assert exc_info.value.response.status_code == 401
+
+
+async def test_valid_api_token_can_list_tools(db_session: AsyncSession) -> None:
+    """A live ``context="api"`` bearer token authenticates at the transport and
+    can complete the initialize + ``list_tools`` handshake. The curated
+    match-flow verbs are exposed — ``get_match`` is registered."""
+    user = await make_user(db_session, "mcp-token-owner")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+
+    assert "get_match" in {tool.name for tool in tools}
+
+
+async def test_missing_token_is_rejected(db_session: AsyncSession) -> None:
+    """No ``Authorization`` header → rejected at the transport (401), before any
+    tool body."""
+    async with _mcp_client(None) as client:
+        await _assert_rejected(client)
+
+
+async def test_invalid_token_is_rejected(db_session: AsyncSession) -> None:
+    """A well-formed but never-minted token resolves to no user → 401."""
+    async with _mcp_client("api-raw-" + uuid.uuid4().hex) as client:
+        await _assert_rejected(client)
+
+
+async def test_tombstoned_users_token_is_rejected(db_session: AsyncSession) -> None:
+    """A valid token whose user was merged away (``merged_into_user_id`` set) is
+    rejected — the folded-in ghost never authenticates through MCP either."""
+    owner = await make_user(db_session, "mcp-merge-owner")
+    guest = await make_user(db_session, "mcp-merged-guest")
+    raw = await _mint(db_session, guest)
+
+    guest.merged_into_user_id = owner.id
+    guest.merged_at = datetime.now(UTC)
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client:
+        await _assert_rejected(client)
+
+
+# ----- get_match tool ------------------------------------------------------
+
+
+async def _create_match(
+    api_client: httpx.AsyncClient, opponent: User, *, best_of: int = 5
+) -> str:
+    """Create a rated match against ``opponent`` as the client's session user via
+    the HTTP endpoint (committed), returning the new match id."""
+    response = await api_client.post(
+        "/v1/matches",
+        json={
+            "opponent_user_id": str(opponent.id),
+            "best_of": best_of,
+            "rated": True,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return str(response.json()["id"])
+
+
+async def test_get_match_returns_same_details_as_http_get(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """The ``get_match`` tool returns the identical ``MatchDetails`` view the HTTP
+    ``GET /v1/matches/{id}`` returns for the same authenticated user — same id,
+    sides, negotiation, and viewer-relative perspective flags."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-get-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent)
+
+    http_body = (await api_client.get(f"/v1/matches/{match_id}")).json()
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert result.isError is False
+    assert result.structuredContent == http_body
+    # Spot-check the load-bearing fields the tool is meant to preserve.
+    assert result.structuredContent is not None
+    assert result.structuredContent["id"] == match_id
+    my_side, opp_side = result.structuredContent["sides"]
+    assert my_side["is_current_user_side"] is True
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["is_current_user_side"] is False
+    assert result.structuredContent["negotiation"]["viewer_state"] == "live"
+    assert result.structuredContent["can_score"] is True
+
+
+async def test_get_match_unknown_id_raises_tool_error(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """An id that matches no match surfaces as a ``ToolError`` at the caller."""
+    me = await start_session(api_client, db_session)
+    raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("get_match", {"match_id": unknown})
+
+
+async def test_get_match_non_participant_sees_scorecard_without_extras(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """Mirroring the public HTTP GET (#515): a caller who is not on the match
+    still reads the scorecard, but with no current-user side and the
+    history/rivalry extras empty — not a ``ToolError``."""
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-nonpart-rival")
+    match_id = await _create_match(api_client, opponent)
+
+    outsider = await make_user(db_session, "mcp-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        result = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert result.isError is False
+    body = result.structuredContent
+    assert body is not None
+    assert body["id"] == match_id
+    # No side is the outsider's, and the participant-only extras are empty (#515).
+    assert all(side["is_current_user_side"] is False for side in body["sides"])
+    assert all(
+        player["is_current_user"] is False
+        for side in body["sides"]
+        for player in side["players"]
+    )
+    assert body["recent_form"] == []
+    assert body["head_to_head"] is None
+
+
+# ----- create_match tool ---------------------------------------------------
+
+
+async def test_create_match_is_registered(db_session: AsyncSession) -> None:
+    """The write verb is exposed alongside the read verb over the transport."""
+    user = await make_user(db_session, "mcp-create-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+
+    assert "create_match" in {tool.name for tool in tools}
+
+
+async def test_create_solo_match_is_retrievable_via_get_match(
+    db_session: AsyncSession,
+) -> None:
+    """A solo ``create_match`` (no opponent, ``rated=False``) returns a
+    ``MatchDetails`` with two sides — side 2 the player-less sentinel — and the
+    created match is then readable back through ``get_match``."""
+    me = await make_user(db_session, "mcp-solo-creator")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match", {"best_of": 3, "rated": False}
+        )
+        assert created.isError is False
+        body = created.structuredContent
+        assert body is not None
+        match_id = body["id"]
+
+        read_back = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    # Creator's perspective: side 1 is mine, side 2 is the player-less sentinel.
+    my_side, opp_side = body["sides"]
+    assert my_side["is_current_user_side"] is True
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["is_current_user_side"] is False
+    assert opp_side["players"] == []
+    assert body["best_of"] == 3
+    assert body["affects_rating"] is False
+    # get_match reads the same match back.
+    assert read_back.isError is False
+    assert read_back.structuredContent is not None
+    assert read_back.structuredContent["id"] == match_id
+
+
+async def test_create_rated_without_opponent_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match with no opponent surfaces the domain rule as a ``ToolError``
+    with an actionable message."""
+    me = await make_user(db_session, "mcp-rated-noopp")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="registered opponent"):
+            await client.call_tool("create_match", {"best_of": 3, "rated": True})
+
+
+async def test_create_self_match_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """Passing your own id as the opponent surfaces ``SelfMatchError`` as a
+    ``ToolError``."""
+    me = await make_user(db_session, "mcp-self-match")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="against yourself"):
+            await client.call_tool(
+                "create_match",
+                {"best_of": 3, "rated": False, "opponent_user_id": str(me.id)},
+            )
+
+
+async def test_create_match_unknown_opponent_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match against an id that matches no live player surfaces
+    ``OpponentNotFoundError`` as a ``ToolError``."""
+    me = await make_user(db_session, "mcp-unknown-opp")
+    raw = await _mint(db_session, me)
+    ghost = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=ghost):
+            await client.call_tool(
+                "create_match",
+                {"best_of": 5, "rated": True, "opponent_user_id": ghost},
+            )
+
+
+async def test_create_rated_match_against_registered_opponent(
+    db_session: AsyncSession,
+) -> None:
+    """A rated match against a real registered opponent is created and rated."""
+    me = await make_user(db_session, "mcp-rated-creator")
+    opponent = await make_user(db_session, "mcp-rated-rival")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match",
+            {"best_of": 5, "rated": True, "opponent_user_id": str(opponent.id)},
+        )
+
+    assert created.isError is False
+    body = created.structuredContent
+    assert body is not None
+    assert body["affects_rating"] is True
+    my_side, opp_side = body["sides"]
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["players"][0]["user_id"] == str(opponent.id)
+
+
+# ----- score-write tools (enter / update / delete) -------------------------
+
+
+def _game_score(body: dict[str, object] | None, game_number: int) -> dict[str, int]:
+    """The committed score dict for ``game_number`` in a ``MatchDetails`` body,
+    asserting one exists."""
+    assert body is not None
+    games = body["games"]
+    assert isinstance(games, list)
+    game = next(g for g in games if g["game_number"] == game_number)
+    score = game["score"]
+    assert score is not None
+    return score
+
+
+async def test_score_write_tools_are_registered(db_session: AsyncSession) -> None:
+    """The three per-game score verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-score-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"enter_game_score", "update_game_score", "delete_game_score"} <= names
+
+
+async def test_enter_update_delete_game_score_round_trip(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """enter → get_match reflects it; update with the current version replaces
+    it; a STALE version conflicts (naming get_match); delete clears it."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    async with _mcp_client(raw) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 5,
+            },
+        )
+        assert entered.isError is False
+        score = _game_score(entered.structuredContent, 1)
+        assert (score["side_1_points"], score["side_2_points"], score["version"]) == (
+            11,
+            5,
+            1,
+        )
+
+        # get_match reads the committed score back.
+        read_back = await client.call_tool_mcp("get_match", {"match_id": match_id})
+        assert _game_score(read_back.structuredContent, 1)["side_1_points"] == 11
+
+        # Update with the current version succeeds and bumps the version.
+        updated = await client.call_tool_mcp(
+            "update_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 7,
+                "expected_version": 1,
+            },
+        )
+        assert updated.isError is False
+        score = _game_score(updated.structuredContent, 1)
+        assert (score["side_1_points"], score["side_2_points"], score["version"]) == (
+            11,
+            7,
+            2,
+        )
+
+        # A stale expected_version loses the optimistic-concurrency check; the
+        # ToolError must name get_match as the recovery path.
+        with pytest.raises(ToolError, match="get_match"):
+            await client.call_tool(
+                "update_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 9,
+                    "expected_version": 1,
+                },
+            )
+
+        # Delete clears the committed score (the game row stays, score is null).
+        deleted = await client.call_tool_mcp(
+            "delete_game_score",
+            {"match_id": match_id, "game_number": 1},
+        )
+        assert deleted.isError is False
+        assert deleted.structuredContent is not None
+        game = next(
+            g for g in deleted.structuredContent["games"] if g["game_number"] == 1
+        )
+        assert game["score"] is None
+
+
+async def test_enter_game_score_out_of_range_is_schema_error(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A ``game_number`` outside 1..7 is rejected as a validation error before the
+    tool body — the bounded ``Field(ge=1, le=7)`` on the argument."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-range-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 8,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+
+async def test_enter_game_score_non_participant_raises_tool_error(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A caller who isn't on the match can't score it — the load collapses
+    non-participation into the same opaque not-found ToolError (naming
+    participation), so existence can't be probed."""
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-outsider-rival")
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    outsider = await make_user(db_session, "mcp-score-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="participant"):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+
+async def test_enter_game_score_on_frozen_match_raises_scorable_reason(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A match with a posted (standing) result has a frozen scratchpad; scoring
+    it surfaces the carried scorability reason as the ToolError."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-frozen-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=1)
+
+    # Post a complete, decided result via HTTP — a rated two-human match leaves
+    # it standing and freezes the score endpoints (#715).
+    posted = await api_client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]},
+    )
+    assert posted.status_code == 201, posted.text
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="posted result"):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 7,
+                },
+            )
+
+
+# ----- propose_result / accept_result tools --------------------------------
+
+# A decided best-of-3 board — side 1 clinches 2–0 — for the first proposal, and a
+# different-but-still-decided board (also 2–0 to side 1, different points) for the
+# counter that supersedes it.
+_DECISIVE_BOARD = [
+    {"game_number": 1, "side_1_points": 11, "side_2_points": 7},
+    {"game_number": 2, "side_1_points": 11, "side_2_points": 8},
+]
+_COUNTER_BOARD = [
+    {"game_number": 1, "side_1_points": 11, "side_2_points": 9},
+    {"game_number": 2, "side_1_points": 11, "side_2_points": 6},
+]
+
+
+async def test_propose_and_accept_result_tools_are_registered(
+    db_session: AsyncSession,
+) -> None:
+    """Both negotiation verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-negotiation-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"propose_result", "accept_result"} <= names
+
+
+async def test_propose_awaits_acceptance_notifies_and_accept_completes(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """The headline flow: A proposes a decided board on a rated two-human match →
+    a standing result awaiting B, and B is sent one accept/counter notification.
+    B reads the standing result id via get_match, then accept_result completes the
+    match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-accept-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+
+    assert proposed.isError is False
+    body = proposed.structuredContent
+    assert body is not None
+    # A's own view after proposing: the standing result is theirs and awaits B.
+    assert body["status"] == "in_progress"
+    negotiation = body["negotiation"]
+    assert negotiation["viewer_state"] == "awaiting"
+    standing = negotiation["standing_result"]
+    assert standing is not None
+    assert standing["submitted_by"] == str(a.id)
+    standing_id = standing["id"]
+
+    # B (the opposing side) got exactly one accept/counter notification.
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [b.id]
+    assert jobs[0].link == f"/matches/{match_id}"
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        # B sees the same standing result id through get_match, then accepts it.
+        seen = await client_b.call_tool_mcp("get_match", {"match_id": match_id})
+        assert seen.structuredContent is not None
+        assert seen.structuredContent["negotiation"]["standing_result"]["id"] == (
+            standing_id
+        )
+
+        accepted = await client_b.call_tool_mcp(
+            "accept_result", {"match_id": match_id, "result_id": standing_id}
+        )
+
+    assert accepted.isError is False
+    assert accepted.structuredContent is not None
+    assert accepted.structuredContent["status"] == "completed"
+    assert accepted.structuredContent["negotiation"]["viewer_state"] == "final"
+
+
+async def test_counter_supersedes_standing_proposal(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """After A proposes, B counters with a different decided board targeting the
+    standing id — the counter becomes the new standing result, superseding A's."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-counter-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+    assert proposed.structuredContent is not None
+    first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        countered = await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+
+    assert countered.isError is False
+    body = countered.structuredContent
+    assert body is not None
+    standing = body["negotiation"]["standing_result"]
+    assert standing is not None
+    # A new standing result, submitted by B, that supersedes A's first proposal.
+    assert standing["id"] != first_id
+    assert standing["submitted_by"] == str(b.id)
+
+
+async def test_accept_own_proposal_raises_tool_error(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """The proposing side already consented by proposing; A accepting their own
+    standing proposal is a ``ToolError``."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-own-rival")
+    token_a = await _mint(db_session, a)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        standing_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+        with pytest.raises(ToolError, match="your own proposal"):
+            await client_a.call_tool(
+                "accept_result", {"match_id": match_id, "result_id": standing_id}
+            )
+
+
+async def test_accept_stale_result_id_raises_tool_error_naming_get_match(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Accepting a superseded result id (A's first proposal, after B countered)
+    surfaces the moved-on conflict as a ``ToolError`` naming get_match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-stale-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+    assert proposed.structuredContent is not None
+    first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        # B counters, superseding A's first proposal ...
+        await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+        # ... so accepting the now-stale first id loses the negotiation race.
+        with pytest.raises(ToolError, match="get_match"):
+            await client_b.call_tool(
+                "accept_result", {"match_id": match_id, "result_id": first_id}
+            )
+
+
+async def test_countering_stale_result_id_raises_tool_error_naming_get_match(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A counter that supersedes an id no longer standing (B already countered
+    A's first proposal) surfaces the conflict as a ``ToolError`` naming
+    get_match."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-counter-stale-rival")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        first_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(token_b) as client_b, client_b:
+        await client_b.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": _COUNTER_BOARD,
+                "supersedes_result_id": first_id,
+            },
+        )
+
+    # A now tries to counter targeting the stale first id.
+    async with _mcp_client(token_a) as client_a, client_a:
+        with pytest.raises(ToolError, match="get_match"):
+            await client_a.call_tool(
+                "propose_result",
+                {
+                    "match_id": match_id,
+                    "games": _DECISIVE_BOARD,
+                    "supersedes_result_id": first_id,
+                },
+            )
+
+
+async def test_propose_undecided_board_raises_tool_error(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A board that doesn't decide the match (one game on a best-of-3) can't be a
+    result — surfaced as a ``ToolError``."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-undecided-rival")
+    token_a = await _mint(db_session, a)
+    match_id = await _create_match(api_client, b, best_of=3)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        with pytest.raises(ToolError):
+            await client_a.call_tool(
+                "propose_result",
+                {
+                    "match_id": match_id,
+                    "games": [
+                        {"game_number": 1, "side_1_points": 11, "side_2_points": 7}
+                    ],
+                },
+            )
+
+
+# ----- search_players / list_my_matches read tools -------------------------
+
+
+async def test_search_and_list_my_matches_tools_are_registered(
+    db_session: AsyncSession,
+) -> None:
+    """Both read verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-reads-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"search_players", "list_my_matches"} <= names
+
+
+async def test_search_players_finds_opponent_and_excludes_caller(
+    db_session: AsyncSession,
+) -> None:
+    """A username-fragment search returns matching players and never the caller
+    themselves, mirroring ``GET /v1/players/search``."""
+    me = await make_user(db_session, "mcp-search-zephyr-self")
+    rival = await make_user(db_session, "mcp-search-zephyr-rival")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        found = await client.call_tool_mcp("search_players", {"query": "zephyr-rival"})
+
+    assert found.isError is False
+    assert found.structuredContent is not None
+    players = found.structuredContent["result"]
+    ids = {p["id"] for p in players}
+    assert str(rival.id) in ids
+    assert str(me.id) not in ids
+
+
+async def test_search_players_blank_query_returns_empty(
+    db_session: AsyncSession,
+) -> None:
+    """A blank query matches nothing — the same as the underlying service."""
+    me = await make_user(db_session, "mcp-search-blank")
+    await make_user(db_session, "mcp-search-blank-other")
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        found = await client.call_tool_mcp("search_players", {"query": "   "})
+
+    assert found.isError is False
+    assert found.structuredContent is not None
+    assert found.structuredContent["result"] == []
+
+
+async def test_search_create_score_negotiate_then_list_my_matches(
+    db_session: AsyncSession,
+) -> None:
+    """The whole match flow over MCP ONLY: A searches for B, creates a rated
+    best-of-3, scores a decisive board, proposes it; B accepts → completed;
+    finally A's ``list_my_matches`` shows the completed match, won, against B."""
+    a = await make_user(db_session, "mcp-flow-alice")
+    b = await make_user(db_session, "mcp-flow-bob-quartz")
+    token_a = await _mint(db_session, a)
+    token_b = await _mint(db_session, b)
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        # A finds B by a username fragment; A is excluded from her own search.
+        found = await client_a.call_tool_mcp("search_players", {"query": "bob-quartz"})
+        assert found.isError is False
+        assert found.structuredContent is not None
+        hit_ids = {p["id"] for p in found.structuredContent["result"]}
+        assert str(b.id) in hit_ids
+        assert str(a.id) not in hit_ids
+
+        # A creates a rated best-of-3 against B via the tool.
+        created = await client_a.call_tool_mcp(
+            "create_match",
+            {"best_of": 3, "rated": True, "opponent_user_id": str(b.id)},
+        )
+        assert created.isError is False
+        assert created.structuredContent is not None
+        match_id = created.structuredContent["id"]
+
+        # A scores a decisive 2-0 board, then proposes it.
+        for game in _DECISIVE_BOARD:
+            entered = await client_a.call_tool_mcp(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": game["game_number"],
+                    "side_1_points": game["side_1_points"],
+                    "side_2_points": game["side_2_points"],
+                },
+            )
+            assert entered.isError is False
+        proposed = await client_a.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+        assert proposed.structuredContent is not None
+        standing_id = proposed.structuredContent["negotiation"]["standing_result"]["id"]
+
+    # B accepts the standing proposal → the match completes.
+    async with _mcp_client(token_b) as client_b, client_b:
+        accepted = await client_b.call_tool_mcp(
+            "accept_result", {"match_id": match_id, "result_id": standing_id}
+        )
+        assert accepted.isError is False
+        assert accepted.structuredContent is not None
+        assert accepted.structuredContent["status"] == "completed"
+
+    # A's own match list now shows the completed match, projected onto her side.
+    async with _mcp_client(token_a) as client_a, client_a:
+        listed = await client_a.call_tool_mcp("list_my_matches", {})
+
+    assert listed.isError is False
+    assert listed.structuredContent is not None
+    rows = {row["id"]: row for row in listed.structuredContent["items"]}
+    assert match_id in rows
+    assert rows[match_id]["status"] == "completed"
+    assert rows[match_id]["result"] == "W"
+    assert rows[match_id]["opponent"]["id"] == str(b.id)
+
+
+async def test_list_my_matches_returns_only_the_callers_matches(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """``list_my_matches`` is scoped to the caller — a match the caller is NOT a
+    side of (unlike the global ``GET /v1/matches`` feed) never appears."""
+    me = await make_user(db_session, "mcp-mine-owner")
+    raw = await _mint(db_session, me)
+
+    # A match the caller owns (created via the tool), and a wholly-separate match
+    # between two other players seeded over HTTP that the caller is absent from.
+    other = await start_session(api_client, db_session)
+    other_opponent = await make_user(db_session, "mcp-mine-other-rival")
+    foreign_match_id = await _create_match(api_client, other_opponent)
+
+    async with _mcp_client(raw) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match",
+            {"best_of": 3, "rated": True, "opponent_user_id": str(other.id)},
+        )
+        assert created.structuredContent is not None
+        mine_match_id = created.structuredContent["id"]
+
+        listed = await client.call_tool_mcp("list_my_matches", {})
+
+    assert listed.isError is False
+    assert listed.structuredContent is not None
+    listed_ids = {row["id"] for row in listed.structuredContent["items"]}
+    assert mine_match_id in listed_ids
+    assert foreign_match_id not in listed_ids
