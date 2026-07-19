@@ -122,9 +122,9 @@ import os
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, assert_never
 
 from redis.exceptions import RedisError
 from sqlalchemy import exists, select, update
@@ -154,10 +154,14 @@ from app.scheduling import (
     EventId,
     EventSettings,
     FixtureId,
+    InfeasibilityReason,
     InProgressMatch,
+    NoSingleCause,
     Pin,
     PlayerId,
+    PoolHasNoTables,
     PoolId,
+    PoolOverCapacity,
     PreviousPlacement,
     RestShadow,
     ScheduleFixture,
@@ -166,8 +170,16 @@ from app.scheduling import (
     SolveResult,
     TableId,
     Window,
+    WindowTooShortForMatch,
 )
 from app.schemas.notification import NotificationJob
+from app.schemas.schedule_solve import (
+    NoSingleCauseRead,
+    PoolHasNoTablesRead,
+    PoolOverCapacityRead,
+    ResolvedReason,
+    WindowTooShortForMatchRead,
+)
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
 from app.tournament_draws import event_pools
@@ -462,6 +474,17 @@ async def latest_solve(
 
 
 @dataclass(frozen=True, slots=True)
+class _PoolResolution:
+    """The DB-side facts an infeasibility reason needs to name a pool a human
+    can act on: its display ``name`` and the ``HH:MM`` clock bounds of its
+    window (already strings on the pool's ``Slot`` — no minute→clock math)."""
+
+    name: str
+    window_start: str
+    window_end: str
+
+
+@dataclass(frozen=True, slots=True)
 class SolveInputs:
     """One transactional read of everything a solve consumes: the pure
     snapshot, its fingerprint, the wall-clock origin of the snapshot's minute
@@ -475,7 +498,15 @@ class SolveInputs:
     ``withdrawn_entry_ids`` lets the cancelled correction pick the *remaining*
     entrant. Everything these sets derive from is fingerprinted, so a
     fingerprint match between snapshot and apply guarantees the fresh read's
-    sets are the ones the solve was computed against."""
+    sets are the ones the solve was computed against.
+
+    ``pool_resolutions`` (keyed by the solver's namespaced ``PoolId`` string
+    ``f"{event.id}:{pool.id}"``) and ``fixture_best_of`` (keyed by
+    ``str(fixture.id)``) are the resolution lookups the apply humanizes an
+    *infeasible* solve's structured reasons through — pool id → name+clock,
+    fixture id → its event's ``length_games``. They derive from the same
+    fingerprinted inputs, so the fresh read's maps match the ones the reasons
+    were computed against."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
@@ -484,6 +515,8 @@ class SolveInputs:
     broken_pin_moves: frozenset[uuid.UUID] = frozenset()
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
+    pool_resolutions: dict[str, _PoolResolution] = field(default_factory=dict)
+    fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = field(default_factory=dict)
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -671,6 +704,13 @@ async def _load_solver_inputs(
     # ``SchedulePool``s are built from these same specs below (only ``base``
     # — which needs every window start first — stands between the two).
     pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
+    # Resolution lookups the apply humanizes an infeasible solve's reasons
+    # through: solver ``PoolId`` → the pool's display name + ``HH:MM`` bounds,
+    # and fixture id → its event's ``length_games`` (``best_of``). Built off the
+    # same parsed inputs the snapshot is, so they resolve exactly the ids the
+    # reasons carry.
+    pool_resolutions: dict[str, _PoolResolution] = {}
+    fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = {}
     for event, _settings, pools in parsed_events:
         for pool in pools:
             key = f"{event.id}:{pool.id}"
@@ -681,6 +721,11 @@ async def _load_solver_inputs(
                 if TableId(table_id) in catalogue_ids
             )
             pool_specs.append((key, tables, start, end))
+            pool_resolutions[key] = _PoolResolution(
+                name=pool.name,
+                window_start=pool.slot.start,
+                window_end=pool.slot.end,
+            )
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
@@ -711,7 +756,7 @@ async def _load_solver_inputs(
     rest_shadows: list[RestShadow] = []
     broken_pin_moves: set[uuid.UUID] = set()
     broken_pin_voids: set[uuid.UUID] = set()
-    for event, _settings, _pools in parsed_events:
+    for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
             if fixture.pool_id is None:
                 # Un-pooled (single-elim / a KO stage): no pool, no window —
@@ -765,6 +810,10 @@ async def _load_solver_inputs(
                         start_min=to_min(fixture.scheduled_start),
                     )
             fixture_id = FixtureId(str(fixture.id))
+            # Only placeable (pooled, both-sides-known) fixtures reach here, and
+            # only such a fixture can surface in a WindowTooShortForMatch reason —
+            # so this is exactly the set the apply resolves best_of for.
+            fixture_best_of[fixture_id] = settings.length_games
             schedule_fixtures.append(
                 ScheduleFixture(
                     id=fixture_id,
@@ -896,11 +945,61 @@ async def _load_solver_inputs(
         broken_pin_moves=frozenset(broken_pin_moves),
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
+        pool_resolutions=pool_resolutions,
+        fixture_best_of=fixture_best_of,
     )
 
 
 def _opt(value: uuid.UUID | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> ResolvedReason:
+    """Humanize one pure, id-and-minute reason into its resolved read form
+    (ADR "structured data, not prose"): the pool's display name and ``HH:MM``
+    window come from ``inputs.pool_resolutions``, ``best_of`` from
+    ``inputs.fixture_best_of``; the integer minutes pass through untouched for
+    the client to format. Direct id lookups are safe here — the apply resolves
+    only after the drift guard proved this read's inputs fingerprint-identical
+    to the ones the reasons were computed against, so every pool/fixture id a
+    reason carries is present in these maps (the same guarantee the placement
+    write relies on when it indexes ``fresh.fixtures``).
+
+    An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
+    an arm to :data:`app.scheduling.InfeasibilityReason` is a type error here
+    until it is handled."""
+    match reason:
+        case PoolHasNoTables():
+            return PoolHasNoTablesRead(
+                pool_name=inputs.pool_resolutions[reason.pool_id].name
+            )
+        case WindowTooShortForMatch():
+            pool = inputs.pool_resolutions[reason.pool_id]
+            return WindowTooShortForMatchRead(
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                best_of=inputs.fixture_best_of[reason.fixture_id],
+                needed_min=reason.needed_min,
+                window_span_min=reason.window_span_min,
+            )
+        case PoolOverCapacity():
+            pool = inputs.pool_resolutions[reason.pool_id]
+            return PoolOverCapacityRead(
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                required_min=reason.required_min,
+                capacity_min=reason.capacity_min,
+                table_count=reason.table_count,
+            )
+        case NoSingleCause():
+            return NoSingleCauseRead(
+                required_min=reason.required_min,
+                available_min=reason.available_min,
+            )
+        case _:
+            assert_never(reason)
 
 
 def run_schedule_solve(schedule_solve_id: str) -> None:
@@ -1134,10 +1233,20 @@ async def _apply_result(
                 )
             case scheduling.Verdict.infeasible:
                 # A designed outcome, not a failure: the solver *proved* the
-                # day does not fit. Nothing is written; existing placements
-                # (the last accepted plan) stand.
+                # day does not fit. No *placement* is written (the last accepted
+                # plan stands) — but the run records *why*: each structured,
+                # id-and-minute reason is resolved to its humanized read form
+                # (pool name + HH:MM window + best_of, minutes passed through)
+                # against ``fresh``'s maps and stored as JSONB. Only this branch
+                # writes ``infeasibility_reasons``; every other status leaves it
+                # NULL (parsed back at read via
+                # ``schemas.schedule_solve.parse_infeasibility_reasons``).
                 row.status = ScheduleSolveStatus.infeasible
                 row.verdict = SolverVerdict.infeasible
+                resolved: list[ResolvedReason] = [
+                    _resolve_reason(reason, fresh) for reason in result.reasons
+                ]
+                row.infeasibility_reasons = [reason.model_dump() for reason in resolved]
             case scheduling.Verdict.unknown:
                 # The cap ran out before any answer. No verdict — the DB enum
                 # has no ``unknown``, and a run that proved nothing has none.

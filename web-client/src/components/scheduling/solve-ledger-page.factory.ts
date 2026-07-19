@@ -60,6 +60,25 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
       fixtures_pinned: null,
       tournament_id: 'summer-slam-2026',
       tournament_name: 'Summer Slam 2026',
+      // The resolved causes the day doesn't fit — two arms, so the expansion
+      // proves it renders each reason's sentence + remedy (the same list the
+      // Schedule-tab strip shows).
+      infeasibility_reasons: [
+        {
+          kind: 'window_too_short_for_match',
+          pool_name: 'Pool A',
+          window_start: '09:00',
+          window_end: '10:00',
+          best_of: 5,
+          needed_min: 75,
+          window_span_min: 60,
+        },
+        {
+          kind: 'no_single_cause',
+          required_min: 420,
+          available_min: 480,
+        },
+      ],
     }),
     buildAdminScheduleSolveRead({
       id: 'sv-succeeded',

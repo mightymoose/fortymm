@@ -32,9 +32,13 @@ used to make a day infeasible — *two called matches promised the same table at
 overlapping times* and *a called match under an in-progress overrun* — now
 auto-resolve by sliding one later on the same table (the apply path notifies the
 player, a separate concern). Infeasibility becomes almost entirely a property of
-*unpinned* fixtures that cannot fit their pool window. A **genuinely in-progress**
-(being-played) match is different: it stays fully fixed in both dimensions —
-reality is not a variable, and a match underway must never move.
+*unpinned* fixtures that cannot fit their pool window — and when it happens the
+solve **explains itself with a structured, resolved reason** (a discriminated
+:data:`InfeasibilityReason` union carried on :attr:`SolveResult.reasons`) rather
+than a bare verdict: pins outrank windows, so a pin is never named as the cause.
+A **genuinely in-progress** (being-played) match is different: it stays fully
+fixed in both dimensions — reality is not a variable, and a match underway must
+never move.
 
 **Rest across the completion boundary.** A player's 10-minute rest floor
 (:data:`REST_MIN`) is a hard constraint, and it must survive a match *ending*,
@@ -332,24 +336,130 @@ class SolveStats:
 
 
 @dataclass(frozen=True, slots=True)
+class PoolHasNoTables:
+    """A pool that carries active fixtures but no tables at all — its unpinned
+    fixtures have nowhere to be placed. The most specific, most certain cause a
+    pool can have: no search is needed to know it cannot run."""
+
+    pool_id: PoolId
+    kind: Literal["pool_has_no_tables"] = "pool_has_no_tables"
+
+
+@dataclass(frozen=True, slots=True)
+class WindowTooShortForMatch:
+    """A single unpinned fixture whose pool window cannot hold even one match
+    contiguously (the ``lo > hi`` case): its match needs ``needed_min`` minutes
+    but the pool's playable span is only ``window_span_min``. Certain and
+    per-fixture — no other fixture's placement can rescue it."""
+
+    pool_id: PoolId
+    fixture_id: FixtureId
+    needed_min: int
+    window_span_min: int
+    kind: Literal["window_too_short_for_match"] = "window_too_short_for_match"
+
+
+@dataclass(frozen=True, slots=True)
+class PoolOverCapacity:
+    """A pool whose aggregate *unpinned*-fixture match-time (``required_min``)
+    exceeds the table-minutes its window offers (``capacity_min`` =
+    ``window_span × table_count``). A pigeonhole bound: it is a *necessary*
+    condition for the pool to fit, so a violation proves the day cannot —
+    without naming which fixtures collide (that is the CP-SAT conflict core,
+    out of scope here). Scoped to unpinned fixtures only: pins/in-progress are
+    not constrained to this pool's tables or window (ADR-0790), so counting them
+    could invent a false over-capacity. Deliberately conservative — it excludes
+    pins and undercounts demand (ignores rest padding) rather than ever
+    overcounting, so it never *falsely* reports over-capacity. The trade-off is
+    completeness: a pool that fits its unpinned fixtures but only overflows once
+    in-window pins are layered in is left to CP-SAT and surfaces as
+    ``NoSingleCause``."""
+
+    pool_id: PoolId
+    required_min: int
+    capacity_min: int
+    table_count: int
+    kind: Literal["pool_over_capacity"] = "pool_over_capacity"
+
+
+@dataclass(frozen=True, slots=True)
+class NoSingleCause:
+    """The honest residual: CP-SAT *proved* the day infeasible, yet no certain
+    structural cause (arms above) explains it — the infeasibility lives in the
+    combinatorial interaction of windows, rest, and no-double-booking that only
+    search sees. Carries the whole-day aggregate for context: ``required_min``
+    (Σ every active fixture's duration) against ``available_min`` (Σ over pools
+    of ``window_span × table_count``). Typically ``required_min ≤ available_min``
+    here — aggregate room exists, but it cannot be packed."""
+
+    required_min: int
+    available_min: int
+    kind: Literal["no_single_cause"] = "no_single_cause"
+
+
+#: The closed set of reasons an infeasible solve can carry. A discriminated
+#: union over ``kind``: the first three arms are *certain* structural causes a
+#: guard proves without the solver (and are collected exhaustively — every one
+#: that holds, not just the first), the last is the best-effort residual when
+#: CP-SAT refuses but no structure does. Frozen dataclasses + a ``kind``
+#: discriminator so a downstream humanizer can ``match`` exhaustively with no
+#: catch-all. Ids + minute-ints only: turning these into names and wall-clock
+#: is a later, DB-aware layer's job, not this pure module's.
+InfeasibilityReason = (
+    PoolHasNoTables | WindowTooShortForMatch | PoolOverCapacity | NoSingleCause
+)
+
+
+@dataclass(frozen=True, slots=True)
 class SolveResult:
     """A solve's whole answer. Placements cover every active fixture that is
     not in progress — called fixtures on their fixed table at the promised or a
     slid-later start, unpinned fixtures solved in both dimensions — or are empty
     when ``verdict`` produced no plan. Deterministically ordered by
-    ``(start, table, fixture)``."""
+    ``(start, table, fixture)``.
+
+    ``reasons`` is non-empty exactly when ``verdict`` is
+    :attr:`Verdict.infeasible` and empty (``()``) for every other verdict
+    (optimal / feasible / unknown, including the trivial no-active-fixtures
+    optimal). It carries the structured, id-and-minute-only explanation of
+    *why* the day does not fit — see :data:`InfeasibilityReason`."""
 
     verdict: Verdict
     placements: tuple[PlacedFixture, ...]
     stats: SolveStats
+    reasons: tuple[InfeasibilityReason, ...] = ()
 
 
-def _no_plan(verdict: Verdict, wall_time_ms: int = 0) -> SolveResult:
+def _no_plan(
+    verdict: Verdict,
+    wall_time_ms: int = 0,
+    reasons: tuple[InfeasibilityReason, ...] = (),
+) -> SolveResult:
     return SolveResult(
         verdict=verdict,
         placements=(),
         stats=SolveStats(wall_time_ms=wall_time_ms, objective=None),
+        reasons=reasons,
     )
+
+
+def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
+    """``(required_min, available_min)`` for the whole day: Σ every active
+    fixture's duration against Σ over pools of ``window_span × table_count``.
+    The rough aggregate behind :class:`NoSingleCause`. Reads the event map
+    directly — a solve only reaches this on a *built* model, so the snapshot's
+    cross-references have already passed :func:`_validated`."""
+    events = {e.id: e for e in snapshot.events}
+    required = sum(
+        match_minutes(events[f.event_id].length_games)
+        for f in snapshot.fixtures
+        if not f.completed
+    )
+    available = sum(
+        (p.window.end_min - p.window.start_min) * len(p.table_ids)
+        for p in snapshot.pools
+    )
+    return required, available
 
 
 def _validated(
@@ -505,21 +615,101 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     total_pin_duration = sum(duration_of(fixture) for fixture, _ in pinned)
     horizon = max(horizon, latest_obstruction + total_pin_duration)
 
-    # Structural feasibility first: a fixture whose window cannot hold its
-    # duration at all needs no solver to refuse. (Whole-or-nothing: one
-    # unplaceable fixture makes the entire day infeasible, by design.)
+    # Structural feasibility first — but gathered *exhaustively*, not first-fail.
+    # A day that cannot possibly be placed should explain every certain cause at
+    # once (the director fixes them together), not just the first one hit. Three
+    # certain, per-structure causes need no solver to prove:
+    #   * PoolHasNoTables — a pool with unpinned fixtures but no tables to use,
+    #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
+    #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables.
+    # We dedupe to the *most specific* cause per pool: a no-tables or window-too-
+    # short pool is already unplaceable, so we don't also pile on over-capacity
+    # for it. Bucket bounds for the pools that *do* fit are recorded on the way,
+    # so the window is walked once; they are only consumed when no reason fires
+    # (the clean case populates every unpinned fixture).
+    #
+    # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
+    # are deliberately not constrained to their pool's tables or window (ADR-0790:
+    # an off-pool or out-of-window pin is a supported director action), so
+    # counting them against a pool's window×tables would invent false
+    # infeasibility. Only unpinned fixtures are constrained to their pool's tables
+    # inside its window by construction, so only they can prove a certain
+    # structural cause that can never false-fire.
+    unpinned_by_pool: defaultdict[PoolId, list[ScheduleFixture]] = defaultdict(list)
+    for fixture in unpinned:
+        unpinned_by_pool[fixture.pool_id].append(fixture)
+
+    reasons: list[InfeasibilityReason] = []
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
+    pools_short_window: set[PoolId] = set()
+
+    # Per-fixture: does this unpinned fixture's window hold even one match
+    # contiguously? (Pinned fixtures outrank windows, so they never apply here.)
+    # A no-tables pool is covered by PoolHasNoTables below, so skip its fixtures.
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
         if not pool.table_ids:
-            return _no_plan(Verdict.infeasible)
+            continue
+        needed = duration_of(fixture)
         earliest = max(now, pool.window.start_min)
-        latest = pool.window.end_min - duration_of(fixture)
+        latest = pool.window.end_min - needed
         lo = -(-earliest // BUCKET_MIN)  # ceil: first grid start not in the past
         hi = latest // BUCKET_MIN  # floor: last grid start that still fits
         if lo > hi:
-            return _no_plan(Verdict.infeasible)
+            reasons.append(
+                WindowTooShortForMatch(
+                    pool_id=pool.id,
+                    fixture_id=fixture.id,
+                    needed_min=needed,
+                    window_span_min=pool.window.end_min - pool.window.start_min,
+                )
+            )
+            pools_short_window.add(pool.id)
+            continue
         bucket_bounds[fixture.id] = (lo, hi)
+
+    # Per-pool (in snapshot order for determinism), most-specific cause wins.
+    for pool in snapshot.pools:
+        pool_unpinned = unpinned_by_pool.get(pool.id)
+        if not pool_unpinned:
+            continue  # no unpinned demand: no arm can prove a cause here
+        if not pool.table_ids:
+            # A no-tables pool with ≥1 unpinned fixture: that fixture has nowhere
+            # to go. A no-tables pool whose only fixtures are pinned/in-progress
+            # (placed off-pool by the director) is fine — it never reaches here.
+            reasons.append(PoolHasNoTables(pool_id=pool.id))
+            continue  # dominates any capacity claim for this pool
+        if pool.id in pools_short_window:
+            continue  # window-too-short already dominates this pool
+        # Capacity is a pigeonhole *necessary* condition over *unpinned* demand:
+        # sum the match-time of this pool's unpinned fixtures (the only ones
+        # constrained to its tables inside its window) against the table-minutes
+        # the window offers. Pins/in-progress are excluded — they are not bound
+        # to this pool's tables or window (ADR-0790), so counting them could
+        # invent a false over-capacity. Dropping them keeps the bound truly
+        # conservative: a pin only ever adds contention, so unpinned-alone
+        # overflowing is a genuine, necessary infeasibility, while unpinned-alone
+        # fitting is never falsely flagged. Completeness trade-off: a pool that
+        # fits its unpinned fixtures but tips over only once in-window pins are
+        # layered in is not reported here — that case is infeasible only if
+        # CP-SAT proves it, surfacing as the honest NoSingleCause residual.
+        required_min = sum(duration_of(f) for f in pool_unpinned)
+        table_count = len(pool.table_ids)
+        capacity_min = (pool.window.end_min - pool.window.start_min) * table_count
+        if required_min > capacity_min:
+            reasons.append(
+                PoolOverCapacity(
+                    pool_id=pool.id,
+                    required_min=required_min,
+                    capacity_min=capacity_min,
+                    table_count=table_count,
+                )
+            )
+
+    if reasons:
+        # A certain structural infeasibility: refuse without building or running
+        # CP-SAT, but carry every cause we found rather than a bare verdict.
+        return _no_plan(Verdict.infeasible, reasons=tuple(reasons))
 
     model = cp_model.CpModel()
     table_intervals: defaultdict[TableId, list[Any]] = defaultdict(list)
@@ -775,7 +965,17 @@ def solve(
             "in app.scheduling, not a property of the tournament."
         )
     if status == cp_model.INFEASIBLE:
-        return _no_plan(Verdict.infeasible, wall_time_ms)
+        # CP-SAT proved it, but the structural pre-check found no certain cause
+        # (by construction: it returns before we ever build the model). Attach
+        # the honest residual — the whole-day aggregate, no single blamed pool.
+        required_min, available_min = _aggregate_capacity(snapshot)
+        return _no_plan(
+            Verdict.infeasible,
+            wall_time_ms,
+            reasons=(
+                NoSingleCause(required_min=required_min, available_min=available_min),
+            ),
+        )
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return _no_plan(Verdict.unknown, wall_time_ms)
 

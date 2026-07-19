@@ -280,6 +280,9 @@ export function buildScheduleSolve(
     fixturesPlaced: 9,
     fixturesPinned: 0,
     error: null,
+    // A succeeded run has no infeasibility reasons; the list is always present
+    // (`[]` off the infeasible path). An infeasible fixture overrides this.
+    infeasibilityReasons: [],
     ...overrides,
   }
 }

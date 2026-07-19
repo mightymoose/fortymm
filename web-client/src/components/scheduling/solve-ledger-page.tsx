@@ -6,8 +6,12 @@ import { ChevronDown, ChevronUp, ListFilter, X } from 'lucide-react'
 import { PaginationFooter } from '@/components/pagination-footer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { TRIGGER_LABEL } from '@/components/tournaments/data/solve'
-import { fmtWallTime } from '@/components/tournaments/data/solve'
+import {
+  TRIGGER_LABEL,
+  fmtWallTime,
+  infeasibilityReasonCopy,
+  infeasibilityReasonKey,
+} from '@/components/tournaments/data/solve'
 import { fmtDateTimeShort } from '@/lib/dates'
 
 import {
@@ -348,6 +352,28 @@ function LedgerRow({
                   content (the solve strip's precedent). */}
               {solve.error && (
                 <div className="solve-ledger-detail-error mono">{solve.error}</div>
+              )}
+              {/* Why the day doesn't fit — the SAME resolved reasons the Schedule
+                  tab's strip shows, rendered through the one shared
+                  `infeasibilityReasonCopy` so the two surfaces cannot drift.
+                  Only the `infeasible` arm carries reasons (`[]` off that path);
+                  an unexpectedly empty list keeps the headline-only expansion. */}
+              {status === 'infeasible' && solve.infeasibilityReasons.length > 0 && (
+                <ul className="solve-ledger-detail-reasons">
+                  {solve.infeasibilityReasons.map((reason, i) => {
+                    const copy = infeasibilityReasonCopy(reason)
+                    return (
+                      <li key={infeasibilityReasonKey(reason, i)}>
+                        <span className="solve-ledger-detail-reason-sentence">
+                          {copy.sentence}
+                        </span>{' '}
+                        <span className="solve-ledger-detail-reason-remedy">
+                          {copy.remedy}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
               )}
               <div className="solve-ledger-detail-fingerprint">
                 <span className="solve-ledger-detail-label">
