@@ -1,9 +1,8 @@
 import uuid
-from collections import defaultdict
-from typing import Any, Literal, assert_never
+from typing import Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import ColumnElement, exists, or_, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +10,6 @@ from app.db import get_session
 from app.draws import (
     DegenerateDraw,
     DrawError,
-    EntryId,
     NonSinglesDraw,
     PoolId,
     UnsupportedDrawType,
@@ -23,7 +21,6 @@ from app.models import (
     EventFormat,
     Match,
     MatchStatus,
-    ScheduleSolve,
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
@@ -34,23 +31,15 @@ from app.models import (
     User,
 )
 from app.rbac import require_permission, user_has_permission
-from app.results import EventResults, MatchOutcome, PoolInput, results_for
 from app.schedule_solves import (
     latest_solve,
     request_solve,
     tournament_has_drawn_event,
 )
 from app.schemas.tournament import (
-    EventEntryFull,
-    EventEntryOpen,
-    EventEntryRatingIneligible,
-    EventEntryState,
-    EventResultsRead,
     MatchSettings,
-    PoolStandingsRead,
     ScheduleSolveRead,
     Slot,
-    StandingRowRead,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -83,14 +72,21 @@ from app.tournament_eligibility import (
     event_is_full,
 )
 from app.tournament_entry_refusals import EntryRefusal, entry_refused
+from app.tournament_list import list_tournament_details
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import (
     active_entrants_by_event,
     active_entry_count,
     entrant_rating,
-    entrant_ratings_by_league,
     fixtures_by_event,
     game_counts_by_match,
+)
+from app.tournament_queries import completed_match_ids as _completed_match_ids
+from app.tournament_queries import visible_to as _visible_to
+from app.tournament_serialization import (
+    serialize,
+    serialize_detail,
+    serialize_event,
 )
 
 # Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
@@ -154,363 +150,6 @@ router = APIRouter(prefix="/v1")
 
 
 # ----- helpers -------------------------------------------------------------
-
-
-def _tournament_fields(
-    t: Tournament,
-    *,
-    created_by_username: str,
-    current_user_id: uuid.UUID,
-) -> dict[str, Any]:
-    # The request-scoped fields (``created_by_username``/``can_edit``) aren't on
-    # the ORM row. The JSONB columns (``address``/``table_catalogue``) are read
-    # straight off the attributes; Pydantic validates them into
-    # Address/TournamentTable when the returned dict is fed to model_validate,
-    # so the raw dicts never leave the serialize boundary.
-    return {
-        "id": t.id,
-        "name": t.name,
-        "description": t.description,
-        "status": t.status,
-        "start_date": t.start_date,
-        "end_date": t.end_date,
-        "address": t.address,
-        "table_catalogue": t.table_catalogue,
-        "league_id": t.league_id,
-        "created_by_user_id": t.created_by_user_id,
-        "created_by_username": created_by_username,
-        "can_edit": t.created_by_user_id == current_user_id,
-        "created_at": t.created_at,
-        "updated_at": t.updated_at,
-    }
-
-
-def _serialize(
-    t: Tournament,
-    *,
-    created_by_username: str,
-    current_user_id: uuid.UUID,
-) -> TournamentRead:
-    return TournamentRead.model_validate(
-        _tournament_fields(
-            t, created_by_username=created_by_username, current_user_id=current_user_id
-        )
-    )
-
-
-def _entry_state(
-    e: TournamentEvent,
-    *,
-    entered: int,
-    rating: float | None,
-) -> EventEntryState:
-    """Whether THIS caller may enter THIS event — the read-path twin of the guards
-    the entry route raises 409s from, computed from facts already in hand.
-
-    No database access, and that is the point: the ``entered`` count is the length of
-    the entrants list the read has already batched (ADR-0016 — the count is derived
-    from the rows, so it cannot disagree with the list beside it), and ``rating`` is
-    the caller's rating on the **tournament's** league, resolved ONCE per tournament
-    (``entrant_ratings_by_league``) because every event of a tournament is judged on
-    the same ladder. Reaching for either from in here would be a query per event: an
-    N+1 that grows with the very field the page is describing, and the statement-count
-    tripwires in ``tests/test_tournaments.py`` fail if one appears.
-
-    **The decision is not made here.** ``evaluate_rating_eligibility`` and
-    ``event_is_full`` make it — the same two functions the ``POST …/entries`` guards
-    call — so the page that explains why Enter is not offered and the route that
-    refuses the entry cannot come to two different answers (ADR-0783). This is only
-    the translation into the wire's sum type.
-
-    That sharing is what keeps an **uncapped** event (``max_players IS NULL``,
-    ADR-0935) out of the ``event_full`` arm: ``event_is_full`` answers ``False`` for a
-    null cap however many entrants there are, so this function cannot report as full an
-    event the entry route would happily admit the reader to. Had the capacity question
-    been re-asked here — with a ``>=`` over a nullable column — it would have been a
-    ``TypeError`` on the detail page of the first uncapped event, or (worse, had it
-    been written defensively as ``max_players or 0``) a permanently, silently full one.
-
-    **The ORDER mirrors the entry route's**, and it has to: eligibility first, then
-    capacity. An ineligible player looking at a full event is told about their
-    *rating*, which is exactly what ``POST …/entries`` would tell them
-    (``test_the_rating_refusal_outranks_the_event_full_refusal``) — and it is the more
-    useful of the two facts, because it is the one that does not change when somebody
-    withdraws. Flip these two lines and the page starts promising a player a slot that
-    frees up, for an event that would refuse them anyway.
-
-    What is deliberately NOT decided here: the registration window (a fact about the
-    tournament — its status, ADR-0017), whether the caller is already entered (a fact
-    on the entrants list), whether they hold ``tournament.enter``, and whether the
-    event is doubles. All four are already on the page or in the session, and
-    restating them would be carrying a field and its own derivation. ``open`` means
-    "the event admits you", not "click here".
-
-    ``match`` with ``assert_never``, not ``isinstance``: a third eligibility outcome
-    added tomorrow is a type error here until somebody says what the page should show
-    for it, rather than falling through to ``open`` — a read must not fail in the
-    reassuring direction any more than a guard may fail in the permissive one.
-    """
-    decision = evaluate_rating_eligibility(rating=rating, predicates=e.predicates)
-    match decision:
-        case RatingIneligible():
-            return EventEntryRatingIneligible(
-                predicate_id=decision.predicate_id, rating=decision.rating
-            )
-        case Eligible():
-            if event_is_full(entered=entered, max_players=e.max_players):
-                return EventEntryFull()
-            return EventEntryOpen()
-        case _:
-            assert_never(decision)
-
-
-def _completed_match_ids(
-    fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
-) -> list[uuid.UUID]:
-    """The ids of the matches of every **completed** fixture across the page.
-
-    The one list ``game_counts_by_match`` is batched over, gathered before any event is
-    serialized so the standings of every event are projected from a single game load
-    (ADR-0788) rather than a query per event. Only ``completed`` fixtures contribute: an
-    in-progress match's part-scored board is not a result and must not reach a standings
-    table."""
-    return [
-        f.match_id
-        for fixtures in fixtures_by_event.values()
-        for f in fixtures
-        if f.match_status is MatchStatus.completed and f.match_id is not None
-    ]
-
-
-def _event_results(
-    e: TournamentEvent,
-    *,
-    fixtures: list[TournamentFixtureRead],
-    game_counts: dict[uuid.UUID, tuple[int, int]],
-) -> EventResultsRead | None:
-    """The event's results (ADR-0788), projected from its fixtures' completed matches,
-    or ``None`` when there are none to compute.
-
-    ``None`` in two cases, both meaning "no results here" rather than an empty table: a
-    draw type with no results strategy yet (``results_for`` raises for it — only
-    round-robin has one today), and an event whose draw has not been cut (no fixtures to
-    stand). Everything else is a real :class:`EventResultsRead`, whose standings are
-    empty of *decided* rows but full of *seated* ones while the pool is still played.
-
-    The projection is the fixed materialization convention read backwards (#788): side 1
-    is ``entry_a`` and side 2 is ``entry_b``, so the ``(side_1, side_2)`` game counts
-    are the ``(entry_a, entry_b)`` game counts, and the winner is whichever took more
-    games — derived from the live match, never from the fixture's written-back
-    ``winner_entry_id`` (which no round-robin read reads, for correction-safety)."""
-    match e.draw_type:
-        case DrawType.round_robin:
-            pass  # the projection below is round-robin-shaped
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
-            # No results projection for these yet (``results_for`` has no strategy for
-            # them either). Spelled as a checked dispatch with an ``assert_never``
-            # catch-all rather than a bare ``is not round_robin``, so a new ``DrawType``
-            # is a type error here until its projection is written — the same guarantee
-            # ``strategy_for``/``results_for`` give (ADR-0788).
-            return None
-        case _:
-            assert_never(e.draw_type)
-    if not fixtures:
-        return None
-    by_pool: dict[str, list[TournamentFixtureRead]] = defaultdict(list)
-    for f in fixtures:
-        # A round-robin fixture is always pooled; a NULL pool would be a different draw
-        # type's fixture and has no pool table to stand in. Skip it rather than key a
-        # pool on ``None``.
-        if f.pool_id is not None:
-            by_pool[f.pool_id].append(f)
-    pool_inputs: list[PoolInput] = []
-    for pool_id, pool_fixtures in by_pool.items():
-        entrants = {
-            entry_id
-            for f in pool_fixtures
-            for entry_id in (f.entry_a_id, f.entry_b_id)
-            if entry_id is not None
-        }
-        outcomes: list[MatchOutcome] = []
-        for f in pool_fixtures:
-            if (
-                f.match_status is not MatchStatus.completed
-                or f.match_id is None
-                or f.entry_a_id is None
-                or f.entry_b_id is None
-            ):
-                continue
-            side_1_games, side_2_games = game_counts[f.match_id]
-            outcomes.append(
-                MatchOutcome(
-                    entry_a_id=EntryId(f.entry_a_id),
-                    entry_b_id=EntryId(f.entry_b_id),
-                    entry_a_games=side_1_games,
-                    entry_b_games=side_2_games,
-                )
-            )
-        pool_inputs.append(
-            PoolInput(
-                pool_id=PoolId(pool_id),
-                entrants=tuple(EntryId(entry_id) for entry_id in entrants),
-                # Count only the pairings that can still produce a result. A **voided**
-                # fixture never will — its match is terminal and ``ready_fixtures`` will
-                # not re-materialize it — so it is excluded, not counted-but-missing.
-                # Without this, a played-event account-merge collision (which voids the
-                # guest-vs-survivor self-play match) would hold the pool one outcome
-                # short of ``fixture_count`` forever: permanently un-``complete``, no
-                # champion — the opposite of ADR-0788's live-standings guarantee.
-                fixture_count=sum(
-                    1 for f in pool_fixtures if f.match_status is not MatchStatus.voided
-                ),
-                outcomes=tuple(outcomes),
-            )
-        )
-    return _serialize_results(results_for(e.draw_type).tabulate(pool_inputs))
-
-
-def _serialize_results(results: EventResults) -> EventResultsRead:
-    return EventResultsRead(
-        pools=[
-            PoolStandingsRead(
-                pool_id=pool.pool_id,
-                rows=[
-                    StandingRowRead(
-                        entry_id=row.entry_id,
-                        rank=row.rank,
-                        played=row.played,
-                        wins=row.wins,
-                        losses=row.losses,
-                        games_won=row.games_won,
-                        games_lost=row.games_lost,
-                    )
-                    for row in pool.rows
-                ],
-                complete=pool.complete,
-            )
-            for pool in results.pools
-        ],
-        complete=results.complete,
-        champion=results.champion,
-    )
-
-
-def _serialize_event(
-    e: TournamentEvent,
-    *,
-    entrants: list[TournamentEntrantRead],
-    fixtures: list[TournamentFixtureRead],
-    rating: float | None,
-    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
-) -> TournamentEventRead:
-    # ``entrants`` is not on the ORM row in the shape the read model wants (it
-    # needs the entrant's username, and only the *active* entries), so the fields
-    # are listed explicitly rather than validated straight off the attributes —
-    # which would also fire a lazy load. The event's ``entered`` count is not
-    # listed at all: it is a computed field over ``entrants`` (ADR-0016), so
-    # there is nothing here that could disagree with the list.
-    #
-    # ``entry_state`` is the caller's, and it is computed from the entrants already
-    # loaded plus the caller's ``rating`` on this tournament's league — passed in,
-    # never fetched here, so no serializer can turn into an N+1.
-    #
-    # ``fixtures`` — the event's draw (ADR-0786) — is passed in for exactly that
-    # reason. ``e.fixtures`` is right there on the ORM instance and would read
-    # *correctly*: a lazy load would fetch the rows and the response would be
-    # identical. It would also fire one SELECT per event, on the LIST endpoint that
-    # returns every event of every tournament — an N+1 that no assertion about the
-    # body can see. It is loaded once, in a batch, by ``fixtures_by_event``, which
-    # also owns the pool → round → position ordering, so the serializer never sorts
-    # and no two call sites can order a bracket differently.
-    return TournamentEventRead.model_validate(
-        {
-            "id": e.id,
-            "tournament_id": e.tournament_id,
-            "name": e.name,
-            "format": e.format,
-            "draw_type": e.draw_type,
-            "max_players": e.max_players,
-            "entry_fee": e.entry_fee,
-            "slot": e.slot,
-            "match_settings": e.match_settings,
-            "predicates": e.predicates,
-            "pools": e.pools,
-            "created_at": e.created_at,
-            "updated_at": e.updated_at,
-            "entrants": entrants,
-            "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
-            "fixtures": fixtures,
-            # The standings, projected here from the fixtures' completed matches plus
-            # the page's one batched game load — ``None`` for an uncut or
-            # non-round-robin event (ADR-0788). Computed in the serializer, not fetched
-            # per event, for the same reason ``fixtures`` is: no read may become an N+1.
-            #
-            # ``game_counts is None`` is the tournaments *list*'s signal to skip the
-            # projection entirely: its cards render no standings (only event and table
-            # counts), so the list neither runs the game-count query nor tabulates a
-            # results object nobody reads — standings are a detail-BFF concern. A
-            # detail surface passes a real map (``{}`` when nothing is played).
-            "results": (
-                None
-                if game_counts is None
-                else _event_results(e, fixtures=fixtures, game_counts=game_counts)
-            ),
-        }
-    )
-
-
-def _serialize_detail(
-    t: Tournament,
-    *,
-    created_by_username: str,
-    current_user_id: uuid.UUID,
-    events: list[TournamentEvent],
-    entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
-    fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
-    game_counts: dict[uuid.UUID, tuple[int, int]] | None,
-    rating: float | None,
-    latest_schedule_solve: ScheduleSolve | None,
-) -> TournamentDetailRead:
-    # The full aggregate: tournament fields plus its events (each event's JSONB
-    # value-objects validate into Pydantic models here, at this single boundary).
-    #
-    # ONE ``rating`` for all of them — the caller's, on ``t.league_id``. A tournament
-    # names the single ladder its eligibility is judged on (ADR-0783), so every event
-    # under it is judged on the same number, and fetching it per event would be a
-    # query per event for an answer that cannot vary.
-    return TournamentDetailRead.model_validate(
-        {
-            **_tournament_fields(
-                t,
-                created_by_username=created_by_username,
-                current_user_id=current_user_id,
-            ),
-            # ``None`` is two things by design, exactly as ``results`` above is: on
-            # the DETAIL read it is the fact ("no solve ever requested"); on the LIST
-            # it is "not projected" — the list's cards render no solve strip, so it
-            # skips the ledger query the same way it skips standings.
-            "latest_schedule_solve": (
-                ScheduleSolveRead.model_validate(latest_schedule_solve)
-                if latest_schedule_solve is not None
-                else None
-            ),
-            "events": [
-                _serialize_event(
-                    e,
-                    entrants=entrants_by_event[e.id],
-                    fixtures=fixtures_by_event[e.id],
-                    rating=rating,
-                    game_counts=game_counts,
-                )
-                for e in events
-            ],
-        }
-    )
 
 
 async def _get_owned_tournament_or_404(
@@ -720,52 +359,6 @@ def _enforce_league_editable(t: Tournament) -> None:
     )
 
 
-# The statuses in which a tournament has been ANNOUNCED to the world. Publishing
-# is the act that makes a tournament public (ADR-0017), and nothing walks
-# backwards out of it, so everything from ``published`` onward is announced and
-# ``draft`` is not.
-#
-# An allow-list, deliberately, rather than "anything but draft": a status added
-# to the enum tomorrow is invisible to non-owners until somebody puts it in this
-# set on purpose. The inverse spelling would silently publish a future
-# pre-publish status (a ``pending_review``, a ``scheduled``) the moment it was
-# added, which is exactly the leak this predicate exists to close.
-ANNOUNCED_STATUSES: frozenset[TournamentStatus] = frozenset(
-    {
-        TournamentStatus.published,
-        TournamentStatus.live,
-        TournamentStatus.archived,
-    }
-)
-
-
-def _visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
-    """Which tournaments ``user_id`` may see at all: the announced ones, plus
-    their own — whatever status their own is in.
-
-    A draft is not announced, so it is owner-only. The read routes push this into
-    the WHERE clause rather than filtering after the fact, so a hidden draft is
-    *not selected* and the detail route's existing "Tournament not found." 404
-    answers for it. 404 and not 403: a 403 would confirm that a tournament with
-    that id exists, which is precisely what an unannounced tournament must not
-    admit. A draft the caller cannot see is indistinguishable from one that was
-    never created.
-
-    ``tournament.view`` is a separate question, and it is asked first — it is a
-    route dependency, so a caller without the permission is refused (403) before
-    this predicate is ever built. Permission says "may you read tournaments at
-    all"; this says "which ones are there for you to read".
-
-    One predicate, used by both the list and the detail route, because two copies
-    of this rule would eventually disagree — and the way they disagree is that the
-    list hides a draft the detail route still serves.
-    """
-    return or_(
-        Tournament.status.in_(ANNOUNCED_STATUSES),
-        Tournament.created_by_user_id == user_id,
-    )
-
-
 # ----- tournament routes ---------------------------------------------------
 
 
@@ -780,85 +373,20 @@ async def list_tournaments(
 ) -> list[TournamentDetailRead]:
     # The list page's cards render event-derived stats (event count, total
     # entries, table count), so the list returns the full aggregate — events, their
-    # entrants and their draws included — rather than a thinner summary. FIVE queries,
-    # no N+1, whatever the number of tournaments or events: the tournaments+usernames
-    # join, then all their events, then all those events' active entrants in one
-    # batch, then all those events' fixtures in one batch (ADR-0786), then the caller's
-    # rating on every distinct league those tournaments run on (which every event's
-    # ``entry_state`` is judged against, ADR-0783). A per-event entry count, a
-    # per-event draw, or a per-tournament rating would be the N+1 this shape exists to
-    # avoid, and a statement-count tripwire in tests/test_tournaments.py fails if one
-    # comes back.
+    # entrants and their draws included — rather than a thinner summary. The FIVE-query
+    # batched read (no N+1, whatever the number of tournaments or events) lives in the
+    # shared ``list_tournament_details`` so the MCP ``list_my_tournaments`` tool runs
+    # the exact same shape; this handler only supplies the WHERE.
     #
-    # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
-    # so it never enters the result set — and, because the filter is a WHERE clause
-    # on the first of the four queries, the events and entrants queries are keyed
-    # off the surviving ids and cannot leak a hidden tournament's contents either.
-    # A predicate costs no extra statement, so the tripwire above still reads 4.
-    rows = (
-        await db.execute(
-            select(Tournament, User.username)
-            .join(User, User.id == Tournament.created_by_user_id)
-            .where(_visible_to(current_user.id))
-            .order_by(Tournament.created_at.desc())
-        )
-    ).all()
-    tournament_ids = [tournament.id for tournament, _ in rows]
-    events_by_tournament: dict[uuid.UUID, list[TournamentEvent]] = {
-        tid: [] for tid in tournament_ids
-    }
-    events: list[TournamentEvent] = []
-    if tournament_ids:
-        events = list(
-            (
-                await db.execute(
-                    select(TournamentEvent)
-                    .where(TournamentEvent.tournament_id.in_(tournament_ids))
-                    .order_by(TournamentEvent.created_at)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for event in events:
-            events_by_tournament[event.tournament_id].append(event)
-    event_ids = [e.id for e in events]
-    entrants_by_event = await active_entrants_by_event(db, event_ids)
-    # And ONE batch for every one of those events' fixtures — its draw (ADR-0786).
-    # Batched for the same reason the entrants are: the list returns every event of
-    # every tournament, so reading ``event.fixtures`` in the loop would be a SELECT per
-    # event. Uncut draws come back as ``[]``, so an event nobody has cut a draw for
-    # costs nothing and answers with an empty list rather than a null.
-    event_fixtures = await fixtures_by_event(db, event_ids)
-    # The list deliberately does NOT project standings: its cards render only event and
-    # table counts, never a results table, so it skips the game-count query and the
-    # per-event tabulation a results object would need (``game_counts=None`` below).
-    # Standings are a detail-BFF concern (ADR-0788); computing them here would be work a
-    # page throws away — the same shape as #1051 for fixtures/entrants.
-    # ONE batch for the caller's ratings, keyed by league — deduplicated, because
-    # every tournament on the default league shares the one number, and because the
-    # ladders a page happens to list is not a reason to ask the same question twice.
-    ratings = await entrant_ratings_by_league(
-        db, list({tournament.league_id for tournament, _ in rows}), current_user.id
+    # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see, so it
+    # never enters the result set — and, because the filter is a WHERE clause on the
+    # first of the five queries, the events and entrants queries are keyed off the
+    # surviving ids and cannot leak a hidden tournament's contents either. A predicate
+    # costs no extra statement, so the statement-count tripwire in
+    # tests/test_tournaments.py still reads the same count.
+    return await list_tournament_details(
+        db, where=_visible_to(current_user.id), current_user_id=current_user.id
     )
-    return [
-        _serialize_detail(
-            tournament,
-            created_by_username=username,
-            current_user_id=current_user.id,
-            events=events_by_tournament[tournament.id],
-            entrants_by_event=entrants_by_event,
-            fixtures_by_event=event_fixtures,
-            game_counts=None,
-            rating=ratings[tournament.league_id],
-            # The list projects no solve strip, for the same reason it projects no
-            # standings (``game_counts=None`` above): its cards never render one, so
-            # it skips the ledger read rather than paying a query for a field every
-            # card throws away. The solve strip is a detail-BFF concern.
-            latest_schedule_solve=None,
-        )
-        for tournament, username in rows
-    ]
 
 
 @router.post(
@@ -907,7 +435,7 @@ async def create_tournament(
     db.add(tournament)
     await db.commit()
     await db.refresh(tournament)
-    return _serialize(
+    return serialize(
         tournament,
         created_by_username=current_user.username,
         current_user_id=current_user.id,
@@ -983,7 +511,7 @@ async def get_tournament(
     # statement-count pin stays flat; ``None`` is the designed state of a tournament
     # nobody has asked to schedule yet.
     latest_schedule_solve = await latest_solve(db, tournament.id)
-    return _serialize_detail(
+    return serialize_detail(
         tournament,
         created_by_username=username,
         current_user_id=current_user.id,
@@ -1072,7 +600,7 @@ async def update_tournament(
     await db.commit()
     await db.refresh(tournament)
     # The owner is the current user, so the username and can_edit are known.
-    return _serialize(
+    return serialize(
         tournament,
         created_by_username=current_user.username,
         current_user_id=current_user.id,
@@ -1342,7 +870,7 @@ async def create_tournament_transition(
     await db.refresh(tournament)
     # The owner is the current user (``_require_owner`` just said so), so the
     # creator's username and can_edit are both known without another query.
-    return _serialize(
+    return serialize(
         tournament,
         created_by_username=current_user.username,
         current_user_id=current_user.id,
@@ -1394,7 +922,7 @@ async def create_event(
     # No fixtures on a one-statement-old event, so no results either —
     # ``_event_results`` answers ``None`` for an uncut draw whatever the game counts, so
     # an empty map is all this needs.
-    return _serialize_event(
+    return serialize_event(
         event, entrants=[], fixtures=[], rating=rating, game_counts={}
     )
 
@@ -1707,7 +1235,7 @@ async def update_event(
     # who has just tightened a rule or lowered ``max_players`` is answered with what
     # the event says NOW, not with what it said before their edit.
     rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    return _serialize_event(
+    return serialize_event(
         event,
         entrants=entrants,
         fixtures=fixtures,

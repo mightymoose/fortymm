@@ -28,7 +28,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
-from pydantic import Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,20 +62,37 @@ from app.match_serialization import (
     serialize_details,
     view_extras,
 )
-from app.models import Match, User
+from app.models import Match, Tournament, TournamentEvent, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
+from app.rbac import user_has_permission
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
     accept_result as accept_result_core,
 )
 from app.result_proposal import propose_result as propose_result_core
+from app.schedule_solves import latest_solve
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.schemas.player import PlayerMatchListResponse, PlayerRead
+from app.schemas.tournament import (
+    ScheduleSolveRead,
+    TournamentDetailRead,
+    TournamentFixtureRead,
+)
 from app.services.match_service import MatchService
+from app.tournament_list import list_tournament_details
+from app.tournament_queries import (
+    active_entrants_by_event,
+    completed_match_ids,
+    entrant_rating,
+    fixtures_by_event,
+    game_counts_by_match,
+    visible_to,
+)
+from app.tournament_serialization import serialize_detail
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +114,13 @@ MatchPageSize = Annotated[int, Field(ge=1, le=100)]
 # The default page size ``list_my_matches`` uses when the caller names none,
 # matching the HTTP per-player list default (``app.players.LIST_DEFAULT_PAGE_SIZE``).
 MY_MATCHES_DEFAULT_PAGE_SIZE = 25
+
+# The permission the tournament reads gate on — the same seeded RBAC name the HTTP
+# router's ``require_view`` dependency enforces (``app.tournaments.TOURNAMENT_VIEW``,
+# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
+# the MCP adapter stays router-free; ``get_tournament`` asks it through the one shared
+# ``user_has_permission`` (``app.rbac``), so the two surfaces gate on the same grant.
+TOURNAMENT_VIEW_PERMISSION = "tournament.view"
 
 
 @asynccontextmanager
@@ -347,6 +371,243 @@ async def enter_game_score(
         except _SCORE_WRITE_ERRORS as exc:
             raise _map_score_write_tool_error(exc) from exc
         return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
+    """Read a single tournament as the authenticated API-token caller.
+
+    Returns the same ``TournamentDetailRead`` view the HTTP
+    ``GET /v1/tournaments/{tournament_id}`` endpoint returns for that user: the
+    tournament's fields (with the caller's ``can_edit``), its events in creation
+    order — each carrying its active entrants, its draw (fixtures), the caller's
+    ``entry_state``, and its round-robin standings once played — plus the newest
+    row of the schedule-solve ledger. It reuses the exact same shared read queries
+    (``tournament_queries``, ``latest_solve``) and the shared ``serialize_detail``
+    serializer the HTTP route composes, so the two surfaces can never drift.
+
+    Gated on the same ``tournament.view`` permission the HTTP route requires, and
+    scoped by the same visibility rule: a draft you do not own is not yours to see,
+    so it surfaces as a not-found ``ToolError`` — the same way the HTTP route hides
+    it behind a 404 rather than confirming it exists.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
+    with that id is visible to you (absent, or an unannounced draft you do not own).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, then visibility — the order the HTTP route keeps: the
+        # ``require_view`` dependency (403) runs before the handler, and only then
+        # does ``_visible_to`` scope the row so a hidden draft leaves by not-found.
+        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
+            raise ToolError("You don't have permission to view tournaments.")
+        # ``visible_to`` rides in the same WHERE as the id lookup, so a tournament
+        # the caller can't see leaves by the same not-found path as an absent one —
+        # existence is never confirmed for an unannounced draft (see visible_to).
+        row = (
+            await db.execute(
+                select(Tournament, User.username)
+                .join(User, User.id == Tournament.created_by_user_id)
+                .where(Tournament.id == tournament_id, visible_to(user_id))
+            )
+        ).one_or_none()
+        if row is None:
+            raise ToolError(f"No tournament found with id {tournament_id}.")
+        tournament, username = row
+        # Mirror the HTTP route's batched read shape exactly — events, then their
+        # active entrants, their draws, the games of every completed match (for
+        # standings), the caller's one rating on the tournament's league, and the
+        # newest solve — feeding the identical shared ``serialize_detail``.
+        events = list(
+            (
+                await db.execute(
+                    select(TournamentEvent)
+                    .where(TournamentEvent.tournament_id == tournament_id)
+                    .order_by(TournamentEvent.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        event_ids = [e.id for e in events]
+        entrants_by_event = await active_entrants_by_event(db, event_ids)
+        event_fixtures = await fixtures_by_event(db, event_ids)
+        game_counts = await game_counts_by_match(
+            db, completed_match_ids(event_fixtures)
+        )
+        rating = await entrant_rating(db, tournament.league_id, user_id)
+        latest_schedule_solve = await latest_solve(db, tournament.id)
+        return serialize_detail(
+            tournament,
+            created_by_username=username,
+            current_user_id=user_id,
+            events=events,
+            entrants_by_event=entrants_by_event,
+            fixtures_by_event=event_fixtures,
+            game_counts=game_counts,
+            rating=rating,
+            latest_schedule_solve=latest_schedule_solve,
+        )
+
+
+class ScheduleEventGroup(BaseModel):
+    """One event's slice of the schedule projection: the event's identity and its
+    draw's fixtures, each carrying its placement (``table_id`` +
+    ``scheduled_start``) and its pool/round/position.
+
+    The fixtures are the exact ``TournamentFixtureRead`` the detail BFF composes —
+    same fields, same **pool → round → position** order (``fixtures_by_event``) —
+    reused whole rather than reshaped, so this agent-facing schedule and the
+    detail page cannot disagree about a slot. Empty is the designed state of an
+    event whose draw has not been cut (ADR-0786), not an error.
+    """
+
+    event_id: uuid.UUID
+    name: str
+    fixtures: list[TournamentFixtureRead]
+
+
+class TournamentScheduleRead(BaseModel):
+    """A narrow, agent-shaped SCHEDULE projection of a tournament — each event's
+    placed fixtures grouped for reading, plus the tournament's latest solve.
+
+    Deliberately NOT the whole ``TournamentDetailRead``: it drops entrants,
+    standings, eligibility and the per-event write metadata an agent reading a
+    schedule does not need, and keeps only what answers "what plays where and
+    when, and how is the current solve doing". It is composed entirely from the
+    existing detail-BFF reads — ``fixtures_by_event`` for each event's placed
+    fixtures and ``latest_solve`` for the ledger's newest row — wrapping the
+    unchanged ``TournamentFixtureRead`` / ``ScheduleSolveRead`` shapes so the MCP
+    and HTTP surfaces read the same placement and solve facts.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does
+    not reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the
+    parent schema — see the tournament-verbs ADR).
+    """
+
+    tournament_id: uuid.UUID
+    events: list[ScheduleEventGroup]
+    # The newest row of the tournament's solve ledger (status + CP-SAT verdict),
+    # or ``null`` when no solve has ever been requested — the same ``latest_solve``
+    # read, and the same ``ScheduleSolveRead`` shape, the detail BFF's solve strip
+    # renders.
+    latest_schedule_solve: ScheduleSolveRead | None
+
+
+@mcp.tool
+async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
+    """Read a tournament's SCHEDULE as the authenticated API-token caller — a
+    narrow, agent-shaped projection, not the whole tournament detail.
+
+    Returns each event's draw fixtures with their placement (``table_id`` and the
+    predicted ``scheduled_start``) and pool/round/position — grouped by event, in
+    the same **pool → round → position** order the detail page uses — plus the
+    tournament's latest schedule solve (its ``status`` and CP-SAT ``verdict``). It
+    reuses the exact same shared reads the detail BFF composes (``fixtures_by_event``
+    for the placed fixtures, ``latest_solve`` for the ledger's newest row) and the
+    identical ``TournamentFixtureRead`` / ``ScheduleSolveRead`` shapes, so this
+    schedule and the tournament page can never drift.
+
+    An event whose draw has not been cut carries ``[]`` fixtures (the designed
+    state, not an error), and a tournament for which no solve has ever been
+    requested has ``latest_schedule_solve = null``.
+
+    Gated on the same ``tournament.view`` permission the HTTP detail read requires,
+    and scoped by the same visibility rule: a draft you do not own is not yours to
+    see, so it surfaces as a not-found ``ToolError`` — existence is never confirmed
+    for an unannounced draft you do not own.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
+    with that id is visible to you (absent, or an unannounced draft you do not own).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, then visibility — the same order ``get_tournament``
+        # keeps: the HTTP detail route's ``require_view`` dependency (403) runs
+        # before the handler, and only then does ``visible_to`` scope the row so a
+        # hidden draft leaves by not-found.
+        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
+            raise ToolError("You don't have permission to view tournaments.")
+        tournament = (
+            await db.execute(
+                select(Tournament).where(
+                    Tournament.id == tournament_id, visible_to(user_id)
+                )
+            )
+        ).scalar_one_or_none()
+        if tournament is None:
+            raise ToolError(f"No tournament found with id {tournament_id}.")
+        # Events in creation order (as the detail read lists them), then their
+        # draws in one batched read (``fixtures_by_event`` — pool → round →
+        # position ordered, every event id keyed so an un-cut event maps to ``[]``)
+        # and the ledger's newest row — the same shared reads the detail BFF uses.
+        events = list(
+            (
+                await db.execute(
+                    select(TournamentEvent)
+                    .where(TournamentEvent.tournament_id == tournament_id)
+                    .order_by(TournamentEvent.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        event_fixtures = await fixtures_by_event(db, [event.id for event in events])
+        latest_schedule_solve = await latest_solve(db, tournament.id)
+        return TournamentScheduleRead(
+            tournament_id=tournament.id,
+            events=[
+                ScheduleEventGroup(
+                    event_id=event.id,
+                    name=event.name,
+                    fixtures=event_fixtures[event.id],
+                )
+                for event in events
+            ],
+            latest_schedule_solve=(
+                ScheduleSolveRead.model_validate(latest_schedule_solve)
+                if latest_schedule_solve is not None
+                else None
+            ),
+        )
+
+
+@mcp.tool
+async def list_my_tournaments() -> list[TournamentDetailRead]:
+    """List the tournaments the authenticated API-token caller OWNS, newest first.
+
+    Returns the same ``TournamentDetailRead`` aggregate the HTTP
+    ``GET /v1/tournaments`` list serves — each tournament with its events, their
+    active entrants and their draws, the caller's ``can_edit`` / per-event
+    ``entry_state`` / ladder ``rating`` — by reusing that list's exact five-query
+    batched read (``list_tournament_details``), so the MCP and HTTP surfaces can
+    never drift and neither runs an N+1.
+
+    Unlike the HTTP list, which is VISIBILITY-scoped (every announced tournament
+    plus your own drafts), this is OWNER-scoped: only tournaments you created
+    (``created_by_user_id == you``), in ANY status. That is deliberate — the
+    tournament write verbs are owner-gated, so the tournaments an agent can act on
+    are exactly the ones it owns, and this is the discovery read that hands the
+    agent a ``tournament_id`` to drive them (see the tournament-verbs ADR). A
+    tournament you can merely *see* but do not own is excluded.
+
+    Gated on the same ``tournament.view`` permission the HTTP list requires.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, mirroring the HTTP list's ``require_view`` dependency;
+        # only then the owner-scoped read. Owner-scoping is by construction (the
+        # WHERE selects only the caller's own rows), so there is no separate
+        # visibility gate to run — an owner always sees their own tournaments.
+        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
+            raise ToolError("You don't have permission to view tournaments.")
+        return await list_tournament_details(
+            db,
+            where=Tournament.created_by_user_id == user_id,
+            current_user_id=user_id,
+        )
 
 
 @mcp.tool

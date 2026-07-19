@@ -521,6 +521,20 @@ _Avoid_: pin (the call *causes* a pin, but a **manual placement** also pins with
 call; the pin is the placement's fixedness, the call is the promise to the players),
 notify (the call includes a notification but is the whole state transition, not just it).
 
+**Solve**:
+One run of the **scheduler** over a tournament: the CP-SAT job that packs the
+event's unplayed, **free** **placements** onto **tables** within each **pool**'s
+**Slot**, holding **pinned** ones fixed, and writes the resulting placements back.
+A solve is **requested** (queued), **running**, then reaches a **verdict** —
+`succeeded`, `infeasible`, or `failed` — recorded on the tournament's **solve
+ledger**; at most one is in flight per tournament at a time (a fresh request
+coalesces onto the running one), and a **stale running** solve is reaped by the
+next reader or request. Requesting a solve is what "run the scheduler" means; it
+is **not** a hypothetical or Monte-Carlo projection of who will win — it computes
+*when and where* the real matches play, not their outcomes.
+_Avoid_: simulation, run (a solve computes the real schedule, never a
+what-if), optimization pass, recalculation.
+
 ## Dashboard
 
 **First-match**:
