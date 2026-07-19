@@ -55,6 +55,25 @@ from app.result_chain import standing_result
 from app.tournament_advancement import on_match_completed
 
 
+class SelfMatchError(Exception):
+    """Raised by the match-creation service when the requested opponent is the
+    acting user themselves. The HTTP adapter maps this to the existing 422
+    ``"You cannot start a match against yourself."``."""
+
+
+class OpponentNotFoundError(Exception):
+    """Raised by the match-creation service when the requested opponent id does
+    not resolve to a live (non-tombstoned) user. The HTTP adapter maps this to
+    the existing 404 ``"Opponent not found."``."""
+
+
+class RatedNeedsRegisteredOpponentError(Exception):
+    """Raised by the match-creation service when a rated match is requested
+    without a registered opponent (a solo match cannot be rated). The HTTP
+    adapter maps this to the existing 422
+    ``"A rated match needs a registered opponent."``."""
+
+
 class StandingResultConflictError(Exception):
     """Raised when the ``result_id`` handed to :func:`accept_standing_result` is
     no longer the live standing proposal — a concurrent counter superseded it,

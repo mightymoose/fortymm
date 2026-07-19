@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import redis.asyncio as redis_asyncio
 from fastapi import FastAPI, Request, Response
@@ -23,6 +23,7 @@ from app.api_tokens import router as api_tokens_router
 from app.dashboard import router as dashboard_router
 from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
+from app.mcp_server import mcp
 from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
@@ -43,9 +44,16 @@ from app.tournaments import router as tournaments_router
 # line below surfaces alongside "Application startup complete" in every stack.
 log = logging.getLogger("uvicorn.error")
 
+# The FastMCP Streamable-HTTP ASGI app, mounted at ``/mcp`` below. Built at
+# ``path="/"`` so the endpoint is exactly ``/mcp/`` once mounted (its default
+# ``/mcp`` would nest to ``/mcp/mcp``). It carries its OWN lifespan — the
+# Streamable-HTTP session manager — which MUST run or every MCP call 500s, so
+# ``lifespan`` below enters it alongside the app's own startup.
+mcp_app = mcp.http_app(path="/")
+
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     connection = redis_asyncio.from_url(redis_url, encoding="utf-8")
     try:
@@ -73,7 +81,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # app.match_calls). Cancelled (and awaited) on shutdown.
         pin_tick_task = asyncio.create_task(pin_tick_loop())
         try:
-            yield
+            # Run the mounted FastMCP app's own lifespan (its Streamable-HTTP
+            # session manager) for the whole of ours — without this the manager
+            # never starts and every /mcp request 500s. AsyncExitStack unwinds
+            # it before the app teardown below.
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(mcp_app.lifespan(app))
+                yield
         finally:
             pin_tick_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -191,6 +205,12 @@ app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
 app.include_router(admin_schedule_solves_router)
+
+# The MCP server (Streamable HTTP) at ``/mcp``. A mounted Starlette sub-app does
+# not contribute to the parent ``openapi.json``, so this endpoint is absent from
+# the generated clients by construction — the mount is additive to the HTTP wire
+# contract. Its lifespan is composed into ``lifespan`` above.
+app.mount("/mcp", mcp_app)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

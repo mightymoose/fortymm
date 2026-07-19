@@ -76,8 +76,11 @@ object without one router depending on another's internals.
 
 ### The MCP server is FastMCP, mounted on the same app at `/mcp`
 
-FastMCP 2.x, hand-written tools (not OpenAPI-generated — we curate agent-shaped
-verbs), Streamable HTTP transport, mounted `app.mount("/mcp", mcp.http_app())`.
+FastMCP 3.x (`fastmcp>=3.4,<4`, 3.4.4 at implementation — the current PyPI major;
+the earlier "2.x" note was superseded), hand-written tools (not OpenAPI-generated
+— we curate agent-shaped verbs), Streamable HTTP transport, mounted
+`app.mount("/mcp", mcp.http_app(path="/"))` (the `path="/"` form yields the
+intended `/mcp` endpoint rather than a nested `/mcp/mcp`).
 The FastMCP ASGI app has **its own lifespan** (the Streamable-HTTP session
 manager) which **must be combined** into the FastAPI lifespan, or every MCP call
 500s. Always mounted; **no env flag**. It is one new dependency (`fastmcp`).
