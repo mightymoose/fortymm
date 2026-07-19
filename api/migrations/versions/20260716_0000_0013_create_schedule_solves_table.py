@@ -115,13 +115,14 @@ def upgrade() -> None:
         ["tournament_id", sa.text("requested_at DESC")],
     )
 
-    # The pin facts on the fixture itself. ``pinned_at`` is NAIVE wall-clock
-    # (TIMESTAMP WITHOUT TIME ZONE) in the venue's frame, like the
-    # ``scheduled_start`` beside it — the same deliberate ADR-0790 exemption
-    # from the "datetimes are always timezone-aware" rule. NULL = unpinned.
+    # The pin facts on the fixture itself. ``pinned_at`` is a ``timestamptz``
+    # instant (TIMESTAMP WITH TIME ZONE) — the call's ``now`` — like the
+    # ``scheduled_start`` beside it. The 2026-07-19 ADR "tournament times are
+    # timezone-aware instants" supersedes ADR-0790's naive exemption and moves
+    # both onto timezone-aware instants. NULL = unpinned.
     op.add_column(
         "tournament_fixtures",
-        sa.Column("pinned_at", sa.DateTime(timezone=False), nullable=True),
+        sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=True),
     )
     # How many times the players were told about this fixture's placement —
     # the initial call plus every moved/cancelled correction. 0 = never.

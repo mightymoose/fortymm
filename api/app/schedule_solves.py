@@ -17,10 +17,15 @@ lock or Redis key to drift from it.
 **The job is three phases, and the transaction boundaries are the design.**
 
 (a) *Snapshot*: mark the row ``running``, read every solver input for the
-    tournament, compute the input fingerprint, commit. Wall-clock times (naive
-    ``scheduled_start`` timestamps, pool ``Slot`` date+HH:MM strings) become
-    minute offsets from a per-tournament base — the earliest pool window start
-    — because the pure module speaks only ``int`` minutes in one shared frame.
+    tournament, compute the input fingerprint, commit. Times become minute
+    offsets from a per-tournament base — the earliest pool window start —
+    because the pure module speaks only ``int`` minutes in one shared frame.
+    Every time is first put on **one real-instant axis**: pool ``Slot``
+    date+HH:MM components are anchored to instants by the event's venue
+    ``timezone``, ``scheduled_start``/``pinned_at`` are ``timestamptz``
+    instants, and ``now`` is an aware UTC instant — so ``now`` and the windows
+    finally share an axis (ADR "tournament times are timezone-aware instants",
+    the #1068 fix).
 (b) *Solve*: call ``app.scheduling.solve`` **outside any transaction**. A
     CP-SAT run can take seconds; holding row locks (or even an idle-in-
     transaction connection) across it would block every writer at the venue.
@@ -31,8 +36,9 @@ lock or Redis key to drift from it.
     with ``error='inputs changed during solve; superseded by re-run'`` and a
     ``rerun`` solve is requested in the same transaction. That is honest (this
     run produced nothing) and keeps the status enum closed. On a match, every
-    returned placement for an *unpinned* fixture is written back as wall-clock
-    (``base + minutes``); pinned fixtures' columns are never touched — the
+    returned placement for an *unpinned* fixture is written back as an instant
+    (``base + minutes``, and ``base`` is an aware instant); pinned fixtures'
+    columns are never touched — the
     solver echoes pins verbatim, and a promise is not rewritten even with its
     own bytes. (The one exception is a pin *physics* broke — see the
     broken-pins section below.) No per-fixture merging, ever: the output is
@@ -121,6 +127,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from redis.exceptions import RedisError
 from sqlalchemy import exists, select, update
@@ -493,12 +500,16 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _slot_bounds(slot: Slot) -> tuple[datetime, datetime]:
-    """A pool ``Slot``'s window as naive wall-clock datetimes — the venue's own
-    frame, the same one ``scheduled_start`` lives in (ADR-0790)."""
+def _slot_bounds(slot: Slot, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """A pool ``Slot``'s window as timezone-aware **instants**, composed from its
+    ``{date, start, end}`` wall-clock components anchored by the event's venue
+    ``timezone`` (ADR "tournament times are timezone-aware instants"). Anchoring
+    is what puts the window on the same real-instant axis as ``now``, so an
+    evening/"today" venue window is no longer mis-compared against a UTC
+    wall-clock (#1068)."""
     start = datetime.strptime(f"{slot.date} {slot.start}", "%Y-%m-%d %H:%M")
     end = datetime.strptime(f"{slot.date} {slot.end}", "%Y-%m-%d %H:%M")
-    return start, end
+    return start.replace(tzinfo=tz), end.replace(tzinfo=tz)
 
 
 def _rest_shadows_for(
@@ -516,16 +527,16 @@ def _rest_shadows_for(
     completion stamp — no stamp (completed via winner alone) means no anchor, so
     no shadow. Round the anchor UP to the whole minute in the shared offset
     frame (NOT ``to_min``, which floors) so a grid-snapped start never lands a
-    sub-minute short of the floor, normalizing the aware stamp into the naive
-    wall-clock frame ``now`` and ``base`` live in first. Skip a window that has
-    already closed relative to ``now`` — no future grid start >= now can overlap
-    it (pure waste). One shadow per real human, on user-level ids so rest holds
-    across events.
+    sub-minute short of the floor. ``completed_at`` and ``base`` are both
+    timezone-aware instants now (ADR "tournament times are timezone-aware
+    instants"), so the difference is a straight instant subtraction. Skip a
+    window that has already closed relative to ``now`` — no future grid start >=
+    now can overlap it (pure waste). One shadow per real human, on user-level ids
+    so rest holds across events.
     """
     if completed_at is None:
         return []
-    completed_local = completed_at.astimezone().replace(tzinfo=None)
-    completed_at_min = math.ceil((completed_local - base).total_seconds() / 60)
+    completed_at_min = math.ceil((completed_at - base).total_seconds() / 60)
     if completed_at_min + REST_MIN <= now_min:
         return []
     return [
@@ -668,9 +679,13 @@ async def _load_solver_inputs(
     # — which needs every window start first — stands between the two).
     pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
     for event, _settings, pools in parsed_events:
+        # The event's IANA zone anchors its pools' wall-clock windows to real
+        # instants; it is boundary-validated on write (``EventTimezone``), so
+        # ``ZoneInfo`` here cannot raise on a stored value.
+        event_tz = ZoneInfo(event.timezone)
         for pool in pools:
             key = f"{event.id}:{pool.id}"
-            start, end = _slot_bounds(pool.slot)
+            start, end = _slot_bounds(pool.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
                 for table_id in pool.table_ids

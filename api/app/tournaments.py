@@ -1,6 +1,8 @@
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from typing import Any, Literal, assert_never
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import ColumnElement, exists, or_, select
@@ -1607,6 +1609,65 @@ def _event_scheduling_facts(
     )
 
 
+async def _reanchor_placements_for_timezone_change(
+    db: AsyncSession,
+    event_id: uuid.UUID,
+    *,
+    old_timezone: str,
+    new_timezone: str,
+) -> None:
+    """Preserve the **wall-clock** of an event's manual placements across a
+    timezone edit (ADR "tournament times are timezone-aware instants" —
+    "Wall-clock is preserved across a timezone edit").
+
+    A director who placed a fixture at 18:00 in ``America/Chicago`` and then
+    corrects the event to ``America/Denver`` means "the match is at 6 PM local; I
+    just fixed which local" — so the fixture must still read **18:00**, its stored
+    instant moving by the offset delta while its local reading stays put. The pool
+    ``Slot`` windows get this for free (they are wall-clock ``{date,start,end}``
+    components, untouched by the edit); ``scheduled_start``/``pinned_at`` are
+    ``timestamptz`` **instants** (B1/B2), so they are recomposed here or they would
+    silently shift.
+
+    Recovery is: read the stored instant's wall-clock **in the OLD zone** (the one
+    the director saw when placing it), then re-anchor those same components in the
+    NEW zone — the same ``.replace(tzinfo=...)`` composition B2 uses for window
+    instants, so a wall-clock that lands in a DST gap/fold resolves one consistent
+    way rather than crashing. Only rows that actually carry a placement are read;
+    a fixture with just one of the two columns set recomposes only that one. The
+    caller invokes this **only when the zone truly changed**, on its open
+    transaction under the tournament row lock, so the recompose commits atomically
+    with the ``timezone`` write it accompanies.
+    """
+    old_tz = ZoneInfo(old_timezone)
+    new_tz = ZoneInfo(new_timezone)
+
+    def _reanchor(instant: datetime) -> datetime:
+        wall_clock = instant.astimezone(old_tz).replace(tzinfo=None)
+        return wall_clock.replace(tzinfo=new_tz)
+
+    placed = (
+        (
+            await db.execute(
+                select(TournamentFixture).where(
+                    TournamentFixture.event_id == event_id,
+                    or_(
+                        TournamentFixture.scheduled_start.is_not(None),
+                        TournamentFixture.pinned_at.is_not(None),
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fixture in placed:
+        if fixture.scheduled_start is not None:
+            fixture.scheduled_start = _reanchor(fixture.scheduled_start)
+        if fixture.pinned_at is not None:
+            fixture.pinned_at = _reanchor(fixture.pinned_at)
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -1676,8 +1737,20 @@ async def update_event(
     # see ``_event_scheduling_facts``. A name/fee/predicates-only PATCH, or a
     # pool rename, compares equal and triggers nothing.
     facts_before = _event_scheduling_facts(event)
+    # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
+    # wall-clock of already-placed fixtures (ADR "Wall-clock is preserved across a
+    # timezone edit"), which needs the zone they were placed IN to recover it.
+    old_timezone = event.timezone
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(event, key, value)
+    if event.timezone != old_timezone:
+        # The zone truly moved (a PATCH re-sending the same zone falls through as a
+        # no-op): recompose every placement so its local reading is unchanged and
+        # only its stored instant shifts by the offset delta. The Slot windows are
+        # left alone — their wall-clock components are unchanged by definition.
+        await _reanchor_placements_for_timezone_change(
+            db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
+        )
     if facts_before != _event_scheduling_facts(event) and await event_has_draw(
         db, event.id
     ):
@@ -2635,9 +2708,12 @@ async def uncut_event_draw(
 
 async def _get_fixture_or_404(
     db: AsyncSession, tournament_id: uuid.UUID, fixture_id: uuid.UUID
-) -> tuple[TournamentFixture, MatchStatus | None]:
-    """The fixture named in the URL, scoped to the tournament, plus its linked match's
-    live status (``None`` when the fixture has not materialized).
+) -> tuple[TournamentFixture, MatchStatus | None, str]:
+    """The fixture named in the URL, scoped to the tournament, its linked match's
+    live status (``None`` when the fixture has not materialized), and the venue
+    ``timezone`` of its event (the IANA zone that anchors a placement's wall-clock
+    ``scheduled_start`` to a real instant — ADR "tournament times are timezone-aware
+    instants").
 
     Scoped by BOTH ids — fixture → event → tournament — so a fixture that exists but
     hangs off a *different* tournament is a 404, not a cross-tournament placement,
@@ -2653,7 +2729,7 @@ async def _get_fixture_or_404(
     """
     row = (
         await db.execute(
-            select(TournamentFixture, Match.status)
+            select(TournamentFixture, Match.status, TournamentEvent.timezone)
             .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(
@@ -2664,8 +2740,8 @@ async def _get_fixture_or_404(
     ).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Fixture not found.")
-    fixture, match_status = row
-    return fixture, match_status
+    fixture, match_status, event_timezone = row
+    return fixture, match_status, event_timezone
 
 
 def _enforce_fixture_placeable(match_status: MatchStatus | None) -> None:
@@ -2782,7 +2858,9 @@ async def place_fixture(
     _require_owner(tournament, current_user)
     # The fixture, scoped to this tournament (a mismatched pair is a 404), and its
     # match's live status — the single fact the freeze judges.
-    fixture, match_status = await _get_fixture_or_404(db, tournament_id, fixture_id)
+    fixture, match_status, event_timezone = await _get_fixture_or_404(
+        db, tournament_id, fixture_id
+    )
     # The one hard rule, before anything is written: a played-out fixture keeps its
     # placement. Everything else — an odd time, a dangling table ref — saves.
     _enforce_fixture_placeable(match_status)
@@ -2798,6 +2876,7 @@ async def place_fixture(
         fixture,
         table_id=payload.table_id,
         scheduled_start=payload.scheduled_start,
+        event_timezone=event_timezone,
     )
     # Scheduling-input trigger: the director just changed the solver's inputs — a new
     # pin to plan around, or a freed slot — so the board re-plans (ADR). Same

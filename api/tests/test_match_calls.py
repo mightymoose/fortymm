@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import pytest
@@ -66,8 +67,13 @@ from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
 
 DATE = "2030-01-01"
-#: The pool window's start — the tournament's minute-frame origin.
-BASE = datetime(2030, 1, 1, 9, 0)
+#: The event's venue timezone — the IANA zone that anchors its wall-clock pool
+#: windows (and manual placements) to real instants (ADR "tournament times are
+#: timezone-aware instants"). Every clock in this module is aware in this frame.
+VENUE_TZ = ZoneInfo("America/Chicago")
+#: The pool window's start — the tournament's minute-frame origin — as a
+#: timezone-aware instant in the venue frame (``09:00`` local on ``DATE``).
+BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 
 
 @pytest.fixture(autouse=True)
@@ -1583,7 +1589,12 @@ class TestBrokenPinRepair:
         for row in rows:
             assert row.title == f"Your match moved to {new_label}"
             assert new_label in row.body
-            assert target.scheduled_start.strftime("%H:%M") in row.body
+            # The stored instant round-trips as UTC-aware; the copy renders it in
+            # the venue frame, so compare the venue-local wall-clock.
+            assert (
+                target.scheduled_start.astimezone(VENUE_TZ).strftime("%H:%M")
+                in row.body
+            )
         jobs = _fanout_jobs(fake_notifications_queue)
         assert {job.user_id for job in jobs} == target_users
         assert all(job.collapse_id == f"match-call:{target.id}" for job in jobs)
@@ -1953,6 +1964,7 @@ class TestCallFlipsMatchLive:
             fixture,
             table_id="t1",
             scheduled_start=BASE + timedelta(minutes=5),
+            event_timezone="America/Chicago",
         )
         await db_session.commit()
 
@@ -2024,6 +2036,7 @@ class TestCallFlipsMatchLive:
             fixture,
             table_id="t1",
             scheduled_start=BASE + timedelta(minutes=20),  # a move
+            event_timezone="America/Chicago",
         )
         await db_session.commit()
 
@@ -2066,7 +2079,12 @@ class TestClearRevertsMatchToPending:
         assert tournament is not None
 
         fanout = await match_calls.apply_manual_placement(
-            db_session, tournament, fixture, table_id=None, scheduled_start=None
+            db_session,
+            tournament,
+            fixture,
+            table_id=None,
+            scheduled_start=None,
+            event_timezone="America/Chicago",
         )
         await db_session.commit()
 
@@ -2109,7 +2127,12 @@ class TestClearRevertsMatchToPending:
         assert tournament is not None
 
         await match_calls.apply_manual_placement(
-            db_session, tournament, fixture, table_id=None, scheduled_start=None
+            db_session,
+            tournament,
+            fixture,
+            table_id=None,
+            scheduled_start=None,
+            event_timezone="America/Chicago",
         )
         await db_session.commit()
 
@@ -2151,7 +2174,12 @@ class TestClearRevertsMatchToPending:
         await db_session.commit()
 
         await match_calls.apply_manual_placement(
-            db_session, tournament, fixture, table_id=None, scheduled_start=None
+            db_session,
+            tournament,
+            fixture,
+            table_id=None,
+            scheduled_start=None,
+            event_timezone="America/Chicago",
         )
         await db_session.commit()
 
@@ -2192,7 +2220,12 @@ class TestManualPlacementPin:
         target_id = target.id
         pin_start = BASE + timedelta(minutes=60)
         fanout = await match_calls.apply_manual_placement(
-            db_session, tournament, target, table_id="t1", scheduled_start=pin_start
+            db_session,
+            tournament,
+            target,
+            table_id="t1",
+            scheduled_start=pin_start,
+            event_timezone="America/Chicago",
         )
         assert fanout == []  # pre-live: a silent pin, nobody paged
         await db_session.commit()

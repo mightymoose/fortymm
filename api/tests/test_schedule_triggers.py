@@ -184,7 +184,8 @@ async def _call_fixture(
     placement — so its scheduled ``pending`` match flips to ``in_progress`` and
     becomes scorable (#1073). A tournament match is born ``pending`` and cannot
     be played until the schedule calls it to a table, so the completion helper
-    must call before it scores. The scheduling frame is naive wall-clock."""
+    must call before it scores. The director enters ``scheduled_start`` as venue
+    wall-clock; the write path anchors it to the event timezone."""
     tournament = await db.get(Tournament, tournament_id)
     assert tournament is not None
     await match_calls.apply_manual_placement(
@@ -193,6 +194,7 @@ async def _call_fixture(
         fixture,
         table_id="t1",
         scheduled_start=datetime(2030, 1, 1, 10, 0),
+        event_timezone="America/Chicago",
     )
     await db.commit()
 

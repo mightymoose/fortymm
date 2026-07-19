@@ -28,6 +28,7 @@ import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import pytest
@@ -82,8 +83,12 @@ from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
 
 DATE = "2030-01-01"
-#: The tournament's minute-frame origin: the (single) pool window's start.
-BASE = datetime(2030, 1, 1, 9, 0)
+#: The event's venue timezone — the IANA zone anchoring its wall-clock windows
+#: to real instants (ADR "tournament times are timezone-aware instants").
+VENUE_TZ = ZoneInfo("America/Chicago")
+#: The tournament's minute-frame origin: the (single) pool window's start, as a
+#: timezone-aware instant in the venue frame (``09:00`` local on ``DATE``).
+BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 
 
 @pytest.fixture(autouse=True)
@@ -782,6 +787,64 @@ class TestSolveJob:
         again = await _fixtures_of(db_session, event_id)
         assert {f.id: (f.table_id, f.scheduled_start) for f in again} == placements
         assert len(await _solve_rows(db_session, tournament_id)) == 1
+
+    async def test_evening_venue_window_is_placeable_when_now_is_past_midnight_utc(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#1068: a venue-evening window is schedulable when ``now`` falls inside
+        it, even though that instant is already past midnight in UTC.
+
+        The event is ``America/Chicago`` (CST = UTC-6) with a window of
+        ``18:00``-``23:00`` on ``2030-01-01`` — i.e. ``00:00``-``05:00`` UTC on
+        ``2030-01-02``. ``now`` is set to ``02:00`` UTC on ``2030-01-02``, which
+        is ``20:00`` **in the venue** — squarely inside the window, but a
+        *different calendar day* in UTC.
+
+        Under the old naive frame the window (naive ``18:00``) and ``now`` (a UTC
+        wall-clock) landed on the same axis at different positions, so ``now``
+        read as hours past the window's end and the only fixture was instantly
+        unschedulable. Anchored to one instant axis, ``now`` sits mid-window and
+        the fixture is placed. The assertions below fail on any frame where
+        ``now`` and the windows are not venue-anchored onto one instant axis.
+        """
+        # 20:00 America/Chicago (CST) == 02:00 UTC the next calendar day.
+        now = datetime(2030, 1, 2, 2, 0, tzinfo=UTC)
+        window_start = datetime(2030, 1, 1, 18, 0, tzinfo=VENUE_TZ)
+        window_end = datetime(2030, 1, 1, 23, 0, tzinfo=VENUE_TZ)
+        assert window_start < now < window_end  # mid-window, guarding the setup
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: now)
+
+        tournament_id, event_id = await _make_tournament(
+            db_session, entrants=2, tables=("t1",), window=("18:00", "23:00")
+        )
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        # Placeable, not "the day doesn't fit": a real verdict, the fixture down.
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.verdict in (SolverVerdict.optimal, SolverVerdict.feasible)
+        assert ledger.fixtures_placed == 1
+
+        (fixture,) = await _fixtures_of(db_session, event_id)
+        assert fixture.table_id == "t1"
+        assert fixture.scheduled_start is not None
+        # Placed at/after ``now`` and finishing inside the venue window — the
+        # instant axis the whole epic hinges on. Aware/aware comparisons across
+        # frames compare real instants, so these are frame-agnostic and true
+        # only when now and the window share one axis.
+        assert now <= fixture.scheduled_start
+        assert fixture.scheduled_start < window_end
 
     @pytest.mark.parametrize(
         "env_value, expected",

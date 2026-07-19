@@ -150,25 +150,26 @@ class TournamentFixture(Base):
     #: table. ``NULL`` = unassigned. ``(table_id, scheduled_start) = (NULL, NULL)``
     #: means the fixture is unplaced (ADR-0790).
     table_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    #: A **placement**'s predicted start — a **naive** wall-clock timestamp
-    #: (``TIMESTAMP WITHOUT TIME ZONE``), a *deliberate* exemption from the "datetimes
-    #: are always timezone-aware" rule (ADR-0790). It is checked against a pool's
-    #: ``Slot`` window, which is itself stored as naive wall-clock; matching that frame
-    #: is the whole point, so do NOT "fix" this to ``timezone=True``. ``NULL`` =
-    #: unassigned.
+    #: A **placement**'s predicted start — a ``timestamptz`` **instant**
+    #: (``TIMESTAMP WITH TIME ZONE``), the server composes it from the event's Slot
+    #: wall-clock components anchored by the event ``timezone`` (see the
+    #: 2026-07-19 ADR "tournament times are timezone-aware instants", which
+    #: supersedes ADR-0790's naive-wall-clock exemption on the representation
+    #: question). A ``DateTime(timezone=True)`` column yields an aware datetime.
+    #: ``NULL`` = unassigned.
     scheduled_start: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=False), nullable=True
+        DateTime(timezone=True), nullable=True
     )
     #: When this fixture was **called** — the moment its placement stopped being an
     #: estimate and became a promise (ADR "the schedule is solved, the call is
     #: pinned"). ``NULL`` = unpinned: the solver may still move it freely. Set (with
     #: both players notified, in one transaction) it becomes a hard constraint in
-    #: every later solve. Naive wall-clock in the venue's frame, like
-    #: ``scheduled_start`` above — the same deliberate ADR-0790 exemption from the
-    #: "datetimes are always timezone-aware" rule; do NOT "fix" this to
-    #: ``timezone=True``.
+    #: every later solve. A ``timestamptz`` **instant** (the call's ``now``), like
+    #: ``scheduled_start`` above — both moved onto timezone-aware instants by the
+    #: 2026-07-19 ADR "tournament times are timezone-aware instants" (superseding
+    #: ADR-0790's naive exemption).
     pinned_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=False), nullable=True
+        DateTime(timezone=True), nullable=True
     )
     #: How many times the players were told about this fixture's placement — the
     #: initial call plus every "moved"/"cancelled" correction. 0 = never notified.

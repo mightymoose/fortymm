@@ -24,6 +24,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import pytest
@@ -54,10 +55,13 @@ from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_
 from tests._helpers import grant_permissions, make_client, make_user, start_session
 
 DATE = "2030-01-01"
-#: The pool window's start — the solve's minute-frame origin, as in the service
-#: tests.
-BASE = datetime(2030, 1, 1, 9, 0)
-WINDOW_END = datetime(2030, 1, 1, 17, 0)
+#: The event's venue timezone, anchoring its wall-clock windows to real instants
+#: (ADR "tournament times are timezone-aware instants").
+VENUE_TZ = ZoneInfo("America/Chicago")
+#: The pool window's start and end — the solve's minute-frame origin, as in the
+#: service tests — as timezone-aware instants in the venue frame.
+BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
+WINDOW_END = datetime(2030, 1, 1, 17, 0, tzinfo=VENUE_TZ)
 #: length_games=3 under the fixed duration mapping (see the service tests).
 MATCH_MINUTES = 25
 
