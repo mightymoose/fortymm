@@ -62,20 +62,15 @@ from app.match_scoring import (
 from app.match_scoring import (
     update_game_score as update_game_score_core,
 )
-
-# Re-exported for ``tests/test_matches.py``, which unit-tests the compaction
-# helper via ``app.matches._compact_games`` (the propose path that consumes it
-# now lives in ``app.result_proposal``). Redundant alias marks the intentional
-# re-export so ruff doesn't flag it as unused.
-from app.match_serialization import _compact_games as _compact_games
 from app.match_serialization import (
-    _is_participant,
-    _is_scorable,
-    _negotiation,
-    _serialize_details,
-    _side_schema,
-    _status_label,
+    compact_games,
+    is_participant,
+    is_scorable,
     load_match_eager,
+    negotiation,
+    serialize_details,
+    side_schema,
+    status_label,
     view_extras,
 )
 from app.models import (
@@ -118,6 +113,13 @@ from app.services.dependencies import get_match_service
 from app.services.match_service import MatchService
 from app.sessions import get_current_user, get_optional_user
 
+# Re-exported for ``tests/test_matches.py``, which unit-tests the compaction
+# helper via ``app.matches._compact_games`` (the propose path that consumes it
+# now lives in ``app.result_proposal``). The helper is now the public
+# ``compact_games``; this module-level alias keeps the test's import line
+# resolving (and counts as a use, so ruff doesn't flag the import as unused).
+_compact_games = compact_games
+
 router = APIRouter(prefix="/v1")
 
 log = logging.getLogger(__name__)
@@ -159,7 +161,7 @@ def _has_result_exists() -> Any:
     ``in_progress`` match the presence of any result means a standing proposal
     exists (acceptance moves the match to ``completed``, so the head of the
     chain is necessarily unaccepted) — making "has a result" the derived
-    "Awaiting acceptance" bucket (see ``_status_label``). Pulled into a helper
+    "Awaiting acceptance" bucket (see ``status_label``). Pulled into a helper
     so the list filter and the status-count aggregate split the Live vs awaiting
     buckets identically (issue #381)."""
     return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
@@ -202,7 +204,7 @@ async def create_match(
             status_code=422,
             detail="A rated match needs a registered opponent.",
         ) from err
-    return _serialize_details(created, current_user.id)
+    return serialize_details(created, current_user.id)
 
 
 def _apply_list_filter[SelectT: Select[Any]](
@@ -327,7 +329,7 @@ async def list_matches(
     status_counts[MatchStatus.in_progress] -= awaiting_count
 
     # The list is open to every signed-in user. Writes still gate on
-    # `_is_participant` downstream.
+    # `is_participant` downstream.
     if attention:
         # The Attention set is bounded by the caller's *actionable* open matches
         # (issue #729) — a handful even for an active player — so we load them
@@ -409,25 +411,25 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     side_wins = side_win_counts(match)
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     next_number = current_game_number(match)
-    is_participant = _is_participant(match, current_user_id)
-    # Editability follows the no-result scratchpad rule (``_is_scorable``),
+    viewer_is_participant = is_participant(match, current_user_id)
+    # Editability follows the no-result scratchpad rule (``is_scorable``),
     # not whether a next game exists — so a decided-but-unposted row still reads
     # as scorable. ``current_game_number`` stays the next-playable-game
     # deep-link target (None when decided or signed); suppressed for spectators.
-    can_score = is_participant and _is_scorable(match)
+    can_score = viewer_is_participant and is_scorable(match)
 
     return MatchListRow(
         id=match.id,
         status=match.status,
-        status_label=_status_label(match),
+        status_label=status_label(match),
         league=MatchLeague(id=match.league.id, name=match.league.name),
-        sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
+        sides=[side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
-        current_game_number=next_number if is_participant else None,
+        current_game_number=next_number if viewer_is_participant else None,
         can_score=can_score,
-        negotiation=_negotiation(match, current_user_id),
+        negotiation=negotiation(match, current_user_id),
         attention=list_attention_kind(match, current_user_id),
     )
 
@@ -537,13 +539,15 @@ async def get_match(
     # Gate the history/rivalry/rating payload on participation. Anonymous and
     # spectator callers never see another player's form or rating trajectory —
     # they get the scorecard with empty extras (see #515).
-    is_participant = current_user is not None and _is_participant(
+    viewer_is_participant = current_user is not None and is_participant(
         match, current_user.id
     )
     extras = (
-        await view_extras(match_service, match) if is_participant else empty_extras()
+        await view_extras(match_service, match)
+        if viewer_is_participant
+        else empty_extras()
     )
-    return _serialize_details(
+    return serialize_details(
         match,
         current_user.id if current_user else None,
         extras,
@@ -591,7 +595,8 @@ async def _load_match_for_scoring(
 # create handler lookups-or-inserts the MatchGame; update and delete operate
 # on an existing score. All three are pure "save / clear scratchpad state" —
 # they never touch match.status, side wins, side.won, or ratings. The single
-# canonical commit happens in ``finalize_match`` below.
+# canonical commit happens in ``finalize_match`` (now in ``app.result_acceptance``,
+# reached via the propose/accept services), not here.
 
 
 # The FastAPI-free score write path (``app.match_scoring``) raises this closed
@@ -661,7 +666,7 @@ async def create_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(reloaded, current_user.id, extras)
 
 
 @router.put(
@@ -696,7 +701,7 @@ async def update_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(reloaded, current_user.id, extras)
 
 
 @router.delete(
@@ -727,7 +732,7 @@ async def delete_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(reloaded, current_user.id, extras)
 
 
 def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
@@ -738,7 +743,7 @@ def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPExcep
     result already exists); the FE reconciles against this snapshot."""
     return HTTPException(
         status_code=409,
-        detail=_negotiation(match, current_user_id).model_dump(mode="json"),
+        detail=negotiation(match, current_user_id).model_dump(mode="json"),
     )
 
 
@@ -820,7 +825,7 @@ async def post_match_result(
 
     reloaded = outcome.match
     extras = await view_extras(match_service, reloaded)
-    details = _serialize_details(reloaded, current_user.id, extras)
+    details = serialize_details(reloaded, current_user.id, extras)
     # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
     # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
@@ -896,4 +901,4 @@ async def accept_match_result(
         ) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(reloaded, current_user.id, extras)

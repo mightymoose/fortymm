@@ -65,7 +65,7 @@ class NegotiationConflictError(Exception):
 
     Carries the loaded (or reloaded) :class:`Match` so the HTTP adapter can build
     the exact viewer-relative negotiation snapshot (``_negotiation_conflict`` /
-    ``_negotiation``) it produced before, letting a client that lost the race
+    ``negotiation``) it produced before, letting a client that lost the race
     re-render from the 409 body without an extra round-trip. Never an
     ``HTTPException`` — the caller adapts it to its transport."""
 
@@ -135,7 +135,7 @@ class MatchNotFoundError(Exception):
 class MatchNotScorableError(Exception):
     """Raised by the per-game score service when the loaded match can't be
     scored. It carries the exact ``http_status`` (422 or 409) **and** ``message``
-    for each of ``_enforce_scorable``'s four reason-specific outcomes — no
+    for each of ``ensure_scorable``'s four reason-specific outcomes — no
     opponent (422), a posted result (409), an uncalled scheduled match (409), or
     any other non-scorable/terminal state (409) — so the HTTP adapter reproduces
     the identical response byte-for-byte while the MCP adapter reads the message.

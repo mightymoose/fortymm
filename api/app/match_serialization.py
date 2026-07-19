@@ -64,8 +64,28 @@ from app.schemas.match import (
 )
 from app.schemas.rating import RatingChange
 
+# Public shared surface: the serializer/board helpers that both the HTTP router
+# (``matches.py``) and the MCP adapter (``mcp_server.py``), plus the scoring /
+# proposal / notification services, import. Everything not listed is a
+# module-internal helper (leading underscore) and stays private.
+__all__ = [
+    "compact_games",
+    "first_decider",
+    "games_payload_from_match",
+    "is_participant",
+    "is_scorable",
+    "load_match_eager",
+    "negotiation",
+    "score_view",
+    "serialize_details",
+    "side_schema",
+    "status_label",
+    "validate_finalize_games",
+    "view_extras",
+]
 
-def _side_schema(
+
+def side_schema(
     side: MatchSide,
     side_wins: dict[int, int],
     current_user_id: uuid.UUID | None,
@@ -94,11 +114,11 @@ def _side_schema(
     )
 
 
-def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
+def is_participant(match: Match, user_id: uuid.UUID) -> bool:
     return my_side(match, user_id) is not None
 
 
-def _status_label(match: Match) -> str:
+def status_label(match: Match) -> str:
     """User-facing label for a match's lifecycle position. An ``in_progress``
     match with a standing posted result is waiting on the other side — surface
     that distinctly so the FE doesn't need to know about the result model to
@@ -117,7 +137,7 @@ def _status_label(match: Match) -> str:
             return "Voided"
 
 
-def _score_view(score: MatchGameScore) -> MatchDetailsScore:
+def score_view(score: MatchGameScore) -> MatchDetailsScore:
     return MatchDetailsScore(
         id=score.id,
         side_1_points=score.side_1_points,
@@ -193,7 +213,7 @@ def _submitted_on_side(match: Match, result: MatchResult, side: MatchSide) -> bo
     return any(p.user_id == result.submitted_by_user_id for p in side.players)
 
 
-def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotiation:
+def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotiation:
     """Viewer-relative negotiation state for the BFF (#713).
 
     The viewer's "side" is the side the current user is on; the opponent side is
@@ -289,7 +309,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
     )
 
 
-def _is_scorable(match: Match) -> bool:
+def is_scorable(match: Match) -> bool:
     """Whether a match accepts score writes right now (ignoring who's asking).
 
     The saved games are a provisional *scratchpad* until somebody posts the
@@ -307,7 +327,7 @@ def _is_scorable(match: Match) -> bool:
     born ``in_progress`` and so remain scorable at once.
 
     Single source of truth shared by the write-path guard
-    (``_enforce_scorable``) and the BFF ``can_score`` flag, so the flag the
+    (``ensure_scorable``) and the BFF ``can_score`` flag, so the flag the
     clients trust can never disagree with what the score endpoints accept."""
     return (
         len(match.sides) >= 2
@@ -316,7 +336,7 @@ def _is_scorable(match: Match) -> bool:
     )
 
 
-def _first_decider(
+def first_decider(
     games: list[MatchResultsGameWrite], target: int
 ) -> tuple[int, int] | None:
     """Walk ``games`` in game-number order tallying wins; return
@@ -336,7 +356,7 @@ def _first_decider(
     return None
 
 
-def _compact_games(
+def compact_games(
     games: list[MatchResultsGameWrite],
 ) -> list[MatchResultsGameWrite]:
     """Normalize a (possibly gappy) scratchpad board into a canonical one:
@@ -346,7 +366,7 @@ def _compact_games(
     Renumbers by the *rank of each distinct* ``game_number`` (not by list
     position), so a genuine duplicate game_number is preserved as a duplicate
     (two games at original ``1`` both map to new ``1``) and the strict
-    ``_validate_finalize_games`` duplicate check downstream still rejects it.
+    ``validate_finalize_games`` duplicate check downstream still rejects it.
     (Renumbering *does* absorb an out-of-``best_of``-range game_number — e.g.
     ``[1,2,5]`` on best-of-3 → ``[1,2,3]`` — but the real scratchpad never
     produces one: the score endpoints reject ``game_number > best_of`` before a
@@ -377,7 +397,7 @@ def _compact_games(
     ]
 
 
-def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -> int:
+def validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -> int:
     """Cross-game invariants for a finalize payload. Per-game point legality
     is already enforced by ``MatchResultsGameWrite``. Returns the decided side
     number (1 or 2); raises ``ValueError`` with a human-readable detail on any
@@ -394,7 +414,7 @@ def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -
         raise ValueError("Games must be numbered 1..N consecutively with no gaps.")
 
     target = _games_to_win(best_of)
-    decider = _first_decider(games, target)
+    decider = first_decider(games, target)
     if decider is None:
         raise ValueError(
             f"No side reached {target} game wins — the match isn't decided."
@@ -408,9 +428,9 @@ def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -
     return decided_side
 
 
-def _games_payload_from_match(match: Match) -> list[MatchResultsGameWrite]:
+def games_payload_from_match(match: Match) -> list[MatchResultsGameWrite]:
     """Recast currently-saved scores as a finalize payload, so ``_can_finalize``
-    can reuse ``_validate_finalize_games`` instead of duplicating its rules.
+    can reuse ``validate_finalize_games`` instead of duplicating its rules.
 
     Returns the board **raw** (scored games at their real ``game_number``, gaps
     and all). The two scratchpad overrun guards depend on this: ``create_game_score``
@@ -448,8 +468,8 @@ def _can_finalize(match: Match) -> bool:
     if match.results:
         return False
     try:
-        _validate_finalize_games(
-            _compact_games(_games_payload_from_match(match)),
+        validate_finalize_games(
+            compact_games(games_payload_from_match(match)),
             match.match_settings.best_of,
         )
     except ValueError:
@@ -457,7 +477,7 @@ def _can_finalize(match: Match) -> bool:
     return True
 
 
-def _serialize_details(
+def serialize_details(
     match: Match,
     current_user_id: uuid.UUID | None,
     extras: MatchDetailsExtras | None = None,
@@ -476,7 +496,7 @@ def _serialize_details(
         MatchDetailsGame(
             id=game.id,
             game_number=game.game_number,
-            score=_score_view(game.score) if game.score else None,
+            score=score_view(game.score) if game.score else None,
         )
         for game in games_sorted
     ]
@@ -490,14 +510,14 @@ def _serialize_details(
 
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     # Anonymous viewers on the public route are never participants.
-    is_participant = current_user_id is not None and _is_participant(
+    viewer_is_participant = current_user_id is not None and is_participant(
         match, current_user_id
     )
 
     return MatchDetails(
         id=match.id,
         status=match.status,
-        status_label=_status_label(match),
+        status_label=status_label(match),
         league=MatchLeague(id=match.league.id, name=match.league.name),
         best_of=match.match_settings.best_of,
         games_to_win=_games_to_win(match.match_settings.best_of),
@@ -505,28 +525,28 @@ def _serialize_details(
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
         sides=[
-            _side_schema(side, side_wins, current_user_id, extras.rating_changes)
+            side_schema(side, side_wins, current_user_id, extras.rating_changes)
             for side in sides_sorted
         ],
         games=games,
         current_game=current_game,
         # "This participant may edit scores" — true whenever the match is
-        # scorable (no result posted yet; see ``_is_scorable``), *independent*
+        # scorable (no result posted yet; see ``is_scorable``), *independent*
         # of whether there's a next un-played game. A decided-but-unposted
         # board is still editable, so this is True while ``current_game`` is
         # None. Spectators get the read-only view — writes
         # 404 for non-participants in the score endpoints regardless.
-        can_score=(is_participant and _is_scorable(match)),
+        can_score=(viewer_is_participant and is_scorable(match)),
         # True iff the saved games already form a decided, validly-ordered
         # match AND no result is currently posted — the FE flips the scoring
         # page's submit button label to "Post result" when this is true.
         can_finalize=(
-            is_participant and len(match.sides) >= 2 and _can_finalize(match)
+            viewer_is_participant and len(match.sides) >= 2 and _can_finalize(match)
         ),
         # Viewer-relative negotiation state — the standing proposal, whose turn
         # it is, and (when the opponent corrected the viewer's own proposal) the
         # diff. Drives the accept CTA + the negotiation callouts (#713).
-        negotiation=_negotiation(match, current_user_id),
+        negotiation=negotiation(match, current_user_id),
         # ``extras.recent_form`` is a read-only Sequence; the response model owns
         # its own list, so copy rather than alias it.
         recent_form=list(extras.recent_form),

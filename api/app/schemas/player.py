@@ -98,7 +98,7 @@ class PlayerMatchRow(BaseModel):
     # True when a result has been proposed but not yet accepted by the
     # opponent — i.e. ``status`` is still ``in_progress`` *and* the match has a
     # standing proposed result. This is the same "Awaiting acceptance" bucket
-    # matches.py derives via ``_status_label``; it's surfaced as a boolean here
+    # the ``status_label`` serializer helper derives; it's surfaced as a boolean here
     # so the profile chip can distinguish a posted-but-unaccepted result from a
     # genuinely-live match (both sit at ``in_progress``) without the FE having
     # to re-derive the negotiation state (#364).

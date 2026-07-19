@@ -12,11 +12,12 @@ Following ``api/CLAUDE.md``'s rule of thumb, propose is a plain module-level
 async function taking ``db`` rather than a class-plus-provider: none of its
 collaborators is worth injecting. It returns the reloaded domain :class:`Match`
 plus whether acceptance is now awaited (:class:`ProposedResult`), and signals
-every rejection with a domain exception from ``app.result_acceptance`` —
+every rejection with a domain exception from ``app.match_errors`` —
 :class:`MatchClosedError`, :class:`UndecidedBoardError`,
 :class:`NegotiationConflictError` (carrying the loaded ``Match`` so an adapter
 can rebuild the viewer-relative snapshot), and the already-existing
-:class:`MatchLockUnavailable` — never ``HTTPException``. The HTTP handler is a
+:class:`MatchLockUnavailable` (from ``app.match_scoring``) — never
+``HTTPException``. The HTTP handler is a
 thin adapter that maps each back to the exact status and body it produced
 before; the MCP adapter maps the same exceptions to ``ToolError``s.
 
@@ -50,7 +51,7 @@ from app.match_scoring import (
     _MatchWriteLoader,
     load_match_for_write,
 )
-from app.match_serialization import _compact_games, _validate_finalize_games
+from app.match_serialization import compact_games, validate_finalize_games
 from app.models import (
     League,
     Match,
@@ -244,16 +245,16 @@ async def propose_result(
     # an existing result — would be rejected before it could supersede. Propose
     # has its OWN gates below (first-post vs counter) instead.
 
-    # Compact once, upstream of every consumer below (_validate_finalize_games,
+    # Compact once, upstream of every consumer below (validate_finalize_games,
     # _commit_canonical_games, and the immutable _result_games_snapshot), so the
-    # minted board is contiguous (see ``_compact_games``). Covers both the first
+    # minted board is contiguous (see ``compact_games``). Covers both the first
     # proposal and the counter.
-    compacted = _compact_games(games)
+    compacted = compact_games(games)
 
     # Decided-board hard gate — the strict precondition: an undecided board can't
     # be a result.
     try:
-        decided_side = _validate_finalize_games(compacted, match.match_settings.best_of)
+        decided_side = validate_finalize_games(compacted, match.match_settings.best_of)
     except ValueError as exc:
         raise UndecidedBoardError(str(exc)) from exc
 

@@ -57,9 +57,9 @@ from app.match_scoring import delete_game_score as delete_game_score_core
 from app.match_scoring import enter_game_score as enter_game_score_core
 from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import (
-    _is_participant,
-    _serialize_details,
+    is_participant,
     load_match_eager,
+    serialize_details,
     view_extras,
 )
 from app.models import Match, User
@@ -200,9 +200,13 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
         # Gate the history/rivalry/rating payload on participation, exactly as the
         # HTTP GET does — a non-participant (spectator) still sees the scorecard,
         # but with empty extras (#515).
-        is_participant = _is_participant(match, user_id)
-        extras = await view_extras(service, match) if is_participant else empty_extras()
-        return _serialize_details(match, user_id, extras, domain_match)
+        viewer_is_participant = is_participant(match, user_id)
+        extras = (
+            await view_extras(service, match)
+            if viewer_is_participant
+            else empty_extras()
+        )
+        return serialize_details(match, user_id, extras, domain_match)
 
 
 @mcp.tool
@@ -252,7 +256,7 @@ async def create_match(
                 "A rated match needs a registered opponent. Pass an "
                 "opponent_user_id, or set rated=False for a solo match."
             ) from err
-        return _serialize_details(created, creator.id)
+        return serialize_details(created, creator.id)
 
 
 # The per-game score-write domain family the ``match_scoring`` entry points
@@ -304,7 +308,7 @@ async def _serialize_written_match(
     score handlers return for the acting user."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
     extras = await view_extras(service, match)
-    return _serialize_details(match, user_id, extras)
+    return serialize_details(match, user_id, extras)
 
 
 @mcp.tool

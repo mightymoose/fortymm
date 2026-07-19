@@ -43,11 +43,11 @@ from app.match_errors import (
 )
 from app.match_queries import match_eager_options
 from app.match_serialization import (
-    _first_decider,
-    _games_payload_from_match,
-    _is_participant,
-    _is_scorable,
-    _score_view,
+    first_decider,
+    games_payload_from_match,
+    is_participant,
+    is_scorable,
+    score_view,
 )
 from app.models import Match, MatchGame, MatchGameScore, MatchStatus
 from app.result_acceptance import _games_to_win
@@ -139,7 +139,7 @@ async def load_match_for_write(
         .options(*(options if options is not None else match_eager_options()))
     )
     match = result.scalar_one_or_none()
-    if match is None or not _is_participant(match, user_id):
+    if match is None or not is_participant(match, user_id):
         raise MatchNotFoundError()
     return match
 
@@ -170,12 +170,12 @@ class _MatchWriteLoader(Protocol):
 
 def ensure_scorable(match: Match) -> None:
     """Raise :class:`MatchNotScorableError` when ``match`` can't be scored.
-    ``_is_scorable`` owns the *decision*; this only picks the reason-specific
+    ``is_scorable`` owns the *decision*; this only picks the reason-specific
     status/message for a rejection, so the write guard can't drift from the
-    ``can_score`` flag — a future gate added to ``_is_scorable`` falls through to
+    ``can_score`` flag — a future gate added to ``is_scorable`` falls through to
     the catch-all 409 rather than being silently accepted. The carried
     status+message reproduce each historical ``_enforce_scorable`` response."""
-    if _is_scorable(match):
+    if is_scorable(match):
         return
     if len(match.sides) < 2:
         raise MatchNotScorableError(
@@ -197,7 +197,7 @@ def ensure_scorable(match: Match) -> None:
             message="This match hasn't been called to a table yet.",
         )
     # Terminal status (``completed``/``voided``) — or any future
-    # ``_is_scorable`` gate without a message of its own.
+    # ``is_scorable`` gate without a message of its own.
     raise MatchNotScorableError(
         http_status=409, message="This match is no longer scorable."
     )
@@ -225,7 +225,7 @@ def _overrun_decided_at(games: list[MatchResultsGameWrite], best_of: int) -> int
     until a side actually clinches *before* the highest-numbered scored game."""
     if not games:
         return None
-    decider = _first_decider(games, _games_to_win(best_of))
+    decider = first_decider(games, _games_to_win(best_of))
     if decider is None:
         return None
     _, decided_at = decider
@@ -283,7 +283,7 @@ async def _committed_score(
     if reloaded is None:
         return None
     game = _game_by_number(reloaded, game_number)
-    return _score_view(game.score) if game and game.score else None
+    return score_view(game.score) if game and game.score else None
 
 
 async def _enter_game_score_locked(
@@ -316,7 +316,7 @@ async def _enter_game_score_locked(
         # conflict the update path guards against, just on first write. Hand
         # back the committed score so the client surfaces it for review instead
         # of overwriting it.
-        raise ScoreConflictError(committed_score=_score_view(game.score))
+        raise ScoreConflictError(committed_score=score_view(game.score))
 
     game.score = MatchGameScore(
         side_1_points=side_1_points,
@@ -391,7 +391,7 @@ async def _update_game_score_locked(
         # to the value as it actually stands now and signal the conflict (the
         # caller's transaction teardown rolls the no-op transaction back).
         await db.refresh(game.score)
-        raise ScoreConflictError(committed_score=_score_view(game.score))
+        raise ScoreConflictError(committed_score=score_view(game.score))
 
     await db.commit()
 
@@ -467,7 +467,7 @@ async def enter_game_score(
     game = _game_by_number(match, game_number)
     if game is None or game.score is None:
         prospective = [
-            g for g in _games_payload_from_match(match) if g.game_number != game_number
+            g for g in games_payload_from_match(match) if g.game_number != game_number
         ] + [
             MatchResultsGameWrite(
                 game_number=game_number,
@@ -524,7 +524,7 @@ async def update_game_score(
             side_1_points=side_1_points,
             side_2_points=side_2_points,
         )
-        for g in _games_payload_from_match(match)
+        for g in games_payload_from_match(match)
     ]
     ensure_no_overrun(prospective, match.match_settings.best_of, game_number)
 

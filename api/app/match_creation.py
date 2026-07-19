@@ -12,7 +12,7 @@ async function taking ``db`` rather than a class-plus-provider: it has no
 collaborator worth injecting (``resolve_league`` is itself a module-level
 function). It returns the loaded domain :class:`Match`, ready to serialise, and
 signals the three rejection cases with domain exceptions from
-``app.result_acceptance`` — ``SelfMatchError``, ``OpponentNotFoundError``,
+``app.match_errors`` — ``SelfMatchError``, ``OpponentNotFoundError``,
 ``RatedNeedsRegisteredOpponentError`` — never ``HTTPException``. The HTTP
 handler is a thin adapter that maps each back to the exact status and body it
 produced before.

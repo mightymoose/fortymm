@@ -13,7 +13,7 @@ never a router — so it stays cycle-free and is drivable outside an HTTP reques
 import uuid
 
 from app.match_queries import my_side, opponent_side
-from app.match_serialization import _negotiation
+from app.match_serialization import negotiation
 from app.models import Match
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.service import NotificationService
@@ -109,7 +109,7 @@ async def notify_result_posted(
     if recipient_side is None or not recipient_side.players:
         return
     # Derive counter-vs-first-post from the same viewer-relative negotiation
-    # state the BFF/UI use (``_negotiation``'s ``"corrected"`` vs ``"review"``),
+    # state the BFF/UI use (``negotiation``'s ``"corrected"`` vs ``"review"``),
     # rather than the raw ``supersedes_result_id is not None`` check — that
     # naive check is wrong on a self-edit (poster corrects their own standing
     # proposal before the recipient ever answers): it supersedes a result, but
@@ -117,7 +117,7 @@ async def notify_result_posted(
     # "corrected", so they must get the Accept/Suggest-correction prompt, not
     # Accept/Counter.
     is_counter = (
-        _negotiation(match, recipient_side.players[0].user_id).viewer_state
+        negotiation(match, recipient_side.players[0].user_id).viewer_state
         == "corrected"
     )
     copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)

@@ -121,7 +121,7 @@ def side_win_counts(match: Match) -> dict[int, int]:
 def _posted_decided_side(match: Match) -> int:
     """Winner side number per the committed canonical games. Only meaningful
     once a result has been posted: /results validated the games as decided,
-    and ``_enforce_scorable`` freezes them while a result is pending, so exactly
+    and ``ensure_scorable`` freezes them while a result is pending, so exactly
     one side has clinched by the time acceptance reads this."""
     target = _games_to_win(match.match_settings.best_of)
     for side_number, count in sorted(side_win_counts(match).items()):
@@ -397,7 +397,8 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
 
     **The one place a match becomes ``completed``.** Both completion sites funnel
     through here — the rated accept/retire path (:func:`accept_standing_result`) and the
-    unrated immediate-self-accept path (``app.matches``) — so the four things a
+    unrated immediate-self-accept path (``app.result_proposal``'s ``propose_result``,
+    which calls ``finalize_match``) — so the four things a
     completion must do happen together and in one order, and a future third completion
     path cannot do three of them and forget the fourth. ``decided_side`` is the winning
     side number, computed by the caller from the agreed board (``_posted_decided_side``
