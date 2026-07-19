@@ -21,12 +21,13 @@ lifecycle yourself"). The verifier does the same.
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
+from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,17 +40,31 @@ from app.mappers.match_extras_mapper import (
 )
 from app.match_creation import create_match as create_match_core
 from app.match_queries import match_eager_options, singles_user_ids
+from app.match_scoring import MatchLockUnavailable
+from app.match_scoring import delete_game_score as delete_game_score_core
+from app.match_scoring import enter_game_score as enter_game_score_core
+from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import _is_participant, _serialize_details
 from app.models import Match, User
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
+    MatchNotFoundError,
+    MatchNotScorableError,
     OpponentNotFoundError,
     RatedNeedsRegisteredOpponentError,
+    ScoreConflictError,
+    ScoreNotAllowedError,
     SelfMatchError,
 )
 from app.schemas.match import MatchDetails
 from app.services.match_service import MatchService
+
+# A game number bounded to the widest ``best_of`` (7), so an out-of-range value
+# is a schema-level validation error at the transport rather than a tool-body
+# ``ToolError``. The per-match ``best_of`` range is still enforced inside the
+# ``match_scoring`` entry points (``ScoreNotAllowedError``).
+GameNumber = Annotated[int, Field(ge=1, le=7)]
 
 
 @asynccontextmanager
@@ -232,3 +247,170 @@ async def create_match(
                 "opponent_user_id, or set rated=False for a solo match."
             ) from err
         return _serialize_details(created, creator.id)
+
+
+# The per-game score-write domain family the ``match_scoring`` entry points
+# raise. ``MatchLockUnavailable`` is included defensively — the entry points take
+# the *blocking* row lock, so it won't fire today, but mapping it keeps the
+# adapter honest if a caller ever drives them with ``nowait``.
+_SCORE_WRITE_ERRORS = (
+    MatchNotFoundError,
+    MatchNotScorableError,
+    ScoreNotAllowedError,
+    ScoreConflictError,
+    MatchLockUnavailable,
+)
+
+
+def _map_score_write_tool_error(exc: Exception) -> ToolError:
+    """Adapt a score-write domain exception to an actionable ``ToolError``.
+
+    Mirrors the HTTP adapter (``matches._map_score_write_error``) but speaks the
+    agent's language instead of HTTP status codes: a lost optimistic-concurrency
+    race names ``get_match`` as the recovery path (re-read the committed score,
+    then retry with the current version), and a held lock asks for a retry."""
+    if isinstance(exc, MatchNotFoundError):
+        # "Match not found." collapses absent-match and non-participant into one
+        # opaque reason (a non-participant can't probe existence); "Score not
+        # found." is the update/delete missing-score case — surface each as-is,
+        # naming participation for the former.
+        if exc.message == "Match not found.":
+            return ToolError("Match not found, or you are not a participant.")
+        return ToolError(exc.message)
+    if isinstance(exc, MatchNotScorableError):
+        return ToolError(exc.message)
+    if isinstance(exc, ScoreNotAllowedError):
+        return ToolError(str(exc))
+    if isinstance(exc, ScoreConflictError):
+        return ToolError(
+            "This game's score changed under you — call get_match to see the "
+            "committed score, then retry with the current version."
+        )
+    if isinstance(exc, MatchLockUnavailable):
+        return ToolError("Another write is in progress for this match, retry.")
+    return ToolError(str(exc))
+
+
+async def _serialize_written_match(
+    db: AsyncSession, match: Match, user_id: uuid.UUID
+) -> MatchDetails:
+    """Serialize a just-written match from the participant caller's perspective.
+
+    The ``match_scoring`` entry points only return to a participant (a
+    non-participant is rejected at load with ``MatchNotFoundError``), so the
+    history/rivalry/rating extras are always assembled — the same view the HTTP
+    score handlers return for the acting user."""
+    service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
+    extras = await _view_extras(service, match)
+    return _serialize_details(match, user_id, extras)
+
+
+@mcp.tool
+async def enter_game_score(
+    match_id: uuid.UUID,
+    game_number: GameNumber,
+    side_1_points: int,
+    side_2_points: int,
+) -> MatchDetails:
+    """Save the first score for a game as the authenticated API-token caller and
+    return the updated match.
+
+    Mirrors ``POST /v1/matches/{match_id}/games/{game_number}/scores/new``: it
+    reuses the shared ``match_scoring`` write path (blocking row lock,
+    scorability + best-of-range + no-overrun guards, then the insert) so the MCP
+    and HTTP surfaces can never drift. ``game_number`` is 1-based and at most 7.
+    Returns the reloaded ``MatchDetails`` from the caller's perspective (the same
+    view ``get_match`` reads back).
+
+    Raises a ``ToolError`` when the match doesn't exist or you're not a
+    participant, when the match isn't scorable (no opponent, a posted result, not
+    yet called to a table, or terminal), when the game is out of the ``best_of``
+    range or would overrun a decided match, or when a concurrent participant
+    already scored this game (call ``get_match``, then retry)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        try:
+            reloaded = await enter_game_score_core(
+                db,
+                match_id,
+                user_id,
+                game_number=game_number,
+                side_1_points=side_1_points,
+                side_2_points=side_2_points,
+            )
+        except _SCORE_WRITE_ERRORS as exc:
+            raise _map_score_write_tool_error(exc) from exc
+        return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def update_game_score(
+    match_id: uuid.UUID,
+    game_number: GameNumber,
+    side_1_points: int,
+    side_2_points: int,
+    expected_version: int,
+) -> MatchDetails:
+    """Replace a game's committed score under optimistic concurrency as the
+    authenticated API-token caller and return the updated match.
+
+    Mirrors ``PUT /v1/matches/{match_id}/games/{game_number}/scores``: it reuses
+    the shared ``match_scoring`` write path (blocking row lock, scorability + the
+    score's existence + no-overrun guards, then the version-guarded UPDATE) so
+    the MCP and HTTP surfaces can never drift. ``expected_version`` is the
+    ``version`` the caller last read for this game's score (from ``get_match``);
+    the write only commits while the committed row is still at that version.
+
+    Raises a ``ToolError`` when the match doesn't exist or you're not a
+    participant, when the game score doesn't exist, when the match isn't
+    scorable, when the write would overrun a decided match, or when
+    ``expected_version`` is stale — a concurrent participant saved this game since
+    you read it (call ``get_match`` for the committed score, then retry with the
+    current version)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        try:
+            reloaded = await update_game_score_core(
+                db,
+                match_id,
+                user_id,
+                game_number=game_number,
+                side_1_points=side_1_points,
+                side_2_points=side_2_points,
+                expected_version=expected_version,
+            )
+        except _SCORE_WRITE_ERRORS as exc:
+            raise _map_score_write_tool_error(exc) from exc
+        return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def delete_game_score(
+    match_id: uuid.UUID,
+    game_number: GameNumber,
+) -> MatchDetails:
+    """Clear a game's committed score as the authenticated API-token caller and
+    return the updated match.
+
+    Mirrors ``DELETE /v1/matches/{match_id}/games/{game_number}/scores``: it
+    reuses the shared ``match_scoring`` write path (blocking row lock,
+    scorability + the score's existence guards, then the clear) so the MCP and
+    HTTP surfaces can never drift. The game row stays so a later
+    ``enter_game_score`` for the same number attaches a fresh score. Returns the
+    reloaded ``MatchDetails`` from the caller's perspective.
+
+    Raises a ``ToolError`` when the match doesn't exist or you're not a
+    participant, when the game score doesn't exist, or when the match isn't
+    scorable."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        try:
+            reloaded = await delete_game_score_core(
+                db,
+                match_id,
+                user_id,
+                game_number=game_number,
+            )
+        except _SCORE_WRITE_ERRORS as exc:
+            raise _map_score_write_tool_error(exc) from exc
+        return await _serialize_written_match(db, reloaded, user_id)

@@ -349,3 +349,187 @@ async def test_create_rated_match_against_registered_opponent(
     my_side, opp_side = body["sides"]
     assert my_side["players"][0]["user_id"] == str(me.id)
     assert opp_side["players"][0]["user_id"] == str(opponent.id)
+
+
+# ----- score-write tools (enter / update / delete) -------------------------
+
+
+def _game_score(body: dict[str, object] | None, game_number: int) -> dict[str, int]:
+    """The committed score dict for ``game_number`` in a ``MatchDetails`` body,
+    asserting one exists."""
+    assert body is not None
+    games = body["games"]
+    assert isinstance(games, list)
+    game = next(g for g in games if g["game_number"] == game_number)
+    score = game["score"]
+    assert score is not None
+    return score
+
+
+async def test_score_write_tools_are_registered(db_session: AsyncSession) -> None:
+    """The three per-game score verbs are exposed over the transport."""
+    user = await make_user(db_session, "mcp-score-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+
+    assert {"enter_game_score", "update_game_score", "delete_game_score"} <= names
+
+
+async def test_enter_update_delete_game_score_round_trip(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """enter → get_match reflects it; update with the current version replaces
+    it; a STALE version conflicts (naming get_match); delete clears it."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    async with _mcp_client(raw) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 5,
+            },
+        )
+        assert entered.isError is False
+        score = _game_score(entered.structuredContent, 1)
+        assert (score["side_1_points"], score["side_2_points"], score["version"]) == (
+            11,
+            5,
+            1,
+        )
+
+        # get_match reads the committed score back.
+        read_back = await client.call_tool_mcp("get_match", {"match_id": match_id})
+        assert _game_score(read_back.structuredContent, 1)["side_1_points"] == 11
+
+        # Update with the current version succeeds and bumps the version.
+        updated = await client.call_tool_mcp(
+            "update_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 7,
+                "expected_version": 1,
+            },
+        )
+        assert updated.isError is False
+        score = _game_score(updated.structuredContent, 1)
+        assert (score["side_1_points"], score["side_2_points"], score["version"]) == (
+            11,
+            7,
+            2,
+        )
+
+        # A stale expected_version loses the optimistic-concurrency check; the
+        # ToolError must name get_match as the recovery path.
+        with pytest.raises(ToolError, match="get_match"):
+            await client.call_tool(
+                "update_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 9,
+                    "expected_version": 1,
+                },
+            )
+
+        # Delete clears the committed score (the game row stays, score is null).
+        deleted = await client.call_tool_mcp(
+            "delete_game_score",
+            {"match_id": match_id, "game_number": 1},
+        )
+        assert deleted.isError is False
+        assert deleted.structuredContent is not None
+        game = next(
+            g for g in deleted.structuredContent["games"] if g["game_number"] == 1
+        )
+        assert game["score"] is None
+
+
+async def test_enter_game_score_out_of_range_is_schema_error(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A ``game_number`` outside 1..7 is rejected as a validation error before the
+    tool body — the bounded ``Field(ge=1, le=7)`` on the argument."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-range-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 8,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+
+async def test_enter_game_score_non_participant_raises_tool_error(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A caller who isn't on the match can't score it — the load collapses
+    non-participation into the same opaque not-found ToolError (naming
+    participation), so existence can't be probed."""
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-outsider-rival")
+    match_id = await _create_match(api_client, opponent, best_of=5)
+
+    outsider = await make_user(db_session, "mcp-score-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="participant"):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+
+async def test_enter_game_score_on_frozen_match_raises_scorable_reason(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A match with a posted (standing) result has a frozen scratchpad; scoring
+    it surfaces the carried scorability reason as the ToolError."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-frozen-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=1)
+
+    # Post a complete, decided result via HTTP — a rated two-human match leaves
+    # it standing and freezes the score endpoints (#715).
+    posted = await api_client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]},
+    )
+    assert posted.status_code == 201, posted.text
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="posted result"):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 7,
+                },
+            )
