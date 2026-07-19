@@ -1,10 +1,16 @@
 """Unit tests for the transport-neutral per-game score service
 (``app.match_scoring``), constructed directly with a ``db_session`` — no
-FastAPI, no HTTP client. The HTTP wire contract (the 201/409 bodies) is covered
-separately by ``test_matches.py``; here we prove each service function returns
-the reloaded domain ``Match`` on the happy paths and raises the domain
-``ScoreConflictError`` (carrying the committed score, never ``HTTPException``)
-on the concurrent-participant races the HTTP adapter maps to its 409."""
+FastAPI, no HTTP client.
+
+The high-level entry points (:func:`enter_game_score`, :func:`update_game_score`,
+:func:`delete_game_score`) drive the full FastAPI-free write path from a
+``match_id`` + ``user_id``: load+lock+participant, scorability, best-of range,
+no-overrun, then the mutation. They trade in the domain ``Match`` and the domain
+exception family (``MatchNotFoundError`` / ``MatchNotScorableError`` /
+``ScoreNotAllowedError`` / ``ScoreConflictError``), never ``HTTPException`` — the
+HTTP adapter maps each back to its exact status + body, and ``test_matches.py``
+covers that wire contract separately.
+"""
 
 import uuid
 
@@ -14,15 +20,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.match_creation import create_match
 from app.match_queries import match_eager_options
-from app.match_scoring import delete_game_score, enter_game_score, update_game_score
-from app.models import Match
-from app.result_acceptance import ScoreConflictError
+from app.match_scoring import (
+    delete_game_score,
+    ensure_scorable,
+    enter_game_score,
+    update_game_score,
+)
+from app.models import Match, MatchResult, MatchStatus
+from app.result_acceptance import (
+    MatchNotFoundError,
+    MatchNotScorableError,
+    ScoreConflictError,
+    ScoreNotAllowedError,
+)
 from tests._helpers import make_user
 
 
 async def _rated_match(db_session: AsyncSession, tag: str) -> Match:
     """A fresh rated best-of-5 match between two registered users, loaded with
-    the read eager-load chain the score service expects."""
+    the read eager-load chain. ``match.created_by_user_id`` is the side-1
+    participant every write test acts as."""
     creator = await make_user(db_session, f"{tag}-creator")
     opponent = await make_user(db_session, f"{tag}-opponent")
     return await create_match(
@@ -51,13 +68,21 @@ def _score_for(match: Match, game_number: int) -> object:
     return game.score
 
 
+# ----- happy paths ---------------------------------------------------------
+
+
 async def test_enter_game_score_saves_the_first_score(
     db_session: AsyncSession,
 ) -> None:
     match = await _rated_match(db_session, "enter")
 
     updated = await enter_game_score(
-        db_session, match, game_number=1, side_1_points=11, side_2_points=4
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
     )
 
     assert isinstance(updated, Match)
@@ -72,13 +97,19 @@ async def test_update_game_score_with_the_right_version_replaces_it(
     db_session: AsyncSession,
 ) -> None:
     match = await _rated_match(db_session, "update-ok")
-    match = await enter_game_score(
-        db_session, match, game_number=1, side_1_points=11, side_2_points=4
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
     )
 
     updated = await update_game_score(
         db_session,
-        match,
+        match.id,
+        match.created_by_user_id,
         game_number=1,
         side_1_points=11,
         side_2_points=9,
@@ -92,17 +123,246 @@ async def test_update_game_score_with_the_right_version_replaces_it(
     assert score.version == 2
 
 
+async def test_delete_game_score_clears_the_score_and_keeps_the_game(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "delete")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
+    )
+
+    updated = await delete_game_score(
+        db_session, match.id, match.created_by_user_id, game_number=1
+    )
+
+    game = next(g for g in updated.games if g.game_number == 1)
+    # The score row is gone but the MatchGame stays so a fresh score can attach.
+    assert game.score is None
+
+
+# ----- load + participation (MatchNotFoundError) ---------------------------
+
+
+async def test_enter_game_score_for_a_non_participant_raises_match_not_found(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "enter-outsider")
+    outsider = await make_user(db_session, "enter-outsider-3p")
+
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            outsider.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    # A non-participant is opaque-404'd exactly like an absent match, so they
+    # can't probe existence.
+    assert excinfo.value.message == "Match not found."
+
+
+async def test_enter_game_score_for_an_absent_match_raises_match_not_found(
+    db_session: AsyncSession,
+) -> None:
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await enter_game_score(
+            db_session,
+            uuid.uuid4(),
+            uuid.uuid4(),
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.message == "Match not found."
+
+
+async def test_update_game_score_without_a_committed_score_raises_score_not_found(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "update-missing")
+
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await update_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=9,
+            expected_version=1,
+        )
+
+    # Distinct 404 copy from match-not-found: the match resolved, the game score
+    # didn't.
+    assert excinfo.value.message == "Score not found."
+
+
+async def test_delete_game_score_without_a_committed_score_raises_score_not_found(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "delete-missing")
+
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await delete_game_score(
+            db_session, match.id, match.created_by_user_id, game_number=1
+        )
+
+    assert excinfo.value.message == "Score not found."
+
+
+# ----- scorability (MatchNotScorableError) ---------------------------------
+
+
+async def test_enter_game_score_on_a_pending_match_raises_not_scorable(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "pending")
+    # A scheduled-but-uncalled match: the schedule is authoritative, so an
+    # out-of-band score is refused. Commit so the high-level reload sees it.
+    match.status = MatchStatus.pending
+    await db_session.commit()
+
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match hasn't been called to a table yet."
+
+
+def test_ensure_scorable_no_opponent_is_422() -> None:
+    # A one-sided match (defensive: creation always builds a sentinel side 2).
+    match = Match()
+    match.status = MatchStatus.in_progress
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        ensure_scorable(match)
+    assert excinfo.value.http_status == 422
+    assert excinfo.value.message == "This match has no opponent and can't be scored."
+
+
+async def test_ensure_scorable_posted_result_is_409(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "posted")
+    # A posted result freezes the scratchpad (#715); the board now only moves
+    # via propose/accept. Appended in memory — the truthiness of ``results`` is
+    # the whole gate.
+    match.results.append(
+        MatchResult(submitted_by_user_id=match.created_by_user_id, games=[])
+    )
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        ensure_scorable(match)
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match has a posted result; scores are frozen."
+
+
+async def test_ensure_scorable_pending_is_409(db_session: AsyncSession) -> None:
+    match = await _rated_match(db_session, "pending-direct")
+    match.status = MatchStatus.pending
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        ensure_scorable(match)
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match hasn't been called to a table yet."
+
+
+async def test_ensure_scorable_completed_is_409(db_session: AsyncSession) -> None:
+    match = await _rated_match(db_session, "completed")
+    match.status = MatchStatus.completed
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        ensure_scorable(match)
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match is no longer scorable."
+
+
+# ----- range + overrun (ScoreNotAllowedError) ------------------------------
+
+
+async def test_enter_game_score_past_best_of_raises_not_allowed(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "range")
+
+    with pytest.raises(ScoreNotAllowedError) as excinfo:
+        # best_of is 5; game 6 can never exist.
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=6,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert str(excinfo.value) == "This match is best of 5; game 6 can't exist."
+
+
+async def test_enter_game_score_overrunning_the_decider_raises_not_allowed(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "overrun")
+    # Side 1 clinches best-of-5 by sweeping games 1-3 (3 wins = target).
+    for game_number in (1, 2, 3):
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=game_number,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    with pytest.raises(ScoreNotAllowedError) as excinfo:
+        # Game 4 can't have been played — the match was already decided at 3.
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=4,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert (
+        str(excinfo.value)
+        == "The match was already decided at game 3; game 4 can't be played."
+    )
+
+
+# ----- concurrent-participant conflicts (ScoreConflictError) ---------------
+
+
 async def test_update_game_score_with_a_stale_version_raises_score_conflict(
     db_session: AsyncSession,
 ) -> None:
     match = await _rated_match(db_session, "update-stale")
-    match = await enter_game_score(
-        db_session, match, game_number=1, side_1_points=11, side_2_points=4
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
     )
     # A first participant's edit advances the committed row to version 2.
-    match = await update_game_score(
+    await update_game_score(
         db_session,
-        match,
+        match.id,
+        match.created_by_user_id,
         game_number=1,
         side_1_points=11,
         side_2_points=8,
@@ -113,7 +373,8 @@ async def test_update_game_score_with_a_stale_version_raises_score_conflict(
     with pytest.raises(ScoreConflictError) as excinfo:
         await update_game_score(
             db_session,
-            match,
+            match.id,
+            match.created_by_user_id,
             game_number=1,
             side_1_points=5,
             side_2_points=11,
@@ -133,38 +394,31 @@ async def test_enter_game_score_on_an_already_scored_game_raises_score_conflict(
     db_session: AsyncSession,
 ) -> None:
     match = await _rated_match(db_session, "concurrent-create")
-    match = await enter_game_score(
-        db_session, match, game_number=1, side_1_points=11, side_2_points=4
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
     )
-    # Re-read the committed state a second participant would be holding, then
-    # try to create the same game again — the in-memory pre-check the router's
-    # blocking lock funnels the concurrent create into.
-    match = await _reload(db_session, match.id)
 
+    # A concurrent participant tries to create the same game again — the
+    # in-memory pre-check the router's blocking lock funnels the race into.
     with pytest.raises(ScoreConflictError) as excinfo:
         await enter_game_score(
-            db_session, match, game_number=1, side_1_points=11, side_2_points=6
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=6,
         )
 
     committed = excinfo.value.committed_score
     assert committed is not None
-    # The conflict hands back the winner's committed score (11–4), not the
-    # loser's attempted overwrite.
+    # The conflict hands back the winner's committed score (11-4), not the
+    # loser's attempted overwrite, and runs *before* any overrun check.
     assert committed.side_1_points == 11
     assert committed.side_2_points == 4
     assert committed.version == 1
-
-
-async def test_delete_game_score_clears_the_score_and_keeps_the_game(
-    db_session: AsyncSession,
-) -> None:
-    match = await _rated_match(db_session, "delete")
-    match = await enter_game_score(
-        db_session, match, game_number=1, side_1_points=11, side_2_points=4
-    )
-
-    updated = await delete_game_score(db_session, match, game_number=1)
-
-    game = next(g for g in updated.games if g.game_number == 1)
-    # The score row is gone but the MatchGame stays so a fresh score can attach.
-    assert game.score is None

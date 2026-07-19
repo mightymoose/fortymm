@@ -90,6 +90,46 @@ class PostedGamesNotDecisiveError(Exception):
     the existing 409 ``"The posted games no longer decide this match."``."""
 
 
+class MatchNotFoundError(Exception):
+    """Raised by the per-game score service (``app.match_scoring``) when the
+    write target can't be resolved — either the match id is absent or the acting
+    user isn't a participant (today's score endpoints collapse both into one
+    opaque 404 so a non-participant can't probe match existence), or, on the
+    update/delete paths, the addressed game score doesn't exist.
+
+    Carries the exact ``message`` the HTTP adapter must reproduce as its 404
+    ``detail``: ``"Match not found."`` for an absent match or non-participant,
+    ``"Score not found."`` for a missing game score. Never an ``HTTPException`` —
+    it has no HTTP context; the caller adapts it to its transport."""
+
+    def __init__(self, message: str = "Match not found.") -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class MatchNotScorableError(Exception):
+    """Raised by the per-game score service when the loaded match can't be
+    scored. It carries the exact ``http_status`` (422 or 409) **and** ``message``
+    for each of ``_enforce_scorable``'s four reason-specific outcomes — no
+    opponent (422), a posted result (409), an uncalled scheduled match (409), or
+    any other non-scorable/terminal state (409) — so the HTTP adapter reproduces
+    the identical response byte-for-byte while the MCP adapter reads the message.
+    Never an ``HTTPException`` — the caller adapts it to its transport."""
+
+    def __init__(self, *, http_status: int, message: str) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.message = message
+
+
+class ScoreNotAllowedError(Exception):
+    """Raised by the per-game score service when a scratchpad write is legal to
+    attempt but disallowed by a cross-game rule — the addressed game exceeds the
+    match's ``best_of`` range, or the prospective board would leave the match
+    decided before its last scored game (overrun). Both map to a 422 carrying
+    this exception's exact message. Never an ``HTTPException``."""
+
+
 class ScoreConflictError(Exception):
     """Raised by the per-game score service (``app.match_scoring``) when a
     scratchpad write loses a concurrent-participant race: a create finds the

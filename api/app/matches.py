@@ -17,7 +17,7 @@ from fastapi import (
 )
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -45,18 +45,18 @@ from app.match_queries import (
     singles_user_ids,
 )
 from app.match_scoring import (
-    delete_game_score as delete_game_score_core,
+    MatchLockUnavailable,
+    enter_game_score,
+    load_match_for_write,
 )
 from app.match_scoring import (
-    enter_game_score,
+    delete_game_score as delete_game_score_core,
 )
 from app.match_scoring import (
     update_game_score as update_game_score_core,
 )
 from app.match_serialization import (
     _compact_games,
-    _first_decider,
-    _games_payload_from_match,
     _is_participant,
     _is_scorable,
     _negotiation,
@@ -80,13 +80,15 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
+    MatchNotFoundError,
+    MatchNotScorableError,
     OpponentNotFoundError,
     PostedGamesNotDecisiveError,
     RatedNeedsRegisteredOpponentError,
     ScoreConflictError,
+    ScoreNotAllowedError,
     SelfMatchError,
     StandingResultConflictError,
-    _games_to_win,
     accept_standing_result,
     finalize_match,
     side_win_counts,
@@ -104,7 +106,6 @@ from app.schemas.match import (
     MatchListFilter,
     MatchListResponse,
     MatchListRow,
-    MatchResultsGameWrite,
     MatchResultsWrite,
 )
 from app.schemas.notification import NotificationJob
@@ -608,38 +609,6 @@ _TERMINAL_STATUSES = {
 }
 
 
-def _enforce_scorable(match: Match) -> None:
-    """Raise when a match can't be scored. ``_is_scorable`` owns the *decision*;
-    this only picks the reason-specific status/message for a rejection, so the
-    write guard can't drift from the ``can_score`` flag — a future gate added to
-    ``_is_scorable`` falls through to the catch-all 409 rather than being
-    silently accepted."""
-    if _is_scorable(match):
-        return
-    if len(match.sides) < 2:
-        raise HTTPException(
-            status_code=422,
-            detail="This match has no opponent and can't be scored.",
-        )
-    # Any posted result freezes the scratchpad (#715); the board now only
-    # changes through propose/accept, not the score endpoints.
-    if match.results:
-        raise HTTPException(
-            status_code=409,
-            detail="This match has a posted result; scores are frozen.",
-        )
-    # Scheduled but not yet called to a table (#1073): the schedule is
-    # authoritative, so an uncalled match can't be played out-of-band.
-    if match.status == MatchStatus.pending:
-        raise HTTPException(
-            status_code=409,
-            detail="This match hasn't been called to a table yet.",
-        )
-    # Terminal status (``completed``/``voided``) — or any future
-    # ``_is_scorable`` gate without a message of its own.
-    raise HTTPException(status_code=409, detail="This match is no longer scorable.")
-
-
 # ----- result-acceptance push ---------------------------------------------
 
 # En-dash between scores reads better than a hyphen in notification copy.
@@ -767,49 +736,6 @@ async def _notify_result_posted(
 # ----- finalize-payload validation + apply --------------------------------
 
 
-def _overrun_decider(games: list[MatchResultsGameWrite], best_of: int) -> int | None:
-    """The game number at which the match was already decided when there are
-    scored games numbered *after* it ("overrun"). Returns ``None`` for empty,
-    still-undecided, or exactly-decided-at-the-last-game boards — all legal
-    scratchpad states.
-
-    Gap-tolerant on purpose: it shares the decider core with the finalize
-    validator but does **not** require ``1..N`` contiguity, so legitimate
-    out-of-order / gappy entry (e.g. scoring game 3 first) is allowed right up
-    until a side actually clinches *before* the highest-numbered scored game.
-    That is the impossible state — games can't have been played after the match
-    was already won — so the scratchpad write path rejects it."""
-    if not games:
-        return None
-    decider = _first_decider(games, _games_to_win(best_of))
-    if decider is None:
-        return None
-    _, decided_at = decider
-    if decided_at < max(g.game_number for g in games):
-        return decided_at
-    return None
-
-
-def _enforce_no_overrun(
-    games: list[MatchResultsGameWrite], best_of: int, game_number: int
-) -> None:
-    """Reject a scratchpad write (422) when the prospective board ``games`` would
-    leave the match decided before its last scored game. Shared by both
-    score-write paths so the check, status, and message can't drift; each caller
-    builds its own prospective board (the create path mutates the ORM then reads
-    it back, the update path substitutes the payload because its write is raw
-    SQL), then hands it here."""
-    decided_at = _overrun_decider(games, best_of)
-    if decided_at is not None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"The match was already decided at game {decided_at}; "
-                f"game {game_number} can't be played."
-            ),
-        )
-
-
 def _result_games_snapshot(payload: MatchResultsWrite) -> list[dict[str, int]]:
     """The immutable JSONB snapshot stored on a ``MatchResult`` — the claimed
     board frozen at post time, ordered by game number. (A typed read-side decode
@@ -873,57 +799,6 @@ def _requires_confirmation(match: Match) -> bool:
 # ----- scoring endpoints ---------------------------------------------------
 
 
-class MatchLockUnavailable(Exception):
-    """``SELECT ... FOR UPDATE NOWAIT`` found the match row already locked by a
-    concurrent negotiation transaction. Raised by ``_lock_match_row(nowait=True)``
-    so the caller can translate it into a fast, clean 409 instead of blocking
-    on the lock (see ``post_match_result``)."""
-
-
-# Postgres SQLSTATE for a ``NOWAIT`` lock that could not be acquired.
-_LOCK_NOT_AVAILABLE = "55P03"
-
-
-async def _lock_match_row(
-    db: AsyncSession, match_id: uuid.UUID, *, nowait: bool = False
-) -> None:
-    """Take a transaction-scoped row lock on the ``matches`` row so the
-    negotiation transitions (``/results`` propose, ``/results/{id}/acceptance``)
-    serialize against each other.
-
-    Without this, a participant firing two acceptances (or a propose racing an
-    acceptance) concurrently lets both transactions pass their standing-result
-    guard on the same pre-image and both commit — finalizing the match twice and
-    applying a rating change more than once (issue #365). The lock forces the
-    second transaction to wait for the first to commit and then re-read the
-    post-image, so its guard returns a clean 409.
-
-    It's a thin ``SELECT matches.id ... FOR UPDATE`` rather than adding
-    ``.with_for_update()`` to the eager ``_load_match`` query: a narrow
-    lock-only select is cheaper than re-running ``match_eager_options`` (which
-    fans out into a selectinload query per relationship) just to take the lock,
-    and acquiring it on its own line makes the lock-then-read ordering explicit
-    — the subsequent load sees the serialized state. Locking just the parent
-    row is enough — every negotiation transition reads and writes that match's
-    children under cover of this lock.
-
-    ``nowait=True`` adds ``NOWAIT``: if the row is already locked, Postgres
-    raises immediately instead of blocking, which we surface as
-    ``MatchLockUnavailable``. ``post_match_result`` uses this so a double-tapped
-    finalize doesn't park a request (and its pooled DB connection) on the lock
-    for the full duration of the in-flight post — the pile-up that wedged the
-    whole instance under a stray double-click (issue #641). The blocking form
-    is kept for /results/{id}/acceptance, where a second concurrent caller is a
-    *legitimate* acceptor that must wait, re-read, and proceed."""
-    stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
-    try:
-        await db.execute(stmt)
-    except DBAPIError as exc:
-        if nowait and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE:
-            raise MatchLockUnavailable from exc
-        raise
-
-
 async def _load_match_for_scoring(
     db: AsyncSession,
     match_id: uuid.UUID,
@@ -933,20 +808,27 @@ async def _load_match_for_scoring(
     nowait: bool = False,
     options: tuple[ExecutableOption, ...] | None = None,
 ) -> Match:
-    # ``lock`` callers (the negotiation transitions, and per ADR-0009 the score
-    # endpoints) take the row lock *before* the eager load so the match state
-    # they read is the serialized one.
-    #
-    # The finalize paths (``post_match_result`` self-accept, ``accept_match_result``)
-    # pass ``options=match_rating_eager_options()`` so ``_apply_rating_update`` can
-    # read ``league.rating_strategy`` without a mid-request lazy load; the scratchpad
-    # score endpoints never finalize, so they take the default read chain.
-    if lock:
-        await _lock_match_row(db, match_id, nowait=nowait)
-    match = await _load_match(db, match_id, options=options)
-    if match is None or not _is_participant(match, current_user_id):
-        raise HTTPException(status_code=404, detail="Match not found.")
-    return match
+    """The HTTP adapter over the FastAPI-free ``load_match_for_write``: it maps
+    the service's :class:`MatchNotFoundError` (absent match *or* non-participant)
+    to the endpoints' historical ``HTTPException(404, "Match not found.")`` and
+    lets :class:`MatchLockUnavailable` propagate so ``post_match_result`` can
+    translate a held ``NOWAIT`` lock into its fast 409.
+
+    Both the negotiation transitions (``post_match_result``,
+    ``accept_match_result``) and — as the injected load seam — the score handlers
+    call this, so it stays the single monkeypatchable load the #835 row-lock race
+    tests barrier on."""
+    try:
+        return await load_match_for_write(
+            db,
+            match_id,
+            current_user_id,
+            lock=lock,
+            nowait=nowait,
+            options=options,
+        )
+    except MatchNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Match not found.") from exc
 
 
 # Per-game endpoints are addressed by ``game_number``: a game row may not
@@ -955,6 +837,39 @@ async def _load_match_for_scoring(
 # on an existing score. All three are pure "save / clear scratchpad state" —
 # they never touch match.status, side wins, side.won, or ratings. The single
 # canonical commit happens in ``finalize_match`` below.
+
+
+# The FastAPI-free score write path (``app.match_scoring``) raises this closed
+# family of domain exceptions; ``_map_score_write_error`` reproduces the exact
+# status + body each endpoint produced before the guards moved into the service.
+# ``_SCORE_WRITE_ERRORS`` is the ``except`` tuple; the alias types the mapper.
+_ScoreWriteError = (
+    MatchNotFoundError
+    | MatchNotScorableError
+    | ScoreNotAllowedError
+    | ScoreConflictError
+)
+_SCORE_WRITE_ERRORS = (
+    MatchNotFoundError,
+    MatchNotScorableError,
+    ScoreNotAllowedError,
+    ScoreConflictError,
+)
+
+
+def _map_score_write_error(exc: _ScoreWriteError) -> HTTPException:
+    """Adapt a score-write domain exception to its historical HTTP response:
+    ``MatchNotFoundError`` → 404 with the carried message (``"Match not found."``
+    / ``"Score not found."``), ``MatchNotScorableError`` → its carried 422/409 +
+    message, ``ScoreNotAllowedError`` → 422 (best-of range / overrun), and
+    ``ScoreConflictError`` → the structured 409 ``MatchGameScoreConflict`` body."""
+    if isinstance(exc, MatchNotFoundError):
+        return HTTPException(status_code=404, detail=exc.message)
+    if isinstance(exc, MatchNotScorableError):
+        return HTTPException(status_code=exc.http_status, detail=exc.message)
+    if isinstance(exc, ScoreNotAllowedError):
+        return HTTPException(status_code=422, detail=str(exc))
+    return _score_conflict(exc.committed_score)
 
 
 @router.post(
@@ -971,56 +886,24 @@ async def create_game_score(
     db: AsyncSession = Depends(get_session),
     match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
-    # Take the blocking match row lock so this score write serializes against a
-    # concurrent first ``post_match_result`` (which locks the same row NOWAIT).
-    # The lock is acquired *before* the eager load, so the ``_enforce_scorable``
-    # recheck below runs on the serialized (post-freeze) state — a score can no
-    # longer commit atop a result the propose already froze (#835, ADR-0009).
-    # Blocking (not NOWAIT): the common score-vs-score contention resolves via
-    # the uq_match_games / version guards and must not spuriously 409.
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    _enforce_scorable(match)
-    if game_number > match.match_settings.best_of:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"This match is best of {match.match_settings.best_of}; "
-                f"game {game_number} can't exist."
-            ),
-        )
-
-    # The board can't have games after the match was already decided. Reject
-    # before delegating (request teardown rolls back the uncommitted session),
-    # gap-tolerant — only a clinch *before* the last scored game trips. An
-    # existing committed score at this game short-circuits to the service's 409
-    # below without running overrun, preserving the historical ordering (the
-    # pre-existing-score conflict was raised before the overrun 422). Because
-    # this game has no committed score in that branch, the prospective board is
-    # the currently-scored games plus this new write — identical to the ORM the
-    # old handler mutated then read back.
-    game = next((g for g in match.games if g.game_number == game_number), None)
-    if game is None or game.score is None:
-        prospective = [
-            g for g in _games_payload_from_match(match) if g.game_number != game_number
-        ] + [
-            MatchResultsGameWrite(
-                game_number=game_number,
-                side_1_points=payload.side_1_points,
-                side_2_points=payload.side_2_points,
-            )
-        ]
-        _enforce_no_overrun(prospective, match.match_settings.best_of, game_number)
-
+    # The whole write path — the blocking match row lock (serializing against a
+    # concurrent first ``post_match_result`` NOWAIT lock, #835/ADR-0009), the
+    # scorability / best-of-range / no-overrun guards, and the mutation — is
+    # owned by the service. ``load_match=_load_match_for_scoring`` injects the
+    # router's monkeypatchable load seam (mapping a missing/foreign match to its
+    # 404) so the row-lock race tests still barrier on it.
     try:
         reloaded = await enter_game_score(
             db,
-            match,
+            match_id,
+            current_user.id,
             game_number=game_number,
             side_1_points=payload.side_1_points,
             side_2_points=payload.side_2_points,
+            load_match=_load_match_for_scoring,
         )
-    except ScoreConflictError as exc:
-        raise _score_conflict(exc.committed_score) from exc
+    except _SCORE_WRITE_ERRORS as exc:
+        raise _map_score_write_error(exc) from exc
 
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
@@ -1039,46 +922,23 @@ async def update_game_score(
     db: AsyncSession = Depends(get_session),
     match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
-    # Blocking match row lock (see ``create_game_score``): serializes this update
-    # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
-    # rechecks the serialized state and the conditional UPDATE below can't race a
-    # board freeze that deletes the target score row (#835, ADR-0009). Blocking,
-    # not NOWAIT, so the common score-vs-score edit isn't spuriously 409'd.
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    _enforce_scorable(match)
-
-    game = next((g for g in match.games if g.game_number == game_number), None)
-    if game is None or game.score is None:
-        raise HTTPException(status_code=404, detail="Score not found.")
-
-    # Editing a game's winner can move the decider earlier, so the same
-    # "no games past the decider" guard the create path enforces applies here.
-    # The service's UPDATE runs in raw SQL, so in-memory ``match.games`` still
-    # holds the OLD score — build the prospective board by substituting the
-    # payload points for this game before delegating.
-    prospective = [
-        g
-        if g.game_number != game_number
-        else MatchResultsGameWrite(
-            game_number=game_number,
-            side_1_points=payload.side_1_points,
-            side_2_points=payload.side_2_points,
-        )
-        for g in _games_payload_from_match(match)
-    ]
-    _enforce_no_overrun(prospective, match.match_settings.best_of, game_number)
-
+    # Whole write path owned by the service (blocking row lock, scorability, the
+    # score's existence 404, the no-overrun guard on the payload-substituted
+    # prospective board, then the optimistic-concurrency UPDATE — #835/ADR-0009).
+    # ``load_match=_load_match_for_scoring`` keeps the barrier-patchable load seam.
     try:
         reloaded = await update_game_score_core(
             db,
-            match,
+            match_id,
+            current_user.id,
             game_number=game_number,
             side_1_points=payload.side_1_points,
             side_2_points=payload.side_2_points,
             expected_version=payload.expected_version,
+            load_match=_load_match_for_scoring,
         )
-    except ScoreConflictError as exc:
-        raise _score_conflict(exc.committed_score) from exc
+    except _SCORE_WRITE_ERRORS as exc:
+        raise _map_score_write_error(exc) from exc
 
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
@@ -1095,19 +955,22 @@ async def delete_game_score(
     db: AsyncSession = Depends(get_session),
     match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
-    # Blocking match row lock (see ``create_game_score``): serializes this delete
-    # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
-    # rechecks the serialized state, and two racing clears re-read under the lock
-    # — the loser sees the already-cleared score and 404s instead of a lying 200
-    # (#835, ADR-0009). Blocking, not NOWAIT, to match the other score paths.
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    _enforce_scorable(match)
+    # Whole write path owned by the service (blocking row lock, scorability, the
+    # score's existence 404, then the clear — #835/ADR-0009). Two racing clears
+    # re-read under the lock, so the loser sees the already-cleared score and
+    # 404s. ``load_match=_load_match_for_scoring`` keeps the barrier-patchable
+    # load seam.
+    try:
+        reloaded = await delete_game_score_core(
+            db,
+            match_id,
+            current_user.id,
+            game_number=game_number,
+            load_match=_load_match_for_scoring,
+        )
+    except _SCORE_WRITE_ERRORS as exc:
+        raise _map_score_write_error(exc) from exc
 
-    game = next((g for g in match.games if g.game_number == game_number), None)
-    if game is None or game.score is None:
-        raise HTTPException(status_code=404, detail="Score not found.")
-
-    reloaded = await delete_game_score_core(db, match, game_number=game_number)
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
