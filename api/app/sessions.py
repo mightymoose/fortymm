@@ -8,7 +8,16 @@ from typing import Annotated
 
 import redis.exceptions
 from coolname import generate_slug
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from pyrate_limiter import Duration, Rate
 from rq.job import Job
 from sqlalchemy import ColumnElement, delete, func, or_, select
@@ -70,6 +79,13 @@ CSRF_HEADER_NAME = "x-csrf-token"
 # can't drift.
 CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 SESSION_TOKEN_CONTEXT = "session"
+# Context for personal, opaque API bearer tokens a user mints for external
+# tooling (issue #1130). Namespaced like every other credential type so the
+# api-tokens flow can rotate/resolve its own rows without touching a user's
+# session / login / email-change / merge tokens. Defined here alongside the
+# other context constants so both the mint endpoint (app/api_tokens.py) and the
+# bearer-auth path in get_current_user import the same value.
+API_TOKEN_CONTEXT = "api"
 # Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
 # (merged-away) guest, so clients can tell "your session was merged, sign in"
 # apart from an ordinary auth failure and redirect to login (with the owner's
@@ -359,6 +375,35 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     return user_result.scalar_one_or_none()
 
 
+async def _find_api_token_user(db: AsyncSession, authorization: str) -> User | None:
+    """Resolve the user behind an ``Authorization: Bearer <token>`` header, or
+    ``None`` when the header isn't a well-formed bearer credential, its token
+    matches no live ``api``-context row, or that row's user is tombstoned.
+
+    Mirrors ``_find_session_user`` for the opaque personal API tokens minted at
+    ``POST /v1/api-tokens`` (issue #1130): the scheme is matched
+    case-insensitively (``Bearer``/``bearer``) and the token is compared by
+    sha256 hash, never in plaintext. Tombstoned (merged-away) users are excluded
+    in the query — ``merged_into_user_id IS NOT NULL`` — so a bearer token for a
+    folded-in guest simply doesn't resolve, the same way the auth-layer session
+    queries keep ghosts from surfacing; the caller then falls through to the
+    ordinary ``session_ended`` 401.
+    """
+    scheme, _, raw_token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not raw_token:
+        return None
+    result = await db.execute(
+        select(User)
+        .join(UserToken, UserToken.user_id == User.id)
+        .where(
+            UserToken.token == _hash_token(raw_token),
+            UserToken.context == API_TOKEN_CONTEXT,
+            User.merged_into_user_id.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 def _clear_cookie_header() -> dict[str, str]:
     """A ``Set-Cookie`` that clears the session cookie, for attaching to a 401
     that ends a session no longer good for auth — a cookie resolving to a
@@ -613,23 +658,37 @@ async def get_optional_user(
 
 async def get_current_user(
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
-    """Resolve the authenticated user from the session cookie.
+    """Resolve the authenticated user, cookie first and then a bearer token.
 
     Unlike ``GET /v1/session``, this dependency never mints a new session —
     endpoints that create or mutate data require an already-established
-    session and respond ``401`` otherwise.
+    credential and respond ``401`` otherwise.
 
-    Resolves the cookie directly (rather than via ``get_optional_user``) so it
-    can tell a *tombstoned* guest — whose cookie still resolves — apart from no
-    session at all, raising the structured ``session_merged`` 401 for the former
-    and ``session_ended`` for the latter. Both send the holder to sign in
-    (instead of acting as a merged-away ghost, or silently minting a new guest).
+    Two credentials are accepted, in a fixed precedence:
+
+    1. **Session cookie** (the browser flow). Resolved directly (rather than via
+       ``get_optional_user``) so it can tell a *tombstoned* guest — whose cookie
+       still resolves — apart from no session at all, raising the structured
+       ``session_merged`` 401 for the former. A valid cookie always wins, even
+       when an ``Authorization`` header is also present.
+    2. **``Authorization: Bearer <token>``** (external tooling), consulted only
+       when no valid session cookie resolves a user. The opaque personal API
+       token minted at ``POST /v1/api-tokens`` is looked up by hash; a bearer
+       token whose user is tombstoned does not resolve.
+
+    When neither credential resolves a user — no/invalid cookie and a
+    missing/invalid/unknown bearer token — the structured ``session_ended`` 401
+    is raised so the client redirects to sign in (instead of acting as a
+    merged-away ghost, or silently minting a new guest).
     """
     user = await _find_session_user(db, session_cookie) if session_cookie else None
     if user is not None and user.merged_into_user_id is not None:
         raise await _merged_session_exception(db, user)
+    if user is None and authorization:
+        user = await _find_api_token_user(db, authorization)
     if user is None:
         raise _session_ended_exception()
     return user
