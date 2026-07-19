@@ -521,6 +521,48 @@ _Avoid_: pin (the call *causes* a pin, but a **manual placement** also pins with
 call; the pin is the placement's fixedness, the call is the promise to the players),
 notify (the call includes a notification but is the whole state transition, not just it).
 
+**Infeasible** (scheduler-era):
+A **solve** outcome: the **scheduler** *proved* the day's matches cannot all be placed
+on their tables inside their windows. A **designed outcome, not a failure** — proving a
+day does not fit is the point of a pre-live solve — kept distinct from *failed* (the job
+itself broke) and from *unknown* (the time cap ran out before any answer). An infeasible
+solve changes nothing: the last accepted **placements** stand.
+_Avoid_: failed (a broken job, not a proven non-fit), impossible, error.
+
+**Infeasibility reason** (scheduler-era):
+Why an **infeasible** solve does not fit, carried as a small closed set of causes rather
+than the bare verdict. Each is either a **structural cause** (certain, and it names the
+offending **pool** or **fixture**) or the single residual **timing conflict** (best-effort).
+The reason is computed in ids and minutes by the pure solver, then **resolved to the pool's
+display name and wall-clock window at the moment the solve is applied** — so the ledger row
+records what the director saw then and stays legible even if that pool is later renamed or
+removed. All structural causes are reported together, so a director fixes them in one pass.
+_Avoid_: error message (it is structured data the client renders, not a server sentence),
+diagnostic.
+
+**Structural cause** (scheduler-era):
+An **infeasibility reason** the scheduler is *certain* of, provable by arithmetic before
+CP-SAT runs, and that **names an entity**: a **pool** with no tables, a **fixture** whose
+window is too short to hold even one of its matches, or a pool over **per-pool capacity**.
+Contrast the **timing conflict**, which is the residual best-effort case.
+_Avoid_: hard failure, constraint violation.
+
+**Per-pool capacity** (scheduler-era):
+A **pool**'s ceiling on match time: its window length times its table count. Because a
+pool's **fixtures** can run only on that pool's tables in that pool's window, aggregate
+match-time exceeding this ceiling is a *proof* the pool cannot fit (sharing tables across
+pools only lowers real capacity, never raises it) — one of the **structural causes**.
+_Avoid_: table-time budget (reserve for the whole-day figure the **timing conflict** cites).
+
+**Timing conflict** (scheduler-era):
+The single residual **infeasibility reason**: CP-SAT proved the day infeasible, yet every
+**structural cause** passed — so there *is* enough total table-time and the obstacle is
+*arrangement*, not capacity (a **player** in too many matches too close together, or tables
+contended across overlapping windows). Reported best-effort, telling the director not to add
+tables; naming the exact fixtures/players is deferred (#1129).
+_Avoid_: over capacity (the opposite — capacity is sufficient here), unknown (that is the
+time-cap verdict, which carries no reason at all).
+
 ## Dashboard
 
 **First-match**:
