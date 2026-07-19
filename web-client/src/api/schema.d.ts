@@ -1502,6 +1502,8 @@ export interface components {
             fixtures_pinned: number | null;
             /** Error */
             error: string | null;
+            /** Infeasibility Reasons */
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
             /** Input Fingerprint */
             input_fingerprint: string | null;
             /** Rerun Requested */
@@ -2414,6 +2416,23 @@ export interface components {
             submitted_at: string;
         };
         /**
+         * NoSingleCauseRead
+         * @description CP-SAT proved the day infeasible yet no structural arm explains it — the
+         *     whole-day residual. No pool: it carries only the day aggregate,
+         *     ``required_min`` against ``available_min``, as integer minutes.
+         */
+        NoSingleCauseRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "no_single_cause";
+            /** Required Min */
+            required_min: number;
+            /** Available Min */
+            available_min: number;
+        };
+        /**
          * NotificationCategory
          * @description What a notification is about. Mirrors the product's notification kinds;
          *     a user can mute each category independently per channel.
@@ -2962,6 +2981,46 @@ export interface components {
             table_ids: string[];
         };
         /**
+         * PoolHasNoTablesRead
+         * @description A pool with active fixtures but no tables at all — nowhere to place them.
+         *     Resolved: the pool's display ``name`` (never the namespaced solver id).
+         */
+        PoolHasNoTablesRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "pool_has_no_tables";
+            /** Pool Name */
+            pool_name: string;
+        };
+        /**
+         * PoolOverCapacityRead
+         * @description A pool whose aggregate match-time (``required_min``) exceeds the
+         *     table-minutes its window offers (``capacity_min`` = window span ×
+         *     ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
+         *     minutes stay integers.
+         */
+        PoolOverCapacityRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "pool_over_capacity";
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Required Min */
+            required_min: number;
+            /** Capacity Min */
+            capacity_min: number;
+            /** Table Count */
+            table_count: number;
+        };
+        /**
          * PoolStandingsRead
          * @description One pool's standings: its rows in finishing order, and whether every one of its
          *     fixtures has been decided.
@@ -3297,6 +3356,13 @@ export interface components {
          *       was discarded for drift re-runs rather than reporting partial counts — the
          *       apply is whole-or-nothing.
          *     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+         *
+         *     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
+         *     every row that is not ``infeasible`` (so a client never null-checks it). An
+         *     ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
+         *     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+         *     minutes to format); every other row carries ``[]``. Parsed from the ledger's
+         *     raw JSONB at this boundary so no downstream reader touches a bare dict.
          */
         ScheduleSolveRead: {
             /**
@@ -3324,6 +3390,8 @@ export interface components {
             fixtures_pinned: number | null;
             /** Error */
             error: string | null;
+            /** Infeasibility Reasons */
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
         };
         /**
          * ScheduleSolveStatus
@@ -4034,6 +4102,35 @@ export interface components {
              *     drift (api/CLAUDE.md, "don't carry a field and its own derivation").
              */
             readonly meetings: number;
+        };
+        /**
+         * WindowTooShortForMatchRead
+         * @description A single fixture whose pool window cannot hold even one match: its
+         *     ``best_of`` match needs ``needed_min`` minutes but the window spans only
+         *     ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
+         *     bounds; the minutes pass through as integers for the client to format.
+         */
+        WindowTooShortForMatchRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "window_too_short_for_match";
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /**
+             * Best Of
+             * @enum {integer}
+             */
+            best_of: 1 | 3 | 5 | 7;
+            /** Needed Min */
+            needed_min: number;
+            /** Window Span Min */
+            window_span_min: number;
         };
         /** MatchDetails */
         app__schemas__match__MatchDetails: {

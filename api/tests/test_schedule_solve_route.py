@@ -382,6 +382,63 @@ async def test_solve_strip_carries_the_newest_row_by_requested_at(
     assert strip["status"] == "failed"
     assert strip["trigger"] == "manual"
     assert strip["error"] == "the solver caught fire"
+    # Never-infeasible rows carry an empty list, never a null — the client never
+    # null-checks ``infeasibility_reasons``.
+    assert strip["infeasibility_reasons"] == []
+
+
+async def test_solve_strip_carries_resolved_infeasibility_reasons(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An ``infeasible`` solve's strip carries the resolved, DB-humanized reasons
+    the day did not fit — parsed from the ledger's raw JSONB into the typed union
+    at the read boundary, so a client renders the pool name / window / minutes
+    without any further lookup."""
+    client, owner = authed_client
+    tournament_id, _ = await _make_tournament(db_session, owner)
+    solve = ScheduleSolve(
+        tournament_id=tournament_id,
+        trigger=ScheduleSolveTrigger.manual,
+        status=ScheduleSolveStatus.infeasible,
+        verdict=SolverVerdict.infeasible,
+        requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
+        infeasibility_reasons=[
+            {"kind": "pool_has_no_tables", "pool_name": "Pool A"},
+            {
+                "kind": "pool_over_capacity",
+                "pool_name": "Pool A",
+                "window_start": "09:00",
+                "window_end": "17:00",
+                "required_min": 600,
+                "capacity_min": 480,
+                "table_count": 1,
+            },
+        ],
+    )
+    db_session.add(solve)
+    await db_session.commit()
+
+    strip = (await client.get(_detail_url(tournament_id))).json()[
+        "latest_schedule_solve"
+    ]
+
+    assert strip["id"] == str(solve.id)
+    assert strip["status"] == "infeasible"
+    assert strip["verdict"] == "infeasible"
+    reasons = strip["infeasibility_reasons"]
+    assert [r["kind"] for r in reasons] == [
+        "pool_has_no_tables",
+        "pool_over_capacity",
+    ]
+    assert reasons[0]["pool_name"] == "Pool A"
+    over_capacity = reasons[1]
+    assert over_capacity["pool_name"] == "Pool A"
+    assert over_capacity["window_start"] == "09:00"
+    assert over_capacity["window_end"] == "17:00"
+    assert over_capacity["required_min"] == 600
+    assert over_capacity["capacity_min"] == 480
+    assert over_capacity["table_count"] == 1
 
 
 async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_page(

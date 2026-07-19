@@ -2362,6 +2362,59 @@ internal enum Components {
             internal var fixturesPinned: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/error`.
             internal var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload`.
+            internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/NoSingleCauseRead`.
+                case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
+                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
+                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
+                case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "no_single_cause":
+                        self = .noSingleCause(try .init(from: decoder))
+                    case "pool_has_no_tables":
+                        self = .poolHasNoTables(try .init(from: decoder))
+                    case "pool_over_capacity":
+                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "window_too_short_for_match":
+                        self = .windowTooShortForMatch(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .poolHasNoTables(value):
+                        try value.encode(to: encoder)
+                    case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .windowTooShortForMatch(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasibility_reasons`.
+            internal typealias InfeasibilityReasonsPayload = [Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasibility_reasons`.
+            internal var infeasibilityReasons: Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayload
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/input_fingerprint`.
             internal var inputFingerprint: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/rerun_requested`.
@@ -2384,6 +2437,7 @@ internal enum Components {
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
             ///   - error:
+            ///   - infeasibilityReasons:
             ///   - inputFingerprint:
             ///   - rerunRequested:
             ///   - tournamentId:
@@ -2400,6 +2454,7 @@ internal enum Components {
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
                 error: Swift.String? = nil,
+                infeasibilityReasons: Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayload,
                 inputFingerprint: Swift.String? = nil,
                 rerunRequested: Swift.Bool,
                 tournamentId: Swift.String,
@@ -2416,6 +2471,7 @@ internal enum Components {
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
                 self.error = error
+                self.infeasibilityReasons = infeasibilityReasons
                 self.inputFingerprint = inputFingerprint
                 self.rerunRequested = rerunRequested
                 self.tournamentId = tournamentId
@@ -2433,6 +2489,7 @@ internal enum Components {
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
                 case error
+                case infeasibilityReasons = "infeasibility_reasons"
                 case inputFingerprint = "input_fingerprint"
                 case rerunRequested = "rerun_requested"
                 case tournamentId = "tournament_id"
@@ -4754,6 +4811,43 @@ internal enum Components {
                 case submittedAt = "submitted_at"
             }
         }
+        /// CP-SAT proved the day infeasible yet no structural arm explains it — the
+        /// whole-day residual. No pool: it carries only the day aggregate,
+        /// ``required_min`` against ``available_min``, as integer minutes.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead`.
+        internal struct NoSingleCauseRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case noSingleCause = "no_single_cause"
+            }
+            /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead/kind`.
+            internal var kind: Components.Schemas.NoSingleCauseRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead/required_min`.
+            internal var requiredMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead/available_min`.
+            internal var availableMin: Swift.Int
+            /// Creates a new `NoSingleCauseRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - requiredMin:
+            ///   - availableMin:
+            internal init(
+                kind: Components.Schemas.NoSingleCauseRead.KindPayload? = nil,
+                requiredMin: Swift.Int,
+                availableMin: Swift.Int
+            ) {
+                self.kind = kind
+                self.requiredMin = requiredMin
+                self.availableMin = availableMin
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case requiredMin = "required_min"
+                case availableMin = "available_min"
+            }
+        }
         /// What a notification is about. Mirrors the product's notification kinds;
         /// a user can mute each category independently per channel.
         ///
@@ -6134,6 +6228,98 @@ internal enum Components {
                 ])
             }
         }
+        /// A pool with active fixtures but no tables at all — nowhere to place them.
+        /// Resolved: the pool's display ``name`` (never the namespaced solver id).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead`.
+        internal struct PoolHasNoTablesRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case poolHasNoTables = "pool_has_no_tables"
+            }
+            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/kind`.
+            internal var kind: Components.Schemas.PoolHasNoTablesRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/pool_name`.
+            internal var poolName: Swift.String
+            /// Creates a new `PoolHasNoTablesRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - poolName:
+            internal init(
+                kind: Components.Schemas.PoolHasNoTablesRead.KindPayload? = nil,
+                poolName: Swift.String
+            ) {
+                self.kind = kind
+                self.poolName = poolName
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case poolName = "pool_name"
+            }
+        }
+        /// A pool whose aggregate match-time (``required_min``) exceeds the
+        /// table-minutes its window offers (``capacity_min`` = window span ×
+        /// ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
+        /// minutes stay integers.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead`.
+        internal struct PoolOverCapacityRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case poolOverCapacity = "pool_over_capacity"
+            }
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/kind`.
+            internal var kind: Components.Schemas.PoolOverCapacityRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/pool_name`.
+            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_start`.
+            internal var windowStart: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_end`.
+            internal var windowEnd: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/required_min`.
+            internal var requiredMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/capacity_min`.
+            internal var capacityMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/table_count`.
+            internal var tableCount: Swift.Int
+            /// Creates a new `PoolOverCapacityRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - poolName:
+            ///   - windowStart:
+            ///   - windowEnd:
+            ///   - requiredMin:
+            ///   - capacityMin:
+            ///   - tableCount:
+            internal init(
+                kind: Components.Schemas.PoolOverCapacityRead.KindPayload? = nil,
+                poolName: Swift.String,
+                windowStart: Swift.String,
+                windowEnd: Swift.String,
+                requiredMin: Swift.Int,
+                capacityMin: Swift.Int,
+                tableCount: Swift.Int
+            ) {
+                self.kind = kind
+                self.poolName = poolName
+                self.windowStart = windowStart
+                self.windowEnd = windowEnd
+                self.requiredMin = requiredMin
+                self.capacityMin = capacityMin
+                self.tableCount = tableCount
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case poolName = "pool_name"
+                case windowStart = "window_start"
+                case windowEnd = "window_end"
+                case requiredMin = "required_min"
+                case capacityMin = "capacity_min"
+                case tableCount = "table_count"
+            }
+        }
         /// One pool's standings: its rows in finishing order, and whether every one of its
         /// fixtures has been decided.
         ///
@@ -6910,6 +7096,13 @@ internal enum Components {
         ///   apply is whole-or-nothing.
         /// * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
         ///
+        /// ``infeasibility_reasons`` is **never null** — it is always a list, empty on
+        /// every row that is not ``infeasible`` (so a client never null-checks it). An
+        /// ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
+        /// could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+        /// minutes to format); every other row carries ``[]``. Parsed from the ledger's
+        /// raw JSONB at this boundary so no downstream reader touches a bare dict.
+        ///
         /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead`.
         internal struct ScheduleSolveRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/id`.
@@ -6952,6 +7145,59 @@ internal enum Components {
             internal var fixturesPinned: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/error`.
             internal var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload`.
+            internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/NoSingleCauseRead`.
+                case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
+                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
+                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
+                case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "no_single_cause":
+                        self = .noSingleCause(try .init(from: decoder))
+                    case "pool_has_no_tables":
+                        self = .poolHasNoTables(try .init(from: decoder))
+                    case "pool_over_capacity":
+                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "window_too_short_for_match":
+                        self = .windowTooShortForMatch(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .poolHasNoTables(value):
+                        try value.encode(to: encoder)
+                    case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .windowTooShortForMatch(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasibility_reasons`.
+            internal typealias InfeasibilityReasonsPayload = [Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasibility_reasons`.
+            internal var infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload
             /// Creates a new `ScheduleSolveRead`.
             ///
             /// - Parameters:
@@ -6966,6 +7212,7 @@ internal enum Components {
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
             ///   - error:
+            ///   - infeasibilityReasons:
             internal init(
                 id: Swift.String,
                 trigger: Components.Schemas.ScheduleSolveTrigger,
@@ -6977,7 +7224,8 @@ internal enum Components {
                 wallTimeMs: Swift.Int? = nil,
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
-                error: Swift.String? = nil
+                error: Swift.String? = nil,
+                infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload
             ) {
                 self.id = id
                 self.trigger = trigger
@@ -6990,6 +7238,7 @@ internal enum Components {
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
                 self.error = error
+                self.infeasibilityReasons = infeasibilityReasons
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7003,6 +7252,7 @@ internal enum Components {
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
                 case error
+                case infeasibilityReasons = "infeasibility_reasons"
             }
         }
         /// The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:
@@ -8937,6 +9187,75 @@ internal enum Components {
                 case losses
                 case lastMeeting = "last_meeting"
                 case meetings
+            }
+        }
+        /// A single fixture whose pool window cannot hold even one match: its
+        /// ``best_of`` match needs ``needed_min`` minutes but the window spans only
+        /// ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
+        /// bounds; the minutes pass through as integers for the client to format.
+        ///
+        /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead`.
+        internal struct WindowTooShortForMatchRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case windowTooShortForMatch = "window_too_short_for_match"
+            }
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/kind`.
+            internal var kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/pool_name`.
+            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/window_start`.
+            internal var windowStart: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/window_end`.
+            internal var windowEnd: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/best_of`.
+            internal enum BestOfPayload: Int, Codable, Hashable, Sendable, CaseIterable {
+                case _1 = 1
+                case _3 = 3
+                case _5 = 5
+                case _7 = 7
+            }
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/best_of`.
+            internal var bestOf: Components.Schemas.WindowTooShortForMatchRead.BestOfPayload
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/needed_min`.
+            internal var neededMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/window_span_min`.
+            internal var windowSpanMin: Swift.Int
+            /// Creates a new `WindowTooShortForMatchRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - poolName:
+            ///   - windowStart:
+            ///   - windowEnd:
+            ///   - bestOf:
+            ///   - neededMin:
+            ///   - windowSpanMin:
+            internal init(
+                kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload? = nil,
+                poolName: Swift.String,
+                windowStart: Swift.String,
+                windowEnd: Swift.String,
+                bestOf: Components.Schemas.WindowTooShortForMatchRead.BestOfPayload,
+                neededMin: Swift.Int,
+                windowSpanMin: Swift.Int
+            ) {
+                self.kind = kind
+                self.poolName = poolName
+                self.windowStart = windowStart
+                self.windowEnd = windowEnd
+                self.bestOf = bestOf
+                self.neededMin = neededMin
+                self.windowSpanMin = windowSpanMin
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case poolName = "pool_name"
+                case windowStart = "window_start"
+                case windowEnd = "window_end"
+                case bestOf = "best_of"
+                case neededMin = "needed_min"
+                case windowSpanMin = "window_span_min"
             }
         }
         /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails`.

@@ -21,6 +21,7 @@ from app.models.schedule_solve import (
     SolverVerdict,
 )
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
+from app.schemas.schedule_solve import ResolvedReason, parse_infeasibility_reasons
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
 
@@ -597,6 +598,13 @@ class ScheduleSolveRead(BaseModel):
       was discarded for drift re-runs rather than reporting partial counts — the
       apply is whole-or-nothing.
     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+
+    ``infeasibility_reasons`` is **never null** — it is always a list, empty on
+    every row that is not ``infeasible`` (so a client never null-checks it). An
+    ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
+    could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+    minutes to format); every other row carries ``[]``. Parsed from the ledger's
+    raw JSONB at this boundary so no downstream reader touches a bare dict.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -612,6 +620,18 @@ class ScheduleSolveRead(BaseModel):
     fixtures_placed: int | None
     fixtures_pinned: int | None
     error: str | None
+    infeasibility_reasons: list[ResolvedReason]
+
+    @field_validator("infeasibility_reasons", mode="before")
+    @classmethod
+    def _parse_infeasibility_reasons(cls, value: Any) -> list[ResolvedReason]:
+        """Parse the ledger's raw ``infeasibility_reasons`` JSONB
+        (``list[dict] | None``) into the typed union at the boundary, mapping the
+        NULL of a non-``infeasible`` row to ``[]`` — so ``model_validate`` on a
+        ``ScheduleSolve`` row never fails on a null column and no raw dict leaks
+        inward. A value already parsed to typed reasons passes back through
+        unchanged."""
+        return parse_infeasibility_reasons(value)
 
 
 class StandingRowRead(BaseModel):
