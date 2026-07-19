@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_tokens import API_TOKEN_PERMISSION
 from app.models import UserToken
-from app.sessions import API_TOKEN_CONTEXT, _hash_token
+from app.sessions import API_TOKEN_CONTEXT
+from app.token_hashing import hash_token
 from tests._helpers import grant_permissions, start_session
 
 
@@ -43,7 +44,7 @@ async def test_mint_returns_token_stored_only_as_hash(
     rows = await _api_tokens(db_session, user.id)
     assert len(rows) == 1
     # Stored as the sha256 hash, never the plaintext.
-    assert rows[0].token == _hash_token(raw)
+    assert rows[0].token == hash_token(raw)
     assert rows[0].token != raw.encode("utf-8")
 
 
@@ -62,7 +63,7 @@ async def test_second_mint_rotates_to_a_new_single_token(
 
     rows = await _api_tokens(db_session, user.id)
     assert len(rows) == 1
-    assert rows[0].token == _hash_token(second)
+    assert rows[0].token == hash_token(second)
 
 
 async def test_rotate_leaves_other_context_tokens_untouched(
@@ -73,10 +74,10 @@ async def test_rotate_leaves_other_context_tokens_untouched(
 
     # Seed the user with non-api-context tokens that a rotate must NOT delete.
     session_token = UserToken(
-        user_id=user.id, context="session", token=_hash_token("sess-raw")
+        user_id=user.id, context="session", token=hash_token("sess-raw")
     )
     login_token = UserToken(
-        user_id=user.id, context="login", token=_hash_token("login-raw")
+        user_id=user.id, context="login", token=hash_token("login-raw")
     )
     db_session.add_all([session_token, login_token])
     await db_session.commit()

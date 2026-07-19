@@ -22,7 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import User, UserToken
 from app.rbac import require_permission
-from app.sessions import API_TOKEN_CONTEXT, _hash_token
+from app.sessions import API_TOKEN_CONTEXT
+from app.token_hashing import hash_token
 
 API_TOKEN_PERMISSION = "api_token.manage"
 
@@ -61,7 +62,7 @@ async def rotate_api_token(db: AsyncSession, user_id: uuid.UUID) -> str:
         UserToken(
             user_id=user_id,
             context=API_TOKEN_CONTEXT,
-            token=_hash_token(raw_token),
+            token=hash_token(raw_token),
         )
     )
     await db.commit()

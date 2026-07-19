@@ -19,9 +19,9 @@ from app.sessions import (
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
-    _hash_token,
     _maybe_merge_prior_session,
 )
+from app.token_hashing import hash_token
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
 
@@ -561,7 +561,7 @@ async def _mint_api_token(db_session: AsyncSession, user: User) -> str:
         UserToken(
             user_id=user.id,
             context=API_TOKEN_CONTEXT,
-            token=_hash_token(raw),
+            token=hash_token(raw),
         )
     )
     await db_session.commit()

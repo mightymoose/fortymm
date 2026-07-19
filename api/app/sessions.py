@@ -56,6 +56,7 @@ from app.schemas.session import (
     SetEmailRequest,
     UpdateCurrentUserRequest,
 )
+from app.token_hashing import hash_token
 from app.uniqueness import name_taken
 
 log = logging.getLogger(__name__)
@@ -241,7 +242,7 @@ async def _sign_in_after_merge(
         UserToken(
             user_id=user.id,
             context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_session),
+            token=hash_token(raw_session),
         )
     )
     await db.commit()
@@ -339,10 +340,6 @@ login_consume_ip_rate_limit = RedisRateLimiter(
 )
 
 
-def _hash_token(raw_token: str) -> bytes:
-    return hashlib.sha256(raw_token.encode("utf-8")).digest()
-
-
 async def _generate_username(db: AsyncSession) -> str:
     base = generate_slug(2)
     result = await db.execute(
@@ -364,7 +361,7 @@ def _cookie_secure() -> bool:
 async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     result = await db.execute(
         select(UserToken).where(
-            UserToken.token == _hash_token(raw_token),
+            UserToken.token == hash_token(raw_token),
             UserToken.context == SESSION_TOKEN_CONTEXT,
         )
     )
@@ -396,7 +393,7 @@ async def _find_api_token_user(db: AsyncSession, authorization: str) -> User | N
         select(User)
         .join(UserToken, UserToken.user_id == User.id)
         .where(
-            UserToken.token == _hash_token(raw_token),
+            UserToken.token == hash_token(raw_token),
             UserToken.context == API_TOKEN_CONTEXT,
             User.merged_into_user_id.is_(None),
         )
@@ -527,7 +524,7 @@ async def _create_session(db: AsyncSession) -> tuple[User, str]:
         UserToken(
             user_id=user.id,
             context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_token),
+            token=hash_token(raw_token),
         )
     )
     await db.commit()
@@ -626,7 +623,7 @@ async def delete_session_endpoint(
     if session_cookie:
         await db.execute(
             delete(UserToken).where(
-                UserToken.token == _hash_token(session_cookie),
+                UserToken.token == hash_token(session_cookie),
                 UserToken.context == SESSION_TOKEN_CONTEXT,
             )
         )
@@ -778,7 +775,7 @@ async def _issue_confirmation_token(
         UserToken(
             user_id=user.id,
             context=context,
-            token=_hash_token(raw_token),
+            token=hash_token(raw_token),
             sent_to=sent_to,
         )
     )
@@ -1076,7 +1073,7 @@ async def confirm_email(
         await db.execute(
             select(UserToken)
             .where(
-                UserToken.token == _hash_token(payload.token),
+                UserToken.token == hash_token(payload.token),
                 _pending_email_token_clause(),
             )
             .with_for_update()
@@ -1142,7 +1139,7 @@ async def confirm_email(
             UserToken(
                 user_id=user.id,
                 context=SESSION_TOKEN_CONTEXT,
-                token=_hash_token(raw_session),
+                token=hash_token(raw_session),
             )
         )
         await db.commit()
@@ -1321,7 +1318,7 @@ async def _issue_and_send_login_email(
         UserToken(
             user_id=user.id,
             context=_login_context(merge_from_guest_id),
-            token=_hash_token(raw_token),
+            token=hash_token(raw_token),
             sent_to=email,
         )
     )
@@ -1366,7 +1363,7 @@ async def consume_login_token(
         await db.execute(
             select(UserToken)
             .where(
-                UserToken.token == _hash_token(payload.token),
+                UserToken.token == hash_token(payload.token),
                 _login_token_clause(),
             )
             .with_for_update()
@@ -1457,7 +1454,7 @@ async def preview_merge(
     token_row = (
         await db.execute(
             select(UserToken).where(
-                UserToken.token == _hash_token(payload.token),
+                UserToken.token == hash_token(payload.token),
                 or_(
                     _login_token_clause(),
                     UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
