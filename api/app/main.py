@@ -49,7 +49,16 @@ log = logging.getLogger("uvicorn.error")
 # ``/mcp`` would nest to ``/mcp/mcp``). It carries its OWN lifespan — the
 # Streamable-HTTP session manager — which MUST run or every MCP call 500s, so
 # ``lifespan`` below enters it alongside the app's own startup.
-mcp_app = mcp.http_app(path="/")
+#
+# ``stateless_http=True`` is load-balancer-safety, not an optimization: UAT runs
+# 2 api replicas behind a round-robin Service with no session affinity. In the
+# default *stateful* mode the transport mints an ``Mcp-Session-Id`` on
+# ``initialize`` and keeps that session's state in the pod's memory; the next
+# tool call round-robins to the other pod, which 404s the unknown session, and
+# the client tears down and re-initializes ("session expired"). Stateless mode
+# makes every request self-contained, so it survives landing on any replica (or
+# a rolling redeploy) — the correct shape for a horizontally-scaled deployment.
+mcp_app = mcp.http_app(path="/", stateless_http=True)
 
 
 @asynccontextmanager
