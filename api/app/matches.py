@@ -3,7 +3,7 @@ import io
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -16,7 +16,7 @@ from fastapi import (
     status,
 )
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import CursorResult, Select, func, select, update
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -44,6 +44,15 @@ from app.match_queries import (
     participant_filter,
     singles_user_ids,
 )
+from app.match_scoring import (
+    delete_game_score as delete_game_score_core,
+)
+from app.match_scoring import (
+    enter_game_score,
+)
+from app.match_scoring import (
+    update_game_score as update_game_score_core,
+)
 from app.match_serialization import (
     _compact_games,
     _first_decider,
@@ -51,7 +60,6 @@ from app.match_serialization import (
     _is_participant,
     _is_scorable,
     _negotiation,
-    _score_view,
     _serialize_details,
     _side_schema,
     _status_label,
@@ -75,6 +83,7 @@ from app.result_acceptance import (
     OpponentNotFoundError,
     PostedGamesNotDecisiveError,
     RatedNeedsRegisteredOpponentError,
+    ScoreConflictError,
     SelfMatchError,
     StandingResultConflictError,
     _games_to_win,
@@ -168,19 +177,6 @@ def _score_conflict(committed: MatchDetailsScore | None) -> HTTPException:
             committed_score=committed,
         ).model_dump(mode="json"),
     )
-
-
-async def _committed_score(
-    db: AsyncSession, match_id: uuid.UUID, game_number: int
-) -> MatchDetailsScore | None:
-    """The game's score as it actually stands now — for the conflict body after
-    a create lost the unique-constraint race (the committed row belongs to a
-    different transaction, so it isn't on our in-memory ``match``)."""
-    reloaded = await _load_match(db, match_id)
-    if reloaded is None:
-        return None
-    game = next((g for g in reloaded.games if g.game_number == game_number), None)
-    return _score_view(game.score) if game and game.score else None
 
 
 async def _view_extras(match_service: MatchService, match: Match) -> MatchDetailsExtras:
@@ -993,46 +989,39 @@ async def create_game_score(
             ),
         )
 
+    # The board can't have games after the match was already decided. Reject
+    # before delegating (request teardown rolls back the uncommitted session),
+    # gap-tolerant — only a clinch *before* the last scored game trips. An
+    # existing committed score at this game short-circuits to the service's 409
+    # below without running overrun, preserving the historical ordering (the
+    # pre-existing-score conflict was raised before the overrun 422). Because
+    # this game has no committed score in that branch, the prospective board is
+    # the currently-scored games plus this new write — identical to the ORM the
+    # old handler mutated then read back.
     game = next((g for g in match.games if g.game_number == game_number), None)
-    if game is None:
-        game = MatchGame(game_number=game_number)
-        match.games.append(game)
-    elif game.score is not None:
-        # A concurrent participant already created this game's score — the same
-        # conflict the update path guards against, just on first write. Hand
-        # back the committed score so the client surfaces it for review instead
-        # of overwriting it.
-        raise _score_conflict(_score_view(game.score))
-
-    game.score = MatchGameScore(
-        side_1_points=payload.side_1_points,
-        side_2_points=payload.side_2_points,
-    )
-
-    # The board can't have games after the match was already decided. The ORM
-    # is mutated above, so ``_games_payload_from_match`` already reflects this
-    # write; reject before commit (request teardown rolls back the uncommitted
-    # session). Gap-tolerant — only a clinch *before* the last scored game trips.
-    _enforce_no_overrun(
-        _games_payload_from_match(match), match.match_settings.best_of, game_number
-    )
+    if game is None or game.score is None:
+        prospective = [
+            g for g in _games_payload_from_match(match) if g.game_number != game_number
+        ] + [
+            MatchResultsGameWrite(
+                game_number=game_number,
+                side_1_points=payload.side_1_points,
+                side_2_points=payload.side_2_points,
+            )
+        ]
+        _enforce_no_overrun(prospective, match.match_settings.best_of, game_number)
 
     try:
-        await db.commit()
-    except IntegrityError as exc:
-        # Two participants on the same game-entry page submitting at once both
-        # lazily insert the same game row (uq_match_games_match_id_game_number)
-        # and/or its score (uq_match_game_scores_match_game_id). The pre-checks
-        # above pass for both before either commits, so the loser of the race
-        # trips a unique constraint. The committed row belongs to the winner's
-        # transaction, so reload to read it for the conflict body.
-        await db.rollback()
-        raise _score_conflict(
-            await _committed_score(db, match_id, game_number)
-        ) from exc
+        reloaded = await enter_game_score(
+            db,
+            match,
+            game_number=game_number,
+            side_1_points=payload.side_1_points,
+            side_2_points=payload.side_2_points,
+        )
+    except ScoreConflictError as exc:
+        raise _score_conflict(exc.committed_score) from exc
 
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
@@ -1064,9 +1053,9 @@ async def update_game_score(
 
     # Editing a game's winner can move the decider earlier, so the same
     # "no games past the decider" guard the create path enforces applies here.
-    # The UPDATE below runs in raw SQL, so in-memory ``match.games`` still holds
-    # the OLD score — build the prospective board by substituting the payload
-    # points for this game before checking.
+    # The service's UPDATE runs in raw SQL, so in-memory ``match.games`` still
+    # holds the OLD score — build the prospective board by substituting the
+    # payload points for this game before delegating.
     prospective = [
         g
         if g.game_number != game_number
@@ -1079,37 +1068,18 @@ async def update_game_score(
     ]
     _enforce_no_overrun(prospective, match.match_settings.best_of, game_number)
 
-    # Optimistic concurrency: replace the points only while the committed row is
-    # still at the version the caller last read. The ``WHERE version =`` clause
-    # is the whole guard — if a concurrent participant has saved this game since,
-    # zero rows match and we reject the write rather than overwrite their result
-    # (the data-loss the client used to walk into by re-issuing as a blind PUT).
-    result = await db.execute(
-        update(MatchGameScore)
-        .where(
-            MatchGameScore.id == game.score.id,
-            MatchGameScore.version == payload.expected_version,
-        )
-        .values(
+    try:
+        reloaded = await update_game_score_core(
+            db,
+            match,
+            game_number=game_number,
             side_1_points=payload.side_1_points,
             side_2_points=payload.side_2_points,
-            version=MatchGameScore.version + 1,
+            expected_version=payload.expected_version,
         )
-    )
-    if cast(CursorResult[Any], result).rowcount == 0:
-        # Lost the race: a concurrent participant saved this game since the
-        # caller last read it, so the conditional UPDATE matched no row. The
-        # update changed nothing, so there's nothing to undo — we just refresh
-        # the score to the value as it actually stands now and 409 (the request
-        # teardown rolls the no-op transaction back). The client shows "your
-        # stale entry vs. what's committed" rather than overwriting their save.
-        await db.refresh(game.score)
-        raise _score_conflict(_score_view(game.score))
+    except ScoreConflictError as exc:
+        raise _score_conflict(exc.committed_score) from exc
 
-    await db.commit()
-
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
@@ -1137,15 +1107,7 @@ async def delete_game_score(
     if game is None or game.score is None:
         raise HTTPException(status_code=404, detail="Score not found.")
 
-    # Drop the score; the MatchGame stays so a subsequent POST .../scores/new
-    # for the same number just attaches a fresh score row to the existing game.
-    # delete-orphan on ``MatchGame.score`` removes the row on flush.
-    game.score = None
-
-    await db.commit()
-
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
+    reloaded = await delete_game_score_core(db, match, game_number=game_number)
     extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 

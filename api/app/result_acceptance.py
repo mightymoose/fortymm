@@ -52,6 +52,7 @@ from app.ratings import (
     validate_state,
 )
 from app.result_chain import standing_result
+from app.schemas.match import MatchDetailsScore
 from app.tournament_advancement import on_match_completed
 
 
@@ -87,6 +88,25 @@ class PostedGamesNotDecisiveError(Exception):
     board is decided, and the board is frozen while it stands), but the core
     stays total rather than silently stamping no winner. The router maps this to
     the existing 409 ``"The posted games no longer decide this match."``."""
+
+
+class ScoreConflictError(Exception):
+    """Raised by the per-game score service (``app.match_scoring``) when a
+    scratchpad write loses a concurrent-participant race: a create finds the
+    game already scored (or trips the unique constraint at commit), or an
+    update's ``expected_version`` no longer matches the committed row.
+
+    Carries ``committed_score`` — the game's score as it actually stands now,
+    including its ``version`` — so the HTTP adapter can rebuild the exact 409
+    ``MatchGameScoreConflict`` body (``_score_conflict``) and a future MCP
+    adapter can point the agent back at ``get_match``. It is ``None`` only when
+    the committed row could not be re-read (the match vanished). Never an
+    ``HTTPException`` — it has no HTTP context; the caller adapts it to its
+    transport."""
+
+    def __init__(self, *, committed_score: MatchDetailsScore | None) -> None:
+        super().__init__("This game was saved by someone else while you were editing.")
+        self.committed_score = committed_score
 
 
 def _games_to_win(best_of: int) -> int:
