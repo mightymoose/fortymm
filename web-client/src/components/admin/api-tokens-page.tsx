@@ -4,6 +4,7 @@ import { useCreateApiToken } from '@/api/api-tokens'
 import { useHasPermission, useSession } from '@/api/session'
 import { PERM } from '@/lib/permissions'
 import { ApiError } from '@/api/client'
+import { AccessDenied } from '@/components/rbac/error-fallback'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,7 +25,7 @@ import {
  *
  * Hiding the control is a UX decision, never a security boundary: the API 403s
  * the mint endpoint independently. A viewer who can reach the section but lacks
- * the grant sees a brief "you don't have permission" notice instead.
+ * the grant sees the shared `AccessDenied` panel instead.
  */
 export function ApiTokensPage() {
   const { isPending } = useSession()
@@ -42,24 +43,8 @@ export function ApiTokensPage() {
           behalf.
         </p>
       </header>
-      {canManage ? <ApiTokenGenerator /> : <NoPermissionNotice />}
+      {canManage ? <ApiTokenGenerator /> : <AccessDenied />}
     </div>
-  )
-}
-
-/** Shown to a user who reached the section but lacks `api_token.manage`. Copy is
- * specific to this grant (the admin `AccessDenied` is section-wide), so a viewer
- * who can see the rest of Administration understands exactly what is missing. */
-function NoPermissionNotice() {
-  return (
-    <Alert>
-      <KeyRound />
-      <AlertTitle>You don't have permission to create API tokens</AlertTitle>
-      <AlertDescription>
-        Ask an administrator to grant you the <code>api_token.manage</code>{' '}
-        permission.
-      </AlertDescription>
-    </Alert>
   )
 }
 

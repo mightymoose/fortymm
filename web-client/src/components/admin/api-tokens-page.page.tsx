@@ -10,9 +10,9 @@ const scoped = (container: Container) => ({
   queryGenerateButton() {
     return container.queryByRole('button', { name: /generate token/i })
   },
-  /** The "you don't have permission" notice shown in the ungated state. */
+  /** The shared `AccessDenied` panel shown in the ungated state. */
   queryNoPermission() {
-    return container.queryByText(/don't have permission to create api tokens/i)
+    return container.queryByText("You don't have access to this page")
   },
   /** The one-time password caution that fronts a revealed token. */
   queryPasswordCaution() {

@@ -33,9 +33,13 @@ describe('ApiTokensPage gate', () => {
     apiTokensPageObject.signInWithPermissions([])
     apiTokensPageObject.render()
 
-    // The no-permission notice is the ungated state's tell; wait for it so the
-    // session has resolved before asserting the control's absence.
-    expect(await screen.findByText(/don't have permission/i)).toBeInTheDocument()
+    // The shared AccessDenied panel is the ungated state's tell; wait for it so
+    // the session has resolved before asserting the control's absence.
+    expect(
+      await screen.findByText(
+        'Ask an administrator to grant you access to this page.',
+      ),
+    ).toBeInTheDocument()
     expect(apiTokensPageObject.queryGenerateButton()).not.toBeInTheDocument()
   })
 })
