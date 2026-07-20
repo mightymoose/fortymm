@@ -1,4 +1,4 @@
-"""The batched read behind the tournament LIST surfaces.
+"""The batched reads behind the tournament LIST and DETAIL surfaces.
 
 The HTTP ``GET /v1/tournaments`` list and the MCP ``list_my_tournaments`` tool
 return the *same* full aggregate — every tournament with all of its events, their
@@ -9,8 +9,13 @@ WHERE predicate, and both surfaces call it — a second copy of this five-statem
 batched read would be the N+1 waiting to happen that the statement-count
 tripwires in ``tests/test_tournaments.py`` exist to catch.
 
-It sits a layer above ``tournament_queries`` (pure data access) because it also
-composes the shared ``serialize_detail`` serializer; keeping it out of
+The single-tournament DETAIL read (:func:`tournament_detail`) lives here for the
+same reason: the HTTP ``GET /v1/tournaments/{id}`` route and the MCP
+``get_tournament`` tool composed the identical six-statement batched read inline,
+a hairline apart, and a second copy is the drift this module exists to prevent.
+
+Both sit a layer above ``tournament_queries`` (pure data access) because they also
+compose the shared ``serialize_detail`` serializer; keeping them out of
 ``tournament_queries`` keeps that module import-free of the serializer.
 """
 
@@ -20,11 +25,15 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tournament, TournamentEvent, User
+from app.schedule_solves import latest_solve
 from app.schemas.tournament import TournamentDetailRead
 from app.tournament_queries import (
     active_entrants_by_event,
+    completed_match_ids,
+    entrant_rating,
     entrant_ratings_by_league,
     fixtures_by_event,
+    game_counts_by_match,
 )
 from app.tournament_serialization import serialize_detail
 
@@ -123,3 +132,65 @@ async def list_tournament_details(
         )
         for tournament, username in rows
     ]
+
+
+async def tournament_detail(
+    db: AsyncSession,
+    tournament: Tournament,
+    *,
+    created_by_username: str,
+    current_user_id: uuid.UUID,
+) -> TournamentDetailRead:
+    """The single-tournament DETAIL aggregate the tournament page renders, for an
+    already-loaded, already-visibility-checked ``tournament``.
+
+    The caller loads the row (scoping it by ``visible_to`` and answering the
+    not-found itself, since the HTTP route and the MCP tool 404/refuse
+    differently) and hands it in with its creator's ``created_by_username``; this
+    reader runs the shared batched composition both surfaces used to run inline —
+    SIX statements, no N+1 whatever the number of events, entrants, fixtures or
+    solves:
+
+    1. the tournament's events, in creation order;
+    2. those events' active entrants (one batch);
+    3. those events' fixtures — their draws (one batch, ADR-0786);
+    4. the games of every **completed** match on the page — the standings' raw
+       material (one batch; **no statement at all** until something is played, so an
+       unplayed tournament costs five here, a played one six);
+    5. the caller's rating on the tournament's one league (ADR-0783);
+    6. the newest row of the solve ledger (the Schedule tab's solve strip).
+
+    Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
+    perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The
+    statement-count is exactly the shape ``tests/test_tournaments.py`` pins for the
+    HTTP route, because that route composes this reader; the MCP ``get_tournament``
+    tool composes the *same* reader, so the two surfaces can never drift.
+    """
+    events = list(
+        (
+            await db.execute(
+                select(TournamentEvent)
+                .where(TournamentEvent.tournament_id == tournament.id)
+                .order_by(TournamentEvent.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    event_ids = [e.id for e in events]
+    entrants_by_event = await active_entrants_by_event(db, event_ids)
+    event_fixtures = await fixtures_by_event(db, event_ids)
+    game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
+    rating = await entrant_rating(db, tournament.league_id, current_user_id)
+    latest_schedule_solve = await latest_solve(db, tournament.id)
+    return serialize_detail(
+        tournament,
+        created_by_username=created_by_username,
+        current_user_id=current_user_id,
+        events=events,
+        entrants_by_event=entrants_by_event,
+        fixtures_by_event=event_fixtures,
+        game_counts=game_counts,
+        rating=rating,
+        latest_schedule_solve=latest_schedule_solve,
+    )

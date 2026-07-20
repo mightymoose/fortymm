@@ -104,16 +104,12 @@ from app.tournament_errors import (
     ScheduleQueueUnavailableError,
     TournamentNotFoundError,
 )
-from app.tournament_list import list_tournament_details
+from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_queries import (
-    active_entrants_by_event,
-    completed_match_ids,
-    entrant_rating,
     fixtures_by_event,
-    game_counts_by_match,
     visible_to,
 )
-from app.tournament_serialization import serialize, serialize_detail
+from app.tournament_serialization import serialize
 from app.tournament_solve_service import (
     request_schedule_solve as request_schedule_solve_core,
 )
@@ -221,6 +217,44 @@ async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     return (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
+
+
+async def _require_tournament_view(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The tournament-read gate every read tool shares: refuse unless the caller
+    holds ``tournament.view``.
+
+    Byte-for-byte the ``ToolError`` the three read tools each raised inline, asked
+    through the one shared ``user_has_permission`` the HTTP ``require_view``
+    dependency asks — so the MCP and HTTP surfaces gate reads on the same grant, and
+    a fourth read tool cannot grow a different message or a different permission
+    name. Permission is checked first (before any visibility load), the order the
+    HTTP route keeps: ``require_view`` (403) runs before the handler."""
+    if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
+        raise ToolError("You don't have permission to view tournaments.")
+
+
+async def _load_visible_tournament(
+    db: AsyncSession, user_id: uuid.UUID, tournament_id: uuid.UUID
+) -> Tournament:
+    """The tournament ``tournament_id`` names, scoped to what ``user_id`` may see,
+    or a not-found ``ToolError`` — the visibility-scoped load ``get_tournament`` and
+    ``get_schedule`` share.
+
+    ``visible_to`` rides in the same WHERE as the id lookup, so a tournament the
+    caller can't see leaves by the same not-found path as an absent one — existence
+    is never confirmed for an unannounced draft the caller does not own, exactly as
+    the HTTP route hides it behind a 404. The ``ToolError`` message is byte-for-byte
+    the one both tools raised inline."""
+    tournament = (
+        await db.execute(
+            select(Tournament).where(
+                Tournament.id == tournament_id, visible_to(user_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise ToolError(f"No tournament found with id {tournament_id}.")
+    return tournament
 
 
 @mcp.tool
@@ -406,9 +440,9 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
     tournament's fields (with the caller's ``can_edit``), its events in creation
     order — each carrying its active entrants, its draw (fixtures), the caller's
     ``entry_state``, and its round-robin standings once played — plus the newest
-    row of the schedule-solve ledger. It reuses the exact same shared read queries
-    (``tournament_queries``, ``latest_solve``) and the shared ``serialize_detail``
-    serializer the HTTP route composes, so the two surfaces can never drift.
+    row of the schedule-solve ledger. It composes the exact same shared
+    ``tournament_detail`` reader the HTTP route composes, so the two surfaces can
+    never drift.
 
     Gated on the same ``tournament.view`` permission the HTTP route requires, and
     scoped by the same visibility rule: a draft you do not own is not yours to see,
@@ -420,57 +454,26 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, then visibility — the order the HTTP route keeps: the
-        # ``require_view`` dependency (403) runs before the handler, and only then
-        # does ``_visible_to`` scope the row so a hidden draft leaves by not-found.
-        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
-            raise ToolError("You don't have permission to view tournaments.")
-        # ``visible_to`` rides in the same WHERE as the id lookup, so a tournament
-        # the caller can't see leaves by the same not-found path as an absent one —
-        # existence is never confirmed for an unannounced draft (see visible_to).
-        row = (
+        # Permission first, then the visibility-scoped load — the order the HTTP
+        # route keeps (``require_view`` (403) runs before the handler, then
+        # ``_visible_to`` scopes the row so a hidden draft leaves by not-found).
+        await _require_tournament_view(db, user_id)
+        tournament = await _load_visible_tournament(db, user_id, tournament_id)
+        # The creator's username the shared reader needs for the aggregate. The
+        # RESTRICT FK guarantees the creator row exists, so ``scalar_one`` is total.
+        username = (
             await db.execute(
-                select(Tournament, User.username)
-                .join(User, User.id == Tournament.created_by_user_id)
-                .where(Tournament.id == tournament_id, visible_to(user_id))
+                select(User.username).where(User.id == tournament.created_by_user_id)
             )
-        ).one_or_none()
-        if row is None:
-            raise ToolError(f"No tournament found with id {tournament_id}.")
-        tournament, username = row
-        # Mirror the HTTP route's batched read shape exactly — events, then their
-        # active entrants, their draws, the games of every completed match (for
-        # standings), the caller's one rating on the tournament's league, and the
-        # newest solve — feeding the identical shared ``serialize_detail``.
-        events = list(
-            (
-                await db.execute(
-                    select(TournamentEvent)
-                    .where(TournamentEvent.tournament_id == tournament_id)
-                    .order_by(TournamentEvent.created_at)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        event_ids = [e.id for e in events]
-        entrants_by_event = await active_entrants_by_event(db, event_ids)
-        event_fixtures = await fixtures_by_event(db, event_ids)
-        game_counts = await game_counts_by_match(
-            db, completed_match_ids(event_fixtures)
-        )
-        rating = await entrant_rating(db, tournament.league_id, user_id)
-        latest_schedule_solve = await latest_solve(db, tournament.id)
-        return serialize_detail(
+        ).scalar_one()
+        # The identical six-statement batched composition + ``serialize_detail`` the
+        # HTTP route runs — extracted into the shared ``tournament_detail`` reader,
+        # so this tool and the page can never drift on how a tournament is read.
+        return await tournament_detail(
+            db,
             tournament,
             created_by_username=username,
             current_user_id=user_id,
-            events=events,
-            entrants_by_event=entrants_by_event,
-            fixtures_by_event=event_fixtures,
-            game_counts=game_counts,
-            rating=rating,
-            latest_schedule_solve=latest_schedule_solve,
         )
 
 
@@ -546,21 +549,12 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, then visibility — the same order ``get_tournament``
-        # keeps: the HTTP detail route's ``require_view`` dependency (403) runs
-        # before the handler, and only then does ``visible_to`` scope the row so a
-        # hidden draft leaves by not-found.
-        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
-            raise ToolError("You don't have permission to view tournaments.")
-        tournament = (
-            await db.execute(
-                select(Tournament).where(
-                    Tournament.id == tournament_id, visible_to(user_id)
-                )
-            )
-        ).scalar_one_or_none()
-        if tournament is None:
-            raise ToolError(f"No tournament found with id {tournament_id}.")
+        # Permission first, then the visibility-scoped load — the same shared gate
+        # and loader ``get_tournament`` uses, keeping the order the HTTP detail
+        # route keeps (``require_view`` (403) before the handler, then ``visible_to``
+        # scoping the row so a hidden draft leaves by not-found).
+        await _require_tournament_view(db, user_id)
+        tournament = await _load_visible_tournament(db, user_id, tournament_id)
         # Events in creation order (as the detail read lists them), then their
         # draws in one batched read (``fixtures_by_event`` — pool → round →
         # position ordered, every event id keyed so an un-cut event maps to ``[]``)
@@ -621,12 +615,12 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, mirroring the HTTP list's ``require_view`` dependency;
-        # only then the owner-scoped read. Owner-scoping is by construction (the
-        # WHERE selects only the caller's own rows), so there is no separate
-        # visibility gate to run — an owner always sees their own tournaments.
-        if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
-            raise ToolError("You don't have permission to view tournaments.")
+        # Permission first, through the same shared gate the detail reads use
+        # (mirroring the HTTP list's ``require_view`` dependency); only then the
+        # owner-scoped read. Owner-scoping is by construction (the WHERE selects only
+        # the caller's own rows), so there is no separate visibility gate to run — an
+        # owner always sees their own tournaments.
+        await _require_tournament_view(db, user_id)
         return await list_tournament_details(
             db,
             where=Tournament.created_by_user_id == user_id,
@@ -713,10 +707,10 @@ class DrawUncutConfirmation(BaseModel):
 
     An MCP tool should answer with a meaningful value, so this names *what* was un-cut
     (the resolved ``tournament_id`` + the ``event_id``) and asserts the outcome:
-    ``fixtures_remaining`` is read back through the same ``fixtures_by_event`` loader
-    the detail page uses and is ``0`` after a successful un-cut (the event now has no
-    draw). Un-cutting a never-cut draw is an idempotent success too — it deletes
-    nothing and still confirms ``0`` remaining (ADR-0786).
+    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core deleted the
+    draw wholesale, so the event provably has no fixtures left. Un-cutting a never-cut
+    draw is an idempotent success too — it deletes nothing and still confirms ``0``
+    remaining (ADR-0786).
 
     This schema is **MCP-only** and is attached to no FastAPI route, so it does not
     reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
@@ -882,13 +876,15 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             )
         except _DRAW_WRITE_ERRORS as exc:
             raise _map_draw_write_tool_error(exc, event_id) from exc
-        # Read the draw back through the same loader the detail page uses — after a
-        # successful un-cut the event maps to ``[]``, so this confirms the teardown.
-        fixtures_remaining = len((await fixtures_by_event(db, [event_id]))[event_id])
+        # A successful ``uncut_event_draw`` deleted the draw wholesale (or there was
+        # never one), so the event provably has no fixtures — ``fixtures_remaining``
+        # is ``0`` by construction, no confirming re-read of ``fixtures_by_event``
+        # needed. The idempotent un-cut of a never-cut draw lands here too, and it is
+        # ``0`` for it as well (ADR-0786).
         return DrawUncutConfirmation(
             tournament_id=tournament_id,
             event_id=event_id,
-            fixtures_remaining=fixtures_remaining,
+            fixtures_remaining=0,
         )
 
 

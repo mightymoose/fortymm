@@ -50,11 +50,10 @@ from app.tournament_draws import (
     event_has_draw,
     uncut_draw,
 )
-from app.tournament_edit import _load_tournament_for_update
+from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawUnderWayError,
     EventNotFoundError,
-    NotTournamentOwnerError,
 )
 from app.tournament_queries import fixtures_by_event
 
@@ -82,9 +81,7 @@ async def _load_owned_event_for_draw(
     first — which is what keeps them free of a deadlock cycle. The FastAPI-free
     equivalent of the router's ``_get_owned_event_for_draw_or_404``.
     """
-    tournament = await _load_tournament_for_update(db, tournament_id)
-    if tournament.created_by_user_id != actor.id:
-        raise NotTournamentOwnerError()
+    await _load_owned_tournament_for_update(db, tournament_id, actor)
     # The event must belong to the named tournament — scoped by both ids so a
     # mismatched pair is a miss, not a cross-tournament draw.
     event = (

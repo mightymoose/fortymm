@@ -31,10 +31,7 @@ from app.models import (
     User,
 )
 from app.rbac import require_permission, user_has_permission
-from app.schedule_solves import (
-    latest_solve,
-    request_solve,
-)
+from app.schedule_solves import request_solve
 from app.schemas.tournament import (
     MatchSettings,
     ScheduleSolveRead,
@@ -80,7 +77,7 @@ from app.tournament_errors import (
     ScheduleQueueUnavailableError,
     TournamentNotFoundError,
 )
-from app.tournament_list import list_tournament_details
+from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import (
     active_entrants_by_event,
@@ -93,7 +90,6 @@ from app.tournament_queries import completed_match_ids as _completed_match_ids
 from app.tournament_queries import visible_to as _visible_to
 from app.tournament_serialization import (
     serialize,
-    serialize_detail,
     serialize_event,
 )
 from app.tournament_solve_service import (
@@ -344,6 +340,53 @@ async def _require_enter_permission(db: AsyncSession, current_user: User) -> Non
 # the rule has one home the MCP tool shares too.
 
 
+# The transport-neutral tournament write verbs (``tournament_edit`` /
+# ``tournament_draw_service`` / ``tournament_solve_service``) each raise this closed
+# family of domain exceptions for the refusals that map identically across every
+# owner-only write; ``_map_tournament_write_error`` reproduces the exact status +
+# body each adapter produced inline. ``_TOURNAMENT_WRITE_ERRORS`` is the shared
+# ``except`` tuple; the alias types the mapper. Mirrors the score-write precedent
+# (``matches._map_score_write_error`` + ``_SCORE_WRITE_ERRORS``). The genuinely
+# verb-specific arms — the strict league 404, the no-drawn-events 422, the
+# queue-down 503, and the ``DrawError`` family's 422 — stay inline in their adapters,
+# because each is one adapter's alone.
+_TournamentWriteError = (
+    TournamentNotFoundError
+    | NotTournamentOwnerError
+    | EventNotFoundError
+    | DrawUnderWayError
+    | LeagueNotEditableError
+)
+_TOURNAMENT_WRITE_ERRORS = (
+    TournamentNotFoundError,
+    NotTournamentOwnerError,
+    EventNotFoundError,
+    DrawUnderWayError,
+    LeagueNotEditableError,
+)
+
+
+def _map_tournament_write_error(exc: _TournamentWriteError) -> HTTPException:
+    """Adapt a shared tournament-write domain exception to its historical HTTP
+    response: ``TournamentNotFoundError`` → 404 ``"Tournament not found."``,
+    ``NotTournamentOwnerError`` → 403 ``"You can only modify tournaments you
+    created."``, ``EventNotFoundError`` → 404 ``"Event not found."``, and both
+    ``DrawUnderWayError`` and ``LeagueNotEditableError`` → 409 with their own
+    carried, domain-authored sentence (``str(exc)``)."""
+    if isinstance(exc, TournamentNotFoundError):
+        return HTTPException(status_code=404, detail="Tournament not found.")
+    if isinstance(exc, NotTournamentOwnerError):
+        return HTTPException(
+            status_code=403,
+            detail="You can only modify tournaments you created.",
+        )
+    if isinstance(exc, EventNotFoundError):
+        return HTTPException(status_code=404, detail="Event not found.")
+    # ``DrawUnderWayError`` and ``LeagueNotEditableError`` both carry the exact 409
+    # sentence the handler used to compose inline — rebuilt verbatim with ``str``.
+    return HTTPException(status_code=409, detail=str(exc))
+
+
 # ----- tournament routes ---------------------------------------------------
 
 
@@ -453,59 +496,17 @@ async def get_tournament(
     if row is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
     tournament, username = row
-    # A second query loads this tournament's events in creation order, and a
-    # third batches every one of those events' active entrants — the same
-    # one-statement-per-collection shape the list endpoint uses.
-    events = list(
-        (
-            await db.execute(
-                select(TournamentEvent)
-                .where(TournamentEvent.tournament_id == tournament_id)
-                .order_by(TournamentEvent.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    event_ids = [e.id for e in events]
-    entrants_by_event = await active_entrants_by_event(db, event_ids)
-    # A FOURTH query batches every one of those events' fixtures — their DRAWS
-    # (ADR-0786). The draw rides on this page rather than on a ``GET …/draw`` of its
-    # own: one endpoint per page (root CLAUDE.md), so the bracket cannot become a
-    # second round-trip that the page has to wait for. Batched across the events for
-    # the same reason the entrants are — a draw read per event is an N+1 that grows
-    # with the very thing the page is describing — and it is the loader, not this
-    # route, that orders them (pool → round → position) and answers ``[]`` for an
-    # event whose draw has not been cut.
-    event_fixtures = await fixtures_by_event(db, event_ids)
-    # ONE more query batches the games of every completed tournament match on the page
-    # — what each event's standings are projected from (ADR-0788). One statement for the
-    # whole page, and **none at all** until something has been played (an unplayed
-    # detail collects no completed match ids), so an unplayed tournament still costs
-    # six and the statement-count pin holds; a played one costs the one extra.
-    game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
-    # The FIFTH query: the caller's rating on the tournament's league, read ONCE for
-    # the whole page. It is what every event's ``entry_state`` is judged against
-    # (ADR-0783), and a tournament has exactly one ladder — so a rating read inside
-    # the per-event loop would issue a query per event to learn the same number, on
-    # the page whose whole job is to describe a field of events.
-    rating = await entrant_rating(db, tournament.league_id, current_user.id)
-    # The SIXTH (and last): the newest row of the tournament's solve ledger — the
-    # Schedule tab's solve strip (ADR "the schedule is solved, the call is pinned").
-    # One row by the ledger's own index, whatever the day's solve count, so the
-    # statement-count pin stays flat; ``None`` is the designed state of a tournament
-    # nobody has asked to schedule yet.
-    latest_schedule_solve = await latest_solve(db, tournament.id)
-    return serialize_detail(
+    # The six-statement batched composition — events, their entrants, their draws,
+    # the completed matches' games (standings), the caller's one ladder rating, and
+    # the newest solve — lives in the shared ``tournament_detail`` reader, which the
+    # MCP ``get_tournament`` tool composes too, so the two surfaces cannot drift. The
+    # statement-count pin (tests/test_tournaments.py) is measured against this route,
+    # which is the reader plus this one visibility-scoped load.
+    return await tournament_detail(
+        db,
         tournament,
         created_by_username=username,
         current_user_id=current_user.id,
-        events=events,
-        entrants_by_event=entrants_by_event,
-        fixtures_by_event=event_fixtures,
-        game_counts=game_counts,
-        rating=rating,
-        latest_schedule_solve=latest_schedule_solve,
     )
 
 
@@ -530,15 +531,13 @@ async def update_tournament(
         tournament = await edit_tournament(
             db, tournament_id=tournament_id, actor=current_user, updates=payload
         )
-    except TournamentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
-    except NotTournamentOwnerError as exc:
-        raise HTTPException(
-            status_code=403, detail="You can only modify tournaments you created."
-        ) from exc
-    except LeagueNotEditableError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # Shared arms: the 404 (absent), the 403 (not the owner), and the 409
+        # (league not editable) all map identically across the owner-only writes.
+        raise _map_tournament_write_error(exc) from exc
     except LeagueNotFoundError as exc:
+        # Verb-specific: only the edit verb resolves a league, so the strict 404
+        # for a ``league_id`` that names none is this adapter's alone.
         raise HTTPException(status_code=404, detail="League not found.") from exc
     # The owner is the current user, so the username and can_edit are known.
     return serialize(
@@ -1947,16 +1946,10 @@ async def cut_event_draw(
         return await _cut_event_draw(
             db, tournament_id=tournament_id, event_id=event_id, actor=current_user
         )
-    except TournamentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
-    except EventNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Event not found.") from exc
-    except NotTournamentOwnerError as exc:
-        raise HTTPException(
-            status_code=403, detail="You can only modify tournaments you created."
-        ) from exc
-    except DrawUnderWayError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # Shared arms: the two 404s (absent tournament / event), the 403 (not the
+        # owner), and the draw-under-way 409 all map identically across the writes.
+        raise _map_tournament_write_error(exc) from exc
     except DrawError as error:
         # The domain refusing to produce a draw is not a bug — it is an answer (the verb
         # already rolled back). ``from None`` so no traceback shape reaches the client;
@@ -2004,16 +1997,10 @@ async def uncut_event_draw(
         await _uncut_event_draw(
             db, tournament_id=tournament_id, event_id=event_id, actor=current_user
         )
-    except TournamentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
-    except EventNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Event not found.") from exc
-    except NotTournamentOwnerError as exc:
-        raise HTTPException(
-            status_code=403, detail="You can only modify tournaments you created."
-        ) from exc
-    except DrawUnderWayError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # Shared arms only — the un-cut never produces a ``DrawError`` (it only
+        # deletes), so every refusal it can raise maps through the shared adapter.
+        raise _map_tournament_write_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -2315,12 +2302,11 @@ async def request_schedule_solve(
         row = await _request_schedule_solve(
             db, tournament_id=tournament_id, actor=current_user
         )
-    except TournamentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
-    except NotTournamentOwnerError as exc:
-        raise HTTPException(
-            status_code=403, detail="You can only modify tournaments you created."
-        ) from exc
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # Shared arms: the 404 (absent) and the 403 (not the owner). The verb never
+        # raises the event/draw-under-way members of the tuple, so they cannot fire
+        # here — but catching the whole tuple keeps the one shared mapper.
+        raise _map_tournament_write_error(exc) from exc
     except NoDrawnEventsError as exc:
         # The exact 422 body this route composed inline — kept in the adapter, like
         # every other tournament refusal's HTTP copy.

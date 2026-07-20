@@ -42,10 +42,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ScheduleSolve, ScheduleSolveTrigger, User
 from app.schedule_solves import request_solve, tournament_has_drawn_event
-from app.tournament_edit import _load_tournament_for_update
+from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     NoDrawnEventsError,
-    NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
 )
 
@@ -89,9 +88,7 @@ async def request_schedule_solve(
     than serialized with expired attributes. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
     """
-    tournament = await _load_tournament_for_update(db, tournament_id)
-    if tournament.created_by_user_id != actor.id:
-        raise NotTournamentOwnerError()
+    await _load_owned_tournament_for_update(db, tournament_id, actor)
     if not await tournament_has_drawn_event(db, tournament_id):
         raise NoDrawnEventsError()
     row = await request_solve(db, tournament_id, ScheduleSolveTrigger.manual)

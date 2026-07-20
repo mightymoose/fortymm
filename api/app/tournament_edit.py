@@ -63,6 +63,26 @@ async def _load_tournament_for_update(
     return tournament
 
 
+async def _load_owned_tournament_for_update(
+    db: AsyncSession, tournament_id: uuid.UUID, actor: User
+) -> Tournament:
+    """Load the tournament ``actor`` owns under ``FOR UPDATE``, or raise — the
+    lock-then-owner-gate pair every owner-only tournament write shares.
+
+    Composes :func:`_load_tournament_for_update` (the row lock, raising
+    :class:`TournamentNotFoundError`) with the owner gate (raising
+    :class:`NotTournamentOwnerError`), in that order: the 404 is judged before the
+    403, so a caller who is not the owner never learns whether an absent id existed.
+    The single home for the two lines the edit, solve and draw write cores each ran
+    inline — same exceptions, same order — so a fourth write core cannot grow a
+    fifth opinion about what "the owner's locked tournament" means.
+    """
+    tournament = await _load_tournament_for_update(db, tournament_id)
+    if tournament.created_by_user_id != actor.id:
+        raise NotTournamentOwnerError()
+    return tournament
+
+
 def _catalogue_ids(tournament: Tournament) -> list[str]:
     """The table catalogue reduced to its ``id`` list — the only slice of it the
     solver reads (``_load_solver_inputs`` reduces the catalogue to ``TableId``s;
@@ -115,9 +135,7 @@ async def edit_tournament(
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
     """
-    tournament = await _load_tournament_for_update(db, tournament_id)
-    if tournament.created_by_user_id != actor.id:
-        raise NotTournamentOwnerError()
+    tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
 
     fields = updates.model_dump(exclude_unset=True)
 
