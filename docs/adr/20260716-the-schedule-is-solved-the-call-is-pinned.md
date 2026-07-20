@@ -1,8 +1,18 @@
 # The schedule is solved; the call is pinned
 
 Date: 2026-07-16
-Status: accepted
+Status: accepted (amended 2026-07-19)
 (Number this ADR by its PR at land time; date-prefixed until then.)
+
+> **Amendment (2026-07-19, #1141):** a pin is no longer a *fully* rigid `(table, start)`
+> interval. A called match's **table** is still a hard constant it can never leave, but its
+> **start can be pushed later** when a predecessor overruns — the solver slides it on the same
+> table and the persisted change fires the same "moved" correction. Read "pins are fixed
+> intervals" and "we never rearrange what we told a player" below as: *a called match's table
+> never changes; its start can slide later, always with a correction.* The whole-or-nothing
+> invariant in Consequences still holds — no pinned placement changes except through a capacity
+> break (an overrun now among them), and every such break still carries a correction. See
+> [ADR "A called match holds its table and slides later"](20260719-a-called-match-holds-its-table-and-slides-later.md).
 
 ## Context
 

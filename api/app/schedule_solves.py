@@ -32,9 +32,13 @@ lock or Redis key to drift from it.
     ``rerun`` solve is requested in the same transaction. That is honest (this
     run produced nothing) and keeps the status enum closed. On a match, every
     returned placement for an *unpinned* fixture is written back as wall-clock
-    (``base + minutes``); pinned fixtures' columns are never touched — the
-    solver echoes pins verbatim, and a promise is not rewritten even with its
-    own bytes. (The one exception is a pin *physics* broke — see the
+    (``base + minutes``); a pinned fixture's **table** is never rewritten, and
+    its start is left byte-identical when the solver echoes it unchanged (a
+    promise is not rewritten even with its own bytes) — but a called match the
+    solver slid **later** on its (unchanged) table has that later start
+    persisted with ``pinned_at`` refreshed and fires the same "moved"
+    correction as a broken-pin move (ADR "a called match holds its table and
+    slides later"). (Physics moving a pin is the other exception — see the
     broken-pins section below.) No per-fixture merging, ever: the output is
     taken whole or not at all.
 
@@ -1137,10 +1141,27 @@ async def _apply_result(
                         fixture.pinned_at is not None
                         and fixture.id not in fresh.broken_pin_moves
                     ):
-                        # The solver echoes pins verbatim; a promise's columns
-                        # are never rewritten, not even with their own bytes.
-                        pinned += 1
-                        continue
+                        # A called match holds its table, but its start can be
+                        # pushed LATER on a re-solve when a predecessor overruns
+                        # (ADR "a called match holds its table and slides
+                        # later"). The solver floors a pin at its stored start,
+                        # so it can only echo that start or return a strictly
+                        # later minute. An unchanged pin — off-grid start
+                        # included — is byte-stable and moves no one; a slid pin
+                        # falls through to the shared moved-repair path below,
+                        # which persists the later start, renews ``pinned_at``,
+                        # and fires the SAME "moved" correction (its
+                        # ``table_id`` write is a no-op, since the solver never
+                        # re-tables a pin).
+                        new_start = fresh.base + timedelta(minutes=placement.start_min)
+                        if (
+                            fixture.scheduled_start is None
+                            or new_start <= fixture.scheduled_start
+                        ):
+                            # Unchanged: a promise's columns are never rewritten,
+                            # not even with their own bytes, and nobody is told.
+                            pinned += 1
+                            continue
                     repaired_pin = fixture.pinned_at is not None
                     fixture.table_id = str(placement.table_id)
                     fixture.scheduled_start = fresh.base + timedelta(

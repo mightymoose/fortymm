@@ -26,6 +26,7 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -52,6 +53,7 @@ from app.models import (
     Match,
     MatchSettings,
     MatchStatus,
+    Notification,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -73,6 +75,7 @@ from app.schedule_solves import (
 )
 from app.scheduling import (
     REST_MIN,
+    PlacedFixture,
     PoolHasNoTables,
     PoolId,
     PoolOverCapacity,
@@ -81,6 +84,7 @@ from app.scheduling import (
     SolveStats,
     Verdict,
 )
+from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
@@ -115,6 +119,7 @@ def solver_queue(monkeypatch: pytest.MonkeyPatch) -> Queue:
 async def _make_tournament(
     db: AsyncSession,
     *,
+    status: TournamentStatus = TournamentStatus.published,
     entrants: int = 4,
     tables: tuple[str, ...] = ("t1", "t2"),
     window: tuple[str, str] = ("09:00", "17:00"),
@@ -132,7 +137,7 @@ async def _make_tournament(
 
     tournament = Tournament(
         name="Scheduled Open",
-        status=TournamentStatus.published,
+        status=status,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -332,6 +337,80 @@ async def _mark_completed(
     fixture.winner_entry_id = entry_a_id
     await db.commit()
     return await _fixture_user_ids(db, entry_a_id, entry_b_id)
+
+
+async def _pin_fixture(
+    db: AsyncSession,
+    fixture: TournamentFixture,
+    *,
+    table_id: str,
+    start: datetime,
+    pinned_at: datetime,
+    notified: int = 1,
+) -> None:
+    """Stage an already-called fixture directly on the row — table, promised
+    start, ``pinned_at`` and the told-count — the pre-state the slide/echo
+    apply paths read."""
+    fixture.table_id = table_id
+    fixture.scheduled_start = start
+    fixture.pinned_at = pinned_at
+    fixture.call_notified_count = notified
+    await db.commit()
+
+
+async def _match_call_notifications(db: AsyncSession) -> list[Notification]:
+    return list(
+        (
+            await db.execute(
+                select(Notification)
+                .where(Notification.category == "match_calls")
+                .order_by(Notification.created_at, Notification.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _fanout_jobs(notifications_queue: Queue) -> list[NotificationJob]:
+    return [
+        NotificationJob.model_validate_json(job.args[0])
+        for job in notifications_queue.jobs
+    ]
+
+
+def _slide_pin_later(
+    target_fixture_id: uuid.UUID, extra_min: int
+) -> Callable[[ScheduleSnapshot, float, int], SolveResult]:
+    """Interpose on the ``_solve`` seam: run the real solver, then push only
+    the target pin's placement ``extra_min`` minutes later on its (unchanged)
+    table — exactly the "predecessor overran" outcome 1a's solver produces
+    under contention, staged deterministically so the apply path is what's
+    under test."""
+    real = scheduling.solve
+    target_id = str(target_fixture_id)
+
+    def wrapper(
+        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+    ) -> SolveResult:
+        result = real(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
+        placements = tuple(
+            PlacedFixture(
+                fixture_id=placement.fixture_id,
+                table_id=placement.table_id,
+                start_min=placement.start_min + bump,
+                end_min=placement.end_min + bump,
+            )
+            for placement in result.placements
+            for bump in (extra_min if placement.fixture_id == target_id else 0,)
+        )
+        return SolveResult(
+            verdict=result.verdict, placements=placements, stats=result.stats
+        )
+
+    return wrapper
 
 
 class TestSolveNumWorkers:
@@ -841,14 +920,19 @@ class TestSolveJob:
     async def test_pinned_fixture_columns_are_untouched_by_apply(
         self, db_session: AsyncSession, solver_queue: Queue
     ) -> None:
-        """The solver echoes pins verbatim; the apply must not rewrite a
-        promise's columns even with identical values — so a deliberately
-        off-grid pin survives byte for byte."""
+        """When the solver returns a called match UNCHANGED (its start is a
+        floor with nothing competing for that slot — 1a's no-drift guarantee),
+        the apply must not rewrite the promise's columns even with identical
+        values, so a deliberately off-grid pin survives byte for byte. The pin
+        sits late enough that no other fixture wants its slot, so the floor is
+        the minimum and it never slides (contrast the slide path below)."""
         tournament_id, event_id = await _make_tournament(db_session)
         fixtures = await _fixtures_of(db_session, event_id)
         pinned = fixtures[0]
         pinned_id = pinned.id
-        pinned_start = BASE + timedelta(minutes=62)  # off the 5-minute grid
+        # Late + off the 5-minute grid: every other fixture packs earlier, so
+        # this pin is uncontended and the solver leaves it exactly here.
+        pinned_start = BASE + timedelta(minutes=302)
         pinned_at = BASE - timedelta(minutes=30)
         pinned.table_id = "t1"
         pinned.scheduled_start = pinned_start
@@ -1246,3 +1330,129 @@ class TestDriftGuard:
             if fixture.table_id is not None
         ]
         assert len(placed) == 6
+
+
+class TestCalledMatchSlides:
+    """Chore 2a (ADR "a called match holds its table and slides later"): the
+    guarded apply persists a called match the solver pushed LATER on its
+    (unchanged) table and fires the same "moved" correction a broken-pin move
+    does — while a pin the solver echoes unchanged is still byte-stable and
+    tells no one."""
+
+    async def test_a_slid_called_match_is_persisted_and_moved_notified(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A predecessor overran: the solver returns the called match 20
+        minutes later on the SAME table. The apply persists the slid start,
+        refreshes ``pinned_at``, and sends exactly one *moved* correction per
+        entrant — the pin counts as placed, not pinned."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, status=TournamentStatus.live, entrants=2, tables=("t1",)
+        )
+        fixture = (await _fixtures_of(db_session, event_id))[0]
+        fixture_id = fixture.id
+        entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
+        assert entry_a_id is not None and entry_b_id is not None
+        original_pin_time = BASE - timedelta(minutes=15)
+        await _pin_fixture(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE,
+            pinned_at=original_pin_time,
+            notified=1,
+        )
+        user_a, user_b = await _fixture_user_ids(db_session, entry_a_id, entry_b_id)
+
+        apply_now = BASE - timedelta(minutes=60)
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: apply_now)
+        monkeypatch.setattr(
+            schedule_solves, "_solve", _slide_pin_later(fixture_id, extra_min=20)
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        slid = (await _fixtures_of(db_session, event_id))[0]
+        assert slid.table_id == "t1"  # the table is invariant
+        assert slid.scheduled_start == BASE + timedelta(minutes=20)  # slid later
+        assert slid.pinned_at == apply_now  # the promise is renewed, not demoted
+        assert slid.call_notified_count == 2  # the call, then the moved correction
+
+        rows = await _match_call_notifications(db_session)
+        assert len(rows) == 2  # exactly one per entrant, nobody else
+        assert {str(row.user_id) for row in rows} == {user_a, user_b}
+        for notification in rows:
+            assert notification.title == "Your match moved to T1"
+            assert "09:20" in notification.body  # BASE + 20 minutes
+        jobs = _fanout_jobs(fake_notifications_queue)
+        assert {str(job.user_id) for job in jobs} == {user_a, user_b}
+        assert all(job.collapse_id == f"match-call:{fixture_id}" for job in jobs)
+
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 1  # the slid pin moved → placed
+        assert ledger.fixtures_pinned == 0
+
+    async def test_an_unchanged_called_match_is_echoed_verbatim_and_silent(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No contention: the real solver returns the (off-grid) pin exactly at
+        its promised start. The apply rewrites not a byte and notifies no one —
+        the pin counts as pinned, not placed."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, status=TournamentStatus.live, entrants=2, tables=("t1",)
+        )
+        fixture = (await _fixtures_of(db_session, event_id))[0]
+        fixture_id = fixture.id
+        original_pin_time = BASE - timedelta(minutes=15)
+        pinned_start = BASE + timedelta(minutes=7)  # off the 5-minute grid
+        await _pin_fixture(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=pinned_start,
+            pinned_at=original_pin_time,
+            notified=1,
+        )
+
+        apply_now = BASE - timedelta(minutes=60)
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: apply_now)
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        survivor = (await _fixtures_of(db_session, event_id))[0]
+        assert survivor.id == fixture_id
+        assert survivor.table_id == "t1"
+        assert survivor.scheduled_start == pinned_start  # byte-identical
+        assert survivor.pinned_at == original_pin_time  # not refreshed
+        assert survivor.call_notified_count == 1  # never re-told
+
+        assert await _match_call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 0  # nothing moved
+        assert ledger.fixtures_pinned == 1  # the verbatim echo
