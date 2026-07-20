@@ -17,6 +17,8 @@ import {
   TRIGGER_LABEL,
   VERDICT_LABEL,
   fmtWallTime,
+  infeasibilityReasonCopy,
+  infeasibilityReasonKey,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
@@ -117,7 +119,10 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
     }
     case 'infeasible':
       // A DESIGNED outcome, not an error banner: the solver *proved* the plan
-      // impossible, which is exactly what a pre-live run is for.
+      // impossible, which is exactly what a pre-live run is for. The API resolves
+      // the causes to names/numbers, so the strip names each specifically —
+      // falling back to the generic sentence only if the (guaranteed ≥1) list is
+      // somehow empty, so the strip never renders bodyless.
       return (
         <div data-testid="solve-strip-infeasible">
           <Line
@@ -125,9 +130,27 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
             tint="text-[color:var(--warn)]"
             title="The day doesn't fit"
           >
-            The matches can't all fit inside their windows on the tables
-            available. Add tables, widen a pool window, or trim an event's field —
-            then run the scheduler again.
+            {state.reasons.length > 0 ? (
+              <ul className="space-y-1.5">
+                {state.reasons.map((reason, i) => {
+                  const copy = infeasibilityReasonCopy(reason)
+                  return (
+                    <li key={infeasibilityReasonKey(reason, i)}>
+                      <span className="text-[color:var(--fg-2)]">
+                        {copy.sentence}
+                      </span>{' '}
+                      {copy.remedy}
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <>
+                The matches can't all fit inside their windows on the tables
+                available. Add tables, widen a pool window, or trim an event's
+                field — then run the scheduler again.
+              </>
+            )}
           </Line>
         </div>
       )

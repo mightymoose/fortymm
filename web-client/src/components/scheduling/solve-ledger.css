@@ -107,6 +107,35 @@
   color: var(--loss);
   word-break: break-word;
 }
+/* The resolved infeasibility reasons — one quiet line per cause, the sentence
+ * in the reading tone and the remedy a notch quieter, mirroring the Schedule
+ * tab's strip. */
+.match-list-page .solve-ledger-detail-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+/* Wrap a long sentence + remedy inside the panel instead of overflowing it.
+   The reasons live in a `.matches` table cell, whose `white-space: nowrap`
+   (match-list.css) is inherited here — so a long reason line stays on one line,
+   pushing the colSpan cell's max-content wider than the 100% table and
+   clipping the remedy at the panel edge. Restore normal wrapping and, like the
+   `.solve-ledger-detail-error` sibling's `word-break: break-word`, also break a
+   pathological unbreakable token rather than overflow. */
+.match-list-page .solve-ledger-detail-reasons li {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.match-list-page .solve-ledger-detail-reason-sentence {
+  color: var(--fg-2);
+}
+.match-list-page .solve-ledger-detail-reason-remedy {
+  color: var(--fg-3);
+}
 .match-list-page .solve-ledger-detail-label {
   font-size: 11px;
   font-weight: 600;

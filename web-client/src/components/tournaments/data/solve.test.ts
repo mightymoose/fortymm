@@ -7,13 +7,18 @@ import { buildScheduleSolve } from './seed.factory'
 import {
   LIVE_POLL_MS,
   SOLVE_IN_FLIGHT_POLL_MS,
+  fmtTableTime,
+  fmtTables,
   fmtWallTime,
+  infeasibilityReasonCopy,
+  infeasibilityReasonSchema,
   parseLatestScheduleSolve,
   parseScheduleSolve,
   runSchedulerNotice,
   scheduleRefetchInterval,
   solveInFlight,
   solveStripState,
+  type InfeasibilityReason,
 } from './solve'
 
 // ----- the parse boundary ----------------------------------------------------
@@ -61,6 +66,235 @@ describe('parseLatestScheduleSolve', () => {
     const { verdict, ...missing } = buildScheduleSolveRead()
     void verdict
     expect(() => parseLatestScheduleSolve(missing)).toThrow()
+  })
+})
+
+// ----- the infeasibility reasons: parse boundary ------------------------------
+
+describe('infeasibilityReasonSchema (the parse boundary)', () => {
+  it('parses pool_has_no_tables into its client arm', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_has_no_tables',
+        pool_name: 'Pool B',
+      }),
+    ).toEqual({ kind: 'pool_has_no_tables', poolName: 'Pool B' })
+  })
+
+  it('parses window_too_short_for_match, mapping snake→camel and keeping best_of narrow', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'window_too_short_for_match',
+        pool_name: 'Pool A',
+        window_start: '09:00',
+        window_end: '09:20',
+        best_of: 5,
+        needed_min: 35,
+        window_span_min: 20,
+      }),
+    ).toEqual({
+      kind: 'window_too_short_for_match',
+      poolName: 'Pool A',
+      windowStart: '09:00',
+      windowEnd: '09:20',
+      bestOf: 5,
+      neededMin: 35,
+      windowSpanMin: 20,
+    })
+  })
+
+  it('parses pool_over_capacity', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_over_capacity',
+        pool_name: 'Pool C',
+        window_start: '09:00',
+        window_end: '13:00',
+        required_min: 480,
+        capacity_min: 450,
+        table_count: 5,
+      }),
+    ).toEqual({
+      kind: 'pool_over_capacity',
+      poolName: 'Pool C',
+      windowStart: '09:00',
+      windowEnd: '13:00',
+      requiredMin: 480,
+      capacityMin: 450,
+      tableCount: 5,
+    })
+  })
+
+  it('parses no_single_cause (the residual, no pool)', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'no_single_cause',
+        required_min: 360,
+        available_min: 480,
+      }),
+    ).toEqual({ kind: 'no_single_cause', requiredMin: 360, availableMin: 480 })
+  })
+
+  it('refuses an arm kind this client has no words for — an unknown reason must fail the parse, not blank the row', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({ kind: 'sunspots', pool_name: 'Pool B' }),
+    ).toThrow()
+  })
+
+  it('fails the whole solve row when one reason arm is unknown — the boundary rejects, the query fails', () => {
+    expect(() =>
+      parseLatestScheduleSolve(
+        buildScheduleSolveRead({
+          status: 'infeasible',
+          verdict: 'infeasible',
+          infeasibility_reasons: [
+            { kind: 'pool_has_no_tables', pool_name: 'Pool B' },
+            { kind: 'gremlins' },
+          ] as never,
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('carries the reasons through onto the domain row, snake→camel-mapped', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasibility_reasons: [{ kind: 'pool_has_no_tables', pool_name: 'Pool B' }],
+      }),
+    )
+    expect(parsed?.infeasibilityReasons).toEqual([
+      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+    ])
+  })
+
+  it('defaults to an empty list off the infeasible path', () => {
+    expect(parseLatestScheduleSolve(buildScheduleSolveRead())?.infeasibilityReasons).toEqual([])
+  })
+})
+
+// ----- the infeasibility reasons: shared copy ---------------------------------
+
+describe('infeasibilityReasonCopy', () => {
+  it('words pool_has_no_tables with the pool name interpolated into both lines', () => {
+    expect(
+      infeasibilityReasonCopy({ kind: 'pool_has_no_tables', poolName: 'Pool B' }),
+    ).toEqual({
+      sentence: 'Pool B has no tables assigned.',
+      remedy: 'Assign at least one table to Pool B, then run the scheduler again.',
+    })
+  })
+
+  it('words window_too_short_for_match with the window, format and minutes', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'window_too_short_for_match',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '09:20',
+        bestOf: 5,
+        neededMin: 35,
+        windowSpanMin: 20,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool A's 09:00–09:20 window is too short for a best-of-5 match — it needs 35 min but the window is only 20.",
+      remedy: "Widen Pool A's window, or use a shorter match format.",
+    })
+  })
+
+  it('words pool_over_capacity, formatting the minutes as hours and pluralising tables', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_over_capacity',
+        poolName: 'Pool C',
+        windowStart: '09:00',
+        windowEnd: '13:00',
+        requiredMin: 480,
+        capacityMin: 450,
+        tableCount: 5,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool C can't fit all its matches: they need about 8h of table-time, but its 09:00–13:00 window on 5 tables only holds about 7.5h.",
+      remedy: 'Add a table to Pool C, widen its window, or trim the field.',
+    })
+  })
+
+  it('pluralises a single table as "1 table"', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_over_capacity',
+        poolName: 'Pool D',
+        windowStart: '09:00',
+        windowEnd: '10:15',
+        requiredMin: 90,
+        capacityMin: 75,
+        tableCount: 1,
+      }).sentence,
+    ).toContain('on 1 table only')
+  })
+
+  it('words no_single_cause as a timing conflict that steers away from adding tables', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'no_single_cause',
+      requiredMin: 360,
+      availableMin: 480,
+    })
+    expect(copy.sentence).toBe(
+      "There's enough total table-time (about 8h available for about 6h of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.",
+    )
+    expect(copy.remedy).toContain("adding tables won't help here")
+  })
+
+  it('gives each arm a distinct sentence and remedy', () => {
+    const arms: InfeasibilityReason[] = [
+      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+      {
+        kind: 'window_too_short_for_match',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '09:20',
+        bestOf: 3,
+        neededMin: 30,
+        windowSpanMin: 20,
+      },
+      {
+        kind: 'pool_over_capacity',
+        poolName: 'Pool C',
+        windowStart: '09:00',
+        windowEnd: '13:00',
+        requiredMin: 480,
+        capacityMin: 450,
+        tableCount: 5,
+      },
+      { kind: 'no_single_cause', requiredMin: 360, availableMin: 480 },
+    ]
+    const sentences = arms.map((a) => infeasibilityReasonCopy(a).sentence)
+    expect(new Set(sentences).size).toBe(arms.length)
+  })
+})
+
+describe('fmtTableTime', () => {
+  it('renders sub-hour spans in whole minutes, no leading "about"', () => {
+    expect(fmtTableTime(45)).toBe('45 min')
+  })
+
+  it('renders whole hours without a decimal', () => {
+    expect(fmtTableTime(480)).toBe('8h')
+  })
+
+  it('renders fractional hours to one decimal (75 min → 1.3h)', () => {
+    expect(fmtTableTime(75)).toBe('1.3h')
+    expect(fmtTableTime(450)).toBe('7.5h')
+  })
+})
+
+describe('fmtTables', () => {
+  it('pluralises', () => {
+    expect(fmtTables(1)).toBe('1 table')
+    expect(fmtTables(5)).toBe('5 tables')
   })
 })
 

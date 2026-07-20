@@ -73,10 +73,18 @@ from app.schedule_solves import (
 )
 from app.scheduling import (
     REST_MIN,
+    PoolHasNoTables,
+    PoolId,
+    PoolOverCapacity,
     ScheduleSnapshot,
     SolveResult,
     SolveStats,
     Verdict,
+)
+from app.schemas.schedule_solve import (
+    PoolHasNoTablesRead,
+    PoolOverCapacityRead,
+    parse_infeasibility_reasons,
 )
 from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
@@ -1020,6 +1028,121 @@ class TestSolveJob:
         assert rerun.status is ScheduleSolveStatus.queued
         assert rerun.trigger is ScheduleSolveTrigger.rerun
         assert len(solver_queue.jobs) == 2
+
+    async def test_infeasible_reasons_are_resolved_to_names_and_clock(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An infeasible verdict's structured, id-and-minute reasons are
+        humanized at apply: the persisted ``infeasibility_reasons`` carry the
+        pool's DISPLAY NAME (not the namespaced solver id) and, for the capacity
+        arm, the ``HH:MM`` window and the integer minutes verbatim."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, window=("09:00", "17:00")
+        )
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        pool_id = PoolId(f"{event_id}:pool-a")
+
+        def infeasible(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.infeasible,
+                placements=(),
+                stats=SolveStats(wall_time_ms=77, objective=None),
+                reasons=(
+                    PoolHasNoTables(pool_id=pool_id),
+                    PoolOverCapacity(
+                        pool_id=pool_id,
+                        required_min=600,
+                        capacity_min=480,
+                        table_count=2,
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", infeasible)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+        assert ledger.verdict is SolverVerdict.infeasible
+
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        no_tables, over_capacity = reasons
+        assert isinstance(no_tables, PoolHasNoTablesRead)
+        # The DISPLAY name, never the namespaced ``{event_id}:pool-a`` id.
+        assert no_tables.pool_name == "Pool A"
+
+        assert isinstance(over_capacity, PoolOverCapacityRead)
+        assert over_capacity.pool_name == "Pool A"
+        assert over_capacity.window_start == "09:00"
+        assert over_capacity.window_end == "17:00"
+        assert over_capacity.required_min == 600
+        assert over_capacity.capacity_min == 480
+        assert over_capacity.table_count == 2
+
+    async def test_succeeded_apply_leaves_infeasibility_reasons_null(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """Only the infeasible branch writes ``infeasibility_reasons``; a real
+        (optimal/feasible) solve leaves the column NULL."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.infeasibility_reasons is None
+        assert parse_infeasibility_reasons(ledger.infeasibility_reasons) == []
+
+    async def test_failed_apply_leaves_infeasibility_reasons_null(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An ``unknown`` verdict fails the row (cap exhausted) and never
+        touches ``infeasibility_reasons`` — it stays NULL."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        def exhausted(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.unknown,
+                placements=(),
+                stats=SolveStats(wall_time_ms=5, objective=None),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", exhausted)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.failed
+        assert ledger.infeasibility_reasons is None
 
 
 class TestDriftGuard:
