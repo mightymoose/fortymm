@@ -28,12 +28,18 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
-from pydantic import Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_token_auth import find_api_token_user
 from app.db import get_sessionmaker
+from app.draws import (
+    DegenerateDraw,
+    DrawError,
+    NonSinglesDraw,
+    UnsupportedDrawType,
+)
 from app.mappers.match_extras_mapper import empty_extras
 from app.match_creation import create_match as create_match_core
 from app.match_errors import (
@@ -62,20 +68,51 @@ from app.match_serialization import (
     serialize_details,
     view_extras,
 )
-from app.models import Match, User
+from app.models import Match, Tournament, TournamentEvent, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
+from app.rbac import user_has_permission
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.result_acceptance import (
     accept_result as accept_result_core,
 )
 from app.result_proposal import propose_result as propose_result_core
+from app.schedule_solves import latest_solve
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.schemas.player import PlayerMatchListResponse, PlayerRead
+from app.schemas.tournament import (
+    ScheduleSolveRead,
+    TournamentDetailRead,
+    TournamentFixtureRead,
+    TournamentRead,
+    TournamentUpdate,
+)
 from app.services.match_service import MatchService
+from app.tournament_draw_service import cut_event_draw as cut_event_draw_core
+from app.tournament_draw_service import uncut_event_draw as uncut_event_draw_core
+from app.tournament_edit import edit_tournament as edit_tournament_core
+from app.tournament_errors import (
+    DrawUnderWayError,
+    EventNotFoundError,
+    LeagueNotEditableError,
+    LeagueNotFoundError,
+    NoDrawnEventsError,
+    NotTournamentOwnerError,
+    ScheduleQueueUnavailableError,
+    TournamentNotFoundError,
+)
+from app.tournament_list import list_tournament_details, tournament_detail
+from app.tournament_queries import (
+    fixtures_by_event,
+    visible_to,
+)
+from app.tournament_serialization import serialize
+from app.tournament_solve_service import (
+    request_schedule_solve as request_schedule_solve_core,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +134,13 @@ MatchPageSize = Annotated[int, Field(ge=1, le=100)]
 # The default page size ``list_my_matches`` uses when the caller names none,
 # matching the HTTP per-player list default (``app.players.LIST_DEFAULT_PAGE_SIZE``).
 MY_MATCHES_DEFAULT_PAGE_SIZE = 25
+
+# The permission the tournament reads gate on — the same seeded RBAC name the HTTP
+# router's ``require_view`` dependency enforces (``app.tournaments.TOURNAMENT_VIEW``,
+# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
+# the MCP adapter stays router-free; ``get_tournament`` asks it through the one shared
+# ``user_has_permission`` (``app.rbac``), so the two surfaces gate on the same grant.
+TOURNAMENT_VIEW_PERMISSION = "tournament.view"
 
 
 @asynccontextmanager
@@ -173,6 +217,44 @@ async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     return (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
+
+
+async def _require_tournament_view(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The tournament-read gate every read tool shares: refuse unless the caller
+    holds ``tournament.view``.
+
+    Byte-for-byte the ``ToolError`` the three read tools each raised inline, asked
+    through the one shared ``user_has_permission`` the HTTP ``require_view``
+    dependency asks — so the MCP and HTTP surfaces gate reads on the same grant, and
+    a fourth read tool cannot grow a different message or a different permission
+    name. Permission is checked first (before any visibility load), the order the
+    HTTP route keeps: ``require_view`` (403) runs before the handler."""
+    if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
+        raise ToolError("You don't have permission to view tournaments.")
+
+
+async def _load_visible_tournament(
+    db: AsyncSession, user_id: uuid.UUID, tournament_id: uuid.UUID
+) -> Tournament:
+    """The tournament ``tournament_id`` names, scoped to what ``user_id`` may see,
+    or a not-found ``ToolError`` — the visibility-scoped load ``get_tournament`` and
+    ``get_schedule`` share.
+
+    ``visible_to`` rides in the same WHERE as the id lookup, so a tournament the
+    caller can't see leaves by the same not-found path as an absent one — existence
+    is never confirmed for an unannounced draft the caller does not own, exactly as
+    the HTTP route hides it behind a 404. The ``ToolError`` message is byte-for-byte
+    the one both tools raised inline."""
+    tournament = (
+        await db.execute(
+            select(Tournament).where(
+                Tournament.id == tournament_id, visible_to(user_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise ToolError(f"No tournament found with id {tournament_id}.")
+    return tournament
 
 
 @mcp.tool
@@ -347,6 +429,532 @@ async def enter_game_score(
         except _SCORE_WRITE_ERRORS as exc:
             raise _map_score_write_tool_error(exc) from exc
         return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
+    """Read a single tournament as the authenticated API-token caller.
+
+    Returns the same ``TournamentDetailRead`` view the HTTP
+    ``GET /v1/tournaments/{tournament_id}`` endpoint returns for that user: the
+    tournament's fields (with the caller's ``can_edit``), its events in creation
+    order — each carrying its active entrants, its draw (fixtures), the caller's
+    ``entry_state``, and its round-robin standings once played — plus the newest
+    row of the schedule-solve ledger. It composes the exact same shared
+    ``tournament_detail`` reader the HTTP route composes, so the two surfaces can
+    never drift.
+
+    Gated on the same ``tournament.view`` permission the HTTP route requires, and
+    scoped by the same visibility rule: a draft you do not own is not yours to see,
+    so it surfaces as a not-found ``ToolError`` — the same way the HTTP route hides
+    it behind a 404 rather than confirming it exists.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
+    with that id is visible to you (absent, or an unannounced draft you do not own).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, then the visibility-scoped load — the order the HTTP
+        # route keeps (``require_view`` (403) runs before the handler, then
+        # ``_visible_to`` scopes the row so a hidden draft leaves by not-found).
+        await _require_tournament_view(db, user_id)
+        tournament = await _load_visible_tournament(db, user_id, tournament_id)
+        # The creator's username the shared reader needs for the aggregate. The
+        # RESTRICT FK guarantees the creator row exists, so ``scalar_one`` is total.
+        username = (
+            await db.execute(
+                select(User.username).where(User.id == tournament.created_by_user_id)
+            )
+        ).scalar_one()
+        # The identical six-statement batched composition + ``serialize_detail`` the
+        # HTTP route runs — extracted into the shared ``tournament_detail`` reader,
+        # so this tool and the page can never drift on how a tournament is read.
+        return await tournament_detail(
+            db,
+            tournament,
+            created_by_username=username,
+            current_user_id=user_id,
+        )
+
+
+class ScheduleEventGroup(BaseModel):
+    """One event's slice of the schedule projection: the event's identity and its
+    draw's fixtures, each carrying its placement (``table_id`` +
+    ``scheduled_start``) and its pool/round/position.
+
+    The fixtures are the exact ``TournamentFixtureRead`` the detail BFF composes —
+    same fields, same **pool → round → position** order (``fixtures_by_event``) —
+    reused whole rather than reshaped, so this agent-facing schedule and the
+    detail page cannot disagree about a slot. Empty is the designed state of an
+    event whose draw has not been cut (ADR-0786), not an error.
+    """
+
+    event_id: uuid.UUID
+    name: str
+    fixtures: list[TournamentFixtureRead]
+
+
+class TournamentScheduleRead(BaseModel):
+    """A narrow, agent-shaped SCHEDULE projection of a tournament — each event's
+    placed fixtures grouped for reading, plus the tournament's latest solve.
+
+    Deliberately NOT the whole ``TournamentDetailRead``: it drops entrants,
+    standings, eligibility and the per-event write metadata an agent reading a
+    schedule does not need, and keeps only what answers "what plays where and
+    when, and how is the current solve doing". It is composed entirely from the
+    existing detail-BFF reads — ``fixtures_by_event`` for each event's placed
+    fixtures and ``latest_solve`` for the ledger's newest row — wrapping the
+    unchanged ``TournamentFixtureRead`` / ``ScheduleSolveRead`` shapes so the MCP
+    and HTTP surfaces read the same placement and solve facts.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does
+    not reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the
+    parent schema — see the tournament-verbs ADR).
+    """
+
+    tournament_id: uuid.UUID
+    events: list[ScheduleEventGroup]
+    # The newest row of the tournament's solve ledger (status + CP-SAT verdict),
+    # or ``null`` when no solve has ever been requested — the same ``latest_solve``
+    # read, and the same ``ScheduleSolveRead`` shape, the detail BFF's solve strip
+    # renders.
+    latest_schedule_solve: ScheduleSolveRead | None
+
+
+@mcp.tool
+async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
+    """Read a tournament's SCHEDULE as the authenticated API-token caller — a
+    narrow, agent-shaped projection, not the whole tournament detail.
+
+    Returns each event's draw fixtures with their placement (``table_id`` and the
+    predicted ``scheduled_start``) and pool/round/position — grouped by event, in
+    the same **pool → round → position** order the detail page uses — plus the
+    tournament's latest schedule solve (its ``status`` and CP-SAT ``verdict``). It
+    reuses the exact same shared reads the detail BFF composes (``fixtures_by_event``
+    for the placed fixtures, ``latest_solve`` for the ledger's newest row) and the
+    identical ``TournamentFixtureRead`` / ``ScheduleSolveRead`` shapes, so this
+    schedule and the tournament page can never drift.
+
+    An event whose draw has not been cut carries ``[]`` fixtures (the designed
+    state, not an error), and a tournament for which no solve has ever been
+    requested has ``latest_schedule_solve = null``.
+
+    Gated on the same ``tournament.view`` permission the HTTP detail read requires,
+    and scoped by the same visibility rule: a draft you do not own is not yours to
+    see, so it surfaces as a not-found ``ToolError`` — existence is never confirmed
+    for an unannounced draft you do not own.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
+    with that id is visible to you (absent, or an unannounced draft you do not own).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, then the visibility-scoped load — the same shared gate
+        # and loader ``get_tournament`` uses, keeping the order the HTTP detail
+        # route keeps (``require_view`` (403) before the handler, then ``visible_to``
+        # scoping the row so a hidden draft leaves by not-found).
+        await _require_tournament_view(db, user_id)
+        tournament = await _load_visible_tournament(db, user_id, tournament_id)
+        # Events in creation order (as the detail read lists them), then their
+        # draws in one batched read (``fixtures_by_event`` — pool → round →
+        # position ordered, every event id keyed so an un-cut event maps to ``[]``)
+        # and the ledger's newest row — the same shared reads the detail BFF uses.
+        events = list(
+            (
+                await db.execute(
+                    select(TournamentEvent)
+                    .where(TournamentEvent.tournament_id == tournament_id)
+                    .order_by(TournamentEvent.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        event_fixtures = await fixtures_by_event(db, [event.id for event in events])
+        latest_schedule_solve = await latest_solve(db, tournament.id)
+        return TournamentScheduleRead(
+            tournament_id=tournament.id,
+            events=[
+                ScheduleEventGroup(
+                    event_id=event.id,
+                    name=event.name,
+                    fixtures=event_fixtures[event.id],
+                )
+                for event in events
+            ],
+            latest_schedule_solve=(
+                ScheduleSolveRead.model_validate(latest_schedule_solve)
+                if latest_schedule_solve is not None
+                else None
+            ),
+        )
+
+
+@mcp.tool
+async def list_my_tournaments() -> list[TournamentDetailRead]:
+    """List the tournaments the authenticated API-token caller OWNS, newest first.
+
+    Returns the same ``TournamentDetailRead`` aggregate the HTTP
+    ``GET /v1/tournaments`` list serves — each tournament with its events, their
+    active entrants and their draws, the caller's ``can_edit`` / per-event
+    ``entry_state`` / ladder ``rating`` — by reusing that list's exact five-query
+    batched read (``list_tournament_details``), so the MCP and HTTP surfaces can
+    never drift and neither runs an N+1.
+
+    Unlike the HTTP list, which is VISIBILITY-scoped (every announced tournament
+    plus your own drafts), this is OWNER-scoped: only tournaments you created
+    (``created_by_user_id == you``), in ANY status. That is deliberate — the
+    tournament write verbs are owner-gated, so the tournaments an agent can act on
+    are exactly the ones it owns, and this is the discovery read that hands the
+    agent a ``tournament_id`` to drive them (see the tournament-verbs ADR). A
+    tournament you can merely *see* but do not own is excluded.
+
+    Gated on the same ``tournament.view`` permission the HTTP list requires.
+
+    Raises a ``ToolError`` when you lack ``tournament.view``.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, through the same shared gate the detail reads use
+        # (mirroring the HTTP list's ``require_view`` dependency); only then the
+        # owner-scoped read. Owner-scoping is by construction (the WHERE selects only
+        # the caller's own rows), so there is no separate visibility gate to run — an
+        # owner always sees their own tournaments.
+        await _require_tournament_view(db, user_id)
+        return await list_tournament_details(
+            db,
+            where=Tournament.created_by_user_id == user_id,
+            current_user_id=user_id,
+        )
+
+
+@mcp.tool
+async def edit_tournament(
+    tournament_id: uuid.UUID,
+    updates: TournamentUpdate,
+) -> TournamentRead:
+    """Edit a tournament you OWN as the authenticated API-token caller, and return
+    the updated tournament.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}``: it reuses the shared
+    ``edit_tournament`` verb (the ``FOR UPDATE`` load-lock, the owner gate, the
+    league-editable-only-while-draft state rule, the STRICT league lookup, the
+    partial apply, and the table-catalogue-change → re-solve trigger) and the same
+    ``TournamentUpdate`` schema the HTTP route validates, so the MCP and HTTP
+    surfaces can never drift on what a valid edit is.
+
+    ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
+    field replaces the current value. ``name``, ``address``, ``table_catalogue``
+    and ``league_id`` back NOT NULL columns, so an explicit ``null`` for any of
+    them is rejected (send them only to set a real value);
+    ``description`` / ``start_date`` / ``end_date`` are nullable and may be cleared
+    with ``null``. ``table_catalogue`` replaces wholesale when present.
+    ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
+    published the ladder is settled. ``status`` is not editable here (it moves only
+    across the guarded lifecycle transitions). Returns the updated
+    ``TournamentRead`` from the owner's perspective (``can_edit`` is always true).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner (only the creator may edit it), when you try to change
+    the league of a tournament that has left ``draft``, or when ``league_id`` names
+    no league.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await edit_tournament_core(
+                db,
+                tournament_id=tournament_id,
+                actor=actor,
+                updates=updates,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError("You can only edit tournaments you created.") from exc
+        except LeagueNotEditableError as exc:
+            raise ToolError(str(exc)) from exc
+        except LeagueNotFoundError as exc:
+            raise ToolError("No league found with that id.") from exc
+        # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
+        # so here the actor is the creator — the owner's perspective the HTTP PATCH
+        # serializes from (``created_by_username`` known, ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
+        )
+
+
+# The domain-exception family the two draw-write verbs raise for a refusal that is
+# NOT a ``DrawError`` — an absent event, a non-owner, or a draw already under way. The
+# ``app.draws.DrawError`` family (an un-cuttable field) is a separate hierarchy that
+# only ``build_cut`` can hit, and is mapped by ``_map_draw_refusal_tool_error`` below.
+_DRAW_WRITE_ERRORS = (
+    TournamentNotFoundError,
+    EventNotFoundError,
+    NotTournamentOwnerError,
+    DrawUnderWayError,
+)
+
+
+class DrawUncutConfirmation(BaseModel):
+    """The result of tearing an event's draw down (``uncut``) — a small, agent-shaped
+    confirmation rather than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was un-cut
+    (the resolved ``tournament_id`` + the ``event_id``) and asserts the outcome:
+    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core deleted the
+    draw wholesale, so the event provably has no fixtures left. Un-cutting a never-cut
+    draw is an idempotent success too — it deletes nothing and still confirms ``0``
+    remaining (ADR-0786).
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR).
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+    fixtures_remaining: int
+
+
+async def _tournament_id_for_event(db: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
+    """Resolve the tournament that owns ``event_id`` — the id the shared draw cores
+    need alongside the event id.
+
+    An event id is globally unique, so a draw tool can take just the event and recover
+    its tournament from the ``TournamentEvent.tournament_id`` foreign key, keeping a
+    clean agent-facing signature. A missing event is a not-found ``ToolError`` here,
+    before the core is called; because the resolved id comes straight off the event's
+    own FK, the core's later event-under-tournament load always matches, so the owner
+    gate inside the core is what actually refuses a stranger."""
+    tournament_id = (
+        await db.execute(
+            select(TournamentEvent.tournament_id).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one_or_none()
+    if tournament_id is None:
+        raise ToolError(f"No event found with id {event_id}.")
+    return tournament_id
+
+
+def _map_draw_write_tool_error(exc: Exception, event_id: uuid.UUID) -> ToolError:
+    """Adapt a non-``DrawError`` draw-write refusal to an actionable ``ToolError``.
+
+    Mirrors the HTTP adapters (``tournaments.cut_event_draw`` /
+    ``uncut_event_draw``) but speaks the agent's language instead of HTTP status
+    codes: a tournament/event that does not resolve is one opaque not-found (the tool
+    is addressed by event id), a non-owner is told the write is owner-gated, and a draw
+    already under way passes through its own domain-authored sentence
+    (``DrawUnderWayError`` carries the exact copy)."""
+    if isinstance(exc, TournamentNotFoundError | EventNotFoundError):
+        return ToolError(f"No event found with id {event_id}.")
+    if isinstance(exc, NotTournamentOwnerError):
+        return ToolError(
+            "You can only cut or remove draws for tournaments you created."
+        )
+    return ToolError(str(exc))
+
+
+def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
+    """Adapt a ``DrawError`` — the domain refusing to produce a draw from this event —
+    to an actionable ``ToolError``, mirroring the intent of the HTTP route's
+    ``_draw_refusal`` but in the agent's language.
+
+    A ``match`` over the error, not ``str(error)`` over whatever arrives, so each arm
+    tells an agent which of *their* events cannot be cut and why:
+
+    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's draw
+      type has no generator yet (only round-robin does today), a fact to change on the
+      event, not a transient one to retry.
+    * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
+      event can never be given a draw (an entry is one row per player, with nowhere to
+      seat a partner or a team, ADR-0788), so the refusal names the event and is
+      permanent.
+    * ``DegenerateDraw``'s message is **domain-authored copy** (the strategy alone knows
+      which degeneracy it hit and the numbers the director must change — "5 entrants
+      across 3 pool(s)"), passed through so the agent reads exactly what a director
+      would.
+    * The fallback arm is a generic sentence, never a future subclass's own message —
+      refusing vaguely is a bug report, leaking internals is a defect."""
+    match error:
+        case UnsupportedDrawType():
+            return ToolError(
+                f"This event's {error.draw_type.value} draw can't be cut yet — only "
+                "round-robin draws are supported. Change the event's draw type to one "
+                "that can, or wait for support."
+            )
+        case NonSinglesDraw():
+            return ToolError(
+                f"A {error.event_format.value} event can't be given a draw — only "
+                "singles events can. A fixture seats one entrant on each side, and "
+                "there's nowhere to record a doubles pairing or a team."
+            )
+        case DegenerateDraw():
+            return ToolError(str(error))
+        case _:
+            return ToolError("This event's draw can't be cut as the event stands.")
+
+
+@mcp.tool
+async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
+    """Cut (or re-cut) an event's DRAW as the authenticated API-token caller — generate
+    its fixtures from its entrants — and return them.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events/{event_id}/draw``: it reuses
+    the shared ``cut_event_draw`` verb (the ``FOR UPDATE`` tournament row lock, the
+    owner gate, the event-under-tournament load, the play-evidence gate, the
+    ``cut_draw`` domain core and the re-solve trigger) so the MCP and HTTP surfaces can
+    never drift. You address the event by its globally-unique ``event_id`` alone; the
+    owning tournament is resolved from it. Cutting is owner-gated (only the
+    tournament's creator may cut), and it is NOT tied to status — a draw may be cut and
+    re-cut freely while a director inspects the pools and the seeding. **Re-cutting
+    replaces the draw wholesale**: the previous fixtures are deleted and a fresh set is
+    planned from the event's current active entrants (their ids do not survive).
+    Returns the created
+    fixtures in **pool → round → position** order — the same ``TournamentFixtureRead``
+    the detail page and ``get_schedule`` carry.
+
+    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    event's tournament, when the draw already shows evidence of play (a fixture with a
+    recorded winner or a linked match — it can no longer be cut), or when the event
+    cannot produce a draw at all: its draw type has no generator yet (only round-robin
+    does today), it has no pools configured for a pooled draw type, or its field is too
+    small for its pools (a pool of fewer than two has nobody to play). The message names
+    what to change."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        tournament_id = await _tournament_id_for_event(db, event_id)
+        try:
+            return await cut_event_draw_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except _DRAW_WRITE_ERRORS as exc:
+            raise _map_draw_write_tool_error(exc, event_id) from exc
+        except DrawError as error:
+            # The domain refusing to produce a draw is not a bug — it is an answer, and
+            # the verb already rolled back, so nothing was written. Compose the agent's
+            # sentence and surface it as a ``ToolError``.
+            raise _map_draw_refusal_tool_error(error) from error
+
+
+@mcp.tool
+async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
+    """Un-cut an event's DRAW as the authenticated API-token caller: delete its
+    fixtures, leaving the event with no draw. Returns a confirmation carrying the
+    resolved tournament, the event, and the fixtures now remaining (``0`` on success).
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`` (which
+    answers a bodiless ``204``): it reuses the shared ``uncut_event_draw`` verb (the
+    ``FOR UPDATE`` tournament row lock, the owner gate, the event-under-tournament load,
+    the play-evidence gate, the ``uncut_draw`` core and the ``had_draw``-gated re-solve
+    trigger) so the MCP and HTTP surfaces can never drift. You address the event by its
+    globally-unique ``event_id`` alone; the owning tournament is resolved from it.
+    Un-cutting is owner-gated (only the tournament's creator may). An event with **no
+    draw is already in the state this asks for**, so un-cutting a never-cut draw deletes
+    nothing and is still a success (``fixtures_remaining`` = ``0``) — it is idempotent.
+
+    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    event's tournament, or when the draw already shows evidence of play (a fixture with
+    a recorded winner or a linked match — it can no longer be removed)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        tournament_id = await _tournament_id_for_event(db, event_id)
+        try:
+            await uncut_event_draw_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except _DRAW_WRITE_ERRORS as exc:
+            raise _map_draw_write_tool_error(exc, event_id) from exc
+        # A successful ``uncut_event_draw`` deleted the draw wholesale (or there was
+        # never one), so the event provably has no fixtures — ``fixtures_remaining``
+        # is ``0`` by construction, no confirming re-read of ``fixtures_by_event``
+        # needed. The idempotent un-cut of a never-cut draw lands here too, and it is
+        # ``0`` for it as well (ADR-0786).
+        return DrawUncutConfirmation(
+            tournament_id=tournament_id,
+            event_id=event_id,
+            fixtures_remaining=0,
+        )
+
+
+@mcp.tool
+async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
+    """Run the SCHEDULER for a tournament you OWN as the authenticated API-token
+    caller — queue a solve that places its cut draws' fixtures onto tables and
+    times — and return the ledger row that will carry the outcome.
+
+    This is NOT a match-outcome simulation: it does not play games or predict
+    winners. It runs the CP-SAT placement SOLVER, which decides *when and where*
+    each already-drawn fixture is played (its ``table_id`` and predicted
+    ``scheduled_start``), the same run the tournament page's "Run scheduler" button
+    triggers.
+
+    It is **ASYNC**: the solve runs on a background worker, so this tool returns the
+    freshly queued (or already in-flight) ``ScheduleSolveRead`` immediately — a
+    ledger row whose ``status`` is ``queued`` or ``running`` and whose ``verdict`` /
+    placement counts are still ``null``. Read the verdict back later via
+    ``get_schedule`` (or ``get_tournament``) — its ``latest_schedule_solve`` carries
+    the run's final ``status`` and CP-SAT ``verdict`` (``optimal`` / ``feasible`` /
+    ``infeasible``) once the worker finishes. Poll it; do not expect the answer in
+    this return value.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/schedule/solves``: it reuses the
+    shared ``request_schedule_solve`` verb (the ``FOR UPDATE`` tournament row lock,
+    the owner gate, the has-a-drawn-event gate, and the one coalesced enqueue every
+    trigger funnels into) so the MCP and HTTP surfaces can never drift. **One solve
+    is in flight per tournament**: if a run is already ``queued`` this request is
+    absorbed by it and that row comes back; if one is ``running`` its re-run flag is
+    set and the running row comes back; only when neither exists is a fresh run
+    queued. Allowed in ANY tournament status, from the moment any event has a cut
+    draw — pre-live solves are the point (an ``infeasible`` verdict before going live
+    is how a director learns the day does not fit while there is still time).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner (only the creator may run the scheduler), when no event of
+    the tournament has a cut draw yet (there is nothing to schedule — ``build_cut`` an
+    event's draw first, then retry), or when the scheduler queue itself is
+    unreachable (nothing was queued; the same request is safe to retry)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            row = await request_schedule_solve_core(
+                db, tournament_id=tournament_id, actor=actor
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only run the scheduler for tournaments you created."
+            ) from exc
+        except NoDrawnEventsError as exc:
+            raise ToolError(
+                "There is nothing to schedule yet: no event of this tournament has a "
+                "cut draw. The scheduler places a draw's fixtures, so build_cut at "
+                "least one event's draw first, then run it again."
+            ) from exc
+        except ScheduleQueueUnavailableError as exc:
+            raise ToolError(
+                "The scheduler queue is unavailable, so the solve was not queued. "
+                "Try again in a moment."
+            ) from exc
+        # The core committed and refreshed the queued/running ledger row — serialize
+        # it into the same ``ScheduleSolveRead`` the HTTP route and the schedule
+        # projection carry, so the agent reads the run's status back off it.
+        return ScheduleSolveRead.model_validate(row)
 
 
 @mcp.tool
