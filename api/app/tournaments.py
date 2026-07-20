@@ -34,7 +34,6 @@ from app.rbac import require_permission, user_has_permission
 from app.schedule_solves import (
     latest_solve,
     request_solve,
-    tournament_has_drawn_event,
 )
 from app.schemas.tournament import (
     MatchSettings,
@@ -76,7 +75,9 @@ from app.tournament_errors import (
     EventNotFoundError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    NoDrawnEventsError,
     NotTournamentOwnerError,
+    ScheduleQueueUnavailableError,
     TournamentNotFoundError,
 )
 from app.tournament_list import list_tournament_details
@@ -94,6 +95,9 @@ from app.tournament_serialization import (
     serialize,
     serialize_detail,
     serialize_event,
+)
+from app.tournament_solve_service import (
+    request_schedule_solve as _request_schedule_solve,
 )
 
 # Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
@@ -2296,32 +2300,40 @@ async def request_schedule_solve(
     Owner-only, like every other tournament mutation: an absent tournament is a
     `404`, a non-owner a `403`.
     """
-    # 404 → 403 → 422, the ordering ADR-0017 fixed for this module — and the same
-    # tournament row lock every scheduling-input writer takes, taken FIRST, which is
-    # the lock ``request_solve`` requires of its callers (lock order: tournament →
-    # schedule_solves). Without it, this route's "a draw exists" judgment and its
-    # enqueue would sit in two instants: an un-cut could commit between them and a
-    # solve would be queued for a tournament this route just certified as drawable.
-    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
-    # The caller's own refusal, last: nothing drawn means nothing to schedule.
-    if not await tournament_has_drawn_event(db, tournament_id):
-        raise _no_drawn_events_refusal()
-    row = await request_solve(db, tournament_id, ScheduleSolveTrigger.manual)
-    if row is None:
-        # The enqueue itself failed (Redis down) and ``request_solve`` took its row
-        # back out — a zombie row would absorb every later trigger while no job ever
-        # runs. Nothing was queued, so the honest answer is "not available", not a
-        # ledger row that names a run that does not exist.
+    # Thin adapter over the transport-neutral ``request_schedule_solve`` verb: it
+    # owns the row lock, the owner gate, the no-drawn-events gate, the coalesced
+    # ``request_solve`` enqueue and the commit + read-back, and signals each refusal
+    # with a domain exception. This handler maps each back to the exact status +
+    # body it produced before, so the wire contract is unchanged (404 → 403 → 422,
+    # ADR-0017's ordering; the 503 is the queue-down case):
+    #
+    #   TournamentNotFoundError        -> 404 "Tournament not found."
+    #   NotTournamentOwnerError        -> 403 "You can only modify tournaments you …"
+    #   NoDrawnEventsError             -> 422 {"code": "no_drawn_events", "message": …}
+    #   ScheduleQueueUnavailableError  -> 503 "The scheduling queue is unavailable, …"
+    try:
+        row = await _request_schedule_solve(
+            db, tournament_id=tournament_id, actor=current_user
+        )
+    except TournamentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
+    except NotTournamentOwnerError as exc:
+        raise HTTPException(
+            status_code=403, detail="You can only modify tournaments you created."
+        ) from exc
+    except NoDrawnEventsError as exc:
+        # The exact 422 body this route composed inline — kept in the adapter, like
+        # every other tournament refusal's HTTP copy.
+        raise _no_drawn_events_refusal() from exc
+    except ScheduleQueueUnavailableError as exc:
+        # The enqueue failed (Redis down) and the verb took its row back out —
+        # nothing was queued, so the honest answer is "not available", not a ledger
+        # row that names a run that does not exist. Same request is safe to retry.
         raise HTTPException(
             status_code=503,
             detail=(
                 "The scheduling queue is unavailable, so the solve was not queued. "
                 "Try again in a moment."
             ),
-        )
-    await db.commit()
-    # ``requested_at`` (and the other server defaults) were never round-tripped by
-    # the INSERT, so read the row back rather than serializing expired attributes.
-    await db.refresh(row)
+        ) from exc
     return ScheduleSolveRead.model_validate(row)

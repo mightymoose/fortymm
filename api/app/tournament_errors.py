@@ -78,3 +78,27 @@ class LeagueNotFoundError(Exception):
     ``resolve_league`` 404 (``app.leagues``), which raises an ``HTTPException``
     the FastAPI-free verb must not. The HTTP adapter maps this to the existing
     404 ``"League not found."``. Never an ``HTTPException``."""
+
+
+class NoDrawnEventsError(Exception):
+    """Raised by the request-schedule-solve verb when no event of the addressed
+    tournament has a **cut draw** — nothing the solver can place, so a run would
+    succeed at placing zero fixtures (a green ledger row that answers a question
+    nobody asked). The HTTP adapter maps this to the existing 422 with the
+    machine-readable ``{"code": "no_drawn_events", "message": ...}`` body
+    (``app.tournaments._no_drawn_events_refusal``): a bare marker like
+    :class:`TournamentNotFoundError`, its transport copy lives in the adapter,
+    not here. Never an ``HTTPException``."""
+
+
+class ScheduleQueueUnavailableError(Exception):
+    """Raised by the request-schedule-solve verb when the enqueue itself could
+    not be placed on the queue (Redis down): :func:`app.schedule_solves.request_solve`
+    catches the ``RedisError`` internally, takes its just-inserted row back out
+    (a zombie row would absorb every later trigger while no job ever runs) and
+    returns ``None``. This verb turns that ``None`` into this exception so its
+    own return type stays a non-optional :class:`~app.models.ScheduleSolve` —
+    the caller gets a real ledger row or a refusal, never an ambiguous ``None``.
+    The HTTP adapter maps this to the existing 503 ``"The scheduling queue is
+    unavailable, …"``; nothing was queued and the same request is safe to retry.
+    Never an ``HTTPException``."""

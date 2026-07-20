@@ -1835,3 +1835,135 @@ async def test_uncut_non_owner_raises_tool_error(
     async with _mcp_client(outsider_token) as client, client:
         with pytest.raises(ToolError, match="tournaments you created"):
             await client.call_tool("uncut", {"event_id": str(event.id)})
+
+
+# ----- request_schedule_solve tool -----------------------------------------
+
+
+async def test_request_schedule_solve_is_registered(
+    db_session: AsyncSession,
+) -> None:
+    """The solve write verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-solve-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+    assert "request_schedule_solve" in names
+
+
+async def test_request_schedule_solve_owner_queues_a_run(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """An owner runs the scheduler for a tournament with a cut draw: the tool returns
+    a ledger row for the run (``queued``/``running``, its ``verdict`` not yet known —
+    the solve is async, its verdict read back later via ``get_schedule``), and that
+    row is durable on the tournament's solve ledger."""
+    owner = await make_user(db_session, "mcp-solve-owner")
+    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW])
+    raw = await _mint(db_session, owner)
+    tournament, event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
+    tournament_id = str(tournament.id)
+
+    async with _mcp_client(raw) as client, client:
+        # Cut a draw first, so the tournament has fixtures the scheduler can place.
+        assert (
+            await client.call_tool_mcp("build_cut", {"event_id": str(event.id)})
+        ).isError is False
+        result = await client.call_tool_mcp(
+            "request_schedule_solve", {"tournament_id": tournament_id}
+        )
+
+    assert result.isError is False
+    body = result.structuredContent
+    assert body is not None
+    # An async run: the returned row is the queued/running ledger row, its verdict
+    # (and placement counts) not yet known — read back later via get_schedule.
+    assert body["status"] in {"queued", "running"}
+    assert body["verdict"] is None
+
+    # The run is a real, durable row on the tournament's solve ledger.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(ScheduleSolve).where(
+                ScheduleSolve.id == uuid.UUID(body["id"]),
+                ScheduleSolve.tournament_id == uuid.UUID(tournament_id),
+            )
+        )
+    ).scalar_one()
+    assert persisted.status in {
+        ScheduleSolveStatus.queued,
+        ScheduleSolveStatus.running,
+    }
+
+
+async def test_request_schedule_solve_without_a_drawn_event_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A tournament whose events have no cut draw has nothing to schedule: the owner
+    gets a ``ToolError`` telling them to ``build_cut`` a draw first, and no solve is
+    queued (``NoDrawnEventsError``)."""
+    owner = await make_user(db_session, "mcp-solve-undrawn-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _ = await _seed_drawable_tournament(db_session, owner, default_league)
+    tournament_id = tournament.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="build_cut"):
+            await client.call_tool(
+                "request_schedule_solve", {"tournament_id": str(tournament_id)}
+            )
+
+    # Nothing was queued — the ledger stays empty.
+    db_session.expire_all()
+    solves = (
+        (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert solves == []
+
+
+async def test_request_schedule_solve_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Running the scheduler is owner-gated by construction in the shared verb: a
+    caller who is not the tournament's creator gets a ``ToolError`` (judged before the
+    draw state is even looked at), and no solve is queued."""
+    owner = await make_user(db_session, "mcp-solve-real-owner")
+    tournament, _ = await _seed_drawable_tournament(db_session, owner, default_league)
+    tournament_id = tournament.id
+
+    outsider = await make_user(db_session, "mcp-solve-outsider")
+    outsider_token = await _mint(db_session, outsider)
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool(
+                "request_schedule_solve", {"tournament_id": str(tournament_id)}
+            )
+
+    db_session.expire_all()
+    solves = (
+        (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert solves == []

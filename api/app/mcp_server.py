@@ -99,7 +99,9 @@ from app.tournament_errors import (
     EventNotFoundError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    NoDrawnEventsError,
     NotTournamentOwnerError,
+    ScheduleQueueUnavailableError,
     TournamentNotFoundError,
 )
 from app.tournament_list import list_tournament_details
@@ -112,6 +114,9 @@ from app.tournament_queries import (
     visible_to,
 )
 from app.tournament_serialization import serialize, serialize_detail
+from app.tournament_solve_service import (
+    request_schedule_solve as request_schedule_solve_core,
+)
 
 log = logging.getLogger(__name__)
 
@@ -885,6 +890,75 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             event_id=event_id,
             fixtures_remaining=fixtures_remaining,
         )
+
+
+@mcp.tool
+async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
+    """Run the SCHEDULER for a tournament you OWN as the authenticated API-token
+    caller — queue a solve that places its cut draws' fixtures onto tables and
+    times — and return the ledger row that will carry the outcome.
+
+    This is NOT a match-outcome simulation: it does not play games or predict
+    winners. It runs the CP-SAT placement SOLVER, which decides *when and where*
+    each already-drawn fixture is played (its ``table_id`` and predicted
+    ``scheduled_start``), the same run the tournament page's "Run scheduler" button
+    triggers.
+
+    It is **ASYNC**: the solve runs on a background worker, so this tool returns the
+    freshly queued (or already in-flight) ``ScheduleSolveRead`` immediately — a
+    ledger row whose ``status`` is ``queued`` or ``running`` and whose ``verdict`` /
+    placement counts are still ``null``. Read the verdict back later via
+    ``get_schedule`` (or ``get_tournament``) — its ``latest_schedule_solve`` carries
+    the run's final ``status`` and CP-SAT ``verdict`` (``optimal`` / ``feasible`` /
+    ``infeasible``) once the worker finishes. Poll it; do not expect the answer in
+    this return value.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/schedule/solves``: it reuses the
+    shared ``request_schedule_solve`` verb (the ``FOR UPDATE`` tournament row lock,
+    the owner gate, the has-a-drawn-event gate, and the one coalesced enqueue every
+    trigger funnels into) so the MCP and HTTP surfaces can never drift. **One solve
+    is in flight per tournament**: if a run is already ``queued`` this request is
+    absorbed by it and that row comes back; if one is ``running`` its re-run flag is
+    set and the running row comes back; only when neither exists is a fresh run
+    queued. Allowed in ANY tournament status, from the moment any event has a cut
+    draw — pre-live solves are the point (an ``infeasible`` verdict before going live
+    is how a director learns the day does not fit while there is still time).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner (only the creator may run the scheduler), when no event of
+    the tournament has a cut draw yet (there is nothing to schedule — ``build_cut`` an
+    event's draw first, then retry), or when the scheduler queue itself is
+    unreachable (nothing was queued; the same request is safe to retry)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            row = await request_schedule_solve_core(
+                db, tournament_id=tournament_id, actor=actor
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only run the scheduler for tournaments you created."
+            ) from exc
+        except NoDrawnEventsError as exc:
+            raise ToolError(
+                "There is nothing to schedule yet: no event of this tournament has a "
+                "cut draw. The scheduler places a draw's fixtures, so build_cut at "
+                "least one event's draw first, then run it again."
+            ) from exc
+        except ScheduleQueueUnavailableError as exc:
+            raise ToolError(
+                "The scheduler queue is unavailable, so the solve was not queued. "
+                "Try again in a moment."
+            ) from exc
+        # The core committed and refreshed the queued/running ledger row — serialize
+        # it into the same ``ScheduleSolveRead`` the HTTP route and the schedule
+        # projection carry, so the agent reads the run's status back off it.
+        return ScheduleSolveRead.model_validate(row)
 
 
 @mcp.tool
