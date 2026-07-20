@@ -519,6 +519,48 @@ class TestRestShadows:
         assert inputs is not None
         assert inputs.snapshot.rest_shadows == ()
 
+    async def test_two_completions_within_rest_coalesce_to_one_shadow(
+        self, db_session: AsyncSession
+    ) -> None:
+        """One entry per human, not per match (#1145): a human who completes
+        two matches within REST_MIN accumulates a shadow per completion in the
+        raw scan — coalesced to exactly ONE, anchored at the LATER completion
+        (rest = time since your last match), so the solver never receives two
+        mutually unsatisfiable fixed rest intervals for one player."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        # Two fixtures sharing a human: in a 4-player round robin every player
+        # appears in 3 fixtures, so a shared entry always exists.
+        first = fixtures[0]
+        shared_entry = first.entry_a_id
+        second = next(
+            f for f in fixtures[1:] if shared_entry in (f.entry_a_id, f.entry_b_id)
+        )
+        # Complete both 2 minutes apart, both within REST_MIN of ``now`` so
+        # neither window has closed and both would otherwise cast a shadow.
+        early_wall = BASE + timedelta(minutes=30)
+        late_wall = BASE + timedelta(minutes=32)
+        users_first = await _mark_completed(
+            db_session, first, completed_at=early_wall.astimezone()
+        )
+        shared_user = users_first[0]  # entry_a's user == the shared human
+        await _mark_completed(db_session, second, completed_at=late_wall.astimezone())
+        now = BASE + timedelta(minutes=35)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        shared_shadows = [
+            shadow
+            for shadow in inputs.snapshot.rest_shadows
+            if shadow.player_id == shared_user
+        ]
+        assert len(shared_shadows) == 1
+        # Anchored at the later completion (offset 32), not the earlier (30).
+        assert shared_shadows[0].completed_at_min == 32
+
 
 class TestRequestSolveCoalescing:
     async def test_two_requests_coalesce_into_one_queued_row(

@@ -751,7 +751,20 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # window is a constant, so it needs no makespan/horizon bound, and a player
     # who appears in nothing but a shadow is a harmless lone interval (per-
     # player NoOverlap only fires with more than one).
+    #
+    # Coalesce to one shadow per human first — belt-and-suspenders for the
+    # snapshot builder's own "one entry per human, not per match" contract
+    # (:class:`RestShadow`). Two fixed rest intervals for a single player under
+    # the per-player ``AddNoOverlap`` below are mutually unsatisfiable, and a
+    # lone player's contradiction makes the WHOLE solve INFEASIBLE (#1145). Keep
+    # the latest completion: rest is "time since your last match", so the max
+    # ``completed_at_min`` per human already subsumes every earlier one's floor.
+    latest_shadow: dict[PlayerId, RestShadow] = {}
     for shadow in snapshot.rest_shadows:
+        existing = latest_shadow.get(shadow.player_id)
+        if existing is None or shadow.completed_at_min > existing.completed_at_min:
+            latest_shadow[shadow.player_id] = shadow
+    for shadow in latest_shadow.values():
         player_intervals[shadow.player_id].append(
             model.NewFixedSizeIntervalVar(
                 shadow.completed_at_min,

@@ -836,6 +836,39 @@ class TestRestShadows:
         placed = {p.fixture_id: p for p in result.placements}
         assert placed[FixtureId("F1")].start_min == 0  # ghost's rest binds no one
 
+    def test_two_shadows_for_one_human_solve_feasibly(self) -> None:
+        """UAT wave-2 reproduction (#1145): a single human handed *two* rest
+        shadows (two completions within REST_MIN of each other) must not sink
+        the whole solve. Two fixed rest intervals for one player under the
+        per-player no-overlap are mutually unsatisfiable — before the coalesce
+        this returned global ``infeasible`` and blanked every placement.
+
+        The defensive dedup in the pure module keeps the latest completion, so
+        the solve is feasible, the unrelated fixture still lands, and P1's own
+        fixture is held to the *later* shadow's floor (``2 + REST_MIN``), not
+        the earlier one's. (``_assert_hard_constraints`` is deliberately NOT
+        used: its checker models each shadow as an independent floor — exactly
+        the pre-fix contract this coalesce retires — so it would reject two
+        shadows for one player rather than reflect the dedup.)"""
+        p1, p2, p3, p4 = _players(4)
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2), _fixture(2, p3, p4)),
+            # Two completions for P1, 2 minutes apart — both within REST_MIN.
+            rest_shadows=(RestShadow(p1, 0), RestShadow(p1, 2)),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        # Would be Verdict.infeasible + no placements without the dedup.
+        assert result.verdict in SOLVED
+        placed = {p.fixture_id: p for p in result.placements}
+        assert set(placed) == {FixtureId("F1"), FixtureId("F2")}
+        # The surviving shadow is the *later* completion: P1's floor is
+        # ``2 + REST_MIN == 12``, snapped up to the next 5-minute grid start,
+        # 15 — strictly later than the earlier shadow's floor (``0 + REST_MIN``
+        # → grid start 10), so this pins the coalesce to the MAX completion.
+        assert placed[FixtureId("F1")].start_min == 15
+        # P1-free fixture is unaffected — it takes the very first slot.
+        assert placed[FixtureId("F2")].start_min == 0
+
     def test_issue_1075_freed_table_idles_rather_than_recalling(self) -> None:
         """#1075 shape: 5 players, 2 tables, best-of-5 (35-minute matches), a
         round-robin of fixtures, and P1 who *just* finished at ``now``. The two
