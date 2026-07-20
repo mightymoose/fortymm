@@ -50,7 +50,6 @@ from app.schemas.tournament import (
     TournamentFixturePlacementUpdate,
     TournamentFixtureRead,
     TournamentRead,
-    TournamentTable,
     TournamentTransitionCreate,
     TournamentUpdate,
     named_list,
@@ -65,6 +64,7 @@ from app.tournament_draws import (
     event_pools,
     uncut_draw,
 )
+from app.tournament_edit import edit_tournament
 from app.tournament_eligibility import (
     Eligible,
     RatingIneligible,
@@ -72,6 +72,12 @@ from app.tournament_eligibility import (
     event_is_full,
 )
 from app.tournament_entry_refusals import EntryRefusal, entry_refused
+from app.tournament_errors import (
+    LeagueNotEditableError,
+    LeagueNotFoundError,
+    NotTournamentOwnerError,
+    TournamentNotFoundError,
+)
 from app.tournament_list import list_tournament_details
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import (
@@ -326,37 +332,11 @@ async def _require_enter_permission(db: AsyncSession, current_user: User) -> Non
         raise HTTPException(status_code=403, detail="Forbidden.")
 
 
-def _enforce_league_editable(t: Tournament) -> None:
-    """Raise the 409 unless the tournament's league may still be moved.
-
-    A tournament's league is the ladder its events' rating rules are judged on
-    (ADR-0783), and it is settled the moment the tournament is published: from
-    then on registration is open and eligibility is *live*, so moving the ladder
-    underneath would silently re-judge — and could retroactively disqualify —
-    players who have already entered against the old one. ``draft`` is the only
-    status in which nobody can have entered yet, so it is the only one in which
-    the ladder is still free to move. Same guarded-edge reasoning as the lifecycle
-    itself (ADR-0017): what a tournament will accept depends on where it is.
-
-    Presence, not difference: sending the league the tournament already has, once
-    it is published, is refused too. That mirrors the transition route, where
-    re-asserting the status you already hold is a *conflict* rather than an
-    idempotent no-op — the only caller that sends a settled field is a stale one,
-    and answering 200 would tell it the field is still editable when it is not.
-
-    409, not 403 (as on the transitions route): the caller is the owner and the
-    field is theirs to edit — it is the tournament that is past the point where
-    the edit means anything. "Not you" would be a lie; the truth is "not now".
-    """
-    if t.status is TournamentStatus.draft:
-        return
-    raise HTTPException(
-        status_code=409,
-        detail=(
-            f"This tournament is {t.status.value}; its league can only be changed "
-            "while it is a draft."
-        ),
-    )
+# The league-editable-only-while-draft rule (ADR-0783) now lives on the
+# transport-neutral edit verb: ``edit_tournament`` (``app.tournament_edit``)
+# raises ``LeagueNotEditableError``, which the PATCH adapter below maps to the 409
+# this router used to raise inline. It is not a router helper any more precisely so
+# the rule has one home the MCP tool shares too.
 
 
 # ----- tournament routes ---------------------------------------------------
@@ -531,74 +511,30 @@ async def update_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
-    # The locked loader plus an explicit ``_require_owner`` — the same pair
-    # ``create_tournament_transition`` takes, and for the same reason — rather than
-    # ``_get_owned_tournament_or_404``, which does not lock. This route now *judges
-    # the status and then writes*: the league guard below reads ``status``, and an
-    # unlocked read answers from its own statement's snapshot (READ COMMITTED). A
-    # league change could pass the ``draft`` check, the owner's publish could
-    # commit, and the UPDATE could then land behind it — moving the ladder under a
-    # tournament whose registration is already open, which is the one thing the
-    # guard exists to prevent. Same lock, on the same row, taken first, as the
-    # transition and entry routes: one lock in one order, so no pair of them can
-    # deadlock.
+    # Thin adapter over the transport-neutral ``edit_tournament`` verb: it owns the
+    # load-lock, the owner gate, the league state-rule, the STRICT league lookup,
+    # the partial apply and the table-catalogue → re-solve trigger, and signals
+    # each refusal with a domain exception. This handler maps each back to the
+    # exact status + body it produced before, so the wire contract is unchanged:
     #
-    # Load first (404 if missing), THEN check ownership (403). The ordering is
-    # intentional, and is the one the owner-scoped loader bakes in: a permitted
-    # non-creator learns the tournament exists.
-    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
-    fields = payload.model_dump(exclude_unset=True)
-    # The league is settled once the tournament leaves ``draft`` (ADR-0783), so it
-    # comes out of the generic loop: it is the one field with a *state* rule, and
-    # it is refused (409) before anything is written. The refusal is judged before
-    # the league is looked up, so a caller who cannot change it learns nothing
-    # about whether the league they named exists.
-    if "league_id" in fields:
-        _enforce_league_editable(tournament)
-        # The STRICT resolver, exactly as on create: the id is a deliberate choice
-        # by the owner, not a view preference, so an id that names no league is a
-        # 404 rather than a silent swap to the default (see app/leagues.py). It also
-        # keeps the NOT NULL FK from turning a bad id into a 500.
-        league = await resolve_league(db, fields.pop("league_id"))
-        tournament.league_id = league.id
-    # model_dump(exclude_unset=True) already recursively serializes the nested
-    # value-objects (address/table_catalogue) to plain dicts/lists, so a single
-    # setattr loop covers the JSONB columns and the scalar fields alike. Absent
-    # fields stay untouched; the schema validator already rejected an explicit
-    # null on the NOT NULL columns.
-    #
-    # Scheduling-input change detection (ADR "the schedule is solved; the call
-    # is pinned"): of everything this PATCH can touch, the solver reads exactly
-    # one thing — the table catalogue, and of the catalogue only the *ids*
-    # (labels and courts are display; ``_load_solver_inputs`` reduces the
-    # catalogue to ``TableId``s). So the before/after comparison is over the id
-    # list, parsed with the same model the write boundary validated it with: a
-    # rename/address/date-only PATCH triggers nothing, a label-only re-word of
-    # a table triggers nothing, and adding/removing/re-identifying a table
-    # triggers a re-solve.
-    catalogue_ids_before = [
-        TournamentTable.model_validate(table).id for table in tournament.table_catalogue
-    ]
-    for key, value in fields.items():
-        setattr(tournament, key, value)
-    catalogue_ids_after = [
-        TournamentTable.model_validate(table).id for table in tournament.table_catalogue
-    ]
-    if catalogue_ids_after != catalogue_ids_before and await tournament_has_drawn_event(
-        db, tournament_id
-    ):
-        # Only while it matters: with no cut draw anywhere there is nothing to
-        # place, and the ledger would fill with no-op rows — the drawn-event
-        # gate is the same one the Run-scheduler route asks. Requested inside
-        # this transaction, under the tournament row lock this handler already
-        # holds (the lock order ``request_solve`` requires). A ``None`` return
-        # (Redis down) is deliberately ignored: the edit is the thing the
-        # owner asked for, and the missing solve is recovered by the pin tick
-        # or the Run-scheduler button.
-        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
-    await db.commit()
-    await db.refresh(tournament)
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   LeagueNotEditableError   -> 409 "This tournament is {status}; its league …"
+    #   LeagueNotFoundError      -> 404 "League not found."
+    try:
+        tournament = await edit_tournament(
+            db, tournament_id=tournament_id, actor=current_user, updates=payload
+        )
+    except TournamentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
+    except NotTournamentOwnerError as exc:
+        raise HTTPException(
+            status_code=403, detail="You can only modify tournaments you created."
+        ) from exc
+    except LeagueNotEditableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LeagueNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="League not found.") from exc
     # The owner is the current user, so the username and can_edit are known.
     return serialize(
         tournament,
@@ -1085,8 +1021,9 @@ async def _enforce_draw_type_frozen(
     the one the event already has changes nothing, so it is not a conflict, and a guard
     that fired on the mere presence of the key would refuse a page that PATCHes the
     whole event form back (draw type included) to move a pool's tables — the very edit
-    the freeze exists to permit. (This is where it differs from
-    ``_enforce_league_editable``, which *does* refuse the field it already holds: there,
+    the freeze exists to permit. (This is where it differs from the
+    league-editable rule — ``edit_tournament`` / ``LeagueNotEditableError`` — which
+    *does* refuse the field it already holds: there,
     the field is settled by a
     lifecycle status no request of the caller's can move, so the only client that sends
     it is a stale one. Here, the way out — remove the draw — is on the caller's own

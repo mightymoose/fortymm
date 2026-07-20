@@ -81,8 +81,17 @@ from app.schemas.tournament import (
     ScheduleSolveRead,
     TournamentDetailRead,
     TournamentFixtureRead,
+    TournamentRead,
+    TournamentUpdate,
 )
 from app.services.match_service import MatchService
+from app.tournament_edit import edit_tournament as edit_tournament_core
+from app.tournament_errors import (
+    LeagueNotEditableError,
+    LeagueNotFoundError,
+    NotTournamentOwnerError,
+    TournamentNotFoundError,
+)
 from app.tournament_list import list_tournament_details
 from app.tournament_queries import (
     active_entrants_by_event,
@@ -92,7 +101,7 @@ from app.tournament_queries import (
     game_counts_by_match,
     visible_to,
 )
-from app.tournament_serialization import serialize_detail
+from app.tournament_serialization import serialize, serialize_detail
 
 log = logging.getLogger(__name__)
 
@@ -607,6 +616,67 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
             db,
             where=Tournament.created_by_user_id == user_id,
             current_user_id=user_id,
+        )
+
+
+@mcp.tool
+async def edit_tournament(
+    tournament_id: uuid.UUID,
+    updates: TournamentUpdate,
+) -> TournamentRead:
+    """Edit a tournament you OWN as the authenticated API-token caller, and return
+    the updated tournament.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}``: it reuses the shared
+    ``edit_tournament`` verb (the ``FOR UPDATE`` load-lock, the owner gate, the
+    league-editable-only-while-draft state rule, the STRICT league lookup, the
+    partial apply, and the table-catalogue-change → re-solve trigger) and the same
+    ``TournamentUpdate`` schema the HTTP route validates, so the MCP and HTTP
+    surfaces can never drift on what a valid edit is.
+
+    ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
+    field replaces the current value. ``name``, ``address``, ``table_catalogue``
+    and ``league_id`` back NOT NULL columns, so an explicit ``null`` for any of
+    them is rejected (send them only to set a real value);
+    ``description`` / ``start_date`` / ``end_date`` are nullable and may be cleared
+    with ``null``. ``table_catalogue`` replaces wholesale when present.
+    ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
+    published the ladder is settled. ``status`` is not editable here (it moves only
+    across the guarded lifecycle transitions). Returns the updated
+    ``TournamentRead`` from the owner's perspective (``can_edit`` is always true).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner (only the creator may edit it), when you try to change
+    the league of a tournament that has left ``draft``, or when ``league_id`` names
+    no league.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await edit_tournament_core(
+                db,
+                tournament_id=tournament_id,
+                actor=actor,
+                updates=updates,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError("You can only edit tournaments you created.") from exc
+        except LeagueNotEditableError as exc:
+            raise ToolError(str(exc)) from exc
+        except LeagueNotFoundError as exc:
+            raise ToolError("No league found with that id.") from exc
+        # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
+        # so here the actor is the creator — the owner's perspective the HTTP PATCH
+        # serializes from (``created_by_username`` known, ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
         )
 
 

@@ -1377,3 +1377,130 @@ async def test_get_schedule_without_view_permission_raises_tool_error(
     async with _mcp_client(raw) as client, client:
         with pytest.raises(ToolError, match="permission"):
             await client.call_tool("get_schedule", {"tournament_id": str(uuid.uuid4())})
+
+
+# ----- edit_tournament tool ------------------------------------------------
+
+
+async def test_edit_tournament_is_registered(db_session: AsyncSession) -> None:
+    """The write verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-edit-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "edit_tournament" in {tool.name for tool in tools}
+
+
+async def test_edit_tournament_owner_renames_and_it_persists(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A bearer-authed OWNER renames a tournament via the tool: the returned view
+    carries the new name (and leaves the other fields untouched — partial
+    semantics), and the change is committed, readable back through the tool."""
+    me = await start_session(api_client, db_session)
+    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+    tournament_id = await _create_tournament(api_client)
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "edit_tournament",
+            {"tournament_id": tournament_id, "updates": {"name": "Renamed Cup"}},
+        )
+        assert result.isError is False
+        body = result.structuredContent
+        assert body is not None
+        assert body["id"] == tournament_id
+        assert body["name"] == "Renamed Cup"
+        assert body["can_edit"] is True
+        assert body["created_by_user_id"] == str(me.id)
+        # Partial semantics: an omitted field is left unchanged.
+        assert body["description"] == _tournament_payload()["description"]
+
+        # The write committed — read it back through the tool.
+        read_back = await client.call_tool_mcp(
+            "get_tournament", {"tournament_id": tournament_id}
+        )
+    assert read_back.structuredContent is not None
+    assert read_back.structuredContent["name"] == "Renamed Cup"
+
+    # And it is durable in the database.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    assert persisted.name == "Renamed Cup"
+
+
+async def test_edit_tournament_non_owner_raises_tool_error_and_writes_nothing(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A caller who is not the tournament's creator gets a ``ToolError`` (owner-gated
+    by construction in the shared verb), and nothing is written."""
+    owner = await start_session(api_client, db_session)
+    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    tournament_id = await _create_tournament(api_client)
+    original_name = _tournament_payload()["name"]
+
+    outsider = await make_user(db_session, "mcp-edit-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="only edit tournaments you created"):
+            await client.call_tool(
+                "edit_tournament",
+                {"tournament_id": tournament_id, "updates": {"name": "Hijacked"}},
+            )
+
+    # Nothing was written: the name is still the owner's original.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    assert persisted.name == original_name
+
+
+async def test_edit_tournament_unknown_id_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """An id that matches no tournament surfaces as a ``ToolError`` at the caller."""
+    me = await make_user(db_session, "mcp-edit-unknown")
+    raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool(
+                "edit_tournament",
+                {"tournament_id": unknown, "updates": {"name": "Nope"}},
+            )
+
+
+async def test_edit_tournament_league_change_after_publish_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Changing the league of a tournament that has left ``draft`` is refused
+    (ADR-0783): the owner gets a ``ToolError`` carrying the state rule, and the
+    refusal is judged before the league is even looked up (so an arbitrary id is
+    enough to trip it)."""
+    owner = await make_user(db_session, "mcp-edit-published-owner")
+    raw = await _mint(db_session, owner)
+    published = await _seed_owned_tournament(
+        db_session, owner, default_league, "Published Cup", TournamentStatus.published
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="can only be changed while it is a draft"):
+            await client.call_tool(
+                "edit_tournament",
+                {
+                    "tournament_id": str(published.id),
+                    "updates": {"league_id": str(uuid.uuid4())},
+                },
+            )
