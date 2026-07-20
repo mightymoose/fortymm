@@ -20,6 +20,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -48,6 +49,7 @@ from app.models import (
     User,
     UserToken,
 )
+from app.models.tournament import DrawType, EventFormat
 from app.token_hashing import hash_token
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -1504,3 +1506,332 @@ async def test_edit_tournament_league_change_after_publish_raises_tool_error(
                     "updates": {"league_id": str(uuid.uuid4())},
                 },
             )
+
+
+# ----- build_cut / uncut draw tools ----------------------------------------
+#
+# Two pools, so the round-robin snake deals a clean draw a fixture's ``pool_id``
+# refs against — the same shape ``test_tournament_draw_service.py`` cuts across.
+_DRAW_POOL_A: dict[str, object] = {
+    "id": "p-a",
+    "name": "Pool A",
+    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+    "table_ids": ["t1"],
+}
+_DRAW_POOL_B: dict[str, object] = {
+    "id": "p-b",
+    "name": "Pool B",
+    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+    "table_ids": ["t2"],
+}
+
+
+async def _seed_drawable_tournament(
+    db_session: AsyncSession,
+    owner: User,
+    league: League,
+    *,
+    format: EventFormat = EventFormat.singles,
+    draw_type: DrawType = DrawType.round_robin,
+    entrants: int = 4,
+) -> tuple[Tournament, TournamentEvent]:
+    """A tournament + one event owned by ``owner`` (committed), seeded directly so a
+    draw tool can be driven against its ``event_id`` alone. A round-robin singles event
+    with two pools and ``entrants`` seeded entries is cuttable; ``format`` /
+    ``draw_type`` / ``entrants`` are knobbed to reach the un-cuttable cases (a doubles
+    event, an unsupported draw type)."""
+    tournament = Tournament(
+        name="MCP Draw Cup",
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        table_catalogue=[
+            {"id": "t1", "label": "Table 1", "court": "A"},
+            {"id": "t2", "label": "Table 2", "court": "A"},
+        ],
+        league_id=league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await db_session.refresh(tournament)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=format,
+        draw_type=draw_type,
+        max_players=64,
+        entry_fee=Decimal("45"),
+        slot={"date": "2026-08-01", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": True, "length_games": 5},
+        predicates=[],
+        pools=[_DRAW_POOL_A, _DRAW_POOL_B],
+    )
+    db_session.add(event)
+    await db_session.commit()
+    await db_session.refresh(event)
+    db_session.add_all(
+        [
+            TournamentEntry(
+                event_id=event.id,
+                user_id=(await make_user(db_session, "draw-e-" + uuid.uuid4().hex)).id,
+                status=TournamentEntryStatus.entered,
+                seed=n,
+            )
+            for n in range(1, entrants + 1)
+        ]
+    )
+    await db_session.commit()
+    return tournament, event
+
+
+async def test_build_cut_and_uncut_tools_are_registered(
+    db_session: AsyncSession,
+) -> None:
+    """Both draw-write verbs are exposed as tools to an authenticated caller."""
+    user = await make_user(db_session, "mcp-draw-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+    assert {"build_cut", "uncut"} <= names
+
+
+async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_removes_them(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """An owner cuts a singles event's draw via ``build_cut``: the fixtures come back
+    (4 entrants over 2 pools → one round-robin fixture per pool), they are visible via
+    ``get_schedule``, and ``uncut`` then tears them down (``fixtures_remaining`` = 0 and
+    the schedule shows ``[]``)."""
+    owner = await make_user(db_session, "mcp-draw-owner")
+    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW])
+    raw = await _mint(db_session, owner)
+    tournament, event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
+    event_id, tournament_id = str(event.id), str(tournament.id)
+
+    async with _mcp_client(raw) as client, client:
+        cut = await client.call_tool_mcp("build_cut", {"event_id": event_id})
+        assert cut.isError is False
+        assert cut.structuredContent is not None
+        fixtures = cut.structuredContent["result"]
+        assert len(fixtures) == 2
+        assert all(f["pool_id"] in {"p-a", "p-b"} for f in fixtures)
+
+        # The cut draw is visible through the schedule projection.
+        schedule = await client.call_tool_mcp(
+            "get_schedule", {"tournament_id": tournament_id}
+        )
+        assert schedule.structuredContent is not None
+        group = schedule.structuredContent["events"][0]
+        assert {f["id"] for f in group["fixtures"]} == {f["id"] for f in fixtures}
+
+        # Un-cut tears the whole draw down.
+        removed = await client.call_tool_mcp("uncut", {"event_id": event_id})
+        assert removed.isError is False
+        assert removed.structuredContent is not None
+        assert removed.structuredContent["fixtures_remaining"] == 0
+        assert removed.structuredContent["event_id"] == event_id
+        assert removed.structuredContent["tournament_id"] == tournament_id
+
+        # And the schedule now carries no fixtures for the event.
+        after = await client.call_tool_mcp(
+            "get_schedule", {"tournament_id": tournament_id}
+        )
+    assert after.structuredContent is not None
+    assert after.structuredContent["events"][0]["fixtures"] == []
+
+
+async def test_uncut_of_a_never_cut_draw_is_an_idempotent_ok(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Un-cutting an event that was never cut deletes nothing and still succeeds —
+    ``fixtures_remaining`` is 0, not a ``ToolError`` (ADR-0786's idempotent DELETE)."""
+    owner = await make_user(db_session, "mcp-uncut-noop-owner")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+
+    async with _mcp_client(raw) as client, client:
+        removed = await client.call_tool_mcp("uncut", {"event_id": str(event.id)})
+    assert removed.isError is False
+    assert removed.structuredContent is not None
+    assert removed.structuredContent["fixtures_remaining"] == 0
+
+
+async def test_build_cut_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who is not the tournament's creator gets a ``ToolError`` — owner-gated
+    by construction in the shared verb — and no draw is cut."""
+    owner = await make_user(db_session, "mcp-draw-real-owner")
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+
+    outsider = await make_user(db_session, "mcp-draw-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+    # Nothing was written.
+    remaining = (
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_build_cut_unknown_event_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """An event id that resolves to no event surfaces as a not-found ``ToolError``."""
+    owner = await make_user(db_session, "mcp-draw-unknown")
+    raw = await _mint(db_session, owner)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("build_cut", {"event_id": unknown})
+
+
+async def test_build_cut_played_draw_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Once the draw shows evidence of play (a fixture with a recorded winner), a
+    re-cut is refused with a ``ToolError`` naming that the draw is under way, and the
+    standing draw is left intact."""
+    owner = await make_user(db_session, "mcp-draw-played-owner")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+    # Capture the id once, while the ORM object is fresh: the ``commit`` below expires
+    # it, and touching ``event.id`` afterwards would fire a sync lazy-load
+    # (MissingGreenlet) in async land.
+    event_id = event.id
+
+    # Cut a real draw first (own client block, closed before the DB write below — a
+    # test ``db_session`` write interleaved inside an open MCP client block trips the
+    # ASGI transport's greenlet context).
+    async with _mcp_client(raw) as client, client:
+        cut = await client.call_tool_mcp("build_cut", {"event_id": str(event_id)})
+    assert cut.isError is False
+
+    # Record a winner on one fixture — evidence of play. Read the ids off the fresh rows
+    # BEFORE the commit for the same reason.
+    fixtures = list(
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    before = {f.id for f in fixtures}
+    fixtures[0].winner_entry_id = fixtures[0].entry_a_id
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="under way"):
+            await client.call_tool("build_cut", {"event_id": str(event_id)})
+
+    # The standing draw is untouched — the refusal is asked before any delete.
+    db_session.expire_all()
+    still = (
+        (
+            await db_session.execute(
+                select(TournamentFixture.id).where(
+                    TournamentFixture.event_id == event_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert set(still) == before
+
+
+async def test_build_cut_non_singles_event_raises_readable_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A doubles event can never be given a draw (ADR-0788): ``build_cut`` surfaces the
+    ``NonSinglesDraw`` refusal as a readable ``ToolError`` naming the format, and writes
+    nothing."""
+    owner = await make_user(db_session, "mcp-draw-doubles-owner")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(
+        db_session, owner, default_league, format=EventFormat.doubles
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="singles events can"):
+            await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_build_cut_unsupported_draw_type_raises_readable_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """An ``rr-then-ko`` event has no generator yet (ADR-0786): ``build_cut`` surfaces
+    the ``UnsupportedDrawType`` refusal as a readable ``ToolError`` that names
+    round-robin as the supported type."""
+    owner = await make_user(db_session, "mcp-draw-rrko-owner")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(
+        db_session, owner, default_league, draw_type=DrawType.rr_then_ko
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="round-robin"):
+            await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+
+async def test_uncut_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """``uncut`` is owner-gated by construction too: a non-owner gets a ``ToolError``
+    and no draw is removed."""
+    owner = await make_user(db_session, "mcp-uncut-owner")
+    owner_token = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+
+    # Owner cuts, so there is a real draw a non-owner might try to remove.
+    async with _mcp_client(owner_token) as client, client:
+        assert (
+            await client.call_tool_mcp("build_cut", {"event_id": str(event.id)})
+        ).isError is False
+
+    outsider = await make_user(db_session, "mcp-uncut-outsider")
+    outsider_token = await _mint(db_session, outsider)
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool("uncut", {"event_id": str(event.id)})

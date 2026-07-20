@@ -1,8 +1,9 @@
 """The tournament-flow domain exception family.
 
 A neutral leaf holding the domain exceptions the transport-neutral tournament
-verbs (``tournament_edit`` today; cut/uncut and solve as they are extracted)
-raise, mirroring ``app.match_errors``.
+verbs (``tournament_edit`` and the cut/uncut draw verbs in
+``tournament_draw_service`` today; solve as it is extracted) raise, mirroring
+``app.match_errors``.
 
 None of these is ever an ``HTTPException``: each verb is transport-neutral and
 signals a refusal with a plain domain exception, and each adapter (the HTTP
@@ -25,6 +26,34 @@ class NotTournamentOwnerError(Exception):
     actor``), not RBAC-gated. The HTTP adapter maps this to the existing 403
     ``"You can only modify tournaments you created."``. Never an
     ``HTTPException``."""
+
+
+class EventNotFoundError(Exception):
+    """Raised by the draw verbs when the addressed event id does not resolve to a
+    row **under the named tournament** — a well-formed pair that names no
+    addressable event (a right event id under the wrong tournament id included, so
+    a cross-tournament draw is a miss, not an edit). The HTTP adapter maps this to
+    the existing 404 ``"Event not found."``. Never an ``HTTPException`` — the caller
+    adapts it to its transport."""
+
+
+class DrawUnderWayError(Exception):
+    """Raised by the draw verbs when an event's draw shows **evidence of play** — a
+    fixture with a recorded winner or a linked match — the single gate on both
+    cutting and un-cutting a draw (ADR-0786). A cut replaces the draw wholesale and
+    an un-cut destroys it, so either one over a played fixture would throw away a
+    result a player produced.
+
+    Carries the exact sentence the HTTP handler used to compose inline, so the
+    adapter can rebuild the existing 409 body verbatim with ``str(exc)``. It is a
+    409, not a 403: the caller is the owner and the draw is theirs — it is the draw
+    that is past the point where a re-cut means anything. Never an ``HTTPException``."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This event's draw is already under way — at least one fixture has a "
+            "match or a recorded winner — so it can no longer be cut or removed."
+        )
 
 
 class LeagueNotEditableError(Exception):

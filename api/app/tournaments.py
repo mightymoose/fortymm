@@ -55,14 +55,13 @@ from app.schemas.tournament import (
     named_list,
 )
 from app.sessions import get_current_user
+from app.tournament_draw_service import cut_event_draw as _cut_event_draw
+from app.tournament_draw_service import uncut_event_draw as _uncut_event_draw
 from app.tournament_draws import (
     DrawCurrency,
-    cut_draw,
     draw_currency_by_event,
-    draw_has_play,
     event_has_draw,
     event_pools,
-    uncut_draw,
 )
 from app.tournament_edit import edit_tournament
 from app.tournament_eligibility import (
@@ -73,6 +72,8 @@ from app.tournament_eligibility import (
 )
 from app.tournament_entry_refusals import EntryRefusal, entry_refused
 from app.tournament_errors import (
+    DrawUnderWayError,
+    EventNotFoundError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NotTournamentOwnerError,
@@ -1876,74 +1877,14 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     return HTTPException(status_code=422, detail=detail)
 
 
-async def _enforce_draw_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
-    """Raise the 409 once an event's draw shows **evidence of play** — the single gate
-    on both cutting and un-cutting a draw (ADR-0786).
-
-    It is what makes a re-cut safe. A cut replaces the draw wholesale, so a draw with a
-    decided fixture (a recorded winner) or a materialized one (a linked match, which may
-    already carry games on its scratchpad) cannot be re-cut without throwing away
-    results that players actually produced. The draw must never silently eat a score, so
-    the refusal is on the *evidence*, not on the tournament's status: a director may cut
-    and re-cut as often as they like right up until the first fixture becomes real.
-
-    Read under the tournament's row lock, like every other judge-then-write guard in
-    this module (``_enforce_event_has_room``): the evidence this reads is the evidence
-    the write below is authorized by, and an unlocked read would sit in a different
-    instant from it.
-
-    409, not 403: the caller is the owner and the draw is theirs — it is the draw that
-    is past the point where a re-cut means anything. "Not you" would be a lie; the truth
-    is "not now, not any more".
-
-    One sentence for both verbs, because it is one fact. A re-cut and an un-cut are
-    refused for the same reason (the fixtures that would be destroyed are the ones that
-    have been played), and two sentences saying so would be two things to keep true.
-    """
-    if not await draw_has_play(db, event.id):
-        return
-    raise HTTPException(
-        status_code=409,
-        detail=(
-            "This event's draw is already under way — at least one fixture has a match "
-            "or a recorded winner — so it can no longer be cut or removed."
-        ),
-    )
-
-
-async def _get_owned_event_for_draw_or_404(
-    db: AsyncSession,
-    tournament_id: uuid.UUID,
-    event_id: uuid.UUID,
-    current_user: User,
-) -> TournamentEvent:
-    """The event whose draw is about to be written, loaded under the tournament's row
-    lock and the owner check — the refusal ordering both draw verbs share.
-
-    **404 → 403 → 409**, the ordering ADR-0017 fixed and every route in this module
-    keeps: a tournament that does not exist (or an event that is not under it) is a 404
-    before ownership is considered, so a stranger probing ids learns nothing; a
-    non-owner is a 403 before the draw's *state* is looked at, so the refusal never
-    leaks whether an event has been played. The 409 (``_enforce_draw_unplayed``) is the
-    caller's own, and comes last.
-
-    The tournament is loaded through the **locking** loader — the same lock, on the same
-    row, taken first, that the entry, withdrawal, transition and PATCH routes take
-    (which is what keeps them free of a deadlock cycle) — and ``_require_owner`` is then
-    asked here, exactly as ``update_tournament`` and the transition route do.
-
-    The lock is not decoration. A cut reads the event's active field and writes fixtures
-    *derived from it*; Postgres runs READ COMMITTED, so an unlocked read answers from
-    its own statement's snapshot, and an entry (or a withdrawal) committing between the
-    read and the INSERT would leave a persisted draw that never matched any real field
-    of players — a pool of the wrong size, an entrant seated nowhere, or one seated in a
-    draw they had left. Every writer of the entrant field already queues on this row, so
-    taking it here is what puts the cut in the same queue: the loser blocks and re-reads
-    the field the winner *committed*.
-    """
-    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
-    return await _get_event_or_404(db, tournament_id, event_id)
+# The play-evidence gate, the owner-scoped locking load, and the ``cut_draw`` /
+# ``uncut_draw`` calls now live on the transport-neutral draw verbs
+# (``app.tournament_draw_service``): they raise ``DrawUnderWayError`` /
+# ``EventNotFoundError`` / ``NotTournamentOwnerError`` / ``TournamentNotFoundError``,
+# and let the ``DrawError`` family propagate unchanged, for the two adapters below to
+# map back to the exact codes + bodies this router used to raise inline. They are not
+# router helpers any more precisely so the cut/uncut logic has one home the MCP tool
+# will share too.
 
 
 @router.post(
@@ -1986,43 +1927,37 @@ async def cut_event_draw(
     Owner-only. Fixtures come back in pool → round → position order, exactly as the
     tournament-detail page carries them.
     """
-    # 404 → 403 first (and the tournament's row lock with them), so the draw's own
-    # state is never the reason a stranger's request is refused.
-    event = await _get_owned_event_for_draw_or_404(
-        db, tournament_id, event_id, current_user
-    )
-    # Then the one gate on the write: has this draw been played? Asked before anything
-    # is planned or deleted, so a refused re-cut leaves the standing draw exactly as it
-    # was — the guard's whole promise.
-    await _enforce_draw_unplayed(db, event)
+    # Thin adapter over the transport-neutral ``cut_event_draw`` verb: it owns the
+    # row lock, the owner gate, the event-under-tournament load, the play-evidence
+    # gate, the ``cut_draw`` core, the re-solve trigger and the read-back, and signals
+    # each refusal with a domain exception (letting the ``DrawError`` family through
+    # unchanged). This handler maps each back to the exact status + body it produced
+    # before, so the wire contract is unchanged:
+    #
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   EventNotFoundError       -> 404 "Event not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   DrawUnderWayError        -> 409 "This event's draw is already under way — …"
+    #   DrawError (the family)   -> 422, the sentence ``_draw_refusal`` composes
     try:
-        # Plans, deletes and re-inserts inside THIS transaction — the lock above is
-        # still held, so the field it reads cannot move under it, and the DELETE and
-        # the INSERTs land together or not at all. A DrawError is raised before the
-        # DELETE, so a 422 destroys nothing either.
-        await cut_draw(db, event)
+        return await _cut_event_draw(
+            db, tournament_id=tournament_id, event_id=event_id, actor=current_user
+        )
+    except TournamentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Event not found.") from exc
+    except NotTournamentOwnerError as exc:
+        raise HTTPException(
+            status_code=403, detail="You can only modify tournaments you created."
+        ) from exc
+    except DrawUnderWayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DrawError as error:
-        # The domain refusing to produce a draw is not a bug — it is an answer, and it
-        # is the caller's to act on. ``from None`` so no traceback shape reaches the
-        # client; the sentence is composed in ``_draw_refusal``.
-        await db.rollback()
+        # The domain refusing to produce a draw is not a bug — it is an answer (the verb
+        # already rolled back). ``from None`` so no traceback shape reaches the client;
+        # the sentence is composed in ``_draw_refusal``.
         raise _draw_refusal(error) from None
-    # Scheduling-input trigger (ADR "the schedule is solved; the call is
-    # pinned"): the fixtures just changed wholesale — a re-cut deleted the old
-    # rows (any pins died with them: ``pinned_at`` lives on the fixture, and
-    # the fresh rows are born unplaced and unpinned) and a first cut minted
-    # the day's inputs. No drawn-event gate here: the cut this transaction
-    # holds *is* the drawn event. Same transaction, under the tournament row
-    # lock taken above (the order ``request_solve`` requires); a ``None``
-    # return (Redis down) deliberately costs the solve, never the cut.
-    await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
-    await db.commit()
-    # Read the draw back through the SAME loader the detail page reads it through, so
-    # the fixtures this mutation answers with are byte-for-byte the ones the page will
-    # show — same shape, same pool → round → position order. Composing the response
-    # from the objects just added would be a second serialization of the same rows,
-    # ordered by whatever the planner happened to emit.
-    return (await fixtures_by_event(db, [event.id]))[event.id]
 
 
 @router.delete(
@@ -2050,29 +1985,31 @@ async def uncut_event_draw(
 
     Owner-only.
     """
-    # The same 404 → 403 → 409 ordering, and the same row lock, as the cut: this verb
-    # deletes what that verb writes, and the guard that protects the fixtures cannot
-    # depend on which route is asking.
-    event = await _get_owned_event_for_draw_or_404(
-        db, tournament_id, event_id, current_user
-    )
-    await _enforce_draw_unplayed(db, event)
-    # Read before the DELETE: whether this verb is about to change anything at
-    # all. The idempotent un-cut of a never-cut draw deletes nothing and must
-    # trigger nothing.
-    had_draw = await event_has_draw(db, event.id)
-    await uncut_draw(db, [event.id])
-    if had_draw and await tournament_has_drawn_event(db, tournament_id):
-        # Scheduling-input trigger: fixtures were deleted wholesale (their
-        # pins, if any, died with the rows), which frees this event's tables
-        # and windows for whatever is still drawn. Gated on a drawn event
-        # SURVIVING the un-cut — un-cutting the only draw leaves nothing to
-        # place, and a solve row over an empty board is a no-op ledger entry.
-        # Same transaction, under the tournament row lock (the order
-        # ``request_solve`` requires); a ``None`` return (Redis down)
-        # deliberately costs the solve, never the un-cut.
-        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
-    await db.commit()
+    # Thin adapter over the transport-neutral ``uncut_event_draw`` verb: it owns the
+    # row lock, the owner gate, the event-under-tournament load, the play-evidence
+    # gate, the ``uncut_draw`` core and the ``had_draw``-gated re-solve trigger, and
+    # signals each refusal with a domain exception. This handler maps each back to the
+    # exact status + body it produced before, so the wire contract is unchanged (the
+    # un-cut never produces a ``DrawError`` — it only deletes):
+    #
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   EventNotFoundError       -> 404 "Event not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   DrawUnderWayError        -> 409 "This event's draw is already under way — …"
+    try:
+        await _uncut_event_draw(
+            db, tournament_id=tournament_id, event_id=event_id, actor=current_user
+        )
+    except TournamentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tournament not found.") from exc
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Event not found.") from exc
+    except NotTournamentOwnerError as exc:
+        raise HTTPException(
+            status_code=403, detail="You can only modify tournaments you created."
+        ) from exc
+    except DrawUnderWayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

@@ -34,6 +34,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_token_auth import find_api_token_user
 from app.db import get_sessionmaker
+from app.draws import (
+    DegenerateDraw,
+    DrawError,
+    NonSinglesDraw,
+    UnsupportedDrawType,
+)
 from app.mappers.match_extras_mapper import empty_extras
 from app.match_creation import create_match as create_match_core
 from app.match_errors import (
@@ -85,8 +91,12 @@ from app.schemas.tournament import (
     TournamentUpdate,
 )
 from app.services.match_service import MatchService
+from app.tournament_draw_service import cut_event_draw as cut_event_draw_core
+from app.tournament_draw_service import uncut_event_draw as uncut_event_draw_core
 from app.tournament_edit import edit_tournament as edit_tournament_core
 from app.tournament_errors import (
+    DrawUnderWayError,
+    EventNotFoundError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NotTournamentOwnerError,
@@ -677,6 +687,203 @@ async def edit_tournament(
             tournament,
             created_by_username=actor.username,
             current_user_id=actor.id,
+        )
+
+
+# The domain-exception family the two draw-write verbs raise for a refusal that is
+# NOT a ``DrawError`` — an absent event, a non-owner, or a draw already under way. The
+# ``app.draws.DrawError`` family (an un-cuttable field) is a separate hierarchy that
+# only ``build_cut`` can hit, and is mapped by ``_map_draw_refusal_tool_error`` below.
+_DRAW_WRITE_ERRORS = (
+    TournamentNotFoundError,
+    EventNotFoundError,
+    NotTournamentOwnerError,
+    DrawUnderWayError,
+)
+
+
+class DrawUncutConfirmation(BaseModel):
+    """The result of tearing an event's draw down (``uncut``) — a small, agent-shaped
+    confirmation rather than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was un-cut
+    (the resolved ``tournament_id`` + the ``event_id``) and asserts the outcome:
+    ``fixtures_remaining`` is read back through the same ``fixtures_by_event`` loader
+    the detail page uses and is ``0`` after a successful un-cut (the event now has no
+    draw). Un-cutting a never-cut draw is an idempotent success too — it deletes
+    nothing and still confirms ``0`` remaining (ADR-0786).
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR).
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+    fixtures_remaining: int
+
+
+async def _tournament_id_for_event(db: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
+    """Resolve the tournament that owns ``event_id`` — the id the shared draw cores
+    need alongside the event id.
+
+    An event id is globally unique, so a draw tool can take just the event and recover
+    its tournament from the ``TournamentEvent.tournament_id`` foreign key, keeping a
+    clean agent-facing signature. A missing event is a not-found ``ToolError`` here,
+    before the core is called; because the resolved id comes straight off the event's
+    own FK, the core's later event-under-tournament load always matches, so the owner
+    gate inside the core is what actually refuses a stranger."""
+    tournament_id = (
+        await db.execute(
+            select(TournamentEvent.tournament_id).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one_or_none()
+    if tournament_id is None:
+        raise ToolError(f"No event found with id {event_id}.")
+    return tournament_id
+
+
+def _map_draw_write_tool_error(exc: Exception, event_id: uuid.UUID) -> ToolError:
+    """Adapt a non-``DrawError`` draw-write refusal to an actionable ``ToolError``.
+
+    Mirrors the HTTP adapters (``tournaments.cut_event_draw`` /
+    ``uncut_event_draw``) but speaks the agent's language instead of HTTP status
+    codes: a tournament/event that does not resolve is one opaque not-found (the tool
+    is addressed by event id), a non-owner is told the write is owner-gated, and a draw
+    already under way passes through its own domain-authored sentence
+    (``DrawUnderWayError`` carries the exact copy)."""
+    if isinstance(exc, TournamentNotFoundError | EventNotFoundError):
+        return ToolError(f"No event found with id {event_id}.")
+    if isinstance(exc, NotTournamentOwnerError):
+        return ToolError(
+            "You can only cut or remove draws for tournaments you created."
+        )
+    return ToolError(str(exc))
+
+
+def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
+    """Adapt a ``DrawError`` — the domain refusing to produce a draw from this event —
+    to an actionable ``ToolError``, mirroring the intent of the HTTP route's
+    ``_draw_refusal`` but in the agent's language.
+
+    A ``match`` over the error, not ``str(error)`` over whatever arrives, so each arm
+    tells an agent which of *their* events cannot be cut and why:
+
+    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's draw
+      type has no generator yet (only round-robin does today), a fact to change on the
+      event, not a transient one to retry.
+    * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
+      event can never be given a draw (an entry is one row per player, with nowhere to
+      seat a partner or a team, ADR-0788), so the refusal names the event and is
+      permanent.
+    * ``DegenerateDraw``'s message is **domain-authored copy** (the strategy alone knows
+      which degeneracy it hit and the numbers the director must change — "5 entrants
+      across 3 pool(s)"), passed through so the agent reads exactly what a director
+      would.
+    * The fallback arm is a generic sentence, never a future subclass's own message —
+      refusing vaguely is a bug report, leaking internals is a defect."""
+    match error:
+        case UnsupportedDrawType():
+            return ToolError(
+                f"This event's {error.draw_type.value} draw can't be cut yet — only "
+                "round-robin draws are supported. Change the event's draw type to one "
+                "that can, or wait for support."
+            )
+        case NonSinglesDraw():
+            return ToolError(
+                f"A {error.event_format.value} event can't be given a draw — only "
+                "singles events can. A fixture seats one entrant on each side, and "
+                "there's nowhere to record a doubles pairing or a team."
+            )
+        case DegenerateDraw():
+            return ToolError(str(error))
+        case _:
+            return ToolError("This event's draw can't be cut as the event stands.")
+
+
+@mcp.tool
+async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
+    """Cut (or re-cut) an event's DRAW as the authenticated API-token caller — generate
+    its fixtures from its entrants — and return them.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events/{event_id}/draw``: it reuses
+    the shared ``cut_event_draw`` verb (the ``FOR UPDATE`` tournament row lock, the
+    owner gate, the event-under-tournament load, the play-evidence gate, the
+    ``cut_draw`` domain core and the re-solve trigger) so the MCP and HTTP surfaces can
+    never drift. You address the event by its globally-unique ``event_id`` alone; the
+    owning tournament is resolved from it. Cutting is owner-gated (only the
+    tournament's creator may cut), and it is NOT tied to status — a draw may be cut and
+    re-cut freely while a director inspects the pools and the seeding. **Re-cutting
+    replaces the draw wholesale**: the previous fixtures are deleted and a fresh set is
+    planned from the event's current active entrants (their ids do not survive).
+    Returns the created
+    fixtures in **pool → round → position** order — the same ``TournamentFixtureRead``
+    the detail page and ``get_schedule`` carry.
+
+    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    event's tournament, when the draw already shows evidence of play (a fixture with a
+    recorded winner or a linked match — it can no longer be cut), or when the event
+    cannot produce a draw at all: its draw type has no generator yet (only round-robin
+    does today), it has no pools configured for a pooled draw type, or its field is too
+    small for its pools (a pool of fewer than two has nobody to play). The message names
+    what to change."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        tournament_id = await _tournament_id_for_event(db, event_id)
+        try:
+            return await cut_event_draw_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except _DRAW_WRITE_ERRORS as exc:
+            raise _map_draw_write_tool_error(exc, event_id) from exc
+        except DrawError as error:
+            # The domain refusing to produce a draw is not a bug — it is an answer, and
+            # the verb already rolled back, so nothing was written. Compose the agent's
+            # sentence and surface it as a ``ToolError``.
+            raise _map_draw_refusal_tool_error(error) from error
+
+
+@mcp.tool
+async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
+    """Un-cut an event's DRAW as the authenticated API-token caller: delete its
+    fixtures, leaving the event with no draw. Returns a confirmation carrying the
+    resolved tournament, the event, and the fixtures now remaining (``0`` on success).
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`` (which
+    answers a bodiless ``204``): it reuses the shared ``uncut_event_draw`` verb (the
+    ``FOR UPDATE`` tournament row lock, the owner gate, the event-under-tournament load,
+    the play-evidence gate, the ``uncut_draw`` core and the ``had_draw``-gated re-solve
+    trigger) so the MCP and HTTP surfaces can never drift. You address the event by its
+    globally-unique ``event_id`` alone; the owning tournament is resolved from it.
+    Un-cutting is owner-gated (only the tournament's creator may). An event with **no
+    draw is already in the state this asks for**, so un-cutting a never-cut draw deletes
+    nothing and is still a success (``fixtures_remaining`` = ``0``) — it is idempotent.
+
+    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    event's tournament, or when the draw already shows evidence of play (a fixture with
+    a recorded winner or a linked match — it can no longer be removed)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        tournament_id = await _tournament_id_for_event(db, event_id)
+        try:
+            await uncut_event_draw_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except _DRAW_WRITE_ERRORS as exc:
+            raise _map_draw_write_tool_error(exc, event_id) from exc
+        # Read the draw back through the same loader the detail page uses — after a
+        # successful un-cut the event maps to ``[]``, so this confirms the teardown.
+        fixtures_remaining = len((await fixtures_by_event(db, [event_id]))[event_id])
+        return DrawUncutConfirmation(
+            tournament_id=tournament_id,
+            event_id=event_id,
+            fixtures_remaining=fixtures_remaining,
         )
 
 
