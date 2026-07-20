@@ -171,6 +171,7 @@ from app.scheduling import (
     TableId,
     Window,
     WindowTooShortForMatch,
+    coalesce_rest_shadows,
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
@@ -873,6 +874,10 @@ async def _load_solver_inputs(
                     )
                 )
 
+    # One shadow per human, not per match (app.scheduling's ``RestShadow``
+    # contract): a human who completed two matches within REST_MIN of each other
+    # accumulated a shadow *per completion* above, which would make the whole
+    # solve ``infeasible`` (#1145). Coalesce to the latest completion.
     snapshot = ScheduleSnapshot(
         table_ids=catalogue,
         pools=schedule_pools,
@@ -881,7 +886,7 @@ async def _load_solver_inputs(
         now_min=now_min,
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
-        rest_shadows=tuple(rest_shadows),
+        rest_shadows=coalesce_rest_shadows(rest_shadows),
     )
 
     # The fingerprint payload is the *wall-clock* form of exactly these inputs

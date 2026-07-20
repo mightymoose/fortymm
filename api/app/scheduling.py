@@ -105,6 +105,7 @@ from __future__ import annotations
 
 import enum
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, NewType
 
@@ -286,6 +287,24 @@ class RestShadow:
 
     player_id: PlayerId
     completed_at_min: int
+
+
+def coalesce_rest_shadows(shadows: Iterable[RestShadow]) -> tuple[RestShadow, ...]:
+    """One shadow per human, keeping the latest completion.
+
+    :class:`RestShadow`'s contract is one entry per human, not per match — but a
+    player who completed two matches within :data:`REST_MIN` of each other yields
+    a shadow *per completion*, i.e. two fixed rest intervals that land under the
+    solver's per-player ``AddNoOverlap`` and are mutually unsatisfiable, turning
+    ONE player's close completions into a whole-tournament ``infeasible`` (#1145).
+    Rest is "time since your last match", so the max ``completed_at_min`` per
+    human subsumes every earlier one's floor — keep only that one."""
+    latest: dict[PlayerId, RestShadow] = {}
+    for shadow in shadows:
+        existing = latest.get(shadow.player_id)
+        if existing is None or shadow.completed_at_min > existing.completed_at_min:
+            latest[shadow.player_id] = shadow
+    return tuple(latest.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -751,7 +770,13 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # window is a constant, so it needs no makespan/horizon bound, and a player
     # who appears in nothing but a shadow is a harmless lone interval (per-
     # player NoOverlap only fires with more than one).
-    for shadow in snapshot.rest_shadows:
+    #
+    # Coalesce to one shadow per human first (:func:`coalesce_rest_shadows`) —
+    # belt-and-suspenders for the snapshot builder's own "one entry per human"
+    # contract. Two fixed rest intervals for a single player under the per-player
+    # ``AddNoOverlap`` below are mutually unsatisfiable, and a lone player's
+    # contradiction makes the WHOLE solve INFEASIBLE (#1145).
+    for shadow in coalesce_rest_shadows(snapshot.rest_shadows):
         player_intervals[shadow.player_id].append(
             model.NewFixedSizeIntervalVar(
                 shadow.completed_at_min,
