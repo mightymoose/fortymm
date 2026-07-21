@@ -15,6 +15,7 @@ non-persistent solve over a synthetic field"). These tests prove:
 * the snapshot is coherent enough for the real solver to place.
 """
 
+import re
 import uuid
 from decimal import Decimal
 from itertools import combinations
@@ -150,9 +151,15 @@ async def test_preview_snapshot_round_robin_synthesizes_full_draw(
     }
     assert len(pairings) == 15  # no pairing repeats
 
-    # The synthetic entrants are Placeholder 1..N — deterministic, minted from a
-    # global counter as uuid.UUID(int=1..N).
-    assert players == {str(uuid.UUID(int=n)) for n in range(1, 7)}
+    # The synthetic entrants are projected as ``placeholder-N`` (N the global
+    # ordinal 1..N) — the client-facing spelling the web client strips to render
+    # "Placeholder N", NOT the raw UUID of the underlying entry id.
+    assert players == {f"placeholder-{n}" for n in range(1, 7)}
+    # Discriminating: every projected player id is ``placeholder-<int>`` (never a
+    # UUID string), and a match's two sides differ.
+    assert all(re.fullmatch(r"placeholder-\d+", p) for p in players)
+    for f in preview.snapshot.fixtures:
+        assert f.player_a_id != f.player_b_id
 
     # The per-event summary carries the count used.
     assert len(preview.field_summaries) == 1

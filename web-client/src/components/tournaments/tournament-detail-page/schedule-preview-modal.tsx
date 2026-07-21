@@ -175,14 +175,19 @@ const PreviewBody = ({
   // (`overrides[id] ?? fieldSize`) — no seeding state in an effect.
   const [overrides, setOverrides] = useState<Record<string, number>>({})
 
-  // Enqueue exactly once on mount. Guarded by a ref (set in the effect body, not a
-  // cleanup) so StrictMode's double-invoke doesn't fire two previews.
-  const enqueuedOnce = useRef(false)
+  // Enqueue on open. This *deliberately* carries no once-only ref guard: under
+  // StrictMode (which `npm run dev` and the composed e2e stack both use) a mount
+  // effect runs setup→cleanup→setup, and the first setup's `mutate` rides a
+  // MutationObserver that the cleanup tears down — its 202 is delivered to a
+  // discarded observer and never reaches `enqueue.data`. A ref guard would then
+  // block the surviving second setup, leaving the modal stranded on
+  // "Preparing preview…" with zero polls (repo memory "StrictMode latches a
+  // cleanup-only ref"). Re-firing on the surviving mount lands the enqueue on the
+  // live observer instead; the ADR's cancel-on-close reclaims the throttled slot
+  // of any duplicate the discarded observer left in flight, so a re-fire is safe.
   useEffect(() => {
-    if (enqueuedOnce.current) return
-    enqueuedOnce.current = true
     enqueue.mutate({})
-    // enqueue.mutate is stable; the guard makes this a strict once-on-mount.
+    // enqueue.mutate is stable; empty deps make this fire on (re)mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

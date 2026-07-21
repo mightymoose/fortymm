@@ -284,6 +284,13 @@ def _schedule_fixture(
     ``(pool, round, position)`` is unique within an event). Each synthetic
     entrant is its own human, so the entry id doubles as the ``PlayerId`` — and
     since entry ids are globally disjoint, so are the players.
+
+    The entrant ids are minted as ``uuid.UUID(int=k)`` for the global ordinal
+    ``k`` (``1..N``, disjoint across events), so ``entry_id.int`` recovers ``k``.
+    The projected ``PlayerId`` is the client-facing ``placeholder-{k}`` spelling
+    (the web client strips the ``placeholder-`` prefix to render "Placeholder
+    k"); ``k`` is unique across events, so the players stay disjoint and the
+    solver's no-double-book-by-player constraint holds.
     """
     assert fixture.pool_id is not None
     assert fixture.entry_a_id is not None
@@ -295,6 +302,6 @@ def _schedule_fixture(
         id=FixtureId(f"{pool_ref}:{fixture.round}:{fixture.position}"),
         event_id=event_id,
         pool_id=PoolId(pool_ref),
-        player_a_id=PlayerId(str(fixture.entry_a_id)),
-        player_b_id=PlayerId(str(fixture.entry_b_id)),
+        player_a_id=PlayerId(f"placeholder-{fixture.entry_a_id.int}"),
+        player_b_id=PlayerId(f"placeholder-{fixture.entry_b_id.int}"),
     )

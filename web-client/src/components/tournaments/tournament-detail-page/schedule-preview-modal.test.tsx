@@ -1,8 +1,9 @@
+import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { screen, waitFor } from '@/test/utilities'
+import { render, screen, waitFor } from '@/test/utilities'
 import {
   mockSchedulePreviewCancelEndpoint,
   mockSchedulePreviewPollEndpoint,
@@ -62,6 +63,34 @@ describe('SchedulePreviewModal', () => {
     expect(
       screen.getByText('Placeholder 1 vs Placeholder 2'),
     ).toBeInTheDocument()
+  })
+
+  // The StrictMode regression (repo memory "StrictMode latches a cleanup-only ref;
+  // only npm run dev / e2e catch it"): `npm run dev` and the composed e2e stack both
+  // render under `<StrictMode>`, which double-invokes every mount effect
+  // (setup→cleanup→setup). A once-on-mount enqueue whose result rode a torn-down
+  // MutationObserver never populated `enqueue.data`, so the modal hung forever on
+  // "Preparing preview…" with zero poll requests. vitest and `vite build` don't use
+  // StrictMode, so every other test in this file missed it — the wrapper below is
+  // the whole point. This must reach the streamed result, not the spinner.
+  it('reaches the streamed result under StrictMode double-mount (not a stuck spinner)', async () => {
+    render(
+      <StrictMode>
+        <SchedulePreviewModal {...buildSchedulePreviewModalProps()} />
+      </StrictMode>,
+    )
+
+    // The instant structure lands off the enqueue 202 — proving the enqueue
+    // actually reached a live observer despite the double-invoke.
+    const summary = await schedulePreviewModalPage.findFieldSummary()
+    expect(summary).toHaveTextContent('Synthetic field: Open Singles 4')
+
+    // …and the polled solve streams all the way to a verdict, rather than the modal
+    // being stranded on "Preparing preview…" (the bug's symptom).
+    expect(await schedulePreviewModalPage.findVerdict()).toHaveTextContent(
+      'Best possible plan',
+    )
+    expect(screen.queryByTestId('preview-preparing')).toBeNull()
   })
 
   it('shows the actionable infeasibility reasons instead of a grid', async () => {
