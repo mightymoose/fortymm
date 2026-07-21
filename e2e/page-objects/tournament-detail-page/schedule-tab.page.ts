@@ -1,5 +1,7 @@
 import { Locator, Page } from '@playwright/test'
 
+import { SchedulePreviewPage } from './schedule-preview.page'
+
 /**
  * The tournament detail page's **Schedule tab** (ADR "the schedule is solved;
  * the call is pinned") — the solve strip with the solver's latest verdict, and
@@ -13,6 +15,28 @@ import { Locator, Page } from '@playwright/test'
  */
 export class ScheduleTabPage {
   constructor(private readonly page: Page) {}
+
+  /** The "Nothing to schedule yet" empty state — shown while no draw is cut, i.e.
+   * the pre-live schedule with no real placements. A preview persists nothing, so
+   * this stays put after previewing (the "nothing persisted" observable). */
+  get emptyState(): Locator {
+    return this.page.getByText('Nothing to schedule yet')
+  }
+
+  // ----- the Preview schedule modal (pre-live, owner-only) --------------------
+
+  /** The owner's **Preview schedule** trigger — present only pre-live for the
+   * owner (ADR "a schedule preview is … owner-gated … refused on live/archived"). */
+  get previewTrigger(): Locator {
+    return this.page.getByTestId('preview-schedule-trigger')
+  }
+
+  /** Open the Preview schedule modal and return its page object (the
+   * child-composition variant, like `TournamentDetailPage.openSchedule()`). */
+  async openPreview(): Promise<SchedulePreviewPage> {
+    await this.previewTrigger.click()
+    return new SchedulePreviewPage(this.page)
+  }
 
   // ----- the solve strip ------------------------------------------------------
 

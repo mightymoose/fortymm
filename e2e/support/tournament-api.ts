@@ -55,6 +55,12 @@ export interface SeedTournamentOptions {
   readonly slot?: SlotSpec
   /** The table catalogue; the pool references every listed table. */
   readonly tables?: ReadonlyArray<TableSpec>
+  /** The event's `max_players` cap. Omitted = uncapped (the original minimal
+   * shape). The schedule-preview spec sets a small cap so the synthetic field a
+   * preview auto-fills to (an uncapped event defaults to 16) is small enough that
+   * the real solver returns a fast, clean "fits" verdict rather than an
+   * over-the-cap `unknown`. */
+  readonly maxPlayers?: number
 }
 
 /** A seeded tournament and the ids a spec needs to address it and its event. */
@@ -120,6 +126,11 @@ export async function seedTournament(
         format: 'singles',
         draw_type: 'round-robin',
         entry_fee: 0,
+        // Only sent when the caller caps the field; omitting the key leaves the
+        // event uncapped (the API treats a missing `max_players` as no cap).
+        ...(options.maxPlayers !== undefined
+          ? { max_players: options.maxPlayers }
+          : {}),
         slot,
         match_settings: { rated: false, length_games: 1 },
         predicates: [],
