@@ -502,11 +502,17 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """Wall-clock is preserved across a timezone edit (ADR "tournament times are
-    timezone-aware instants"): a fixture placed at 18:00 in ``America/Chicago``,
-    after the event timezone is corrected to ``America/Denver``, still reads 18:00
-    **local** — its stored instant moves by the Chicago→Denver offset (1h in June:
-    CDT ``-05:00`` → MDT ``-06:00``), its wall-clock does not."""
+    """A timezone edit recomposes ``scheduled_start`` (a wall-clock *intent*) but
+    leaves ``pinned_at`` (an event-log *instant*) fixed (ADR "tournament times are
+    timezone-aware instants"; Finding 2).
+
+    A fixture placed at 18:00 in ``America/Chicago``, after the event timezone is
+    corrected to ``America/Denver``, still reads 18:00 **local** for
+    ``scheduled_start`` — its stored instant moves by the Chicago→Denver offset
+    (1h: CDT ``-05:00`` → MDT ``-06:00``), its wall-clock does not. ``pinned_at``,
+    by contrast, is the real instant the call fired — an event-log timestamp, not
+    an intent — so its stored instant is UNCHANGED; only its venue-local rendering
+    shifts into the new zone."""
     client, _ = authed_client
     tournament_id, event_id, fixture = await _drawn_fixture(client, db_session)
 
@@ -525,6 +531,12 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     )
     assert before["scheduled_start"]["local_label"] == "6:00 PM"
     assert before["scheduled_start"]["tz_abbrev"] == "CDT"
+    # The placement (full, entrants known) is a silent pre-live pin, so pinned_at is
+    # set to the real instant the call fired, rendered in the old (Chicago) zone.
+    before_pin = before["pinned_at"]
+    assert before_pin is not None
+    before_pin_instant = datetime.fromisoformat(before_pin["instant"])
+    assert before_pin["tz_abbrev"] == "CDT"
 
     change = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
@@ -534,8 +546,9 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
 
     after = await _fixture_in_detail(client, tournament_id, str(fixture.id))
     after_start = datetime.fromisoformat(after["scheduled_start"]["instant"])
-    # Wall-clock preserved: still 18:00, now read in the NEW zone — and the
-    # server-rendered label follows the correction (label + abbrev now Denver's).
+    # scheduled_start wall-clock preserved: still 18:00, now read in the NEW zone —
+    # and the server-rendered label follows the correction (label + abbrev now
+    # Denver's).
     assert after_start.astimezone(ZoneInfo("America/Denver")).strftime("%H:%M") == (
         "18:00"
     )
@@ -546,7 +559,15 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     assert after_start != before_start
     assert after_start - before_start == timedelta(hours=1)
     # Still a pin — the recompose renews the reading, it does not clear it.
-    assert after["pinned_at"] is not None
+    after_pin = after["pinned_at"]
+    assert after_pin is not None
+    # pinned_at's INSTANT is left fixed by the tz edit (Finding 2): it is an
+    # event-log timestamp, not a wall-clock intent, so re-anchoring it would falsely
+    # claim the call fired at a different moment. Only its venue-local RENDERING
+    # shifts — same instant, now labelled in Denver (MDT), an hour earlier.
+    assert datetime.fromisoformat(after_pin["instant"]) == before_pin_instant
+    assert after_pin["tz_abbrev"] == "MDT"
+    assert after_pin["local_label"] != before_pin["local_label"]
 
     # A same-timezone PATCH is a no-op: the stored instant is byte-identical, not
     # needlessly rewritten.
@@ -7277,6 +7298,36 @@ async def test_a_live_placement_pins_and_calls_both_entrants(
     jobs = _match_call_jobs(fake_notifications_queue)
     assert {job.user_id for job in jobs} == entrants
     assert all(job.channels == ["push", "email"] for job in jobs)
+
+    (solve,) = await _queued_solves(db_session, tournament_id)
+    assert solve.trigger is ScheduleSolveTrigger.settings_changed
+    assert solve.status is ScheduleSolveStatus.queued
+
+
+async def test_a_timezone_only_event_patch_on_a_drawn_event_requeues_a_solve(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A timezone-only correction on a *drawn* event is a genuine solver-input
+    change (ADR "tournament times are timezone-aware instants"; Finding 1): the
+    event ``timezone`` anchors every pool window's wall-clock to the real instant
+    the solver compares against ``now``, so re-anchoring it can flip an
+    ``infeasible``/``past_window`` verdict. ``_event_scheduling_facts`` therefore
+    carries the timezone, and a tz-only PATCH enqueues a ``settings_changed``
+    re-solve. Before the fix (facts omitted the timezone) ``facts_before ==
+    facts_after`` and no solve was queued, leaving a stale verdict standing."""
+    client, _ = authed_client
+    tournament_id, event_id, _fixture = await _drawn_fixture(client, db_session)
+    # Cutting the draw already queued a settings_changed solve; reset so the NEXT
+    # queued row is attributable to the timezone PATCH under test.
+    await _clear_solve_ledger(db_session)
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"timezone": "America/Denver"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["timezone"] == "America/Denver"
 
     (solve,) = await _queued_solves(db_session, tournament_id)
     assert solve.trigger is ScheduleSolveTrigger.settings_changed

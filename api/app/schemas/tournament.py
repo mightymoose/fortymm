@@ -1178,19 +1178,23 @@ class TournamentEventUpdate(BaseModel):
 
 
 def _naive_wall_clock(value: datetime) -> datetime:
-    """A placement's ``scheduled_start`` is a **naive** wall-clock timestamp, in the
-    venue's local frame (ADR-0790), stored in a ``TIMESTAMP WITHOUT TIME ZONE`` column
-    — a deliberate exemption from the "datetimes are always timezone-aware" rule,
-    because it is checked against a pool's ``Slot`` window, which is itself naive
-    wall-clock.
+    """A placement's ``scheduled_start`` arrives on the wire as a **naive** venue
+    wall-clock timestamp (what the director typed, e.g. "18:00"), in the event's
+    local frame (ADR "tournament times are timezone-aware instants"). The server
+    anchors it to a real instant via the event's ``timezone``
+    (``anchor_wallclock`` does ``naive.replace(tzinfo=...)``, which requires a
+    naive input) before it is stored in the ``timestamptz`` column.
 
-    An offset-**aware** datetime carries a timezone this domain does not model, and
-    asyncpg cannot bind one to a ``timestamp without time zone`` parameter — so it is
-    refused *here*, at the boundary (422), rather than reaching the driver as a 500.
-    Same reasoning as the fee/player-limit bounds above: a boundary that admits what
-    the column cannot hold is not a boundary. This is a representational floor, not one
-    of the *soft* placement constraints (table-in-pool, time-in-window, no
-    double-booking) ADR-0790 keeps off the write path — those still save.
+    So an offset-**aware** value is a client bug: the wire contract is a naive
+    wall-clock the server anchors, and a value that carries its own timezone is
+    both redundant with the event's frame and un-anchorable by
+    ``anchor_wallclock`` (``replace(tzinfo=...)`` on an already-aware value would
+    silently discard the offset). It is refused *here*, at the boundary (422),
+    rather than leaking inward. Same reasoning as the fee/player-limit bounds
+    above: a boundary that admits what the domain cannot honestly represent is not
+    a boundary. This is a representational floor, not one of the *soft* placement
+    constraints (table-in-pool, time-in-window, no double-booking) ADR-0790 keeps
+    off the write path — those still save.
     """
     if value.tzinfo is not None:
         raise ValueError(
@@ -1201,10 +1205,11 @@ def _naive_wall_clock(value: datetime) -> datetime:
 
 
 PlacementStart = Annotated[datetime, AfterValidator(_naive_wall_clock)]
-"""A placement's predicted start: a naive wall-clock ``datetime`` (ADR-0790). The
-``AfterValidator`` refuses an offset-aware value (422) rather than let it 500 in the
-driver against the naive column; it contributes nothing to the JSON schema, exactly like
-``_fits_the_fee_column``."""
+"""A placement's predicted start: a naive venue wall-clock ``datetime`` the server
+anchors to an instant via the event's timezone (ADR "tournament times are
+timezone-aware instants"). The ``AfterValidator`` refuses an offset-aware value (422),
+which the naive-anchoring contract cannot honestly represent; it contributes nothing to
+the JSON schema, exactly like ``_fits_the_fee_column``."""
 
 
 class TournamentFixturePlacementUpdate(BaseModel):

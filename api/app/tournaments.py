@@ -1585,20 +1585,25 @@ async def _enforce_draw_type_frozen(
 
 def _event_scheduling_facts(
     event: TournamentEvent,
-) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int]:
+) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int, str]:
     """The slice of an event the schedule solver actually reads (ADR "the
     schedule is solved; the call is pinned"), in a comparable shape — what the
     event PATCH compares before/after its write to decide whether a re-solve
     is owed.
 
-    Exactly two facts feed ``_load_solver_inputs``: each pool's identity,
+    Exactly three facts feed ``_load_solver_inputs``: each pool's identity,
     window and tables (its *name* is display and deliberately absent — a pool
-    rename must not spend a solve), and ``match_settings.length_games`` (the
-    duration input; ``rated`` is a results rule the solver never sees). Parsed
-    through the same models the write boundary validated the JSONB with
-    (parse, don't validate), and read off the ROW rather than the payload, so
-    "changed" means the row changed — a PATCH that re-sends the values the
-    event already holds compares equal and triggers nothing.
+    rename must not spend a solve), ``match_settings.length_games`` (the
+    duration input; ``rated`` is a results rule the solver never sees), and the
+    event ``timezone`` — the anchor that turns each Slot's wall-clock
+    ``{date,start,end}`` into the real instant the solver compares against
+    ``now`` (ADR "tournament times are timezone-aware instants"). Without the
+    timezone here a tz-only correction re-anchors every placement but compares
+    equal, so a stale ``infeasible``/``past_window`` verdict would never be
+    re-solved away. Parsed through the same models the write boundary validated
+    the JSONB with (parse, don't validate), and read off the ROW rather than
+    the payload, so "changed" means the row changed — a PATCH that re-sends the
+    values the event already holds compares equal and triggers nothing.
     """
     settings = MatchSettings.model_validate(event.match_settings)
     return (
@@ -1606,6 +1611,7 @@ def _event_scheduling_facts(
             (pool.id, pool.slot, tuple(pool.table_ids)) for pool in event_pools(event)
         ),
         settings.length_games,
+        event.timezone,
     )
 
 
@@ -1625,19 +1631,27 @@ async def _reanchor_placements_for_timezone_change(
     just fixed which local" — so the fixture must still read **18:00**, its stored
     instant moving by the offset delta while its local reading stays put. The pool
     ``Slot`` windows get this for free (they are wall-clock ``{date,start,end}``
-    components, untouched by the edit); ``scheduled_start``/``pinned_at`` are
-    ``timestamptz`` **instants** (B1/B2), so they are recomposed here or they would
-    silently shift.
+    components, untouched by the edit); ``scheduled_start`` is a ``timestamptz``
+    **instant** (B1/B2), so it is recomposed here or it would silently shift.
 
-    Recovery is: read the stored instant's wall-clock **in the OLD zone** (the one
+    Only ``scheduled_start`` is recomposed — never ``pinned_at``. The distinction
+    is what the two columns *mean*: ``scheduled_start`` is a wall-clock *intent*
+    ("the match is at 6 PM local"), so correcting which local means recomposing it
+    to keep the intended reading; ``pinned_at`` is the real instant the call/
+    notification actually fired (``_wall_now()``), an **event-log timestamp** —
+    not an intent. Re-anchoring it would falsely claim the call went out at a
+    different instant. Its stored instant is therefore left fixed; the detail
+    BFF's ``venue_local`` re-renders that same instant in the new zone, so the
+    displayed "Called …" label correctly shifts while naming the identical moment.
+
+    Recovery is: read ``scheduled_start``'s wall-clock **in the OLD zone** (the one
     the director saw when placing it), then re-anchor those same components in the
     NEW zone — the same ``.replace(tzinfo=...)`` composition B2 uses for window
     instants, so a wall-clock that lands in a DST gap/fold resolves one consistent
-    way rather than crashing. Only rows that actually carry a placement are read;
-    a fixture with just one of the two columns set recomposes only that one. The
-    caller invokes this **only when the zone truly changed**, on its open
-    transaction under the tournament row lock, so the recompose commits atomically
-    with the ``timezone`` write it accompanies.
+    way rather than crashing. Only rows that actually carry a ``scheduled_start``
+    are read. The caller invokes this **only when the zone truly changed**, on its
+    open transaction under the tournament row lock, so the recompose commits
+    atomically with the ``timezone`` write it accompanies.
     """
     old_tz = ZoneInfo(old_timezone)
     new_tz = ZoneInfo(new_timezone)
@@ -1651,10 +1665,7 @@ async def _reanchor_placements_for_timezone_change(
             await db.execute(
                 select(TournamentFixture).where(
                     TournamentFixture.event_id == event_id,
-                    or_(
-                        TournamentFixture.scheduled_start.is_not(None),
-                        TournamentFixture.pinned_at.is_not(None),
-                    ),
+                    TournamentFixture.scheduled_start.is_not(None),
                 )
             )
         )
@@ -1664,8 +1675,6 @@ async def _reanchor_placements_for_timezone_change(
     for fixture in placed:
         if fixture.scheduled_start is not None:
             fixture.scheduled_start = _reanchor(fixture.scheduled_start)
-        if fixture.pinned_at is not None:
-            fixture.pinned_at = _reanchor(fixture.pinned_at)
 
 
 @router.patch(

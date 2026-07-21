@@ -883,6 +883,11 @@ async def _load_solver_inputs(
                         "date": pool.slot.date,
                         "start": pool.slot.start,
                         "end": pool.slot.end,
+                        # The event ``timezone`` anchors this window's wall-clock
+                        # to the instant the solver reads (ADR "tournament times
+                        # are timezone-aware instants"), so a mid-solve zone
+                        # change is input drift the apply must discard as stale.
+                        "timezone": event.timezone,
                         "table_ids": list(pool.table_ids),
                     }
                     for pool in pools
