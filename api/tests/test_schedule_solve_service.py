@@ -26,6 +26,7 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -50,10 +51,10 @@ from app.leagues import get_default_league
 from app.models import (
     DrawType,
     EventFormat,
-    InfeasibleReasonCode,
     Match,
     MatchSettings,
     MatchStatus,
+    Notification,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -64,6 +65,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
     TournamentStatus,
+    User,
 )
 from app.schedule_solves import (
     JOB_TIMEOUT_MARGIN_S,
@@ -75,10 +77,24 @@ from app.schedule_solves import (
 )
 from app.scheduling import (
     REST_MIN,
+    PlacedFixture,
+    PoolHasNoTables,
+    PoolId,
+    PoolOverCapacity,
     ScheduleSnapshot,
     SolveResult,
     SolveStats,
     Verdict,
+)
+from app.schemas.notification import NotificationJob
+from app.schemas.schedule_solve import (
+    PastWindowReasonRead,
+    PlayerConflictRead,
+    PoolHasNoTablesRead,
+    PoolOverCapacityRead,
+    TableConflictRead,
+    parse_infeasibility_reasons,
+    parse_placement_conflicts,
 )
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
@@ -114,6 +130,7 @@ def solver_queue(monkeypatch: pytest.MonkeyPatch) -> Queue:
 async def _make_tournament(
     db: AsyncSession,
     *,
+    status: TournamentStatus = TournamentStatus.published,
     entrants: int = 4,
     tables: tuple[str, ...] = ("t1", "t2"),
     window: tuple[str, str] = ("09:00", "17:00"),
@@ -132,7 +149,7 @@ async def _make_tournament(
 
     tournament = Tournament(
         name="Scheduled Open",
-        status=TournamentStatus.published,
+        status=status,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -286,6 +303,19 @@ async def _fixture_user_ids(
     return by_entry[entry_a_id], by_entry[entry_b_id]
 
 
+async def _entry_username(db: AsyncSession, entry_id: uuid.UUID) -> str:
+    """The display username behind a tournament entry — what a placement
+    conflict resolves a player/matchup id to."""
+    user_id = (
+        await db.execute(
+            select(TournamentEntry.user_id).where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    return (
+        await db.execute(select(User.username).where(User.id == user_id))
+    ).scalar_one()
+
+
 async def _link_match(
     db: AsyncSession,
     fixture: TournamentFixture,
@@ -333,6 +363,80 @@ async def _mark_completed(
     fixture.winner_entry_id = entry_a_id
     await db.commit()
     return await _fixture_user_ids(db, entry_a_id, entry_b_id)
+
+
+async def _pin_fixture(
+    db: AsyncSession,
+    fixture: TournamentFixture,
+    *,
+    table_id: str,
+    start: datetime,
+    pinned_at: datetime,
+    notified: int = 1,
+) -> None:
+    """Stage an already-called fixture directly on the row — table, promised
+    start, ``pinned_at`` and the told-count — the pre-state the slide/echo
+    apply paths read."""
+    fixture.table_id = table_id
+    fixture.scheduled_start = start
+    fixture.pinned_at = pinned_at
+    fixture.call_notified_count = notified
+    await db.commit()
+
+
+async def _match_call_notifications(db: AsyncSession) -> list[Notification]:
+    return list(
+        (
+            await db.execute(
+                select(Notification)
+                .where(Notification.category == "match_calls")
+                .order_by(Notification.created_at, Notification.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _fanout_jobs(notifications_queue: Queue) -> list[NotificationJob]:
+    return [
+        NotificationJob.model_validate_json(job.args[0])
+        for job in notifications_queue.jobs
+    ]
+
+
+def _slide_pin_later(
+    target_fixture_id: uuid.UUID, extra_min: int
+) -> Callable[[ScheduleSnapshot, float, int], SolveResult]:
+    """Interpose on the ``_solve`` seam: run the real solver, then push only
+    the target pin's placement ``extra_min`` minutes later on its (unchanged)
+    table — exactly the "predecessor overran" outcome 1a's solver produces
+    under contention, staged deterministically so the apply path is what's
+    under test."""
+    real = scheduling.solve
+    target_id = str(target_fixture_id)
+
+    def wrapper(
+        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+    ) -> SolveResult:
+        result = real(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
+        placements = tuple(
+            PlacedFixture(
+                fixture_id=placement.fixture_id,
+                table_id=placement.table_id,
+                start_min=placement.start_min + bump,
+                end_min=placement.end_min + bump,
+            )
+            for placement in result.placements
+            for bump in (extra_min if placement.fixture_id == target_id else 0,)
+        )
+        return SolveResult(
+            verdict=result.verdict, placements=placements, stats=result.stats
+        )
+
+    return wrapper
 
 
 class TestSolveNumWorkers:
@@ -440,6 +544,48 @@ class TestRestShadows:
 
         assert inputs is not None
         assert inputs.snapshot.rest_shadows == ()
+
+    async def test_two_completions_within_rest_coalesce_to_one_shadow(
+        self, db_session: AsyncSession
+    ) -> None:
+        """One entry per human, not per match (#1145): a human who completes
+        two matches within REST_MIN accumulates a shadow per completion in the
+        raw scan — coalesced to exactly ONE, anchored at the LATER completion
+        (rest = time since your last match), so the solver never receives two
+        mutually unsatisfiable fixed rest intervals for one player."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        # Two fixtures sharing a human: in a 4-player round robin every player
+        # appears in 3 fixtures, so a shared entry always exists.
+        first = fixtures[0]
+        shared_entry = first.entry_a_id
+        second = next(
+            f for f in fixtures[1:] if shared_entry in (f.entry_a_id, f.entry_b_id)
+        )
+        # Complete both 2 minutes apart, both within REST_MIN of ``now`` so
+        # neither window has closed and both would otherwise cast a shadow.
+        early_wall = BASE + timedelta(minutes=30)
+        late_wall = BASE + timedelta(minutes=32)
+        users_first = await _mark_completed(
+            db_session, first, completed_at=early_wall.astimezone()
+        )
+        shared_user = users_first[0]  # entry_a's user == the shared human
+        await _mark_completed(db_session, second, completed_at=late_wall.astimezone())
+        now = BASE + timedelta(minutes=35)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=now, lock=False
+        )
+
+        assert inputs is not None
+        shared_shadows = [
+            shadow
+            for shadow in inputs.snapshot.rest_shadows
+            if shadow.player_id == shared_user
+        ]
+        assert len(shared_shadows) == 1
+        # Anchored at the later completion (offset 32), not the earlier (30).
+        assert shared_shadows[0].completed_at_min == 32
 
 
 class TestRequestSolveCoalescing:
@@ -900,14 +1046,19 @@ class TestSolveJob:
     async def test_pinned_fixture_columns_are_untouched_by_apply(
         self, db_session: AsyncSession, solver_queue: Queue
     ) -> None:
-        """The solver echoes pins verbatim; the apply must not rewrite a
-        promise's columns even with identical values — so a deliberately
-        off-grid pin survives byte for byte."""
+        """When the solver returns a called match UNCHANGED (its start is a
+        floor with nothing competing for that slot — 1a's no-drift guarantee),
+        the apply must not rewrite the promise's columns even with identical
+        values, so a deliberately off-grid pin survives byte for byte. The pin
+        sits late enough that no other fixture wants its slot, so the floor is
+        the minimum and it never slides (contrast the slide path below)."""
         tournament_id, event_id = await _make_tournament(db_session)
         fixtures = await _fixtures_of(db_session, event_id)
         pinned = fixtures[0]
         pinned_id = pinned.id
-        pinned_start = BASE + timedelta(minutes=62)  # off the 5-minute grid
+        # Late + off the 5-minute grid: every other fixture packs earlier, so
+        # this pin is uncontended and the solver leaves it exactly here.
+        pinned_start = BASE + timedelta(minutes=302)
         pinned_at = BASE - timedelta(minutes=30)
         pinned.table_id = "t1"
         pinned.scheduled_start = pinned_start
@@ -982,10 +1133,11 @@ class TestSolveJob:
         assert ledger.fixtures_placed is None
         assert ledger.fixtures_pinned is None
         assert ledger.finished_at is not None
-        # A current-but-too-tight window is a *generic* capacity infeasibility:
-        # no named reason, no offending date (contrast the past-window case).
-        assert ledger.infeasible_reason_code is None
-        assert ledger.past_window_date is None
+        # A current-but-too-tight window is a *generic* capacity infeasibility —
+        # it carries a structural reason, but never the ``past_window`` one
+        # (contrast the past-window case below).
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert not any(reason.kind == "past_window" for reason in reasons)
 
     async def test_past_dated_window_names_the_past_window_reason_with_its_date(
         self, db_session: AsyncSession, solver_queue: Queue
@@ -1015,14 +1167,16 @@ class TestSolveJob:
         (ledger,) = await _solve_rows(db_session, tournament_id)
         assert ledger.status is ScheduleSolveStatus.infeasible
         assert ledger.verdict is SolverVerdict.infeasible
-        assert ledger.infeasible_reason_code is InfeasibleReasonCode.past_window
-        assert ledger.past_window_date == date(2020, 3, 14)
+        # Past window is the most specific pre-live cause and suppresses the
+        # tight-window / over-capacity arms for the same pool, so it is the only
+        # resolved reason, carrying the offending venue-local date.
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert reasons == [PastWindowReasonRead(date=date(2020, 3, 14))]
         # And it rides onto the client-facing read as a structured reason.
         read = ScheduleSolveRead.model_validate(ledger)
-        reason = read.infeasible_reason
-        assert reason is not None
-        assert reason.code == "past_window"
-        assert reason.date == date(2020, 3, 14)
+        assert read.infeasibility_reasons == [
+            PastWindowReasonRead(date=date(2020, 3, 14))
+        ]
 
     async def test_unknown_verdict_is_failed_with_the_time_cap_error(
         self,
@@ -1129,6 +1283,252 @@ class TestSolveJob:
         assert rerun.trigger is ScheduleSolveTrigger.rerun
         assert len(solver_queue.jobs) == 2
 
+    async def test_infeasible_reasons_are_resolved_to_names_and_clock(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An infeasible verdict's structured, id-and-minute reasons are
+        humanized at apply: the persisted ``infeasibility_reasons`` carry the
+        pool's DISPLAY NAME (not the namespaced solver id) and, for the capacity
+        arm, the ``HH:MM`` window and the integer minutes verbatim."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, window=("09:00", "17:00")
+        )
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        pool_id = PoolId(f"{event_id}:pool-a")
+
+        def infeasible(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.infeasible,
+                placements=(),
+                stats=SolveStats(wall_time_ms=77, objective=None),
+                reasons=(
+                    PoolHasNoTables(pool_id=pool_id),
+                    PoolOverCapacity(
+                        pool_id=pool_id,
+                        required_min=600,
+                        capacity_min=480,
+                        table_count=2,
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", infeasible)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+        assert ledger.verdict is SolverVerdict.infeasible
+
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        no_tables, over_capacity = reasons
+        assert isinstance(no_tables, PoolHasNoTablesRead)
+        # The DISPLAY name, never the namespaced ``{event_id}:pool-a`` id.
+        assert no_tables.pool_name == "Pool A"
+
+        assert isinstance(over_capacity, PoolOverCapacityRead)
+        assert over_capacity.pool_name == "Pool A"
+        assert over_capacity.window_start == "09:00"
+        assert over_capacity.window_end == "17:00"
+        assert over_capacity.required_min == 600
+        assert over_capacity.capacity_min == 480
+        assert over_capacity.table_count == 2
+
+    async def test_succeeded_apply_leaves_infeasibility_reasons_null(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """Only the infeasible branch writes ``infeasibility_reasons``; a real
+        (optimal/feasible) solve leaves the column NULL."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.infeasibility_reasons is None
+        assert parse_infeasibility_reasons(ledger.infeasibility_reasons) == []
+
+    async def test_failed_apply_leaves_infeasibility_reasons_null(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An ``unknown`` verdict fails the row (cap exhausted) and never
+        touches ``infeasibility_reasons`` — it stays NULL."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        def exhausted(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.unknown,
+                placements=(),
+                stats=SolveStats(wall_time_ms=5, objective=None),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", exhausted)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.failed
+        assert ledger.infeasibility_reasons is None
+
+    async def test_placement_conflicts_are_resolved_and_persisted_on_placed_board(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two in-progress matches recorded on one table AND sharing a player
+        are contradictory data the solver tolerates (it merges the occupancy so
+        the board still places) yet REPORTS. At apply the id-and-minute
+        conflicts are humanized — table label, player name, each colliding
+        fixture named by its matchup — and persisted to ``placement_conflicts``
+        on the (optimal/feasible) verdict, NOT gated on infeasible."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        first_fixture = fixtures[0]
+        partner: TournamentFixture | None = None
+        shared_entry_id: uuid.UUID | None = None
+        for candidate in fixtures[1:]:
+            common = {first_fixture.entry_a_id, first_fixture.entry_b_id} & {
+                candidate.entry_a_id,
+                candidate.entry_b_id,
+            }
+            if common:
+                shared_entry_id = next(iter(common))
+                partner = candidate
+                break
+        assert partner is not None and shared_entry_id is not None
+
+        # Stage both as physically underway on the SAME table at the SAME start
+        # (a soft double-book): pinned, live, promised start already arrived.
+        colliding = (first_fixture, partner)
+        for fixture in colliding:
+            await _link_match(db_session, fixture, status=MatchStatus.in_progress)
+            fixture.table_id = "t1"
+            fixture.scheduled_start = BASE
+            fixture.pinned_at = BASE - timedelta(minutes=5)
+        await db_session.commit()
+
+        # Capture ids/entries before the session is expired below (an expired
+        # ORM instance would sync-lazy-load — MissingGreenlet).
+        fixture_entries: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID]] = {}
+        for fixture in colliding:
+            assert fixture.entry_a_id is not None and fixture.entry_b_id is not None
+            fixture_entries[fixture.id] = (fixture.entry_a_id, fixture.entry_b_id)
+        colliding_ids = set(fixture_entries)
+
+        # The frame is 2030 and the job's wall-clock ``now`` is years off, so
+        # compute the genuine solve at a moment INSIDE the in-progress window
+        # (where the pins read as underway) and replay it through the ``_solve``
+        # seam — the same deterministic-staging trick ``_slide_pin_later`` uses.
+        # The conflicts on this result are the pure module's own, from the real
+        # overlapping in-progress data.
+        controlled_now = BASE + timedelta(minutes=30)
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=controlled_now, lock=False
+        )
+        assert inputs is not None
+        genuine = scheduling.solve(inputs.snapshot)
+        assert genuine.verdict in (Verdict.optimal, Verdict.feasible)
+        assert {conflict.kind for conflict in genuine.conflicts} == {
+            "table_conflict",
+            "player_conflict",
+        }
+
+        monkeypatch.setattr(
+            schedule_solves,
+            "_solve",
+            lambda snapshot, time_cap_s, num_search_workers: genuine,
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+
+        conflicts = parse_placement_conflicts(ledger.placement_conflicts)
+        (table_conflict,) = [c for c in conflicts if isinstance(c, TableConflictRead)]
+        (player_conflict,) = [c for c in conflicts if isinstance(c, PlayerConflictRead)]
+
+        # The catalogue LABEL, never the raw ``t1`` value-object id.
+        assert table_conflict.table_label == "T1"
+        # Both colliding matches, each named by its matchup (the two players).
+        assert {f.fixture_id for f in table_conflict.fixtures} == {
+            str(fixture_id) for fixture_id in colliding_ids
+        }
+
+        # The shared human, resolved to their display name; same two fixtures.
+        shared_username = await _entry_username(db_session, shared_entry_id)
+        assert player_conflict.player_name == shared_username
+        assert {f.fixture_id for f in player_conflict.fixtures} == {
+            str(fixture_id) for fixture_id in colliding_ids
+        }
+
+        # Each colliding fixture is named by BOTH its players' usernames, in
+        # (entry_a, entry_b) order — the id→name resolution is correct.
+        for fixture_id, (entry_a, entry_b) in fixture_entries.items():
+            named = next(
+                f for f in table_conflict.fixtures if f.fixture_id == str(fixture_id)
+            )
+            assert named.player_a == await _entry_username(db_session, entry_a)
+            assert named.player_b == await _entry_username(db_session, entry_b)
+
+    async def test_clean_solve_persists_empty_placement_conflicts(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """A solve with no overlapping in-progress data still writes
+        ``placement_conflicts`` — an empty list, never NULL — on the applied
+        verdict, so the read boundary parses a placed board that simply has
+        nothing to report the same way it parses one that does."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.placement_conflicts == []
+        assert parse_placement_conflicts(ledger.placement_conflicts) == []
+
 
 class TestDriftGuard:
     """THE race test: a committed mutation lands between the job's snapshot
@@ -1231,3 +1631,129 @@ class TestDriftGuard:
             if fixture.table_id is not None
         ]
         assert len(placed) == 6
+
+
+class TestCalledMatchSlides:
+    """Chore 2a (ADR "a called match holds its table and slides later"): the
+    guarded apply persists a called match the solver pushed LATER on its
+    (unchanged) table and fires the same "moved" correction a broken-pin move
+    does — while a pin the solver echoes unchanged is still byte-stable and
+    tells no one."""
+
+    async def test_a_slid_called_match_is_persisted_and_moved_notified(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A predecessor overran: the solver returns the called match 20
+        minutes later on the SAME table. The apply persists the slid start,
+        refreshes ``pinned_at``, and sends exactly one *moved* correction per
+        entrant — the pin counts as placed, not pinned."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, status=TournamentStatus.live, entrants=2, tables=("t1",)
+        )
+        fixture = (await _fixtures_of(db_session, event_id))[0]
+        fixture_id = fixture.id
+        entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
+        assert entry_a_id is not None and entry_b_id is not None
+        original_pin_time = BASE - timedelta(minutes=15)
+        await _pin_fixture(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=BASE,
+            pinned_at=original_pin_time,
+            notified=1,
+        )
+        user_a, user_b = await _fixture_user_ids(db_session, entry_a_id, entry_b_id)
+
+        apply_now = BASE - timedelta(minutes=60)
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: apply_now)
+        monkeypatch.setattr(
+            schedule_solves, "_solve", _slide_pin_later(fixture_id, extra_min=20)
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        slid = (await _fixtures_of(db_session, event_id))[0]
+        assert slid.table_id == "t1"  # the table is invariant
+        assert slid.scheduled_start == BASE + timedelta(minutes=20)  # slid later
+        assert slid.pinned_at == apply_now  # the promise is renewed, not demoted
+        assert slid.call_notified_count == 2  # the call, then the moved correction
+
+        rows = await _match_call_notifications(db_session)
+        assert len(rows) == 2  # exactly one per entrant, nobody else
+        assert {str(row.user_id) for row in rows} == {user_a, user_b}
+        for notification in rows:
+            assert notification.title == "Your match moved to T1"
+            assert "09:20" in notification.body  # BASE + 20 minutes
+        jobs = _fanout_jobs(fake_notifications_queue)
+        assert {str(job.user_id) for job in jobs} == {user_a, user_b}
+        assert all(job.collapse_id == f"match-call:{fixture_id}" for job in jobs)
+
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 1  # the slid pin moved → placed
+        assert ledger.fixtures_pinned == 0
+
+    async def test_an_unchanged_called_match_is_echoed_verbatim_and_silent(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No contention: the real solver returns the (off-grid) pin exactly at
+        its promised start. The apply rewrites not a byte and notifies no one —
+        the pin counts as pinned, not placed."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, status=TournamentStatus.live, entrants=2, tables=("t1",)
+        )
+        fixture = (await _fixtures_of(db_session, event_id))[0]
+        fixture_id = fixture.id
+        original_pin_time = BASE - timedelta(minutes=15)
+        pinned_start = BASE + timedelta(minutes=7)  # off the 5-minute grid
+        await _pin_fixture(
+            db_session,
+            fixture,
+            table_id="t1",
+            start=pinned_start,
+            pinned_at=original_pin_time,
+            notified=1,
+        )
+
+        apply_now = BASE - timedelta(minutes=60)
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: apply_now)
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        survivor = (await _fixtures_of(db_session, event_id))[0]
+        assert survivor.id == fixture_id
+        assert survivor.table_id == "t1"
+        assert survivor.scheduled_start == pinned_start  # byte-identical
+        assert survivor.pinned_at == original_pin_time  # not refreshed
+        assert survivor.call_notified_count == 1  # never re-told
+
+        assert await _match_call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 0  # nothing moved
+        assert ledger.fixtures_pinned == 1  # the verbatim echo

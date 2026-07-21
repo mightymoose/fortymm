@@ -13,18 +13,50 @@ offsets used throughout is the *snapshot builder's* job (a later slice), not
 this module's: every time here is an ``int`` minute offset in one shared frame.
 
 **Two tiers: a plan is an estimate, a call is a promise.** Unpinned fixtures
-are decision variables. Pinned fixtures are **constants**: their
-``(table, start)`` is echoed into the output verbatim and their occupancy is a
-fixed interval every variable must schedule around. A pin is deliberately not
-modeled as "start ≥ pinned start" — a variable the objective is indifferent to
-could drift between solves, and the whole point of a pin is that what we told
-the players never changes. Pins also outrank windows: a pin pushed past its
-pool window by overrun keeps its promised slot (no window constraint is applied
-to pins). The flip side of pins-as-constants is honest: promises that
-physically contradict each other (two pins overlapping on one table, or a pin
-under an in-progress overrun) make the day **infeasible**, which the solve
-reports rather than papering over — the correction path (re-place / void, ADR)
-is the fix, and it runs *before* the next solve, not inside it.
+are free decision variables in both dimensions. A **called** (pinned, not-yet-
+started) fixture holds its *table* as a hard constant — it can never be re-placed
+onto another court — but its *start* is a free variable that can only be pushed
+**later** (``start ≥ pin.start_min``, the promised time as a floor). The start is
+anchored downward at the same weight as an unpinned fixture's wait (see the
+objective below): with no contention it sits exactly at the floor — the promised
+time, no drift — and under contention it slides to the *minimum* legal later
+value, just past the obstruction. The start is deliberately **not** snapped to
+the :data:`BUCKET_MIN` grid: ``pin.start_min`` may itself be off-grid (a manual
+director PATCH, a call tick), and snapping would both re-introduce drift and
+over-delay the slide. Pins still outrank windows: a called match pushed past its
+pool window by overrun keeps running (no window constraint is applied to it).
+
+Because a called match's start can always slide to the horizon, pins essentially
+**stop being a source of infeasibility**: the two promise contradictions that
+used to make a day infeasible — *two called matches promised the same table at
+overlapping times* and *a called match under an in-progress overrun* — now
+auto-resolve by sliding one later on the same table (the apply path notifies the
+player, a separate concern). Infeasibility becomes almost entirely a property of
+*unpinned* fixtures that cannot fit their pool window — and when it happens the
+solve **explains itself with a structured, resolved reason** (a discriminated
+:data:`InfeasibilityReason` union carried on :attr:`SolveResult.reasons`) rather
+than a bare verdict: pins outrank windows, so a pin is never named as the cause.
+A **genuinely in-progress** (being-played) match is different: it stays fully
+fixed in both dimensions — reality is not a variable, and a match underway must
+never move.
+
+**Overlapping in-progress facts are tolerated, not fatal.** Two in-progress
+blocks recorded on the same table, or one human in two of them at once, are
+never physical truth — a table holds one match, a human plays one — so they can
+only be contradictory data from a director's *soft* manual placement PATCH. A
+naïve model would hand two rigid, overlapping fixed intervals to ``AddNoOverlap``
+and prove the WHOLE day infeasible, blanking every placement over one bad pin
+(#1144). Instead, before ``AddNoOverlap`` the *fixed* obstacle intervals on each
+resource (in-progress occupancy plus rest shadows) are **merged into their
+union**: fixed-vs-fixed can then never force infeasibility, while every variable
+interval still routes conservatively around the merged occupancy (nobody else is
+scheduled onto a genuinely-held table or human). The solver does **not** pick
+which of the colliding matches is "real" and never moves, re-times, or drops a
+live match; it reports the in-progress-vs-in-progress overlaps as
+:data:`PlacementConflict`s on :attr:`SolveResult.conflicts` — orthogonal to the
+verdict, so a fully-placed ``optimal`` board can still carry them — for the
+director to resolve. Rest-shadow overlaps are merged the same way but not
+reported (they are not a director-actionable double-booking).
 
 **Rest across the completion boundary.** A player's 10-minute rest floor
 (:data:`REST_MIN`) is a hard constraint, and it must survive a match *ending*,
@@ -42,9 +74,11 @@ the floor stays this one module's single source of truth.
 
 1. **Makespan** — the max end over every active fixture. The day finishes as
    early as possible.
-2. **Player wait**, proxied as the sum of ``start − now`` over unpinned
-   fixtures. The true quantity ("wait beyond the rest floor between a player's
-   consecutive matches") needs per-player sequencing variables; total
+2. **Player wait**, proxied as the sum of ``start − now`` over every fixture
+   with a start variable — unpinned *and* called (a called match's slide is
+   anchored down here, at the same weight, so its start bottoms out at the
+   promised floor). The true quantity ("wait beyond the rest floor between a
+   player's consecutive matches") needs per-player sequencing variables; total
    start-lateness is monotone with aggregate waiting around, is linear, and
    keeps the model small. Documented trade-off: it also rewards starting the
    whole day promptly, which is indistinguishable from the real goal on the
@@ -56,7 +90,13 @@ The weights are computed **per instance** so the tiers provably never trade
 (the fixed "10000/10/1" style breaks once total wait can swing by more than
 one makespan minute times the ratio): ``W_stability = 1``,
 ``W_wait = max stability swing + 1``, ``W_makespan = W_wait · (max total wait
-swing) + 1``. All fit comfortably in int64 at any realistic instance size.
+swing) + 1``. The max total wait swing is bounded by the *count* of wait terms
+times the span — and that count is now ``len(unpinned) + len(pinned)``, since a
+called match contributes a wait term too. A called match's ``start − now`` can
+be *negative* when its promised floor is before ``now`` (a call already ticked
+past); a negative term only lowers the total, so bounding the positive swing by
+``count · span`` still holds. All fit comfortably in int64 at any realistic
+instance size.
 
 **Warm start.** Before solving, every unpinned fixture that has a
 ``previous_plan`` entry *whose prior table is still in its pool* seeds its prior
@@ -83,6 +123,7 @@ from __future__ import annotations
 
 import enum
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, NewType
 
@@ -191,8 +232,11 @@ class EventSettings:
 
 @dataclass(frozen=True, slots=True)
 class Pin:
-    """A called placement — a promise. The solve echoes it back verbatim and
-    schedules everything else around it."""
+    """A called placement — a promise. ``table_id`` is a hard constant the
+    solve never changes; ``start_min`` is the promised time, which the solve
+    treats as a *floor* — a called match may be pushed later on a re-solve (and
+    the apply path then notifies the player), but never moved to another table
+    and never started earlier than promised."""
 
     table_id: TableId
     start_min: int
@@ -263,6 +307,28 @@ class RestShadow:
     completed_at_min: int
 
 
+def coalesce_rest_shadows(shadows: Iterable[RestShadow]) -> tuple[RestShadow, ...]:
+    """One shadow per human, keeping the latest completion.
+
+    :class:`RestShadow`'s contract is one entry per human, not per match — but a
+    player who completed two matches within :data:`REST_MIN` of each other yields
+    a shadow *per completion*, i.e. two fixed rest intervals for one player that
+    would once have landed mutually-unsatisfiable under the solver's per-player
+    ``AddNoOverlap``, turning ONE player's close completions into a whole-tournament
+    ``infeasible`` (#1145). The per-resource fixed-obstacle merge in
+    :func:`_build_model` now absorbs any such fixed-vs-fixed overlap, so this is no
+    longer the sole guard against that infeasibility — but keeping one shadow per
+    human is still correct deduplication: rest is "time since your last match", so
+    the max ``completed_at_min`` per human subsumes every earlier one's floor —
+    keep only that one."""
+    latest: dict[PlayerId, RestShadow] = {}
+    for shadow in shadows:
+        existing = latest.get(shadow.player_id)
+        if existing is None or shadow.completed_at_min > existing.completed_at_min:
+            latest[shadow.player_id] = shadow
+    return tuple(latest.values())
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleSnapshot:
     """Everything one solve reads, as one frozen value.
@@ -300,8 +366,9 @@ class ScheduleSnapshot:
 class PlacedFixture:
     """One line of the output plan. ``end_min`` is always
     ``start_min + match_minutes(...)`` — carried so consumers never re-derive
-    durations. For a pinned fixture, ``(table_id, start_min)`` is the pin,
-    byte for byte."""
+    durations. For a called fixture, ``table_id`` is the pin's table (always)
+    and ``start_min`` is the pin's promised time or a later slid value the
+    solver chose — never earlier than promised."""
 
     fixture_id: FixtureId
     table_id: TableId
@@ -321,13 +388,78 @@ class SolveStats:
 
 
 @dataclass(frozen=True, slots=True)
+class PoolHasNoTables:
+    """A pool that carries active fixtures but no tables at all — its unpinned
+    fixtures have nowhere to be placed. The most specific, most certain cause a
+    pool can have: no search is needed to know it cannot run."""
+
+    pool_id: PoolId
+    kind: Literal["pool_has_no_tables"] = "pool_has_no_tables"
+
+
+@dataclass(frozen=True, slots=True)
+class WindowTooShortForMatch:
+    """A single unpinned fixture whose pool window cannot hold even one match
+    contiguously (the ``lo > hi`` case): its match needs ``needed_min`` minutes
+    but the pool's playable span is only ``window_span_min``. Certain and
+    per-fixture — no other fixture's placement can rescue it."""
+
+    pool_id: PoolId
+    fixture_id: FixtureId
+    needed_min: int
+    window_span_min: int
+    kind: Literal["window_too_short_for_match"] = "window_too_short_for_match"
+
+
+@dataclass(frozen=True, slots=True)
+class PoolOverCapacity:
+    """A pool whose aggregate *unpinned*-fixture match-time (``required_min``)
+    exceeds the table-minutes its window offers (``capacity_min`` =
+    ``window_span × table_count``). A pigeonhole bound: it is a *necessary*
+    condition for the pool to fit, so a violation proves the day cannot —
+    without naming which fixtures collide (that is the CP-SAT conflict core,
+    out of scope here). Scoped to unpinned fixtures only: pins/in-progress are
+    not constrained to this pool's tables or window (ADR-0790), so counting them
+    could invent a false over-capacity. Deliberately conservative — it excludes
+    pins and undercounts demand (ignores rest padding) rather than ever
+    overcounting, so it never *falsely* reports over-capacity. The trade-off is
+    completeness: a pool that fits its unpinned fixtures but only overflows once
+    in-window pins are layered in is left to CP-SAT and surfaces as
+    ``NoSingleCause``."""
+
+    pool_id: PoolId
+    required_min: int
+    capacity_min: int
+    table_count: int
+    kind: Literal["pool_over_capacity"] = "pool_over_capacity"
+
+
+@dataclass(frozen=True, slots=True)
+class NoSingleCause:
+    """The honest residual: CP-SAT *proved* the day infeasible, yet no certain
+    structural cause (arms above) explains it — the infeasibility lives in the
+    combinatorial interaction of windows, rest, and no-double-booking that only
+    search sees. Carries the whole-day aggregate for context: ``required_min``
+    (Σ every active fixture's duration) against ``available_min`` (Σ over pools
+    of ``window_span × table_count``). Typically ``required_min ≤ available_min``
+    here — aggregate room exists, but it cannot be packed."""
+
+    required_min: int
+    available_min: int
+    kind: Literal["no_single_cause"] = "no_single_cause"
+
+
+@dataclass(frozen=True, slots=True)
 class PastWindow:
-    """A pool whose **entire** playable window lies at or before ``now`` — the
-    day was dated in the past (most easily via the silent "today" default on an
-    event that is now a day old, #1101), so no grid start ``≥ now`` can ever
-    land inside ``[start_min, end_min)``. Distinct from a *capacity* shortfall:
-    a past window is unschedulable because of *when* it is, not how much has to
-    fit, and the fix is "move the date", not "add tables/time".
+    """A pool whose **entire** planned playable window lies at or before ``now``
+    — the day was dated in the past (most easily via the silent "today" default
+    on an event that is now a day old, #1101), so no grid start ``≥ now`` can
+    ever land inside ``[start_min, end_min)``. Distinct from a *capacity*
+    shortfall (:class:`PoolOverCapacity`) or a too-tight current window
+    (:class:`WindowTooShortForMatch`): a past window is unschedulable because of
+    *when* it is, not how much has to fit, and the fix is "move the date", not
+    "add tables/time" — so it is reported as the more specific cause and
+    suppresses the tight-window/over-capacity arms for the same pool.
 
     Named only **pre-live** — once the day is live the window end goes soft and
     the remainder overruns instead of wedging (:attr:`SolveResult.overrunning`),
@@ -343,58 +475,139 @@ class PastWindow:
     kind: Literal["past_window"] = "past_window"
 
 
-#: The closed set of *named*, machine-readable causes an ``infeasible`` verdict
-#: can carry (ADR-0968's code-not-prose pattern). A discriminated union over
-#: ``kind`` so a downstream humanizer can ``match`` exhaustively; extensible,
-#: with ``past_window`` the only member today. A ``None`` reason on an infeasible
-#: verdict is the honest residual: a generic capacity infeasibility with no
-#: single named cause (the window is current, just too tight for the fixtures).
-InfeasibilityReason = PastWindow
+#: The closed set of reasons an infeasible solve can carry. A discriminated
+#: union over ``kind``: the first three arms are *certain* structural causes a
+#: guard proves without the solver (and are collected exhaustively — every one
+#: that holds, not just the first), ``PastWindow`` is the equally-certain
+#: pre-live "the day is dated in the past" cause (ADR "a past day is named, not
+#: disguised", #1101), and ``NoSingleCause`` is the best-effort residual when
+#: CP-SAT refuses but no structure does. Frozen dataclasses + a ``kind``
+#: discriminator so a downstream humanizer can ``match`` exhaustively with no
+#: catch-all. Ids + minute-ints only: turning these into names and wall-clock
+#: is a later, DB-aware layer's job, not this pure module's.
+InfeasibilityReason = (
+    PoolHasNoTables
+    | WindowTooShortForMatch
+    | PoolOverCapacity
+    | NoSingleCause
+    | PastWindow
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TableConflict:
+    """Two or more in-progress matches recorded on the *same table* at
+    overlapping times — physically impossible (a table holds one match), so it
+    can only be contradictory data from a soft manual placement PATCH. Carries
+    the shared ``table_id`` and the overlapping ``fixture_ids`` (sorted). The
+    solver tolerates it — it merges the overlapping occupancy into one union so
+    it never blanks the board — and reports it here for the director to resolve;
+    it never adjudicates which match is 'real' and never moves a live match."""
+
+    table_id: TableId
+    fixture_ids: tuple[FixtureId, ...]
+    kind: Literal["table_conflict"] = "table_conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class PlayerConflict:
+    """Two or more in-progress matches sharing a *human* whose rest-padded
+    occupancy intervals overlap — physically impossible (a human plays one
+    match at a time), so it is contradictory data from a soft manual PATCH.
+    Carries the shared ``player_id`` and the overlapping ``fixture_ids``
+    (sorted). Tolerated-and-reported exactly like :class:`TableConflict`."""
+
+    player_id: PlayerId
+    fixture_ids: tuple[FixtureId, ...]
+    kind: Literal["player_conflict"] = "player_conflict"
+
+
+#: The closed set of placement conflicts a solve can *report* (distinct from the
+#: :data:`InfeasibilityReason`s that explain a failed solve — a conflict is
+#: orthogonal to the verdict and can ride on a fully-placed ``optimal`` board).
+#: A discriminated union over ``kind``, DB-blind exactly like the reasons union:
+#: ids + minute-ints only, so a downstream DB-aware layer resolves them into
+#: names and wall-clock. Each arm names one shared resource and the in-progress
+#: fixtures colliding on it — the director-actionable "you double-booked" signal.
+PlacementConflict = TableConflict | PlayerConflict
 
 
 @dataclass(frozen=True, slots=True)
 class SolveResult:
     """A solve's whole answer. Placements cover every active fixture that is
-    not in progress — pins echoed verbatim, unpinned fixtures solved — or are
-    empty when ``verdict`` produced no plan. Deterministically ordered by
+    not in progress — called fixtures on their fixed table at the promised or a
+    slid-later start, unpinned fixtures solved in both dimensions — or are empty
+    when ``verdict`` produced no plan. Deterministically ordered by
     ``(start, table, fixture)``.
 
-    ``overrunning`` is a *success qualifier*, never a failure: it is ``True``
-    only on a solved (``optimal``/``feasible``) live day whose plan actually
-    runs a placed fixture past its pool's **planned** window end — the soft
-    window let the remainder spill into the overrun rather than the day
+    ``reasons`` is non-empty exactly when ``verdict`` is
+    :attr:`Verdict.infeasible` and empty (``()``) for every other verdict
+    (optimal / feasible / unknown, including the trivial no-active-fixtures
+    optimal). It carries the structured, id-and-minute-only explanation of
+    *why* the day does not fit — see :data:`InfeasibilityReason` (including the
+    pre-live :class:`PastWindow` "the day is dated in the past" cause).
+
+    ``conflicts`` is **orthogonal to the verdict**: it reports the in-progress-
+    vs-in-progress overlaps found in the snapshot (two matches recorded on one
+    table, or one human in two matches — contradictory data from a soft manual
+    PATCH). Such overlaps are *tolerated*, not fatal — the solver merges the
+    overlapping fixed occupancy into its union so it can never blank the board
+    (#1144) — so a fully-placed ``optimal`` / ``feasible`` result can still carry
+    conflicts. It never adjudicates which match is real and never moves a live
+    match; the report is the director-actionable "you double-booked" signal.
+    See :data:`PlacementConflict`.
+
+    ``overrunning`` is also orthogonal to the verdict — a *success qualifier*,
+    never a failure: it is ``True`` only on a solved (``optimal``/``feasible``)
+    **live** day whose plan actually runs an unpinned placed fixture past its
+    pool's **planned** window end — the soft window (ADR "the solver stops
+    wedging") let the remainder spill into the overrun rather than the day
     wedging infeasible. It is always ``False`` pre-live (the window is hard),
     and on an ``infeasible``/``unknown`` outcome (which placed nothing). A
     schedule surface reads it to say "overrunning" rather than "doesn't fit".
-
-    ``reason`` rides **only** on an ``infeasible`` verdict and is ``None`` for
-    every other outcome (optimal / feasible / unknown). It is the structured,
-    machine-readable explanation of *why* the day does not fit — see
-    :data:`InfeasibilityReason`. ``None`` on an infeasible verdict means a
-    generic capacity infeasibility with no single named cause; a
-    :class:`PastWindow` means the offending pool's whole window is already in
-    the past. Because ``reason`` is a past-window fact and ``overrunning`` a
-    solved-live fact, the two never coexist.
-    """
+    Because it rides on a *solved live* day and :class:`PastWindow` is a
+    *pre-live* infeasibility, the two never coexist."""
 
     verdict: Verdict
     placements: tuple[PlacedFixture, ...]
     stats: SolveStats
+    reasons: tuple[InfeasibilityReason, ...] = ()
+    conflicts: tuple[PlacementConflict, ...] = ()
     overrunning: bool = False
-    reason: InfeasibilityReason | None = None
 
 
 def _no_plan(
     verdict: Verdict,
     wall_time_ms: int = 0,
-    reason: InfeasibilityReason | None = None,
+    reasons: tuple[InfeasibilityReason, ...] = (),
+    conflicts: tuple[PlacementConflict, ...] = (),
 ) -> SolveResult:
     return SolveResult(
         verdict=verdict,
         placements=(),
         stats=SolveStats(wall_time_ms=wall_time_ms, objective=None),
-        reason=reason,
+        reasons=reasons,
+        conflicts=conflicts,
     )
+
+
+def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
+    """``(required_min, available_min)`` for the whole day: Σ every active
+    fixture's duration against Σ over pools of ``window_span × table_count``.
+    The rough aggregate behind :class:`NoSingleCause`. Reads the event map
+    directly — a solve only reaches this on a *built* model, so the snapshot's
+    cross-references have already passed :func:`_validated`."""
+    events = {e.id: e for e in snapshot.events}
+    required = sum(
+        match_minutes(events[f.event_id].length_games)
+        for f in snapshot.fixtures
+        if not f.completed
+    )
+    available = sum(
+        (p.window.end_min - p.window.start_min) * len(p.table_ids)
+        for p in snapshot.pools
+    )
+    return required, available
 
 
 def _validated(
@@ -477,20 +690,73 @@ class _SolverModel:
     hint's effect deterministically (single worker, fixed seed) without
     touching the production solver parameters. ``model`` carries the hints;
     ``starts``/``presences`` recover each unpinned fixture's chosen start and
-    table, ``durations`` its ``end_min``, and ``pinned_placements`` are echoed
-    verbatim. ``planned_ends`` is each unpinned fixture's pool's **planned**
-    (pre-overrun) window end, and ``is_live`` whether the window was softened —
-    together they let :func:`solve` decide whether the applied plan actually
-    ran past its planned window (the ``overrunning`` qualifier)."""
+    table, ``durations`` its ``end_min``. A called fixture's start is *also* a
+    variable now (it can slide later on its fixed table), so its solved start is
+    read back from ``pin_starts``; ``pin_tables`` holds its immovable table and
+    ``pin_durations`` its length. ``planned_ends`` is each unpinned fixture's
+    pool's **planned** (pre-overrun) window end, and ``is_live`` whether the
+    window was softened — together they let :func:`solve` decide whether the
+    applied plan actually ran an unpinned fixture past its planned window (the
+    ``overrunning`` qualifier)."""
 
     model: cp_model.CpModel
     unpinned: tuple[ScheduleFixture, ...]
     starts: dict[FixtureId, Any]
     presences: dict[FixtureId, dict[TableId, Any]]
     durations: dict[FixtureId, int]
-    pinned_placements: tuple[PlacedFixture, ...]
+    pinned: tuple[ScheduleFixture, ...]
+    pin_starts: dict[FixtureId, Any]
+    pin_tables: dict[FixtureId, TableId]
+    pin_durations: dict[FixtureId, int]
+    #: In-progress-vs-in-progress overlaps detected from the snapshot (orthogonal
+    #: to the solve outcome), carried so :func:`solve` attaches them to whatever
+    #: verdict CP-SAT reaches — a placed board can still report conflicts.
+    conflicts: tuple[PlacementConflict, ...]
+    #: Each unpinned fixture's pool's **planned** (pre-overrun) window end, and
+    #: whether the day is live (its windows softened), so :func:`solve` can tell
+    #: whether the applied plan overran a planned window.
     planned_ends: dict[FixtureId, int]
     is_live: bool
+
+
+def _merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Union mutually-overlapping half-open ``[start, end)`` intervals.
+
+    A sort-and-sweep over connected overlap components: adjacency
+    (``start == end`` of the predecessor) does *not* merge — only a genuine
+    overlap does. Used to collapse the *fixed* obstacle intervals on one
+    resource (in-progress occupancy + rest shadows) into disjoint blocks before
+    ``AddNoOverlap``, so two contradictory fixed facts can never force
+    infeasibility while their union stays blocked for every variable interval."""
+    ordered = sorted(spans)
+    merged: list[tuple[int, int]] = []
+    for start, end in ordered:
+        if merged and start < merged[-1][1]:
+            last_start, last_end = merged[-1]
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _overlapping_fixture_ids(
+    spans: list[tuple[int, int, FixtureId]],
+) -> tuple[FixtureId, ...]:
+    """The fixtures that pairwise-overlap at least one other on one resource.
+
+    Half-open overlap (``s1 < e2 and s2 < e1``), pairwise over the resource's
+    in-progress spans (counts are tiny). Returns the sorted union of every
+    fixture caught in *any* overlap, so a resource is reported once with the
+    full set colliding on it — empty when nothing overlaps."""
+    colliding: set[FixtureId] = set()
+    for i in range(len(spans)):
+        start_i, end_i, fixture_i = spans[i]
+        for j in range(i + 1, len(spans)):
+            start_j, end_j, fixture_j = spans[j]
+            if start_i < end_j and start_j < end_i:
+                colliding.add(fixture_i)
+                colliding.add(fixture_j)
+    return tuple(sorted(colliding))
 
 
 def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
@@ -549,130 +815,277 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             return max(pool.window.end_min, now + overrun_span)
         return pool.window.end_min
 
-    # The latest minute anything can end — start-variable and makespan bounds.
+    # The *fixed* occupancy spans each in-progress match projects onto its table
+    # and its two humans (the human span is rest-padded, so a shared-human
+    # overlap is judged on the same padded interval per-player NoOverlap uses).
+    # Kept as numeric half-open spans so they can be both (a) merged before
+    # AddNoOverlap — two overlapping fixed facts are contradictory data that
+    # must never blank the board (#1144) — and (b) scanned for the director-
+    # actionable in-progress-vs-in-progress conflicts reported on the result.
+    table_inprog: defaultdict[TableId, list[tuple[int, int, FixtureId]]] = defaultdict(
+        list
+    )
+    player_inprog: defaultdict[PlayerId, list[tuple[int, int, FixtureId]]] = (
+        defaultdict(list)
+    )
+    for fixture in in_progress:
+        match_row = running[fixture.id]
+        occ_end = occupancy_ends[fixture.id]
+        table_inprog[match_row.table_id].append(
+            (match_row.start_min, occ_end, fixture.id)
+        )
+        for player in (fixture.player_a_id, fixture.player_b_id):
+            player_inprog[player].append(
+                (match_row.start_min, occ_end + REST_MIN, fixture.id)
+            )
+
+    # Report narrowly: only in-progress-vs-in-progress overlaps (rest-shadow
+    # overlaps are merged below but never reported). Deterministically ordered
+    # by shared resource id, each resource reported once with its colliding set.
+    conflicts: tuple[PlacementConflict, ...] = (
+        *(
+            TableConflict(table_id=table_id, fixture_ids=overlapping)
+            for table_id, spans in sorted(table_inprog.items())
+            if (overlapping := _overlapping_fixture_ids(spans))
+        ),
+        *(
+            PlayerConflict(player_id=player_id, fixture_ids=overlapping)
+            for player_id, spans in sorted(player_inprog.items())
+            if (overlapping := _overlapping_fixture_ids(spans))
+        ),
+    )
+
+    # The latest minute anything can end — the domain ceiling for every start
+    # variable (a called match's included, since it can now slide) and for the
+    # makespan var. A called match's start is no longer a constant: per-table
+    # no-overlap can force it to slide behind every fixed obstruction on its
+    # table (an in-progress occupancy end) and behind every other called match
+    # promised the same table. The safe worst case is *all* pins stacked end to
+    # end just after the latest fixed obstruction, so fold the total pin duration
+    # on top of the latest occupancy end and the latest pin floor. The old bound
+    # (the largest single ``pin.start_min + duration``) could be too tight for a
+    # pin forced past a *later* obstruction — an artificial INFEASIBLE.
     horizon = now + BUCKET_MIN
     for pool in snapshot.pools:
         horizon = max(horizon, effective_end(pool))
-    for fixture, pin in pinned:
-        horizon = max(horizon, pin.start_min + duration_of(fixture))
+    latest_obstruction = now
     for end in occupancy_ends.values():
-        horizon = max(horizon, end)
+        latest_obstruction = max(latest_obstruction, end)
+    for _fixture, pin in pinned:
+        latest_obstruction = max(latest_obstruction, pin.start_min)
+    total_pin_duration = sum(duration_of(fixture) for fixture, _ in pinned)
+    horizon = max(horizon, latest_obstruction + total_pin_duration)
 
-    # Name a past day *before* the generic tight-window check (ADR "a past day
-    # is named, not disguised", #1101). Pre-live only: a pool that still carries
-    # unpinned demand but whose ENTIRE window ends at or before ``now`` is
-    # unschedulable because of *when* it is — no grid start ``≥ now`` can land
-    # inside it — which is a different fact from a current-but-too-tight window,
-    # and the fix is "move the date", not "add tables/time". Checked in snapshot
-    # pool order so the reported pool is deterministic. While live the window end
-    # is soft (the remainder overruns), so this never fires and a past window is
-    # strictly the pre-live/hard-window case.
-    if not is_live:
-        unpinned_pool_ids = {f.pool_id for f in unpinned}
-        for pool in snapshot.pools:
-            if pool.id in unpinned_pool_ids and pool.window.end_min <= now:
-                return _no_plan(
-                    Verdict.infeasible,
-                    reason=PastWindow(pool_id=pool.id),
-                )
+    # Structural feasibility first — but gathered *exhaustively*, not first-fail.
+    # A day that cannot possibly be placed should explain every certain cause at
+    # once (the director fixes them together), not just the first one hit. Four
+    # certain, per-structure causes need no solver to prove:
+    #   * PastWindow — a pool whose ENTIRE planned window is already past (pre-
+    #     live only): unschedulable because of *when* it is, not how much fits,
+    #     fixed by "move the date" (ADR "a past day is named, not disguised",
+    #     #1101). The most specific pre-live cause, so it dominates the tight-
+    #     window / over-capacity arms for the same pool.
+    #   * PoolHasNoTables — a pool with unpinned fixtures but no tables to use,
+    #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
+    #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables.
+    # We dedupe to the *most specific* cause per pool: a past-window, no-tables,
+    # or window-too-short pool is already unplaceable, so we don't also pile on
+    # over-capacity for it. Bucket bounds for the pools that *do* fit are recorded
+    # on the way, so the window is walked once; they are only consumed when no
+    # reason fires (the clean case populates every unpinned fixture). The window
+    # bounds use the *effective* end — softened while live — so a live day never
+    # wedges here; ``planned_ends`` keeps the *planned* end so :func:`solve` can
+    # tell whether the plan actually overran it.
+    #
+    # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
+    # are deliberately not constrained to their pool's tables or window (ADR-0790:
+    # an off-pool or out-of-window pin is a supported director action), so
+    # counting them against a pool's window×tables would invent false
+    # infeasibility. Only unpinned fixtures are constrained to their pool's tables
+    # inside its window by construction, so only they can prove a certain
+    # structural cause that can never false-fire.
+    unpinned_by_pool: defaultdict[PoolId, list[ScheduleFixture]] = defaultdict(list)
+    for fixture in unpinned:
+        unpinned_by_pool[fixture.pool_id].append(fixture)
 
-    # Structural feasibility first: a fixture whose window cannot hold its
-    # duration at all needs no solver to refuse. (Whole-or-nothing: one
-    # unplaceable fixture makes the entire day infeasible, by design.) A window
-    # that is current but simply too tight for the fixtures is a *generic*
-    # capacity infeasibility — it carries no named reason (the past-window case
-    # above already claimed the only named pre-live cause). The ``latest`` bound
-    # uses the *effective* end — softened while live — so a live day never wedges
-    # here; ``planned_ends`` keeps the *planned* end so :func:`solve` can tell
-    # whether the plan actually overran it.
+    reasons: list[InfeasibilityReason] = []
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
     planned_ends: dict[FixtureId, int] = {}
+    pools_short_window: set[PoolId] = set()
+
+    # Pre-live: name every pool whose whole planned window is already in the past
+    # (checked in snapshot pool order for a deterministic report). While live the
+    # window end is soft, so this never fires. These pools are dominated causes —
+    # skipped by the tight-window and over-capacity arms below.
+    pools_past_window: set[PoolId] = set()
+    if not is_live:
+        for pool in snapshot.pools:
+            if pool.id in unpinned_by_pool and pool.window.end_min <= now:
+                reasons.append(PastWindow(pool_id=pool.id))
+                pools_past_window.add(pool.id)
+
+    # Per-fixture: does this unpinned fixture's window hold even one match
+    # contiguously? (Pinned fixtures outrank windows, so they never apply here.)
+    # A no-tables pool is covered by PoolHasNoTables below, and a past-window pool
+    # is already named above, so skip both here.
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
-        if not pool.table_ids:
-            return _no_plan(Verdict.infeasible)
+        if not pool.table_ids or pool.id in pools_past_window:
+            continue
+        needed = duration_of(fixture)
         earliest = max(now, pool.window.start_min)
-        latest = effective_end(pool) - duration_of(fixture)
+        latest = effective_end(pool) - needed
         lo = -(-earliest // BUCKET_MIN)  # ceil: first grid start not in the past
         hi = latest // BUCKET_MIN  # floor: last grid start that still fits
         if lo > hi:
-            return _no_plan(Verdict.infeasible)
+            reasons.append(
+                WindowTooShortForMatch(
+                    pool_id=pool.id,
+                    fixture_id=fixture.id,
+                    needed_min=needed,
+                    window_span_min=pool.window.end_min - pool.window.start_min,
+                )
+            )
+            pools_short_window.add(pool.id)
+            continue
         bucket_bounds[fixture.id] = (lo, hi)
         planned_ends[fixture.id] = pool.window.end_min
+
+    # Per-pool (in snapshot order for determinism), most-specific cause wins.
+    for pool in snapshot.pools:
+        pool_unpinned = unpinned_by_pool.get(pool.id)
+        if not pool_unpinned:
+            continue  # no unpinned demand: no arm can prove a cause here
+        if pool.id in pools_past_window:
+            continue  # past-window (wrong day) dominates every capacity claim
+        if not pool.table_ids:
+            # A no-tables pool with ≥1 unpinned fixture: that fixture has nowhere
+            # to go. A no-tables pool whose only fixtures are pinned/in-progress
+            # (placed off-pool by the director) is fine — it never reaches here.
+            reasons.append(PoolHasNoTables(pool_id=pool.id))
+            continue  # dominates any capacity claim for this pool
+        if pool.id in pools_short_window:
+            continue  # window-too-short already dominates this pool
+        # Capacity is a pigeonhole *necessary* condition over *unpinned* demand:
+        # sum the match-time of this pool's unpinned fixtures (the only ones
+        # constrained to its tables inside its window) against the table-minutes
+        # the window offers. Pins/in-progress are excluded — they are not bound
+        # to this pool's tables or window (ADR-0790), so counting them could
+        # invent a false over-capacity. Dropping them keeps the bound truly
+        # conservative: a pin only ever adds contention, so unpinned-alone
+        # overflowing is a genuine, necessary infeasibility, while unpinned-alone
+        # fitting is never falsely flagged. Completeness trade-off: a pool that
+        # fits its unpinned fixtures but tips over only once in-window pins are
+        # layered in is not reported here — that case is infeasible only if
+        # CP-SAT proves it, surfacing as the honest NoSingleCause residual.
+        required_min = sum(duration_of(f) for f in pool_unpinned)
+        table_count = len(pool.table_ids)
+        # Effective end: pre-live this is the planned window; live it is softened
+        # so an overrunning live day is never falsely flagged over-capacity.
+        capacity_min = (effective_end(pool) - pool.window.start_min) * table_count
+        if required_min > capacity_min:
+            reasons.append(
+                PoolOverCapacity(
+                    pool_id=pool.id,
+                    required_min=required_min,
+                    capacity_min=capacity_min,
+                    table_count=table_count,
+                )
+            )
+
+    if reasons:
+        # A certain structural infeasibility: refuse without building or running
+        # CP-SAT, but carry every cause we found rather than a bare verdict — and
+        # any in-progress conflict too (orthogonal to why the day doesn't fit).
+        return _no_plan(Verdict.infeasible, reasons=tuple(reasons), conflicts=conflicts)
 
     model = cp_model.CpModel()
     table_intervals: defaultdict[TableId, list[Any]] = defaultdict(list)
     player_intervals: defaultdict[PlayerId, list[Any]] = defaultdict(list)
     fixed_ends: list[int] = []
     variable_ends: list[Any] = []
+    # start − now, summed as the player-wait objective tier. Both unpinned and
+    # called fixtures contribute (a called match's slide is anchored here).
+    wait_terms: list[Any] = []
 
-    # In-progress matches: fixed occupancy from their *actual* start. Their
-    # players rest for REST_MIN after the occupancy end, like everyone else.
-    for fixture in in_progress:
-        match_row = running[fixture.id]
-        occ_end = occupancy_ends[fixture.id]
-        table_intervals[match_row.table_id].append(
-            model.NewIntervalVar(
-                match_row.start_min,
-                occ_end - match_row.start_min,
-                occ_end,
-                f"run_{fixture.id}",
-            )
-        )
-        for player in (fixture.player_a_id, fixture.player_b_id):
-            player_intervals[player].append(
-                model.NewIntervalVar(
-                    match_row.start_min,
-                    occ_end - match_row.start_min + REST_MIN,
-                    occ_end + REST_MIN,
-                    f"run_{fixture.id}_{player}",
-                )
-            )
-        fixed_ends.append(occ_end)
+    # In-progress matches project fixed occupancy from their *actual* start (the
+    # players' spans rest-padded), and each still bounds the makespan.
+    fixed_ends.extend(occupancy_ends.values())
 
     # Rest shadows: a human who just completed a match rests until
-    # completed_at + REST_MIN. A fixed interval on that player's list projects
-    # the floor across the completion boundary — the completed fixture itself
-    # is dropped and unplaced, but its rest lingers. Fixed (no variable): the
-    # window is a constant, so it needs no makespan/horizon bound, and a player
-    # who appears in nothing but a shadow is a harmless lone interval (per-
-    # player NoOverlap only fires with more than one).
-    for shadow in snapshot.rest_shadows:
-        player_intervals[shadow.player_id].append(
-            model.NewFixedSizeIntervalVar(
-                shadow.completed_at_min,
-                REST_MIN,
-                f"rest_{shadow.player_id}_{shadow.completed_at_min}",
-            )
+    # completed_at + REST_MIN — a fixed span on that player's list that projects
+    # the floor across the completion boundary (the completed fixture itself is
+    # dropped and unplaced, but its rest lingers). Fixed, no variable, so it
+    # needs no makespan/horizon bound. Coalesced to one per human first
+    # (:func:`coalesce_rest_shadows`) — belt-and-suspenders for the snapshot
+    # builder's "one entry per human" contract — and folded into the same
+    # per-player fixed-span pool as the in-progress occupancy so the merge below
+    # absorbs any shadow-vs-occupancy overlap too.
+    player_fixed_spans: defaultdict[PlayerId, list[tuple[int, int]]] = defaultdict(list)
+    for player_id, spans in player_inprog.items():
+        player_fixed_spans[player_id].extend((s, e) for s, e, _ in spans)
+    for shadow in coalesce_rest_shadows(snapshot.rest_shadows):
+        player_fixed_spans[shadow.player_id].append(
+            (shadow.completed_at_min, shadow.completed_at_min + REST_MIN)
         )
 
-    # Pins: constants. No window constraint (pins outrank windows), no start
-    # variable (a promise does not drift), occupancy every variable respects.
-    pinned_placements: list[PlacedFixture] = []
+    # Merge broadly: collapse each resource's *fixed* spans into their disjoint
+    # union before AddNoOverlap. Two overlapping fixed facts (two in-progress
+    # matches on one table or one human, or a shadow-vs-occupancy overlap) are
+    # physically impossible data that would otherwise make AddNoOverlap
+    # unsatisfiable and blank the WHOLE board (#1144). The union stays fully
+    # blocked for every *variable* interval (unpinned placements, sliding pins),
+    # so no one else is scheduled onto genuinely-held occupancy — conservative
+    # for everyone else — while fixed-vs-fixed can never force infeasibility. We
+    # never move, re-time, or drop the live matches themselves; only what the
+    # *other* fixtures see as occupied changes.
+    for table_id, spans in table_inprog.items():
+        for lo, hi in _merge_spans((s, e) for s, e, _ in spans):
+            table_intervals[table_id].append(
+                model.NewFixedSizeIntervalVar(lo, hi - lo, f"fixed_t_{table_id}_{lo}")
+            )
+    for player_id, merge_spans in player_fixed_spans.items():
+        for lo, hi in _merge_spans(merge_spans):
+            player_intervals[player_id].append(
+                model.NewFixedSizeIntervalVar(lo, hi - lo, f"fixed_p_{player_id}_{lo}")
+            )
+
+    # Called matches: table hard-fixed, start a free variable pushable only
+    # later. The start lives on `table_intervals[pin.table_id]` alone — no
+    # table-choice presence bools, so a promise can never be re-placed onto
+    # another court — with lower bound `pin.start_min` (never earlier than
+    # promised) and no window constraint (pins outrank windows). It is NOT
+    # snapped to the BUCKET_MIN grid: `pin.start_min` may itself be off-grid,
+    # and snapping would re-introduce drift and over-delay the slide. Occupancy
+    # and the rest-padded per-player interval both key off the start variable,
+    # exactly like an in-progress or unpinned interval; the end is a *variable*
+    # end folded into the makespan bound, not a fixed constant.
+    pin_starts: dict[FixtureId, Any] = {}
+    pin_tables: dict[FixtureId, TableId] = {}
+    pin_durations: dict[FixtureId, int] = {}
     for fixture, pin in pinned:
         duration = duration_of(fixture)
-        end = pin.start_min + duration
+        pin_start = model.NewIntVar(
+            pin.start_min, horizon - duration, f"pin_start_{fixture.id}"
+        )
         table_intervals[pin.table_id].append(
-            model.NewIntervalVar(pin.start_min, duration, end, f"pin_{fixture.id}")
+            model.NewFixedSizeIntervalVar(pin_start, duration, f"pin_{fixture.id}")
         )
         for player in (fixture.player_a_id, fixture.player_b_id):
             player_intervals[player].append(
-                model.NewIntervalVar(
-                    pin.start_min,
-                    duration + REST_MIN,
-                    end + REST_MIN,
-                    f"pin_{fixture.id}_{player}",
+                model.NewFixedSizeIntervalVar(
+                    pin_start, duration + REST_MIN, f"pin_{fixture.id}_{player}"
                 )
             )
-        fixed_ends.append(end)
-        pinned_placements.append(
-            PlacedFixture(
-                fixture_id=fixture.id,
-                table_id=pin.table_id,
-                start_min=pin.start_min,
-                end_min=end,
-            )
-        )
+        variable_ends.append(pin_start + duration)
+        # Anchor the start downward at the *same* weight as an unpinned fixture:
+        # since `pin.start_min` is the variable's floor, this wait term bottoms
+        # out at the promised time (no drift, uncontended) and slides to the
+        # minimum legal later value under contention. No new objective tier.
+        wait_terms.append(pin_start - now)
+        pin_starts[fixture.id] = pin_start
+        pin_tables[fixture.id] = pin.table_id
+        pin_durations[fixture.id] = duration
 
     # Unpinned fixtures: one start variable on the 5-minute grid, one optional
     # interval per candidate table (exactly one present), and a mandatory
@@ -684,7 +1097,6 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     presences: dict[FixtureId, dict[TableId, Any]] = {}
     buckets: dict[FixtureId, Any] = {}
     durations: dict[FixtureId, int] = {}
-    wait_terms: list[Any] = []
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
         duration = duration_of(fixture)
@@ -753,10 +1165,15 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         kept_literals.append(kept)
 
     # Instance-computed strictly-lexicographic weights — see module docstring.
+    # The wait tier now has one term per unpinned *and* per called fixture, so
+    # the count bounding the max total wait swing is len(unpinned) + len(pinned).
+    # A called match's `pin_start - now` can be negative (a floor before now),
+    # which only lowers the total, so `count * span` still bounds the positive
+    # swing and the tiers provably never trade.
     span = max(1, horizon - now)
     w_stability = 1
     w_wait = w_stability * stability_span + 1
-    w_makespan = w_wait * max(1, len(unpinned)) * span + 1
+    w_makespan = w_wait * max(1, len(unpinned) + len(pinned)) * span + 1
 
     objective = w_makespan * makespan
     for term in wait_terms:
@@ -780,13 +1197,22 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for table, present in presences[fixture.id].items():
             model.AddHint(present, 1 if table == prior.table_id else 0)
 
+    # Warm start each called match's slide variable at its promised time so a
+    # re-solve begins at what the player was told and only slides if forced.
+    for fixture, pin in pinned:
+        model.AddHint(pin_starts[fixture.id], pin.start_min)
+
     return _SolverModel(
         model=model,
         unpinned=tuple(unpinned),
         starts=starts,
         presences=presences,
         durations=durations,
-        pinned_placements=tuple(pinned_placements),
+        pinned=tuple(fixture for fixture, _ in pinned),
+        pin_starts=pin_starts,
+        pin_tables=pin_tables,
+        pin_durations=pin_durations,
+        conflicts=conflicts,
         planned_ends=planned_ends,
         is_live=is_live,
     )
@@ -797,9 +1223,10 @@ def solve(
     time_cap_s: float = 10.0,
     num_search_workers: int = 1,
 ) -> SolveResult:
-    """Place every active fixture: pins echoed verbatim, everything else
-    solved onto its pool's tables inside its pool's window, on the
-    :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
+    """Place every active fixture: a called match on its fixed table at the
+    promised start or a slid-later one (never earlier), everything else solved
+    onto its pool's tables inside its pool's window, on the :data:`BUCKET_MIN`
+    grid, no earlier than ``now_min``.
 
     Never raises for infeasibility — see :class:`Verdict`. Raises
     :class:`IncoherentSnapshot` for inputs that reference things they do not
@@ -831,16 +1258,40 @@ def solve(
             "in app.scheduling, not a property of the tournament."
         )
     if status == cp_model.INFEASIBLE:
-        return _no_plan(Verdict.infeasible, wall_time_ms)
+        # CP-SAT proved it, but the structural pre-check found no certain cause
+        # (by construction: it returns before we ever build the model). Attach
+        # the honest residual — the whole-day aggregate, no single blamed pool.
+        required_min, available_min = _aggregate_capacity(snapshot)
+        return _no_plan(
+            Verdict.infeasible,
+            wall_time_ms,
+            reasons=(
+                NoSingleCause(required_min=required_min, available_min=available_min),
+            ),
+            conflicts=built.conflicts,
+        )
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _no_plan(Verdict.unknown, wall_time_ms)
+        return _no_plan(Verdict.unknown, wall_time_ms, conflicts=built.conflicts)
 
-    placements = list(built.pinned_placements)
-    # Overrunning: a live day whose soft window let a placed fixture actually
-    # run past its pool's *planned* end (see :class:`SolveResult`). Only
+    placements: list[PlacedFixture] = []
+    # Overrunning: a live day whose soft window let an unpinned placed fixture
+    # actually run past its pool's *planned* end (see :class:`SolveResult`). Only
     # unpinned placements are considered — pins outrank windows and may sit past
     # their window by design (that is not the overrun the flag names).
     overrunning = False
+    # Called matches: table is the pin's fixed table; start is read back from
+    # the solver (it slid later if forced, else sits at the promised floor).
+    for fixture in built.pinned:
+        pin_start = int(solver.Value(built.pin_starts[fixture.id]))
+        duration = built.pin_durations[fixture.id]
+        placements.append(
+            PlacedFixture(
+                fixture_id=fixture.id,
+                table_id=built.pin_tables[fixture.id],
+                start_min=pin_start,
+                end_min=pin_start + duration,
+            )
+        )
     for fixture in built.unpinned:
         start_value = int(solver.Value(built.starts[fixture.id]))
         table = _chosen_table(solver, built.presences[fixture.id], fixture.id)
@@ -864,6 +1315,7 @@ def solve(
             wall_time_ms=wall_time_ms,
             objective=int(solver.ObjectiveValue()),
         ),
+        conflicts=built.conflicts,
         overrunning=overrunning,
     )
 

@@ -1548,6 +1548,10 @@ export interface components {
             overrunning: boolean;
             /** Error */
             error: string | null;
+            /** Infeasibility Reasons */
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            /** Placement Conflicts */
+            placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
             input_fingerprint: string | null;
             /** Rerun Requested */
@@ -1559,15 +1563,6 @@ export interface components {
             tournament_id: string;
             /** Tournament Name */
             tournament_name: string;
-            /**
-             * @description The named, machine-readable cause of an ``infeasible`` verdict, or
-             *     ``null`` for every other outcome and for a generic capacity
-             *     infeasibility with no single named cause. Today the only named cause is
-             *     a ``past_window`` carrying the offending venue-local ``date``. (Assembled
-             *     from the row's reason columns; a half-written pair degrades to ``null``
-             *     rather than a partial reason.)
-             */
-            readonly infeasible_reason: components["schemas"]["PastWindowReason"] | null;
         };
         /**
          * ApiTokenCreated
@@ -1677,6 +1672,23 @@ export interface components {
              * @default false
              */
             skip_merge: boolean;
+        };
+        /**
+         * ConflictFixtureRead
+         * @description One of the in-progress matches caught in a conflict, named the way the
+         *     director reads a fixture — by its **matchup**, the two players facing off
+         *     (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
+         *     ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
+         *     it from the names. Resolved once at apply from the pure conflict's fixture
+         *     ids; the client formats the ``a vs b`` label itself.
+         */
+        ConflictFixtureRead: {
+            /** Fixture Id */
+            fixture_id: string;
+            /** Player A */
+            player_a: string;
+            /** Player B */
+            player_b: string;
         };
         /** ConsumeLoginRequest */
         ConsumeLoginRequest: {
@@ -2032,21 +2044,6 @@ export interface components {
             database: components["schemas"]["ComponentHealth"];
             solver: components["schemas"]["ComponentHealth"];
         };
-        /**
-         * InfeasibleReasonCode
-         * @description The named, machine-readable cause of an ``infeasible`` verdict (ADR-0968's
-         *     code-not-prose pattern; ADR "a past day is named, not disguised"). The column
-         *     is ``NULL`` for every non-infeasible run, and also for a *generic* capacity
-         *     infeasibility — a current window simply too tight for the fixtures, which has
-         *     no single named cause. Extensible; ``past_window`` is the only member today.
-         *
-         *     * ``past_window`` — a pool's entire planned window is already in the past
-         *       (the day was dated behind ``now``), so it cannot run without a new date.
-         *       Paired with a non-``NULL`` ``past_window_date`` naming the offending
-         *       venue-local day.
-         * @enum {string}
-         */
-        InfeasibleReasonCode: "past_window";
         /**
          * LoginRequestAccepted
          * @description 202 body for the magic-link request endpoint. Always echoes the
@@ -2535,6 +2532,23 @@ export interface components {
             submitted_at: string;
         };
         /**
+         * NoSingleCauseRead
+         * @description CP-SAT proved the day infeasible yet no structural arm explains it — the
+         *     whole-day residual. No pool: it carries only the day aggregate,
+         *     ``required_min`` against ``available_min``, as integer minutes.
+         */
+        NoSingleCauseRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "no_single_cause";
+            /** Required Min */
+            required_min: number;
+            /** Available Min */
+            available_min: number;
+        };
+        /**
          * NotificationCategory
          * @description What a notification is about. Mirrors the product's notification kinds;
          *     a user can mute each category independently per channel.
@@ -2731,22 +2745,23 @@ export interface components {
             description?: string | null;
         };
         /**
-         * PastWindowReason
-         * @description The named cause of a ``past_window`` infeasibility: a pool's **entire**
-         *     planned window is already in the past (the day was dated behind now), so it
-         *     cannot run until it is moved to a future day (ADR "a past day is named, not
-         *     disguised"). ``code`` is the machine-readable discriminator the client
-         *     switches on (ADR-0968: code, not prose); ``date`` is the offending
-         *     venue-local calendar day, in the event's own timezone frame, so the client
-         *     can say which day to move without any timezone math of its own.
+         * PastWindowReasonRead
+         * @description A pool whose **entire** planned window is already in the past — the day
+         *     was dated behind ``now`` (most easily via the silent "today" default on an
+         *     event now a day old), so it cannot run until it is moved to a future day
+         *     (ADR "a past day is named, not disguised"). The most specific pre-live cause,
+         *     fixed by "move the date", not "add tables/time". Resolved: the offending
+         *     ``date`` — the venue-local calendar day the director gave a window for, in
+         *     the event's own timezone frame — so the client says which day to move with
+         *     no timezone math of its own. The DB-aware mirror of
+         *     :class:`app.scheduling.PastWindow`.
          */
-        PastWindowReason: {
+        PastWindowReasonRead: {
             /**
-             * Code
-             * @default past_window
-             * @constant
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            code: "past_window";
+            kind: "past_window";
             /**
              * Date
              * Format: date
@@ -2814,6 +2829,25 @@ export interface components {
             best_streak?: components["schemas"]["PlayerStreak"] | null;
             /** League Count */
             league_count: number;
+        };
+        /**
+         * PlayerConflictRead
+         * @description Two or more in-progress matches sharing a *human* whose occupancy
+         *     overlaps — physically impossible (a human plays one match at a time), so
+         *     contradictory data from a soft manual PATCH. Resolved: the human's display
+         *     ``player_name`` and the colliding ``fixtures``, each named by its matchup.
+         *     The DB-aware mirror of :class:`app.scheduling.PlayerConflict`.
+         */
+        PlayerConflictRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "player_conflict";
+            /** Player Name */
+            player_name: string;
+            /** Fixtures */
+            fixtures: components["schemas"]["ConflictFixtureRead"][];
         };
         /**
          * PlayerDetail
@@ -3104,6 +3138,46 @@ export interface components {
             slot: components["schemas"]["Slot"];
             /** Table Ids */
             table_ids: string[];
+        };
+        /**
+         * PoolHasNoTablesRead
+         * @description A pool with active fixtures but no tables at all — nowhere to place them.
+         *     Resolved: the pool's display ``name`` (never the namespaced solver id).
+         */
+        PoolHasNoTablesRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "pool_has_no_tables";
+            /** Pool Name */
+            pool_name: string;
+        };
+        /**
+         * PoolOverCapacityRead
+         * @description A pool whose aggregate match-time (``required_min``) exceeds the
+         *     table-minutes its window offers (``capacity_min`` = window span ×
+         *     ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
+         *     minutes stay integers.
+         */
+        PoolOverCapacityRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "pool_over_capacity";
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Required Min */
+            required_min: number;
+            /** Capacity Min */
+            capacity_min: number;
+            /** Table Count */
+            table_count: number;
         };
         /**
          * PoolStandingsRead
@@ -3450,15 +3524,23 @@ export interface components {
          *     run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
          *     to label the day "overrunning".
          *
-         *     ``infeasible_reason`` is the structured, machine-readable *why* behind an
-         *     ``infeasible`` verdict (ADR "a past day is named, not disguised"; ADR-0968:
-         *     code, not prose). It is ``null`` for every non-infeasible run, and ``null``
-         *     on an ``infeasible`` run that is a *generic* capacity infeasibility — a
-         *     current window simply too tight for the fixtures, with no single named cause.
-         *     It is non-``null`` only for a named cause: today, a ``past_window`` whose
-         *     ``date`` is the offending venue-local day. Because a past window is a
-         *     pre-live/hard-window fact and ``overrunning`` a solved-live one, the two are
-         *     never both set.
+         *     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
+         *     every row that is not ``infeasible`` (so a client never null-checks it). An
+         *     ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
+         *     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+         *     minutes to format) — including the pre-live ``past_window`` cause (ADR "a
+         *     past day is named, not disguised"), which carries the offending venue-local
+         *     ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
+         *     raw JSONB at this boundary so no downstream reader touches a bare dict.
+         *
+         *     ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
+         *     every row without conflicts (so a client never null-checks it). It is
+         *     orthogonal to the verdict: even a fully-*placed* board can flag overlapping
+         *     in-progress matches (two matches on one table, or one human in two at once,
+         *     from a soft manual placement PATCH). It carries the resolved, DB-humanized
+         *     conflicts — table labels and player names, each colliding fixture named by
+         *     its matchup — parsed from the ledger's raw JSONB at this boundary so no
+         *     downstream reader touches a bare dict.
          */
         ScheduleSolveRead: {
             /**
@@ -3488,15 +3570,10 @@ export interface components {
             overrunning: boolean;
             /** Error */
             error: string | null;
-            /**
-             * @description The named, machine-readable cause of an ``infeasible`` verdict, or
-             *     ``null`` for every other outcome and for a generic capacity
-             *     infeasibility with no single named cause. Today the only named cause is
-             *     a ``past_window`` carrying the offending venue-local ``date``. (Assembled
-             *     from the row's reason columns; a half-written pair degrades to ``null``
-             *     rather than a partial reason.)
-             */
-            readonly infeasible_reason: components["schemas"]["PastWindowReason"] | null;
+            /** Infeasibility Reasons */
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            /** Placement Conflicts */
+            placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
         /**
          * ScheduleSolveStatus
@@ -3628,6 +3705,26 @@ export interface components {
          * @enum {string}
          */
         Status: "scheduled" | "live" | "final";
+        /**
+         * TableConflictRead
+         * @description Two or more in-progress matches recorded on the *same table* at
+         *     overlapping times — physically impossible (a table holds one match), so
+         *     contradictory data from a soft manual placement PATCH. Resolved: the table's
+         *     catalogue ``table_label`` (never the raw value-object id) and the colliding
+         *     ``fixtures``, each named by its matchup. The DB-aware mirror of
+         *     :class:`app.scheduling.TableConflict`.
+         */
+        TableConflictRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "table_conflict";
+            /** Table Label */
+            table_label: string;
+            /** Fixtures */
+            fixtures: components["schemas"]["ConflictFixtureRead"][];
+        };
         /**
          * TestNotificationResponse
          * @description Outcome of firing a test push to the current user's devices.
@@ -4212,6 +4309,35 @@ export interface components {
              *     drift (api/CLAUDE.md, "don't carry a field and its own derivation").
              */
             readonly meetings: number;
+        };
+        /**
+         * WindowTooShortForMatchRead
+         * @description A single fixture whose pool window cannot hold even one match: its
+         *     ``best_of`` match needs ``needed_min`` minutes but the window spans only
+         *     ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
+         *     bounds; the minutes pass through as integers for the client to format.
+         */
+        WindowTooShortForMatchRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "window_too_short_for_match";
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /**
+             * Best Of
+             * @enum {integer}
+             */
+            best_of: 1 | 3 | 5 | 7;
+            /** Needed Min */
+            needed_min: number;
+            /** Window Span Min */
+            window_span_min: number;
         };
         /** MatchDetails */
         app__schemas__match__MatchDetails: {

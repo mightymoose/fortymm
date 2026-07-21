@@ -19,7 +19,10 @@ import {
   TRIGGER_LABEL,
   VERDICT_LABEL,
   fmtWallTime,
-  infeasibleReasonMessage,
+  infeasibilityReasonCopy,
+  infeasibilityReasonKey,
+  placementConflictKey,
+  placementConflictSentence,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
@@ -144,27 +147,45 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
     }
     case 'infeasible': {
       // A DESIGNED outcome, not an error banner: the solver *proved* the plan
-      // impossible, which is exactly what a pre-live run is for. When the API
-      // named a *specific* cause (today: a wholly-past window), the strip names
-      // it and the offending day to fix — INSTEAD of the generic "the day doesn't
-      // fit" (ADR "a past day is named, not disguised"). A generic capacity
-      // infeasibility (`reason: null`) keeps the generic copy below.
-      const named = state.reason
+      // impossible, which is exactly what a pre-live run is for. The API resolves
+      // the causes to names/numbers, so the strip names each specifically —
+      // falling back to the generic sentence only if the (guaranteed ≥1) list is
+      // somehow empty, so the strip never renders bodyless. A `past_window` cause
+      // (a wholly-past day) is one arm of that list, given the dated headline
+      // when it is the whole story (ADR "a past day is named, not disguised").
+      const onlyPastWindow =
+        state.reasons.length > 0 &&
+        state.reasons.every((reason) => reason.kind === 'past_window')
       return (
         <div data-testid="solve-strip-infeasible">
           <Line
             icon={<TriangleAlert size={18} />}
             tint="text-[color:var(--warn)]"
             title={
-              named?.code === 'past_window'
-                ? 'This day has already passed'
-                : "The day doesn't fit"
+              onlyPastWindow ? 'This day has already passed' : "The day doesn't fit"
             }
           >
-            {named ? (
-              <span data-testid="solve-strip-past-window">
-                {infeasibleReasonMessage(named)}
-              </span>
+            {state.reasons.length > 0 ? (
+              <ul className="space-y-1.5">
+                {state.reasons.map((reason, i) => {
+                  const copy = infeasibilityReasonCopy(reason)
+                  return (
+                    <li
+                      key={infeasibilityReasonKey(reason, i)}
+                      data-testid={
+                        reason.kind === 'past_window'
+                          ? 'solve-strip-past-window'
+                          : undefined
+                      }
+                    >
+                      <span className="text-[color:var(--fg-2)]">
+                        {copy.sentence}
+                      </span>{' '}
+                      {copy.remedy}
+                    </li>
+                  )
+                })}
+              </ul>
             ) : (
               <>
                 The matches can't all fit inside their windows on the tables
@@ -201,6 +222,40 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
       return exhaustive
     }
   }
+}
+
+/**
+ * Overlapping in-progress matches the solve **tolerated and reported** (ADR
+ * "overlapping-in-progress-matches-are-tolerated-and-reported") — a *placed board
+ * with a caution*, deliberately distinct from the `infeasible` "nothing placed"
+ * banner: the board is fine, but two live matches contradict each other on a
+ * table or a human, and only the director can fix it. A warn-toned `Alert` (the
+ * pools double-booked precedent), rendered only when the (always-present) list is
+ * non-empty. Orthogonal to the solve's state, so it renders under whatever the
+ * `SolveState` line above says.
+ */
+const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
+  if (solve === null || solve.placementConflicts.length === 0) return null
+  return (
+    <Alert
+      data-testid="solve-strip-conflicts"
+      className="mt-2.5 border-[color:var(--warn)]/40 bg-[color:var(--warn)]/10"
+    >
+      <TriangleAlert className="text-[color:var(--warn)]" />
+      <AlertTitle className="text-[color:var(--warn)]">
+        Overlapping matches on the board
+      </AlertTitle>
+      <AlertDescription className="text-[color:var(--fg-3)]">
+        <ul className="space-y-1">
+          {solve.placementConflicts.map((conflict, i) => (
+            <li key={placementConflictKey(conflict, i)}>
+              {placementConflictSentence(conflict)}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  )
 }
 
 /**
@@ -275,6 +330,11 @@ export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
           )}
         </div>
       </Card>
+
+      {/* A placed board's caution: overlapping in-progress matches the solve
+          tolerated rather than blanked the board over. Orthogonal to the state
+          above, so it rides under whatever the strip says. */}
+      <ConflictWarning solve={solve} />
 
       {/* The refusal, where the click was — an `Alert` (the app talking back),
           never a toast that leaves in four seconds. */}

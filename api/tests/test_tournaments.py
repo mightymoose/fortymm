@@ -4839,7 +4839,14 @@ async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_me
             "tournament_fixtures.pool_id='p-a' has a NULL seat at (round=2, position=1)"
         )
 
-    monkeypatch.setattr("app.tournaments.cut_draw", _raise_an_unknown_draw_error)
+    # The ``cut_draw`` core call moved onto the transport-neutral draw verb
+    # (``app.tournament_draw_service``); the HTTP handler is now a thin adapter over
+    # it. Patch the seam where the call now lives — the assertion (an unknown
+    # ``DrawError`` subclass gets the generic 422, leaking none of its message) is
+    # unchanged; only the location of the function being forced to raise moved.
+    monkeypatch.setattr(
+        "app.tournament_draw_service.cut_draw", _raise_an_unknown_draw_error
+    )
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
 

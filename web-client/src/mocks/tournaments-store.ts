@@ -34,6 +34,7 @@ import {
   stepScheduleSolve,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
+import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -898,9 +899,7 @@ const NOTHING_TO_START =
 /** The things a refusal is about, as a human would say them: `“Pool B”`, or
  * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
 function namedList(names: string[]): string {
-  const quoted = names.map((name) => `“${name}”`)
-  if (quoted.length === 1) return quoted[0]
-  return `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`
+  return conjoinWithAnd(names.map((name) => `“${name}”`))
 }
 
 /** Where one event's draw stands (`DrawCurrency`, `api/app/tournament_draws.py`).

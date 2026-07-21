@@ -1,10 +1,10 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
-    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -14,7 +14,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -56,22 +56,6 @@ class SolverVerdict(enum.Enum):
     optimal = "optimal"
     feasible = "feasible"
     infeasible = "infeasible"
-
-
-class InfeasibleReasonCode(enum.Enum):
-    """The named, machine-readable cause of an ``infeasible`` verdict (ADR-0968's
-    code-not-prose pattern; ADR "a past day is named, not disguised"). The column
-    is ``NULL`` for every non-infeasible run, and also for a *generic* capacity
-    infeasibility — a current window simply too tight for the fixtures, which has
-    no single named cause. Extensible; ``past_window`` is the only member today.
-
-    * ``past_window`` — a pool's entire planned window is already in the past
-      (the day was dated behind ``now``), so it cannot run without a new date.
-      Paired with a non-``NULL`` ``past_window_date`` naming the offending
-      venue-local day.
-    """
-
-    past_window = "past_window"
 
 
 class ScheduleSolve(Base):
@@ -160,29 +144,28 @@ class ScheduleSolve(Base):
     overrunning: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
-    #: The named, machine-readable cause of an ``infeasible`` verdict (ADR "a
-    #: past day is named, not disguised"). ``NULL`` on every non-infeasible run,
-    #: and on a *generic* capacity infeasibility with no single named cause (a
-    #: current window too tight for the fixtures). Non-``NULL`` only pairs with
-    #: ``status = infeasible`` / ``verdict = infeasible``.
-    infeasible_reason_code: Mapped[InfeasibleReasonCode | None] = mapped_column(
-        Enum(
-            InfeasibleReasonCode,
-            name="infeasible_reason_code",
-            values_callable=lambda e: [m.value for m in e],
-        ),
-        nullable=True,
-    )
-    #: The offending venue-local calendar day for a ``past_window`` reason — the
-    #: date the director gave a window that is already wholly in the past, in the
-    #: event's own ``timezone`` frame. ``NULL`` unless ``infeasible_reason_code``
-    #: is ``past_window`` (the two are written together, or neither).
-    past_window_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: Hash of the input snapshot the job solved against — the drift guard's
     #: comparison key. ``NULL`` for a run that never snapshotted.
     input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Why a ``failed`` run failed. ``NULL`` on every other status.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Structured reasons an ``infeasible`` solve did not fit, kept raw here; a
+    #: later boundary parses this into Pydantic models. ``NULL`` on every other
+    #: status.
+    infeasibility_reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    #: Resolved in-progress-vs-in-progress placement conflicts a solve reported
+    #: (ADR "overlapping in-progress matches are tolerated and reported") — ids
+    #: humanized to player names and table labels, kept raw here; a later
+    #: boundary parses this into Pydantic models. Distinct from
+    #: ``infeasibility_reasons``: a conflict is orthogonal to the verdict, so
+    #: this is written on **any** verdict where the solver ran (a placed
+    #: ``optimal``/``feasible`` board can still carry conflicts) — ``[]`` when
+    #: there were none. ``NULL`` only before a solve reaches its apply.
+    placement_conflicts: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     #: The coalesced enqueue's second arm: a trigger that lands while this row is
     #: ``running`` cannot be absorbed by a queued row (there isn't one) and must
     #: not enqueue a second job (one solve in flight per tournament) — so it sets

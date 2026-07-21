@@ -1545,6 +1545,13 @@ class TestBrokenPinRepair:
             )
         )
         original_pin_time = BASE - timedelta(minutes=15)
+        # The control sits late on t2, after every other fixture packs in, so
+        # it is uncontended and the solver leaves it byte-for-byte. A called
+        # match's start is a floor, not a constant (ADR "a called match holds
+        # its table and slides later") — an EARLY pin sharing a player with the
+        # rest of the round-robin gets legitimately bumped later, which is not
+        # the "untouched" case this control is here to demonstrate.
+        control_start = BASE + timedelta(minutes=300)
         await _pin_directly(
             db_session,
             target,
@@ -1556,7 +1563,7 @@ class TestBrokenPinRepair:
             db_session,
             control,
             table_id="t2",
-            start=BASE,
+            start=control_start,
             pinned_at=original_pin_time,
         )
         await _remove_table(db_session, tournament_id, event_id, "t1")
@@ -1575,7 +1582,7 @@ class TestBrokenPinRepair:
 
         # The untouched pin: byte-identical, no re-notification.
         assert control.table_id == "t2"
-        assert control.scheduled_start == BASE
+        assert control.scheduled_start == control_start
         assert control.pinned_at == original_pin_time
         assert control.call_notified_count == 1
 
@@ -2218,7 +2225,11 @@ class TestManualPlacementPin:
         )
         target = fixtures[0]
         target_id = target.id
-        pin_start = BASE + timedelta(minutes=60)
+        # Late on the shared table, after the other two pack in: a called
+        # match's start is a floor, not a constant (ADR "a called match holds
+        # its table and slides later"), so an uncontended pin is the one the
+        # solver leaves byte-for-byte — the "does not undo it" point here.
+        pin_start = BASE + timedelta(minutes=200)
         fanout = await match_calls.apply_manual_placement(
             db_session,
             tournament,

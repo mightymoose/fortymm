@@ -215,6 +215,8 @@ async def test_schedule_solve_read_refuses_an_unknown_enum_value(
         "fixtures_pinned": None,
         "overrunning": False,
         "error": None,
+        "infeasibility_reasons": [],
+        "placement_conflicts": [],
     }
     assert ScheduleSolveRead.model_validate(payload).trigger is (
         ScheduleSolveTrigger.manual

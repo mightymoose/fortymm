@@ -49,11 +49,20 @@ const scoped = (container: Container) => ({
     return container.queryByTestId('solve-strip-overrunning')
   },
 
-  /** The specific dated message on an infeasible solve whose cause the API named
-   * (today: a wholly-past window) — present only when `infeasible_reason` is set,
-   * never on a generic capacity infeasibility. */
+  /** The specific dated message on an infeasible solve carrying a `past_window`
+   * reason (a wholly-past day) — present only when that reason arm is in the
+   * list, never on a purely-capacity infeasibility. */
   queryPastWindow() {
     return container.queryByTestId('solve-strip-past-window')
+  },
+
+  /** The placed-board caution: overlapping in-progress matches the solve
+   * tolerated and reported — present only when the solve carries conflicts. */
+  queryConflicts() {
+    return container.queryByTestId('solve-strip-conflicts')
+  },
+  getConflictsText() {
+    return text(container.getByTestId('solve-strip-conflicts'))
   },
 
   /** The inline refusal (the strip's only error surface — there is no toast). */

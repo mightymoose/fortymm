@@ -163,6 +163,15 @@ export function daysBetween(
   return Math.max(1, Math.round((db.getTime() - da.getTime()) / 86_400_000) + 1)
 }
 
+/** Join labels the way a sentence does: `A`, `A and B`, `A, B and C`. The single
+ * definition behind every "list of things" sentence in the tournament UI (a save
+ * failure's fields, a refusal's pools, a solve's conflicting matches), so the
+ * comma-and-conjunction rule can't drift between them. Empty in → `''`. */
+export function conjoinWithAnd(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? ''
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
+}
+
 /** A tournament's real date span is the min/max of its events' slots; falls
  * back to the seeded `startDate`/`endDate` when there are no events. */
 export function effectiveDateRange(t: Tournament): {

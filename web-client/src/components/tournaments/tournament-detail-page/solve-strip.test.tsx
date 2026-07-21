@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import { waitFor } from '@/test/utilities'
 
-import { buildScheduleSolve } from '../data/seed.factory'
+import {
+  buildPlayerConflict,
+  buildScheduleSolve,
+  buildTableConflict,
+} from '../data/seed.factory'
 import { solveStripPage } from './solve-strip.page'
 
 /** The refusal the route really sends for "nothing is drawn" — the ADR-0968
@@ -116,19 +120,38 @@ describe('SolveStrip', () => {
     expect(solveStripPage.getStateText('succeeded')).not.toContain('Overrunning')
   })
 
-  it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner', () => {
+  it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner, naming EACH resolved cause', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
         status: 'infeasible',
         verdict: 'infeasible',
         fixturesPlaced: null,
         fixturesPinned: null,
+        infeasibilityReasons: [
+          { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+          {
+            kind: 'pool_over_capacity',
+            poolName: 'Pool A',
+            windowStart: '09:00',
+            windowEnd: '12:30',
+            requiredMin: 480,
+            capacityMin: 420,
+            tableCount: 4,
+          },
+        ],
       }),
     })
     const text = solveStripPage.getStateText('infeasible')
     expect(text).toContain("The day doesn't fit")
-    // Actionable, in venue vocabulary — never the solver's.
-    expect(text).toContain('Add tables, widen a pool window')
+    // BOTH reasons' sentences, named specifically…
+    expect(text).toContain('Pool B has no tables assigned.')
+    expect(text).toContain("Pool A can't fit all its matches")
+    // …AND both remedies.
+    expect(text).toContain('Assign at least one table to Pool B')
+    expect(text).toContain('Add a table to Pool A, widen its window, or trim the field.')
+    // The specific list REPLACES the generic sentence.
+    expect(text).not.toContain('The matches can\'t all fit inside their windows')
+    // The raw enum never reaches the UI.
     expect(text).not.toContain('infeasible')
     // And it is a state, not a refusal: no notice rings.
     expect(solveStripPage.queryNotice()).toBeNull()
@@ -137,30 +160,48 @@ describe('SolveStrip', () => {
     expect(solveStripPage.queryPastWindow()).toBeNull()
   })
 
-  it('names a wholly-past window with a specific dated message — "already passed, update the date", NOT the generic "doesn\'t fit"', () => {
+  it('names a wholly-past window as its own dated reason arm — "dated in the past, move the date", NOT the generic "doesn\'t fit" body', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
         status: 'infeasible',
         verdict: 'infeasible',
         fixturesPlaced: null,
         fixturesPinned: null,
-        infeasibleReason: { code: 'past_window', date: '2026-07-18' },
+        infeasibilityReasons: [{ kind: 'past_window', date: '2026-07-18' }],
       }),
     })
     // Still the designed infeasible state, not an error banner.
     expect(solveStripPage.queryState('infeasible')).not.toBeNull()
     expect(solveStripPage.queryState('failed')).toBeNull()
     expect(solveStripPage.queryNotice()).toBeNull()
-    // The specific, dated, actionable message names the offending venue-local day.
+    // The past_window arm renders its own discoverable, dated reason row.
     expect(solveStripPage.queryPastWindow()).not.toBeNull()
     const text = solveStripPage.getStateText('infeasible')
+    // A dated-past headline, since a past window is the whole story here.
+    expect(text).toContain('This day has already passed')
+    // The specific, dated, actionable reason names the offending venue-local day.
     expect(text).toContain('Jul 18, 2026')
-    expect(text).toContain('has already passed')
-    expect(text).toContain('update the date')
+    expect(text).toContain('dated in the past')
+    expect(text).toContain('Move the event to a future date')
     // INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
     expect(text).not.toContain('Add tables, widen a pool window')
     // The raw wire code never reaches the UI.
     expect(text).not.toContain('past_window')
+  })
+
+  it('falls back to the generic sentence if an infeasible row carries no reasons — the strip never renders bodyless', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibilityReasons: [],
+      }),
+    })
+    const text = solveStripPage.getStateText('infeasible')
+    expect(text).toContain("The day doesn't fit")
+    expect(text).toContain('Add tables, widen a pool window')
   })
 
   it('renders a failed run under our headline, with the server\'s account as detail', () => {
@@ -177,6 +218,42 @@ describe('SolveStrip', () => {
     const text = solveStripPage.getStateText('failed')
     expect(text).toContain('The scheduler hit a problem')
     expect(text).toContain('worker crashed: OOM')
+    // A broken job is NOT the infeasible outcome — no resolved reason leaks in.
+    expect(text).not.toContain('has no tables assigned')
+    expect(text).not.toContain("The day doesn't fit")
+  })
+
+  // ----- the placed-board caution: overlapping in-progress matches -----------
+
+  it('warns about overlapping in-progress matches on a SUCCEEDED board — a caution, not the infeasible banner — naming both matches and the shared table AND human', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'succeeded',
+        verdict: 'feasible',
+        placementConflicts: [buildTableConflict(), buildPlayerConflict()],
+      }),
+    })
+    // The board is still solved — the caution rides UNDER the success line.
+    expect(solveStripPage.getStateText('succeeded')).toContain('Schedule solved')
+    const text = solveStripPage.getConflictsText()
+    expect(text).toContain('Overlapping matches on the board')
+    // The table conflict: both matches, named by matchup, and the shared table.
+    expect(text).toContain('crafty-vs-spiked and dazed-vs-confused overlap on Table 1')
+    // The player conflict: the shared human.
+    expect(text).toContain(
+      'crafty-vs-spiked-frigatebird and spiked-frigatebird-vs-nimble overlap on spiked-frigatebird',
+    )
+    // It is a caution, not the "nothing placed" infeasible banner.
+    expect(text).not.toContain("The day doesn't fit")
+    // And not a refusal — no notice rings.
+    expect(solveStripPage.queryNotice()).toBeNull()
+  })
+
+  it('renders NO conflict warning on a clean board (placement_conflicts: [])', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', placementConflicts: [] }),
+    })
+    expect(solveStripPage.queryConflicts()).toBeNull()
   })
 
   // ----- the Run-scheduler button --------------------------------------------

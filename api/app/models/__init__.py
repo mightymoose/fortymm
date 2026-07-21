@@ -21,7 +21,6 @@ from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.schedule_solve import (
-    InfeasibleReasonCode,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -68,7 +67,6 @@ __all__ = [
     "Role",
     "RolePermission",
     "ScheduleSolve",
-    "InfeasibleReasonCode",
     "ScheduleSolveStatus",
     "ScheduleSolveTrigger",
     "SolverVerdict",

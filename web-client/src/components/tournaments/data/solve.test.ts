@@ -3,19 +3,28 @@ import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/api/client'
 import { buildScheduleSolveRead } from '@/mocks/factories/tournaments/tournament.factory'
 
-import { buildScheduleSolve } from './seed.factory'
+import {
+  buildPlayerConflict,
+  buildScheduleSolve,
+  buildTableConflict,
+} from './seed.factory'
 import {
   LIVE_POLL_MS,
   SOLVE_IN_FLIGHT_POLL_MS,
+  fmtTableTime,
+  fmtTables,
   fmtWallTime,
-  infeasibleReasonMessage,
-  infeasibleReasonSchema,
+  infeasibilityReasonCopy,
+  infeasibilityReasonSchema,
   parseLatestScheduleSolve,
   parseScheduleSolve,
+  placementConflictSchema,
+  placementConflictSentence,
   runSchedulerNotice,
   scheduleRefetchInterval,
   solveInFlight,
   solveStripState,
+  type InfeasibilityReason,
 } from './solve'
 
 // ----- the parse boundary ----------------------------------------------------
@@ -68,77 +77,375 @@ describe('parseLatestScheduleSolve', () => {
   })
 })
 
-// ----- the named infeasibility reason: parse boundary + copy ------------------
+// ----- the infeasibility reasons: parse boundary ------------------------------
 
-describe('infeasibleReasonSchema (the parse boundary)', () => {
-  it('parses a past_window reason, carrying the offending venue-local date', () => {
+describe('infeasibilityReasonSchema (the parse boundary)', () => {
+  it('parses pool_has_no_tables into its client arm', () => {
     expect(
-      infeasibleReasonSchema.parse({ code: 'past_window', date: '2026-07-18' }),
-    ).toEqual({ code: 'past_window', date: '2026-07-18' })
-  })
-
-  it('refuses a code this client has no words for — an unknown reason must fail the parse, not blank the line', () => {
-    expect(() =>
-      infeasibleReasonSchema.parse({ code: 'sunspots', date: '2026-07-18' }),
-    ).toThrow()
-  })
-
-  it('carries a past_window reason onto the domain row', () => {
-    const parsed = parseLatestScheduleSolve(
-      buildScheduleSolveRead({
-        status: 'infeasible',
-        verdict: 'infeasible',
-        infeasible_reason: { code: 'past_window', date: '2026-07-18' },
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_has_no_tables',
+        pool_name: 'Pool B',
       }),
-    )
-    expect(parsed?.infeasibleReason).toEqual({
-      code: 'past_window',
-      date: '2026-07-18',
+    ).toEqual({ kind: 'pool_has_no_tables', poolName: 'Pool B' })
+  })
+
+  it('parses window_too_short_for_match, mapping snake→camel and keeping best_of narrow', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'window_too_short_for_match',
+        pool_name: 'Pool A',
+        window_start: '09:00',
+        window_end: '09:20',
+        best_of: 5,
+        needed_min: 35,
+        window_span_min: 20,
+      }),
+    ).toEqual({
+      kind: 'window_too_short_for_match',
+      poolName: 'Pool A',
+      windowStart: '09:00',
+      windowEnd: '09:20',
+      bestOf: 5,
+      neededMin: 35,
+      windowSpanMin: 20,
     })
   })
 
-  it('is null off the named-cause path — a generic capacity infeasibility carries no named reason', () => {
+  it('parses pool_over_capacity', () => {
     expect(
-      parseLatestScheduleSolve(
-        buildScheduleSolveRead({ status: 'infeasible', verdict: 'infeasible' }),
-      )?.infeasibleReason,
-    ).toBeNull()
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_over_capacity',
+        pool_name: 'Pool C',
+        window_start: '09:00',
+        window_end: '13:00',
+        required_min: 480,
+        capacity_min: 450,
+        table_count: 5,
+      }),
+    ).toEqual({
+      kind: 'pool_over_capacity',
+      poolName: 'Pool C',
+      windowStart: '09:00',
+      windowEnd: '13:00',
+      requiredMin: 480,
+      capacityMin: 450,
+      tableCount: 5,
+    })
   })
 
-  it('fails the whole solve row when the reason code is unknown — the boundary rejects, the query fails', () => {
+  it('parses no_single_cause (the residual, no pool)', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'no_single_cause',
+        required_min: 360,
+        available_min: 480,
+      }),
+    ).toEqual({ kind: 'no_single_cause', requiredMin: 360, availableMin: 480 })
+  })
+
+  it('refuses an arm kind this client has no words for — an unknown reason must fail the parse, not blank the row', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({ kind: 'sunspots', pool_name: 'Pool B' }),
+    ).toThrow()
+  })
+
+  it('parses past_window, carrying the offending venue-local date straight through', () => {
+    expect(
+      infeasibilityReasonSchema.parse({ kind: 'past_window', date: '2026-07-18' }),
+    ).toEqual({ kind: 'past_window', date: '2026-07-18' })
+  })
+
+  it('fails the whole solve row when one reason arm is unknown — the boundary rejects, the query fails', () => {
     expect(() =>
       parseLatestScheduleSolve(
         buildScheduleSolveRead({
           status: 'infeasible',
           verdict: 'infeasible',
-          infeasible_reason: { code: 'gremlins', date: '2026-07-18' } as never,
+          infeasibility_reasons: [
+            { kind: 'pool_has_no_tables', pool_name: 'Pool B' },
+            { kind: 'gremlins' },
+          ] as never,
         }),
       ),
     ).toThrow()
   })
 
-  it('refuses an ABSENT infeasible_reason — a nullable the API guarantees present cannot be dropped', () => {
-    const { infeasible_reason, ...missing } = buildScheduleSolveRead()
-    void infeasible_reason
+  it('carries the reasons through onto the domain row, snake→camel-mapped', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasibility_reasons: [{ kind: 'pool_has_no_tables', pool_name: 'Pool B' }],
+      }),
+    )
+    expect(parsed?.infeasibilityReasons).toEqual([
+      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+    ])
+  })
+
+  it('defaults to an empty list off the infeasible path', () => {
+    expect(parseLatestScheduleSolve(buildScheduleSolveRead())?.infeasibilityReasons).toEqual([])
+  })
+})
+
+// ----- the placement conflicts: parse boundary --------------------------------
+
+describe('placementConflictSchema (the parse boundary)', () => {
+  it('parses a table_conflict into its client arm, snake→camel, fixtures named by matchup', () => {
+    expect(
+      placementConflictSchema.parse({
+        kind: 'table_conflict',
+        table_label: 'Table 1',
+        fixtures: [
+          { fixture_id: 'fx-a', player_a: 'crafty', player_b: 'spiked' },
+          { fixture_id: 'fx-b', player_a: 'dazed', player_b: 'confused' },
+        ],
+      }),
+    ).toEqual({
+      kind: 'table_conflict',
+      tableLabel: 'Table 1',
+      fixtures: [
+        { fixtureId: 'fx-a', playerA: 'crafty', playerB: 'spiked' },
+        { fixtureId: 'fx-b', playerA: 'dazed', playerB: 'confused' },
+      ],
+    })
+  })
+
+  it('parses a player_conflict into its client arm', () => {
+    expect(
+      placementConflictSchema.parse({
+        kind: 'player_conflict',
+        player_name: 'spiked-frigatebird',
+        fixtures: [{ fixture_id: 'fx-c', player_a: 'crafty', player_b: 'spiked-frigatebird' }],
+      }),
+    ).toEqual({
+      kind: 'player_conflict',
+      playerName: 'spiked-frigatebird',
+      fixtures: [{ fixtureId: 'fx-c', playerA: 'crafty', playerB: 'spiked-frigatebird' }],
+    })
+  })
+
+  it('refuses a conflict kind this client has no words for — it must fail the parse, not blank the warning', () => {
+    expect(() =>
+      placementConflictSchema.parse({ kind: 'venue_conflict', fixtures: [] }),
+    ).toThrow()
+  })
+
+  it('carries conflicts onto the domain row — on a SUCCEEDED board (orthogonal to the verdict)', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'feasible',
+        placement_conflicts: [
+          {
+            kind: 'table_conflict',
+            table_label: 'Table 1',
+            fixtures: [{ fixture_id: 'fx-a', player_a: 'crafty', player_b: 'spiked' }],
+          },
+        ],
+      }),
+    )
+    expect(parsed?.placementConflicts).toEqual([
+      {
+        kind: 'table_conflict',
+        tableLabel: 'Table 1',
+        fixtures: [{ fixtureId: 'fx-a', playerA: 'crafty', playerB: 'spiked' }],
+      },
+    ])
+  })
+
+  it('fails the whole solve row when one conflict arm is unknown — the boundary rejects', () => {
+    expect(() =>
+      parseLatestScheduleSolve(
+        buildScheduleSolveRead({
+          placement_conflicts: [{ kind: 'poltergeist', fixtures: [] }] as never,
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('defaults to an empty list on a clean board', () => {
+    expect(parseLatestScheduleSolve(buildScheduleSolveRead())?.placementConflicts).toEqual([])
+  })
+
+  it('refuses an ABSENT placement_conflicts — an array the API guarantees present cannot be dropped', () => {
+    const { placement_conflicts, ...missing } = buildScheduleSolveRead()
+    void placement_conflicts
     expect(() => parseLatestScheduleSolve(missing)).toThrow()
   })
 })
 
-describe('infeasibleReasonMessage', () => {
-  it('words a past_window reason as a specific, dated "already passed — update the date" sentence', () => {
-    expect(
-      infeasibleReasonMessage({ code: 'past_window', date: '2026-07-18' }),
-    ).toBe(
-      "This event's window (Jul 18, 2026) has already passed — update the date.",
+// ----- the placement conflicts: shared copy -----------------------------------
+
+describe('placementConflictSentence', () => {
+  it('names a table conflict as the two matches overlapping on the table', () => {
+    expect(placementConflictSentence(buildTableConflict())).toBe(
+      'crafty-vs-spiked and dazed-vs-confused overlap on Table 1',
     )
+  })
+
+  it('names a player conflict as the two matches overlapping on the human', () => {
+    expect(placementConflictSentence(buildPlayerConflict())).toBe(
+      'crafty-vs-spiked-frigatebird and spiked-frigatebird-vs-nimble overlap on spiked-frigatebird',
+    )
+  })
+
+  it('lists three overlapping matches with an Oxford-style join', () => {
+    expect(
+      placementConflictSentence(
+        buildTableConflict({
+          fixtures: [
+            { fixtureId: 'a', playerA: 'crafty', playerB: 'spiked' },
+            { fixtureId: 'b', playerA: 'dazed', playerB: 'confused' },
+            { fixtureId: 'c', playerA: 'nimble', playerB: 'quick' },
+          ],
+        }),
+      ),
+    ).toBe(
+      'crafty-vs-spiked, dazed-vs-confused and nimble-vs-quick overlap on Table 1',
+    )
+  })
+})
+
+// ----- the infeasibility reasons: shared copy ---------------------------------
+
+describe('infeasibilityReasonCopy', () => {
+  it('words pool_has_no_tables with the pool name interpolated into both lines', () => {
+    expect(
+      infeasibilityReasonCopy({ kind: 'pool_has_no_tables', poolName: 'Pool B' }),
+    ).toEqual({
+      sentence: 'Pool B has no tables assigned.',
+      remedy: 'Assign at least one table to Pool B, then run the scheduler again.',
+    })
+  })
+
+  it('words window_too_short_for_match with the window, format and minutes', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'window_too_short_for_match',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '09:20',
+        bestOf: 5,
+        neededMin: 35,
+        windowSpanMin: 20,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool A's 09:00–09:20 window is too short for a best-of-5 match — it needs 35 min but the window is only 20.",
+      remedy: "Widen Pool A's window, or use a shorter match format.",
+    })
+  })
+
+  it('words pool_over_capacity, formatting the minutes as hours and pluralising tables', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_over_capacity',
+        poolName: 'Pool C',
+        windowStart: '09:00',
+        windowEnd: '13:00',
+        requiredMin: 480,
+        capacityMin: 450,
+        tableCount: 5,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool C can't fit all its matches: they need about 8h of table-time, but its 09:00–13:00 window on 5 tables only holds about 7.5h.",
+      remedy: 'Add a table to Pool C, widen its window, or trim the field.',
+    })
+  })
+
+  it('pluralises a single table as "1 table"', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_over_capacity',
+        poolName: 'Pool D',
+        windowStart: '09:00',
+        windowEnd: '10:15',
+        requiredMin: 90,
+        capacityMin: 75,
+        tableCount: 1,
+      }).sentence,
+    ).toContain('on 1 table only')
+  })
+
+  it('words no_single_cause as a timing conflict that steers away from adding tables', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'no_single_cause',
+      requiredMin: 360,
+      availableMin: 480,
+    })
+    expect(copy.sentence).toBe(
+      "There's enough total table-time (about 8h available for about 6h of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.",
+    )
+    expect(copy.remedy).toContain("adding tables won't help here")
+  })
+
+  it('words past_window as a dated "in the past" sentence, remedy "move the date"', () => {
+    expect(
+      infeasibilityReasonCopy({ kind: 'past_window', date: '2026-07-18' }),
+    ).toEqual({
+      sentence: 'This event is dated in the past (Jul 18, 2026), so it can\'t be scheduled.',
+      remedy: 'Move the event to a future date, then run the scheduler again.',
+    })
   })
 
   it('formats the venue-local date without a timezone shift — the day named is the day sent', () => {
     // A plain `YYYY-MM-DD` must render as that calendar day whatever the runner's
     // timezone (fmtDate parses to local midnight, never a UTC instant).
     expect(
-      infeasibleReasonMessage({ code: 'past_window', date: '2026-01-01' }),
+      infeasibilityReasonCopy({ kind: 'past_window', date: '2026-01-01' }).sentence,
     ).toContain('Jan 1, 2026')
+  })
+
+  it('gives each arm a distinct sentence and remedy', () => {
+    const arms: InfeasibilityReason[] = [
+      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+      {
+        kind: 'window_too_short_for_match',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '09:20',
+        bestOf: 3,
+        neededMin: 30,
+        windowSpanMin: 20,
+      },
+      {
+        kind: 'pool_over_capacity',
+        poolName: 'Pool C',
+        windowStart: '09:00',
+        windowEnd: '13:00',
+        requiredMin: 480,
+        capacityMin: 450,
+        tableCount: 5,
+      },
+      { kind: 'no_single_cause', requiredMin: 360, availableMin: 480 },
+      { kind: 'past_window', date: '2026-07-18' },
+    ]
+    const sentences = arms.map((a) => infeasibilityReasonCopy(a).sentence)
+    expect(new Set(sentences).size).toBe(arms.length)
+  })
+})
+
+describe('fmtTableTime', () => {
+  it('renders sub-hour spans in whole minutes, no leading "about"', () => {
+    expect(fmtTableTime(45)).toBe('45 min')
+  })
+
+  it('renders whole hours without a decimal', () => {
+    expect(fmtTableTime(480)).toBe('8h')
+  })
+
+  it('renders fractional hours to one decimal (75 min → 1.3h)', () => {
+    expect(fmtTableTime(75)).toBe('1.3h')
+    expect(fmtTableTime(450)).toBe('7.5h')
+  })
+})
+
+describe('fmtTables', () => {
+  it('pluralises', () => {
+    expect(fmtTables(1)).toBe('1 table')
+    expect(fmtTables(5)).toBe('5 tables')
   })
 })
 
@@ -206,25 +513,25 @@ describe('solveStripState', () => {
     ).toMatchObject({ kind: 'infeasible' })
   })
 
-  it('threads a named past_window reason onto the infeasible arm', () => {
+  it('threads the resolved reasons — including a past_window arm — onto the infeasible arm', () => {
     const state = solveStripState(
       buildScheduleSolve({
         status: 'infeasible',
         verdict: 'infeasible',
-        infeasibleReason: { code: 'past_window', date: '2026-07-18' },
+        infeasibilityReasons: [{ kind: 'past_window', date: '2026-07-18' }],
       }),
     )
     expect(state).toMatchObject({
       kind: 'infeasible',
-      reason: { code: 'past_window', date: '2026-07-18' },
+      reasons: [{ kind: 'past_window', date: '2026-07-18' }],
     })
   })
 
-  it('carries a null reason for a generic infeasibility — the discriminating case', () => {
+  it('carries an empty reasons list for an infeasibility with no resolved cause', () => {
     const state = solveStripState(
       buildScheduleSolve({ status: 'infeasible', verdict: 'infeasible' }),
     )
-    expect(state).toMatchObject({ kind: 'infeasible', reason: null })
+    expect(state).toMatchObject({ kind: 'infeasible', reasons: [] })
   })
 
   it('maps failed to its arm, carrying the server error for the detail line', () => {

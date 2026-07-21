@@ -594,9 +594,9 @@ export class TournamentDetailPage {
     return this.page.getByTestId('solve-strip-overrunning')
   }
 
-  /** The specific dated message on an infeasible solve whose cause the API named
-   * (today: a wholly-past window, ADR "a past day is named, not disguised") —
-   * present only when `infeasible_reason` crossed the wire, never on a generic
+  /** The specific dated reason row on an infeasible solve carrying a `past_window`
+   * arm (a wholly-past window, ADR "a past day is named, not disguised") — present
+   * only when that reason is in `infeasibility_reasons`, never on a generic
    * capacity infeasibility. */
   get pastWindowMessage(): Locator {
     return this.page.getByTestId('solve-strip-past-window')

@@ -37,10 +37,14 @@ lock or Redis key to drift from it.
     ``rerun`` solve is requested in the same transaction. That is honest (this
     run produced nothing) and keeps the status enum closed. On a match, every
     returned placement for an *unpinned* fixture is written back as an instant
-    (``base + minutes``, and ``base`` is an aware instant); pinned fixtures'
-    columns are never touched — the
-    solver echoes pins verbatim, and a promise is not rewritten even with its
-    own bytes. (The one exception is a pin *physics* broke — see the
+    (``base + minutes``, and ``base`` is an aware instant); a pinned fixture's
+    **table** is never rewritten, and its start is left byte-identical when the
+    solver echoes it unchanged (a promise is not rewritten even with its own
+    bytes) — but a called match the solver slid **later** on its (unchanged)
+    table has that later start persisted with ``pinned_at`` refreshed and fires
+    the same "moved" correction as a broken-pin move (ADR "a called match holds
+    its table and slides later"). (Physics moving a pin is the other exception —
+    see the
     broken-pins section below.) No per-fixture merging, ever: the output is
     taken whole or not at all.
 
@@ -126,7 +130,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, assert_never
 from zoneinfo import ZoneInfo
 
 from redis.exceptions import RedisError
@@ -138,7 +142,6 @@ from app import queue as queue_module
 from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
-    InfeasibleReasonCode,
     Match,
     MatchStatus,
     ScheduleSolve,
@@ -151,6 +154,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
     TournamentStatus,
+    User,
 )
 from app.rq_async import run_async_db_job
 from app.scheduling import (
@@ -158,21 +162,42 @@ from app.scheduling import (
     EventId,
     EventSettings,
     FixtureId,
+    InfeasibilityReason,
     InProgressMatch,
+    NoSingleCause,
     PastWindow,
     Pin,
+    PlacementConflict,
+    PlayerConflict,
     PlayerId,
+    PoolHasNoTables,
     PoolId,
+    PoolOverCapacity,
     PreviousPlacement,
     RestShadow,
     ScheduleFixture,
     SchedulePool,
     ScheduleSnapshot,
     SolveResult,
+    TableConflict,
     TableId,
     Window,
+    WindowTooShortForMatch,
+    coalesce_rest_shadows,
 )
 from app.schemas.notification import NotificationJob
+from app.schemas.schedule_solve import (
+    ConflictFixtureRead,
+    NoSingleCauseRead,
+    PastWindowReasonRead,
+    PlayerConflictRead,
+    PoolHasNoTablesRead,
+    PoolOverCapacityRead,
+    ResolvedConflict,
+    ResolvedReason,
+    TableConflictRead,
+    WindowTooShortForMatchRead,
+)
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
 from app.tournament_draws import event_pools
@@ -467,6 +492,17 @@ async def latest_solve(
 
 
 @dataclass(frozen=True, slots=True)
+class _PoolResolution:
+    """The DB-side facts an infeasibility reason needs to name a pool a human
+    can act on: its display ``name`` and the ``HH:MM`` clock bounds of its
+    window (already strings on the pool's ``Slot`` — no minute→clock math)."""
+
+    name: str
+    window_start: str
+    window_end: str
+
+
+@dataclass(frozen=True, slots=True)
 class SolveInputs:
     """One transactional read of everything a solve consumes: the pure
     snapshot, its fingerprint, the wall-clock origin of the snapshot's minute
@@ -480,7 +516,23 @@ class SolveInputs:
     ``withdrawn_entry_ids`` lets the cancelled correction pick the *remaining*
     entrant. Everything these sets derive from is fingerprinted, so a
     fingerprint match between snapshot and apply guarantees the fresh read's
-    sets are the ones the solve was computed against."""
+    sets are the ones the solve was computed against.
+
+    ``pool_resolutions`` (keyed by the solver's namespaced ``PoolId`` string
+    ``f"{event.id}:{pool.id}"``) and ``fixture_best_of`` (keyed by
+    ``str(fixture.id)``) are the resolution lookups the apply humanizes an
+    *infeasible* solve's structured reasons through — pool id → name+clock,
+    fixture id → its event's ``length_games``. They derive from the same
+    fingerprinted inputs, so the fresh read's maps match the ones the reasons
+    were computed against.
+
+    ``table_labels`` (solver ``TableId`` → the catalogue label),
+    ``player_names`` (solver ``PlayerId`` — a user-id string — → display
+    username), and ``fixture_matchups`` (``str(fixture.id)`` → the two players'
+    usernames) are the sibling lookups the apply humanizes a solve's
+    *placement conflicts* through (ADR "overlapping in-progress matches are
+    tolerated and reported"). Same fingerprinted provenance, so the fresh read's
+    maps resolve exactly the ids a conflict carries."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
@@ -496,6 +548,11 @@ class SolveInputs:
     broken_pin_moves: frozenset[uuid.UUID] = frozenset()
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
+    pool_resolutions: dict[str, _PoolResolution] = field(default_factory=dict)
+    fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = field(default_factory=dict)
+    table_labels: dict[str, str] = field(default_factory=dict)
+    player_names: dict[str, str] = field(default_factory=dict)
+    fixture_matchups: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -640,6 +697,25 @@ async def _load_solver_inputs(
             else:
                 withdrawn_entry_ids.add(entry_id)
 
+    # user_id → display username: the DB-aware resolution a placement conflict's
+    # shared human (and each colliding fixture's matchup) is humanized through.
+    # Loaded off the same entrant set the snapshot is built from — one IN-query,
+    # like ``load_copy_ingredients`` — so it resolves exactly the user ids the
+    # solver's PlayerIds are stringified from.
+    user_names: dict[uuid.UUID, str] = {}
+    if entry_user:
+        user_names = {
+            user_id: username
+            for user_id, username in (
+                await db.execute(
+                    select(User.id, User.username).where(
+                        User.id.in_(set(entry_user.values()))
+                    )
+                )
+            ).all()
+        }
+    player_names = {str(user_id): name for user_id, name in user_names.items()}
+
     match_status: dict[uuid.UUID, MatchStatus] = {}
     # A completed match's stable completion stamp (``None`` for one deemed
     # completed via ``winner_entry_id`` alone), the anchor a rest shadow needs
@@ -661,10 +737,13 @@ async def _load_solver_inputs(
 
     # Parse the JSONB value-objects once, at this boundary, with the same
     # models the write boundary validated them with (parse, don't validate).
-    catalogue = tuple(
-        TableId(TournamentTable.model_validate(table).id)
-        for table in tournament.table_catalogue
-    )
+    parsed_tables = [
+        TournamentTable.model_validate(table) for table in tournament.table_catalogue
+    ]
+    catalogue = tuple(TableId(table.id) for table in parsed_tables)
+    # table_id → catalogue label: the DB-aware resolution a placement conflict's
+    # shared table is humanized through (mirrors ``load_copy_ingredients``).
+    table_labels = {table.id: table.label for table in parsed_tables}
     parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Pool]]] = [
         (
             event,
@@ -693,6 +772,17 @@ async def _load_solver_inputs(
     # re-deriving a date from minute offsets. Keyed by the same namespaced pool
     # id the pure module carries on its ``PastWindow`` reason.
     pool_dates: dict[str, date] = {}
+    # Resolution lookups the apply humanizes an infeasible solve's reasons
+    # through: solver ``PoolId`` → the pool's display name + ``HH:MM`` bounds,
+    # and fixture id → its event's ``length_games`` (``best_of``). Built off the
+    # same parsed inputs the snapshot is, so they resolve exactly the ids the
+    # reasons carry.
+    pool_resolutions: dict[str, _PoolResolution] = {}
+    fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = {}
+    # fixture id → its matchup (the two players' usernames): the DB-aware
+    # resolution a placement conflict names each colliding fixture through.
+    # Built in the fixture loop below, alongside ``fixture_best_of``.
+    fixture_matchups: dict[str, tuple[str, str]] = {}
     for event, _settings, pools in parsed_events:
         # The event's IANA zone anchors its pools' wall-clock windows to real
         # instants; it is boundary-validated on write (``EventTimezone``), so
@@ -708,6 +798,11 @@ async def _load_solver_inputs(
             )
             pool_specs.append((key, tables, start, end))
             pool_dates[key] = date.fromisoformat(pool.slot.date)
+            pool_resolutions[key] = _PoolResolution(
+                name=pool.name,
+                window_start=pool.slot.start,
+                window_end=pool.slot.end,
+            )
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
@@ -738,7 +833,7 @@ async def _load_solver_inputs(
     rest_shadows: list[RestShadow] = []
     broken_pin_moves: set[uuid.UUID] = set()
     broken_pin_voids: set[uuid.UUID] = set()
-    for event, _settings, _pools in parsed_events:
+    for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
             if fixture.pool_id is None:
                 # Un-pooled (single-elim / a KO stage): no pool, no window —
@@ -792,6 +887,16 @@ async def _load_solver_inputs(
                         start_min=to_min(fixture.scheduled_start),
                     )
             fixture_id = FixtureId(str(fixture.id))
+            # Only placeable (pooled, both-sides-known) fixtures reach here, and
+            # only such a fixture can surface in a WindowTooShortForMatch reason
+            # or a placement conflict — so this is exactly the set the apply
+            # resolves best_of and matchup names for. Both entries are non-None
+            # (guarded above) and their users were loaded into ``user_names``.
+            fixture_best_of[fixture_id] = settings.length_games
+            fixture_matchups[fixture_id] = (
+                user_names[entry_user[fixture.entry_a_id]],
+                user_names[entry_user[fixture.entry_b_id]],
+            )
             schedule_fixtures.append(
                 ScheduleFixture(
                     id=fixture_id,
@@ -851,6 +956,10 @@ async def _load_solver_inputs(
                     )
                 )
 
+    # One shadow per human, not per match (app.scheduling's ``RestShadow``
+    # contract): a human who completed two matches within REST_MIN of each other
+    # accumulated a shadow *per completion* above, which would make the whole
+    # solve ``infeasible`` (#1145). Coalesce to the latest completion.
     snapshot = ScheduleSnapshot(
         table_ids=catalogue,
         pools=schedule_pools,
@@ -859,7 +968,7 @@ async def _load_solver_inputs(
         now_min=now_min,
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
-        rest_shadows=tuple(rest_shadows),
+        rest_shadows=coalesce_rest_shadows(rest_shadows),
         # Soft-window policy fact (ADR "the solver stops wedging"): once the
         # tournament is live, a pool window's end is advisory so wall-clock
         # passing it makes the day "overrunning", not instantly infeasible.
@@ -934,11 +1043,114 @@ async def _load_solver_inputs(
         broken_pin_moves=frozenset(broken_pin_moves),
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
+        pool_resolutions=pool_resolutions,
+        fixture_best_of=fixture_best_of,
+        table_labels=table_labels,
+        player_names=player_names,
+        fixture_matchups=fixture_matchups,
     )
 
 
 def _opt(value: uuid.UUID | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> ResolvedReason:
+    """Humanize one pure, id-and-minute reason into its resolved read form
+    (ADR "structured data, not prose"): the pool's display name and ``HH:MM``
+    window come from ``inputs.pool_resolutions``, ``best_of`` from
+    ``inputs.fixture_best_of``; the integer minutes pass through untouched for
+    the client to format. Direct id lookups are safe here — the apply resolves
+    only after the drift guard proved this read's inputs fingerprint-identical
+    to the ones the reasons were computed against, so every pool/fixture id a
+    reason carries is present in these maps (the same guarantee the placement
+    write relies on when it indexes ``fresh.fixtures``).
+
+    An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
+    an arm to :data:`app.scheduling.InfeasibilityReason` is a type error here
+    until it is handled."""
+    match reason:
+        case PoolHasNoTables():
+            return PoolHasNoTablesRead(
+                pool_name=inputs.pool_resolutions[reason.pool_id].name
+            )
+        case WindowTooShortForMatch():
+            pool = inputs.pool_resolutions[reason.pool_id]
+            return WindowTooShortForMatchRead(
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                best_of=inputs.fixture_best_of[reason.fixture_id],
+                needed_min=reason.needed_min,
+                window_span_min=reason.window_span_min,
+            )
+        case PoolOverCapacity():
+            pool = inputs.pool_resolutions[reason.pool_id]
+            return PoolOverCapacityRead(
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                required_min=reason.required_min,
+                capacity_min=reason.capacity_min,
+                table_count=reason.table_count,
+            )
+        case NoSingleCause():
+            return NoSingleCauseRead(
+                required_min=reason.required_min,
+                available_min=reason.available_min,
+            )
+        case PastWindow():
+            # The offending pool resolves to the venue-local calendar day it was
+            # dated for (``inputs.pool_dates`` — from the same fingerprinted read,
+            # so the pool is present), the actionable "which day to move" fact.
+            return PastWindowReasonRead(date=inputs.pool_dates[reason.pool_id])
+        case _:
+            assert_never(reason)
+
+
+def _conflict_fixture(
+    fixture_id: FixtureId, inputs: SolveInputs
+) -> ConflictFixtureRead:
+    """Name one colliding in-progress fixture by its matchup — the two players
+    facing off (``inputs.fixture_matchups``). Direct lookup is safe: the apply
+    resolves only after the drift guard proved this read's inputs identical to
+    the ones the conflicts were computed against, and every in-progress fixture
+    a conflict names is a placeable fixture whose matchup was recorded here."""
+    player_a, player_b = inputs.fixture_matchups[fixture_id]
+    return ConflictFixtureRead(
+        fixture_id=fixture_id, player_a=player_a, player_b=player_b
+    )
+
+
+def _resolve_conflict(
+    conflict: PlacementConflict, inputs: SolveInputs
+) -> ResolvedConflict:
+    """Humanize one pure, id-only placement conflict into its resolved read form
+    (ADR "overlapping in-progress matches are tolerated and reported"): the
+    shared table's catalogue label comes from ``inputs.table_labels``, the
+    shared human's display name from ``inputs.player_names``, and each colliding
+    fixture is named by its matchup. Same direct-lookup safety as
+    :func:`_resolve_reason` (post-drift-guard).
+
+    An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
+    an arm to :data:`app.scheduling.PlacementConflict` is a type error here until
+    it is handled."""
+    fixtures = [
+        _conflict_fixture(fixture_id, inputs) for fixture_id in conflict.fixture_ids
+    ]
+    match conflict:
+        case TableConflict():
+            return TableConflictRead(
+                table_label=inputs.table_labels[conflict.table_id],
+                fixtures=fixtures,
+            )
+        case PlayerConflict():
+            return PlayerConflictRead(
+                player_name=inputs.player_names[conflict.player_id],
+                fixtures=fixtures,
+            )
+        case _:
+            assert_never(conflict)
 
 
 def run_schedule_solve(schedule_solve_id: str) -> None:
@@ -1080,10 +1292,27 @@ async def _apply_result(
                         fixture.pinned_at is not None
                         and fixture.id not in fresh.broken_pin_moves
                     ):
-                        # The solver echoes pins verbatim; a promise's columns
-                        # are never rewritten, not even with their own bytes.
-                        pinned += 1
-                        continue
+                        # A called match holds its table, but its start can be
+                        # pushed LATER on a re-solve when a predecessor overruns
+                        # (ADR "a called match holds its table and slides
+                        # later"). The solver floors a pin at its stored start,
+                        # so it can only echo that start or return a strictly
+                        # later minute. An unchanged pin — off-grid start
+                        # included — is byte-stable and moves no one; a slid pin
+                        # falls through to the shared moved-repair path below,
+                        # which persists the later start, renews ``pinned_at``,
+                        # and fires the SAME "moved" correction (its
+                        # ``table_id`` write is a no-op, since the solver never
+                        # re-tables a pin).
+                        new_start = fresh.base + timedelta(minutes=placement.start_min)
+                        if (
+                            fixture.scheduled_start is None
+                            or new_start <= fixture.scheduled_start
+                        ):
+                            # Unchanged: a promise's columns are never rewritten,
+                            # not even with their own bytes, and nobody is told.
+                            pinned += 1
+                            continue
                     repaired_pin = fixture.pinned_at is not None
                     fixture.table_id = str(placement.table_id)
                     fixture.scheduled_start = fresh.base + timedelta(
@@ -1160,27 +1389,50 @@ async def _apply_result(
                 )
             case scheduling.Verdict.infeasible:
                 # A designed outcome, not a failure: the solver *proved* the
-                # day does not fit. Nothing is written; existing placements
-                # (the last accepted plan) stand.
+                # day does not fit. No *placement* is written (the last accepted
+                # plan stands) — but the run records *why*: each structured,
+                # id-and-minute reason is resolved to its humanized read form
+                # (pool name + HH:MM window + best_of, minutes passed through)
+                # against ``fresh``'s maps and stored as JSONB. Only this branch
+                # writes ``infeasibility_reasons``; every other status leaves it
+                # NULL (parsed back at read via
+                # ``schemas.schedule_solve.parse_infeasibility_reasons``).
                 row.status = ScheduleSolveStatus.infeasible
                 row.verdict = SolverVerdict.infeasible
-                # Name a past day (ADR "a past day is named, not disguised").
-                # The pure reason is minute-only + a pool id; resolve that pool
-                # to the venue-local date it was given (``fresh.pool_dates`` —
-                # from the same fingerprinted read, so the pool is present) and
-                # record the machine-readable code + date. Both columns are set
-                # together or neither: a generic capacity infeasibility (reason
-                # ``None``) leaves them ``NULL``.
-                if isinstance(result.reason, PastWindow):
-                    offending_date = fresh.pool_dates.get(result.reason.pool_id)
-                    if offending_date is not None:
-                        row.infeasible_reason_code = InfeasibleReasonCode.past_window
-                        row.past_window_date = offending_date
+                # Each structured, id-and-minute reason (including the pre-live
+                # ``PastWindow`` "a past day is named, not disguised" cause, whose
+                # pool id resolves to its venue-local date via ``fresh.pool_dates``)
+                # is humanized against ``fresh``'s maps and stored as JSONB.
+                resolved: list[ResolvedReason] = [
+                    _resolve_reason(reason, fresh) for reason in result.reasons
+                ]
+                # ``mode="json"`` so JSON-native types land in JSONB — the
+                # ``past_window`` reason carries a ``date``, which asyncpg's JSONB
+                # codec cannot serialize raw; it round-trips back to a ``date`` at
+                # read via ``parse_infeasibility_reasons``.
+                row.infeasibility_reasons = [
+                    reason.model_dump(mode="json") for reason in resolved
+                ]
             case scheduling.Verdict.unknown:
                 # The cap ran out before any answer. No verdict — the DB enum
                 # has no ``unknown``, and a run that proved nothing has none.
                 row.status = ScheduleSolveStatus.failed
                 row.error = TIME_CAP_ERROR
+
+        # Placement conflicts are orthogonal to the verdict (ADR "overlapping
+        # in-progress matches are tolerated and reported"): the solver reports
+        # in-progress-vs-in-progress overlaps on ANY verdict — a fully-placed
+        # ``optimal``/``feasible`` board can carry them, and so can an
+        # ``infeasible``/``unknown`` one — so this write is NOT gated on a
+        # branch above. Resolved (ids → player names, table labels) against the
+        # same fingerprint-matched ``fresh`` maps the reasons use, and always a
+        # list (``[]`` when there were none) so the read boundary never sees
+        # NULL for an applied run. Parsed back at read via
+        # ``schemas.schedule_solve.parse_placement_conflicts``.
+        row.placement_conflicts = [
+            _resolve_conflict(conflict, fresh).model_dump()
+            for conflict in result.conflicts
+        ]
 
         if rerun_was_requested:
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)

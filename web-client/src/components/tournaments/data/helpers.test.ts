@@ -2,6 +2,7 @@ import { afterEach, vi } from 'vitest'
 
 import {
   browserTimezone,
+  conjoinWithAnd,
   daysBetween,
   effectiveDateRange,
   emptyEvent,
@@ -316,5 +317,23 @@ describe('emptyEvent', () => {
     const event = emptyEvent(buildTournament())
     expect(event.id.startsWith('new')).toBe(true)
     expect(event.fixtures).toEqual([])
+  })
+})
+
+describe('conjoinWithAnd', () => {
+  it('joins with commas and a trailing "and": A, B and C', () => {
+    expect(conjoinWithAnd(['A', 'B', 'C'])).toBe('A, B and C')
+  })
+
+  it('two labels join with a bare "and", no comma', () => {
+    expect(conjoinWithAnd(['A', 'B'])).toBe('A and B')
+  })
+
+  it('a single label stands alone', () => {
+    expect(conjoinWithAnd(['A'])).toBe('A')
+  })
+
+  it('an empty list is the empty string, never "undefined"', () => {
+    expect(conjoinWithAnd([])).toBe('')
   })
 })

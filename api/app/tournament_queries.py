@@ -15,18 +15,20 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Match,
     MatchGame,
     MatchGameScore,
+    MatchStatus,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
+    TournamentStatus,
     User,
     UserLeagueRating,
 )
@@ -37,6 +39,71 @@ from app.schemas.tournament import (
     TournamentFixtureRead,
 )
 from app.venue_time import venue_local
+
+# The statuses in which a tournament has been ANNOUNCED to the world. Publishing
+# is the act that makes a tournament public (ADR-0017), and nothing walks
+# backwards out of it, so everything from ``published`` onward is announced and
+# ``draft`` is not.
+#
+# An allow-list, deliberately, rather than "anything but draft": a status added
+# to the enum tomorrow is invisible to non-owners until somebody puts it in this
+# set on purpose. The inverse spelling would silently publish a future
+# pre-publish status (a ``pending_review``, a ``scheduled``) the moment it was
+# added, which is exactly the leak this predicate exists to close.
+ANNOUNCED_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {
+        TournamentStatus.published,
+        TournamentStatus.live,
+        TournamentStatus.archived,
+    }
+)
+
+
+def visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Which tournaments ``user_id`` may see at all: the announced ones, plus
+    their own — whatever status their own is in.
+
+    A draft is not announced, so it is owner-only. The read routes push this into
+    the WHERE clause rather than filtering after the fact, so a hidden draft is
+    *not selected* and the detail route's existing "Tournament not found." 404
+    answers for it. 404 and not 403: a 403 would confirm that a tournament with
+    that id exists, which is precisely what an unannounced tournament must not
+    admit. A draft the caller cannot see is indistinguishable from one that was
+    never created.
+
+    ``tournament.view`` is a separate question, and it is asked first — the HTTP
+    route hangs it off a dependency and the MCP adapter checks it before this
+    predicate is ever built, so a caller without the permission is refused (403 /
+    a ``ToolError``) first. Permission says "may you read tournaments at all";
+    this says "which ones are there for you to read".
+
+    One predicate, shared by the list route, the detail route, and the MCP
+    ``get_tournament`` tool, because two copies of this rule would eventually
+    disagree — and the way they disagree is that one hides a draft another still
+    serves.
+    """
+    return or_(
+        Tournament.status.in_(ANNOUNCED_STATUSES),
+        Tournament.created_by_user_id == user_id,
+    )
+
+
+def completed_match_ids(
+    fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
+) -> list[uuid.UUID]:
+    """The ids of the matches of every **completed** fixture across the page.
+
+    The one list ``game_counts_by_match`` is batched over, gathered before any event is
+    serialized so the standings of every event are projected from a single game load
+    (ADR-0788) rather than a query per event. Only ``completed`` fixtures contribute: an
+    in-progress match's part-scored board is not a result and must not reach a standings
+    table."""
+    return [
+        f.match_id
+        for fixtures in fixtures_by_event.values()
+        for f in fixtures
+        if f.match_status is MatchStatus.completed and f.match_id is not None
+    ]
 
 
 async def active_entrants_by_event(

@@ -22,7 +22,7 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 
-import { fmtDate } from './helpers'
+import { conjoinWithAnd, fmtDate } from './helpers'
 import type { TournamentStatus } from './types'
 
 type ScheduleSolveWire = components['schemas']['ScheduleSolveRead']
@@ -69,57 +69,286 @@ export type ScheduleSolveTrigger = z.infer<typeof scheduleSolveTriggerSchema>
 export type ScheduleSolveStatus = z.infer<typeof scheduleSolveStatusSchema>
 export type SolverVerdict = z.infer<typeof solverVerdictSchema>
 
-// ----- the named infeasibility reason: why "infeasible" specifically ----------
+// ----- why the day doesn't fit: the resolved infeasibility reasons ------------
 //
-// An `infeasible` verdict is no longer always one opaque "the day doesn't fit".
-// The API's solver pre-check distinguishes a *named* cause from a generic
-// capacity shortfall (ADR "a past day is named, not disguised") and ships it on
-// `ScheduleSolveRead.infeasible_reason`: `null` for every non-infeasible run AND
-// for a generic capacity infeasibility (a current-but-too-tight window, no single
-// named cause), non-null ONLY for a named cause. Today the sole named cause is
-// `past_window` — a pool's ENTIRE planned window is already behind now — carrying
-// the offending venue-local `date` (`YYYY-MM-DD`, resolved server-side in the
-// event's own timezone frame, so the client does no tz math of its own).
-//
-// The `code` is *data* the strip switches on, so — like `status`/`trigger`/
-// `verdict` — a code this client has no words for must FAIL the parse HERE, in the
-// queryFn, not fall out of a `switch` two components later as a blank line
-// (`z.discriminatedUnion` rejects an unknown discriminator). The *sentence* is
-// still the client's, minted in `infeasibleReasonMessage` below.
+// An `infeasible` solve no longer speaks in one opaque "Doesn't fit" — the API
+// resolves the causes to names/numbers at apply time (the ADR
+// "an-infeasible-solve-explains-itself-with-a-resolved-reason") and ships them
+// as a closed sum type on `ScheduleSolveRead.infeasibility_reasons`: always a
+// list, `[]` off the infeasible path. The `kind` discriminant is *data* the
+// client switches on, so — like `status`/`trigger`/`verdict` — an arm this
+// client has no words for must FAIL the parse here, in the queryFn, not fall
+// out of a `switch` two components later as a blank row (`z.discriminatedUnion`
+// rejects an unknown discriminator). Names + numbers are data (a `pool_name` is
+// like a username); the *sentence* is still the client's, minted in
+// `infeasibilityReasonCopy` below, so "raw API strings never reach the UI" holds.
 
-type PastWindowReasonWire = components['schemas']['PastWindowReason']
+type PoolHasNoTablesWire =
+  components['schemas']['PoolHasNoTablesRead']
+type WindowTooShortForMatchWire =
+  components['schemas']['WindowTooShortForMatchRead']
+type PoolOverCapacityWire =
+  components['schemas']['PoolOverCapacityRead']
+type NoSingleCauseWire =
+  components['schemas']['NoSingleCauseRead']
+type PastWindowReasonWire =
+  components['schemas']['PastWindowReasonRead']
 
-/** The named cause of a `past_window` infeasibility, in the domain's spelling: a
- * pool's whole planned window is a day already behind now, so it cannot run until
- * it is moved to a future day. `code` is the machine-readable discriminator; `date`
- * is the offending venue-local calendar day (`YYYY-MM-DD`), which the strip names
- * so the director knows exactly which day to move. */
-export interface PastWindowReason {
-  code: 'past_window'
-  date: string
-}
+/**
+ * One resolved reason an `infeasible` solve carries, in the domain's camelCase
+ * spelling — a discriminated union over `kind`, one arm per structural cause the
+ * solver can name, plus the honestly-labelled residual (`no_single_cause`). The
+ * `kind` string stays snake_case (it is the wire's discriminant, and the copy
+ * module + admin ledger switch on it); every other field is mapped snake→camel
+ * like the rest of this module.
+ *
+ * - **`pool_has_no_tables`** — a pool with fixtures but nowhere to place them.
+ * - **`window_too_short_for_match`** — a single match cannot fit its pool window
+ *   contiguously, whatever the table count.
+ * - **`pool_over_capacity`** — a pool's aggregate match-time exceeds what its
+ *   window × tables can hold (a *certain* pre-check, not a CP-SAT guess).
+ * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–3 all passed: a
+ *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
+ * - **`past_window`** — a pool's ENTIRE planned window is already a day behind
+ *   now (ADR "a past day is named, not disguised"), fixed by moving the date, not
+ *   by adding tables/time. Carries the offending venue-local `date` (`YYYY-MM-DD`,
+ *   resolved server-side in the event's own timezone frame, so the client does no
+ *   tz math of its own).
+ */
+export type InfeasibilityReason =
+  | { kind: 'pool_has_no_tables'; poolName: string }
+  | {
+      kind: 'window_too_short_for_match'
+      poolName: string
+      windowStart: string
+      windowEnd: string
+      bestOf: 1 | 3 | 5 | 7
+      neededMin: number
+      windowSpanMin: number
+    }
+  | {
+      kind: 'pool_over_capacity'
+      poolName: string
+      windowStart: string
+      windowEnd: string
+      requiredMin: number
+      capacityMin: number
+      tableCount: number
+    }
+  | { kind: 'no_single_cause'; requiredMin: number; availableMin: number }
+  | { kind: 'past_window'; date: string }
 
-/** The named infeasibility reason a solve can carry — a discriminated union over
- * `code`, one arm today (`past_window`). Modelled as a union (not a lone object)
- * so a second named cause added to the API is a compile error here until it is
- * given copy in `infeasibleReasonMessage`, never a raw code on screen. */
-export type InfeasibleReason = PastWindowReason
+/** The wire arms, as they really arrive: snake_case, `kind` a literal so the
+ * union below can discriminate on it. `satisfies` each against the generated
+ * schema so a field renamed in the API is a compile error here, not a silent
+ * `undefined` at render. */
+const poolHasNoTablesWireSchema = z.object({
+  kind: z.literal('pool_has_no_tables'),
+  pool_name: z.string(),
+}) satisfies z.ZodType<PoolHasNoTablesWire>
 
-/** The wire arm, as it really arrives — `code` a literal so the union can
- * discriminate on it. `satisfies` it against the generated schema so a field
- * renamed in the API is a compile error here, not a silent `undefined`. */
+const windowTooShortForMatchWireSchema = z.object({
+  kind: z.literal('window_too_short_for_match'),
+  pool_name: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  best_of: z.union([z.literal(1), z.literal(3), z.literal(5), z.literal(7)]),
+  needed_min: z.number().int(),
+  window_span_min: z.number().int(),
+}) satisfies z.ZodType<WindowTooShortForMatchWire>
+
+const poolOverCapacityWireSchema = z.object({
+  kind: z.literal('pool_over_capacity'),
+  pool_name: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  required_min: z.number().int(),
+  capacity_min: z.number().int(),
+  table_count: z.number().int(),
+}) satisfies z.ZodType<PoolOverCapacityWire>
+
+const noSingleCauseWireSchema = z.object({
+  kind: z.literal('no_single_cause'),
+  required_min: z.number().int(),
+  available_min: z.number().int(),
+}) satisfies z.ZodType<NoSingleCauseWire>
+
 const pastWindowReasonWireSchema = z.object({
-  code: z.literal('past_window'),
+  kind: z.literal('past_window'),
   date: z.string(),
 }) satisfies z.ZodType<PastWindowReasonWire>
 
-/** The named reason as one `z.discriminatedUnion('code', …)` — an unknown `code`
- * has no arm and throws, which is exactly the boundary rule: a reason this client
- * cannot render must fail the parse, not blank the line. `date` is single-word, so
- * the domain shape equals the wire shape (no snake→camel mapping needed). */
-export const infeasibleReasonSchema = z.discriminatedUnion('code', [
+/** The five arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
+ * has no arm and throws, which is exactly the boundary rule: a reason this
+ * client cannot render must fail the parse, not blank the row. */
+export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
+  poolHasNoTablesWireSchema,
+  windowTooShortForMatchWireSchema,
+  poolOverCapacityWireSchema,
+  noSingleCauseWireSchema,
   pastWindowReasonWireSchema,
 ])
+
+/** One wire arm → one domain `InfeasibilityReason`. Annotated `: InfeasibilityReason`
+ * so the union above and the wire arms are one thing — drop or rename a field on
+ * either and this is a compile error. Exhaustive over `kind` (a `never` default),
+ * so a fifth arm added to the API cannot slip through unmapped. */
+export function infeasibilityReasonFromWire(
+  r: z.infer<typeof infeasibilityReasonWireSchema>,
+): InfeasibilityReason {
+  switch (r.kind) {
+    case 'pool_has_no_tables':
+      return { kind: r.kind, poolName: r.pool_name }
+    case 'window_too_short_for_match':
+      return {
+        kind: r.kind,
+        poolName: r.pool_name,
+        windowStart: r.window_start,
+        windowEnd: r.window_end,
+        bestOf: r.best_of,
+        neededMin: r.needed_min,
+        windowSpanMin: r.window_span_min,
+      }
+    case 'pool_over_capacity':
+      return {
+        kind: r.kind,
+        poolName: r.pool_name,
+        windowStart: r.window_start,
+        windowEnd: r.window_end,
+        requiredMin: r.required_min,
+        capacityMin: r.capacity_min,
+        tableCount: r.table_count,
+      }
+    case 'no_single_cause':
+      return {
+        kind: r.kind,
+        requiredMin: r.required_min,
+        availableMin: r.available_min,
+      }
+    case 'past_window':
+      // Domain shape equals the wire shape (single-word `date`), carries straight
+      // through — no snake→camel mapping needed.
+      return { kind: r.kind, date: r.date }
+    default: {
+      const exhaustive: never = r
+      return exhaustive
+    }
+  }
+}
+
+/** The per-reason parser: the wire arm plus the snake→camel mapping, one Zod
+ * pipeline. Embedded in `scheduleSolveWireSchema` below, which the admin ledger's
+ * wire schema `.extend()`s — so both surfaces parse reasons through this one arm. */
+export const infeasibilityReasonSchema =
+  infeasibilityReasonWireSchema.transform(infeasibilityReasonFromWire)
+
+// ----- overlapping in-progress matches: the resolved placement conflicts ------
+//
+// A solve tolerates two *in-progress* matches that a soft manual PATCH parked on
+// the same table or the same human (the ADR "overlapping-in-progress-matches-
+// are-tolerated-and-reported") — it never blanks the board over contradictory
+// data, it keeps the fixed blocks binding and *reports* the overlap. The report
+// is DB-resolved at apply (ids → a table label / a human's name, each fixture
+// named by its matchup) and shipped on `ScheduleSolveRead.placement_conflicts`:
+// ALWAYS a list, `[]` on a clean board — and, unlike the infeasibility reasons,
+// present on ANY verdict (a *placed* board can still carry a caution; the two
+// are orthogonal). The `kind` discriminant is data the surfaces switch on, so —
+// like the infeasibility arms — a conflict kind this client has no words for
+// must FAIL the parse here, not blank a warning row two components later. Names
+// are data (a `player_name` is like a username); the *sentence* is the client's,
+// minted in `placementConflictSentence` below.
+
+type ConflictFixtureWire = components['schemas']['ConflictFixtureRead']
+type TableConflictWire = components['schemas']['TableConflictRead']
+type PlayerConflictWire = components['schemas']['PlayerConflictRead']
+
+/** One in-progress match caught in a conflict, named the way the director reads
+ * a fixture — by its **matchup**, the two players facing off. The raw `fixtureId`
+ * rides along so a surface can key/deep-link without re-deriving it. */
+export interface ConflictFixture {
+  fixtureId: string
+  playerA: string
+  playerB: string
+}
+
+/**
+ * One resolved placement conflict a solve carries, in the domain's camelCase — a
+ * discriminated union over `kind`, one arm per shared resource two overlapping
+ * in-progress matches can contradict. The `kind` string stays snake_case (it is
+ * the wire's discriminant); every other field is mapped snake→camel.
+ *
+ * - **`table_conflict`** — two in-progress matches recorded on the same table at
+ *   overlapping times (a table holds one match).
+ * - **`player_conflict`** — two in-progress matches sharing a human whose
+ *   occupancy overlaps (a human plays one match at a time).
+ */
+export type PlacementConflict =
+  | { kind: 'table_conflict'; tableLabel: string; fixtures: ConflictFixture[] }
+  | { kind: 'player_conflict'; playerName: string; fixtures: ConflictFixture[] }
+
+/** The wire fixture, as it really arrives: snake_case. `satisfies` it against the
+ * generated schema so a field renamed in the API is a compile error here. */
+const conflictFixtureWireSchema = z.object({
+  fixture_id: z.string(),
+  player_a: z.string(),
+  player_b: z.string(),
+}) satisfies z.ZodType<ConflictFixtureWire>
+
+const tableConflictWireSchema = z.object({
+  kind: z.literal('table_conflict'),
+  table_label: z.string(),
+  fixtures: z.array(conflictFixtureWireSchema),
+}) satisfies z.ZodType<TableConflictWire>
+
+const playerConflictWireSchema = z.object({
+  kind: z.literal('player_conflict'),
+  player_name: z.string(),
+  fixtures: z.array(conflictFixtureWireSchema),
+}) satisfies z.ZodType<PlayerConflictWire>
+
+/** The two arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind` has
+ * no arm and throws, which is exactly the boundary rule: a conflict this client
+ * cannot render must fail the parse, not blank the warning. */
+export const placementConflictWireSchema = z.discriminatedUnion('kind', [
+  tableConflictWireSchema,
+  playerConflictWireSchema,
+])
+
+function conflictFixtureFromWire(f: ConflictFixtureWire): ConflictFixture {
+  return { fixtureId: f.fixture_id, playerA: f.player_a, playerB: f.player_b }
+}
+
+/** One wire arm → one domain `PlacementConflict`. Annotated so the union above
+ * and the wire arms are one thing. Exhaustive over `kind` (a `never` default), so
+ * a third arm added to the API cannot slip through unmapped. */
+export function placementConflictFromWire(
+  c: z.infer<typeof placementConflictWireSchema>,
+): PlacementConflict {
+  switch (c.kind) {
+    case 'table_conflict':
+      return {
+        kind: c.kind,
+        tableLabel: c.table_label,
+        fixtures: c.fixtures.map(conflictFixtureFromWire),
+      }
+    case 'player_conflict':
+      return {
+        kind: c.kind,
+        playerName: c.player_name,
+        fixtures: c.fixtures.map(conflictFixtureFromWire),
+      }
+    default: {
+      const exhaustive: never = c
+      return exhaustive
+    }
+  }
+}
+
+/** The per-conflict parser: the wire arm plus the snake→camel mapping, one Zod
+ * pipeline. Embedded in `scheduleSolveWireSchema` below, which the admin ledger's
+ * wire schema `.extend()`s — so both surfaces parse conflicts through this arm. */
+export const placementConflictSchema =
+  placementConflictWireSchema.transform(placementConflictFromWire)
 
 /**
  * One row of the tournament's **solve ledger**, in the domain's spelling — the
@@ -151,13 +380,16 @@ export interface ScheduleSolve {
   fixturesPinned: number | null
   overrunning: boolean
   error: string | null
-  /** The named, machine-readable cause of an `infeasible` verdict, or `null`.
-   * `null` for every non-infeasible run AND for a generic capacity infeasibility
-   * (a current-but-too-tight window, no single named cause); non-null only for a
-   * named cause — today, a `past_window` naming the offending venue-local day
-   * (ADR "a past day is named, not disguised"). Not a stage marker: it is the
-   * *why* behind one specific status, and an absent key is a payload we reject. */
-  infeasibleReason: InfeasibleReason | null
+  /** Why the day doesn't fit — **always a list**, never null (`[]` off the
+   * infeasible path; one or more resolved causes on an `infeasible` row). Not a
+   * nullable stage marker like the fields above: the API guarantees the array is
+   * present, and an absent key is a payload we reject rather than read as `[]`. */
+  infeasibilityReasons: InfeasibilityReason[]
+  /** Overlapping in-progress matches the solve *tolerated and reported* — **always
+   * a list**, never null (`[]` on a clean board). Orthogonal to the verdict: a
+   * placed/succeeded board can still carry a caution here. Like the reasons, an
+   * absent key is a payload we reject rather than read as `[]`. */
+  placementConflicts: PlacementConflict[]
 }
 
 /** The wire shape (`ScheduleSolveRead`), as it really arrives: snake_case, every
@@ -178,10 +410,13 @@ export const scheduleSolveWireSchema = z.object({
   fixtures_pinned: z.number().int().nullable(),
   overrunning: z.boolean(),
   error: z.string().nullable(),
-  // Present on every row (a nullable, never optional — an absent key is a payload
-  // we reject, not a "generic infeasibility"); non-null only for a named cause,
-  // parsed through the discriminated union so an unknown `code` fails the row.
-  infeasible_reason: infeasibleReasonSchema.nullable(),
+  // Always present (a non-nullable list); each element is parsed through the
+  // discriminated union, so an unknown arm `kind` fails the whole row.
+  infeasibility_reasons: z.array(infeasibilityReasonSchema),
+  // Always present too, and on ANY verdict (a placed board can still carry a
+  // caution); each element parsed through the conflict union, so an unknown arm
+  // `kind` fails the whole row.
+  placement_conflicts: z.array(placementConflictSchema),
 })
 
 /** The snake→camel mapping, one wire row → one domain `ScheduleSolve`. Annotated
@@ -205,9 +440,10 @@ export function scheduleSolveFromWire(
     fixturesPinned: s.fixtures_pinned,
     overrunning: s.overrunning,
     error: s.error,
-    // Domain shape equals the wire shape (single-word fields), so it carries
-    // straight through — already parsed by `infeasibleReasonSchema`.
-    infeasibleReason: s.infeasible_reason,
+    // Already snake→camel-mapped by `infeasibilityReasonSchema`'s transform.
+    infeasibilityReasons: s.infeasibility_reasons,
+    // Already snake→camel-mapped by `placementConflictSchema`'s transform.
+    placementConflicts: s.placement_conflicts,
   }
 }
 
@@ -263,11 +499,11 @@ export type SolveStripState =
       kind: 'infeasible'
       finishedAt: string | null
       trigger: ScheduleSolveTrigger
-      /** The named cause when there is one — today only `past_window` (the event's
-       * whole planned window is a day already behind now), which the strip renders
-       * as a *specific, dated* message instead of the generic "doesn't fit". `null`
-       * for a generic capacity infeasibility, which keeps the generic message. */
-      reason: InfeasibleReason | null
+      /** The resolved causes the day doesn't fit — the same list the ledger row
+       * carries (`≥1` on an infeasible row; the strip renders each via
+       * `infeasibilityReasonCopy`, falling back to its generic sentence if empty).
+       * Includes the `past_window` arm — a day dated in the past. */
+      reasons: InfeasibilityReason[]
     }
   | {
       kind: 'failed'
@@ -311,7 +547,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
         kind: 'infeasible',
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,
-        reason: solve.infeasibleReason,
+        reasons: solve.infeasibilityReasons,
       }
     case 'failed':
       return { kind: 'failed', error: solve.error, trigger: solve.trigger }
@@ -360,27 +596,135 @@ export function fmtWallTime(ms: number | null): string | null {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
+// ----- copy: the infeasibility reasons → the director's words -----------------
+//
+// ONE shared module, in the spirit of `VERDICT_LABEL`: both the Schedule-tab
+// solve strip (chore 4b) and the admin solve ledger (chore 4c) import
+// `infeasibilityReasonCopy` and render the SAME `sentence` + `remedy`, so the two
+// surfaces cannot drift on how a reason reads. Pure functions, unit-tested here.
+
+/** A pool's table-time, human-sized in the *prose*' spirit of `fmtWallTime`:
+ * a bare `8h` / `1.3h` / `45 min`, WITHOUT a leading "about" — the sentences
+ * below own that word ("… need about {…}"), so the formatter must not double it.
+ * Hours to one decimal when not whole (`75 min → 1.3h`), a whole number when it
+ * is (`480 min → 8h`), and plain minutes under the hour (`45 min`). */
+export function fmtTableTime(min: number): string {
+  if (min < 60) return `${Math.round(min)} min`
+  const hours = Math.round((min / 60) * 10) / 10
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`
+}
+
+/** `1 table` / `5 tables` — sane pluralisation for the reason sentences. */
+export function fmtTables(count: number): string {
+  return `${count} ${count === 1 ? 'table' : 'tables'}`
+}
+
+/** What a caller renders for one reason: the client's own sentence naming the
+ * cause, and a user-facing remedy. Both interpolate the resolved names/numbers;
+ * neither carries a GitHub issue number (the ADR's rule). */
+export interface InfeasibilityReasonCopy {
+  sentence: string
+  remedy: string
+}
+
 /**
- * The specific, actionable sentence for a *named* infeasibility reason — the
- * client's own copy (raw wire strings never reach the UI), naming the offending
- * day so the director knows exactly what to fix (ADR "a past day is named, not
- * disguised"). The venue-local `date` is formatted through the tournament's own
- * date formatter (`fmtDate`, tz-safe local-midnight — no hand-slicing, no drift).
+ * Map one resolved reason to its designed copy. Exhaustive over `kind` — a `never`
+ * default makes a fifth arm added to the API a compile error here until it is
+ * given words, so a reason can never reach the UI as a blank line.
  *
- * Exhaustive over `code` — a `never` default makes a second named cause added to
- * the API a compile error here until it has words, so a reason can never reach the
- * UI as a blank line. A generic infeasibility carries `null` and never reaches
- * here: the strip keeps its generic "the day doesn't fit" copy for that case.
+ * The residual (`no_single_cause`) is deliberately worded to steer the director
+ * *away* from adding tables: by construction there is a table-time surplus, so the
+ * problem is timing, not capacity (the ADR's "don't add tables here").
  */
-export function infeasibleReasonMessage(reason: InfeasibleReason): string {
-  switch (reason.code) {
+export function infeasibilityReasonCopy(
+  reason: InfeasibilityReason,
+): InfeasibilityReasonCopy {
+  switch (reason.kind) {
+    case 'pool_has_no_tables':
+      return {
+        sentence: `${reason.poolName} has no tables assigned.`,
+        remedy: `Assign at least one table to ${reason.poolName}, then run the scheduler again.`,
+      }
+    case 'window_too_short_for_match':
+      return {
+        sentence: `${reason.poolName}'s ${reason.windowStart}–${reason.windowEnd} window is too short for a best-of-${reason.bestOf} match — it needs ${reason.neededMin} min but the window is only ${reason.windowSpanMin}.`,
+        remedy: `Widen ${reason.poolName}'s window, or use a shorter match format.`,
+      }
+    case 'pool_over_capacity':
+      return {
+        sentence: `${reason.poolName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
+        remedy: `Add a table to ${reason.poolName}, widen its window, or trim the field.`,
+      }
+    case 'no_single_cause':
+      return {
+        sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
+        remedy: `Trim a field, widen a window, or split the event across days — adding tables won't help here.`,
+      }
     case 'past_window':
-      return `This event's window (${fmtDate(reason.date)}) has already passed — update the date.`
+      // The venue-local `date` is formatted through the tournament's own date
+      // formatter (`fmtDate`, tz-safe local-midnight — no hand-slicing, no drift),
+      // so the director sees which day to move (ADR "a past day is named").
+      return {
+        sentence: `This event is dated in the past (${fmtDate(reason.date)}), so it can't be scheduled.`,
+        remedy: `Move the event to a future date, then run the scheduler again.`,
+      }
     default: {
-      const exhaustive: never = reason.code
+      const exhaustive: never = reason
       return exhaustive
     }
   }
+}
+
+/** A stable-enough React key for one infeasibility reason: its `kind`, the pool
+ * it names when it has one, and the list index (two `no_single_cause`s never
+ * coexist, but the index keeps the key total). Shared so every surface that
+ * lists the reasons keys them the same way by import, not by convention. */
+export function infeasibilityReasonKey(reason: InfeasibilityReason, i: number): string {
+  return 'poolName' in reason
+    ? `${reason.kind}:${reason.poolName}:${i}`
+    : `${reason.kind}:${i}`
+}
+
+// ----- copy: the placement conflicts → the director's words -------------------
+//
+// ONE shared module, in the spirit of `infeasibilityReasonCopy`: both the
+// Schedule-tab solve strip and the admin solve ledger import
+// `placementConflictSentence` and render the SAME warning, so the two surfaces
+// cannot drift on how a conflict reads. Pure functions, unit-tested here.
+
+/** A fixture's matchup label — the two players facing off, `crafty-vs-spiked`.
+ * How the director already reads a fixture, so the warning names matches, not
+ * ids. */
+export function conflictFixtureLabel(fixture: ConflictFixture): string {
+  return `${fixture.playerA}-vs-${fixture.playerB}`
+}
+
+/** One conflict as the director's caution sentence, naming the colliding matches
+ * and the shared resource: `crafty-vs-spiked and dazed-vs-confused overlap on
+ * Table 1` (table) / `… overlap on spiked-frigatebird` (human). Exhaustive over
+ * `kind` — a `never` default makes a third arm a compile error until it has
+ * words, so a conflict can never reach the UI as a blank line. */
+export function placementConflictSentence(conflict: PlacementConflict): string {
+  const matches = conjoinWithAnd(conflict.fixtures.map(conflictFixtureLabel))
+  switch (conflict.kind) {
+    case 'table_conflict':
+      return `${matches} overlap on ${conflict.tableLabel}`
+    case 'player_conflict':
+      return `${matches} overlap on ${conflict.playerName}`
+    default: {
+      const exhaustive: never = conflict
+      return exhaustive
+    }
+  }
+}
+
+/** A stable-enough React key for one placement conflict: its `kind`, the resource
+ * it names, and the list index. Shared so every surface that lists the conflicts
+ * keys them the same way by import, not by convention. */
+export function placementConflictKey(conflict: PlacementConflict, i: number): string {
+  const resource =
+    conflict.kind === 'table_conflict' ? conflict.tableLabel : conflict.playerName
+  return `${conflict.kind}:${resource}:${i}`
 }
 
 // ----- polling ----------------------------------------------------------------

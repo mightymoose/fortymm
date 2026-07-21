@@ -194,8 +194,8 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(pom.runSchedulerNotice).not.toBeVisible()
     await expect(pom.toasts).toHaveCount(0)
     await expect(state).not.toContainText('infeasible')
-    // A GENERIC capacity infeasibility (`infeasible_reason: null`): the generic
-    // copy, and NO specific dated message — the discriminating case.
+    // A GENERIC capacity infeasibility (`infeasibility_reasons: []`): the generic
+    // copy, and NO specific dated past-window reason — the discriminating case.
     await expect(pom.pastWindowMessage).toHaveCount(0)
     // The director can act on it immediately: the button is live again.
     await expect(pom.runScheduler).toBeEnabled()
@@ -203,13 +203,13 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expectAxeClean(page, 'schedule tab — infeasible solve on the strip')
   })
 
-  test('names a wholly-past window with a specific dated message — the `infeasible_reason` fact crosses the real wire', async ({
+  test('names a wholly-past window as its own dated reason arm — the `past_window` fact crosses the real wire', async ({
     page,
   }) => {
-    // `infeasible_reason` crosses the real wire on the schedule-solve read; the
-    // client Zod-parses it in the queryFn and the strip renders the SPECIFIC
-    // dated message instead of the generic "doesn't fit" (ADR "a past day is
-    // named, not disguised").
+    // A `past_window` arm of `infeasibility_reasons` crosses the real wire on the
+    // schedule-solve read; the client Zod-parses it in the queryFn and the strip
+    // renders the SPECIFIC dated reason instead of the generic "doesn't fit" (ADR
+    // "a past day is named, not disguised").
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       ...DRAWN_SEED,
       latestSolve: buildScheduleSolveRead({
@@ -218,18 +218,19 @@ test.describe('Tournaments · schedule solve strip', () => {
         trigger: 'manual',
         fixtures_placed: null,
         fixtures_pinned: null,
-        infeasible_reason: { code: 'past_window', date: '2026-07-18' },
+        infeasibility_reasons: [{ kind: 'past_window', date: '2026-07-18' }],
       }),
     })
     await pom.openScheduleTab()
 
     const state = pom.solveStripState('infeasible')
     await expect(state).toBeVisible()
-    // The specific, dated, actionable message names the offending venue-local day…
+    // The specific, dated, actionable reason names the offending venue-local day…
     await expect(pom.pastWindowMessage).toBeVisible()
+    await expect(state).toContainText('This day has already passed')
     await expect(state).toContainText('Jul 18, 2026')
-    await expect(state).toContainText('has already passed')
-    await expect(state).toContainText('update the date')
+    await expect(state).toContainText('dated in the past')
+    await expect(state).toContainText('Move the event to a future date')
     // …INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
     await expect(state).not.toContainText('Add tables, widen a pool window')
     // Still a designed state, not an error: nothing red rings, and the raw wire

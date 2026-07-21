@@ -3,7 +3,7 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
-import type { ScheduleSolve } from './solve'
+import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import type {
   Address,
   Entrant,
@@ -327,10 +327,70 @@ export function buildScheduleSolve(
     fixturesPinned: 0,
     overrunning: false,
     error: null,
-    // No named infeasibility cause on a succeeded run — `null` is the ordinary
-    // state; an infeasible fixture that wants the specific dated message overrides
-    // `infeasibleReason: { code: 'past_window', date: '…' }`.
-    infeasibleReason: null,
+    // A succeeded run has no infeasibility reasons; the list is always present
+    // (`[]` off the infeasible path). An infeasible fixture overrides this — e.g.
+    // `infeasibilityReasons: [{ kind: 'past_window', date: '…' }]`.
+    infeasibilityReasons: [],
+    // A clean board has no overlapping in-progress matches; the list is always
+    // present (`[]` on a clean board) and orthogonal to the verdict — a fixture
+    // proving the caution passes a `placementConflicts` override on ANY status.
+    placementConflicts: [],
+    ...overrides,
+  }
+}
+
+/** One in-progress match caught in a placement conflict, named by its matchup —
+ * `crafty` vs `spiked` by default. A conflict fixture a test wants a specific
+ * matchup for overrides the two player names. */
+export function buildConflictFixture(
+  overrides: Partial<ConflictFixture> = {},
+): ConflictFixture {
+  return {
+    fixtureId: 'fx-conflict-1',
+    playerA: 'crafty',
+    playerB: 'spiked',
+    ...overrides,
+  }
+}
+
+/** A **table** placement conflict (ADR "overlapping-in-progress-matches-are-
+ * tolerated-and-reported"): two in-progress matches — `crafty-vs-spiked` and
+ * `dazed-vs-confused` — recorded on the same table (`Table 1`). */
+export function buildTableConflict(
+  overrides: Partial<Extract<PlacementConflict, { kind: 'table_conflict' }>> = {},
+): PlacementConflict {
+  return {
+    kind: 'table_conflict',
+    tableLabel: 'Table 1',
+    fixtures: [
+      buildConflictFixture({ fixtureId: 'fx-conflict-a', playerA: 'crafty', playerB: 'spiked' }),
+      buildConflictFixture({ fixtureId: 'fx-conflict-b', playerA: 'dazed', playerB: 'confused' }),
+    ],
+    ...overrides,
+  }
+}
+
+/** A **player** placement conflict: two in-progress matches sharing a human
+ * (`spiked-frigatebird`) — `crafty-vs-spiked-frigatebird` and
+ * `spiked-frigatebird-vs-nimble`. */
+export function buildPlayerConflict(
+  overrides: Partial<Extract<PlacementConflict, { kind: 'player_conflict' }>> = {},
+): PlacementConflict {
+  return {
+    kind: 'player_conflict',
+    playerName: 'spiked-frigatebird',
+    fixtures: [
+      buildConflictFixture({
+        fixtureId: 'fx-conflict-c',
+        playerA: 'crafty',
+        playerB: 'spiked-frigatebird',
+      }),
+      buildConflictFixture({
+        fixtureId: 'fx-conflict-d',
+        playerA: 'spiked-frigatebird',
+        playerB: 'nimble',
+      }),
+    ],
     ...overrides,
   }
 }
