@@ -147,6 +147,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
     TournamentStatus,
+    User,
 )
 from app.rq_async import run_async_db_job
 from app.scheduling import (
@@ -158,6 +159,8 @@ from app.scheduling import (
     InProgressMatch,
     NoSingleCause,
     Pin,
+    PlacementConflict,
+    PlayerConflict,
     PlayerId,
     PoolHasNoTables,
     PoolId,
@@ -168,6 +171,7 @@ from app.scheduling import (
     SchedulePool,
     ScheduleSnapshot,
     SolveResult,
+    TableConflict,
     TableId,
     Window,
     WindowTooShortForMatch,
@@ -175,10 +179,14 @@ from app.scheduling import (
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
+    ConflictFixtureRead,
     NoSingleCauseRead,
+    PlayerConflictRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
+    ResolvedConflict,
     ResolvedReason,
+    TableConflictRead,
     WindowTooShortForMatchRead,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
@@ -507,7 +515,15 @@ class SolveInputs:
     *infeasible* solve's structured reasons through — pool id → name+clock,
     fixture id → its event's ``length_games``. They derive from the same
     fingerprinted inputs, so the fresh read's maps match the ones the reasons
-    were computed against."""
+    were computed against.
+
+    ``table_labels`` (solver ``TableId`` → the catalogue label),
+    ``player_names`` (solver ``PlayerId`` — a user-id string — → display
+    username), and ``fixture_matchups`` (``str(fixture.id)`` → the two players'
+    usernames) are the sibling lookups the apply humanizes a solve's
+    *placement conflicts* through (ADR "overlapping in-progress matches are
+    tolerated and reported"). Same fingerprinted provenance, so the fresh read's
+    maps resolve exactly the ids a conflict carries."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
@@ -518,6 +534,9 @@ class SolveInputs:
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
     pool_resolutions: dict[str, _PoolResolution] = field(default_factory=dict)
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = field(default_factory=dict)
+    table_labels: dict[str, str] = field(default_factory=dict)
+    player_names: dict[str, str] = field(default_factory=dict)
+    fixture_matchups: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -658,6 +677,25 @@ async def _load_solver_inputs(
             else:
                 withdrawn_entry_ids.add(entry_id)
 
+    # user_id → display username: the DB-aware resolution a placement conflict's
+    # shared human (and each colliding fixture's matchup) is humanized through.
+    # Loaded off the same entrant set the snapshot is built from — one IN-query,
+    # like ``load_copy_ingredients`` — so it resolves exactly the user ids the
+    # solver's PlayerIds are stringified from.
+    user_names: dict[uuid.UUID, str] = {}
+    if entry_user:
+        user_names = {
+            user_id: username
+            for user_id, username in (
+                await db.execute(
+                    select(User.id, User.username).where(
+                        User.id.in_(set(entry_user.values()))
+                    )
+                )
+            ).all()
+        }
+    player_names = {str(user_id): name for user_id, name in user_names.items()}
+
     match_status: dict[uuid.UUID, MatchStatus] = {}
     # A completed match's stable completion stamp (``None`` for one deemed
     # completed via ``winner_entry_id`` alone), the anchor a rest shadow needs
@@ -679,10 +717,13 @@ async def _load_solver_inputs(
 
     # Parse the JSONB value-objects once, at this boundary, with the same
     # models the write boundary validated them with (parse, don't validate).
-    catalogue = tuple(
-        TableId(TournamentTable.model_validate(table).id)
-        for table in tournament.table_catalogue
-    )
+    parsed_tables = [
+        TournamentTable.model_validate(table) for table in tournament.table_catalogue
+    ]
+    catalogue = tuple(TableId(table.id) for table in parsed_tables)
+    # table_id → catalogue label: the DB-aware resolution a placement conflict's
+    # shared table is humanized through (mirrors ``load_copy_ingredients``).
+    table_labels = {table.id: table.label for table in parsed_tables}
     parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Pool]]] = [
         (
             event,
@@ -712,6 +753,10 @@ async def _load_solver_inputs(
     # reasons carry.
     pool_resolutions: dict[str, _PoolResolution] = {}
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = {}
+    # fixture id → its matchup (the two players' usernames): the DB-aware
+    # resolution a placement conflict names each colliding fixture through.
+    # Built in the fixture loop below, alongside ``fixture_best_of``.
+    fixture_matchups: dict[str, tuple[str, str]] = {}
     for event, _settings, pools in parsed_events:
         for pool in pools:
             key = f"{event.id}:{pool.id}"
@@ -812,9 +857,15 @@ async def _load_solver_inputs(
                     )
             fixture_id = FixtureId(str(fixture.id))
             # Only placeable (pooled, both-sides-known) fixtures reach here, and
-            # only such a fixture can surface in a WindowTooShortForMatch reason —
-            # so this is exactly the set the apply resolves best_of for.
+            # only such a fixture can surface in a WindowTooShortForMatch reason
+            # or a placement conflict — so this is exactly the set the apply
+            # resolves best_of and matchup names for. Both entries are non-None
+            # (guarded above) and their users were loaded into ``user_names``.
             fixture_best_of[fixture_id] = settings.length_games
+            fixture_matchups[fixture_id] = (
+                user_names[entry_user[fixture.entry_a_id]],
+                user_names[entry_user[fixture.entry_b_id]],
+            )
             schedule_fixtures.append(
                 ScheduleFixture(
                     id=fixture_id,
@@ -952,6 +1003,9 @@ async def _load_solver_inputs(
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
         pool_resolutions=pool_resolutions,
         fixture_best_of=fixture_best_of,
+        table_labels=table_labels,
+        player_names=player_names,
+        fixture_matchups=fixture_matchups,
     )
 
 
@@ -1005,6 +1059,54 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             )
         case _:
             assert_never(reason)
+
+
+def _conflict_fixture(
+    fixture_id: FixtureId, inputs: SolveInputs
+) -> ConflictFixtureRead:
+    """Name one colliding in-progress fixture by its matchup — the two players
+    facing off (``inputs.fixture_matchups``). Direct lookup is safe: the apply
+    resolves only after the drift guard proved this read's inputs identical to
+    the ones the conflicts were computed against, and every in-progress fixture
+    a conflict names is a placeable fixture whose matchup was recorded here."""
+    player_a, player_b = inputs.fixture_matchups[fixture_id]
+    return ConflictFixtureRead(
+        fixture_id=fixture_id, player_a=player_a, player_b=player_b
+    )
+
+
+def _resolve_conflict(
+    conflict: PlacementConflict, inputs: SolveInputs
+) -> ResolvedConflict:
+    """Humanize one pure, id-only placement conflict into its resolved read form
+    (ADR "overlapping in-progress matches are tolerated and reported"): the
+    shared table's catalogue label comes from ``inputs.table_labels``, the
+    shared human's display name from ``inputs.player_names``, and each colliding
+    fixture is named by its matchup. Same direct-lookup safety as
+    :func:`_resolve_reason` (post-drift-guard).
+
+    An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
+    an arm to :data:`app.scheduling.PlacementConflict` is a type error here until
+    it is handled."""
+    match conflict:
+        case TableConflict():
+            return TableConflictRead(
+                table_label=inputs.table_labels[conflict.table_id],
+                fixtures=[
+                    _conflict_fixture(fixture_id, inputs)
+                    for fixture_id in conflict.fixture_ids
+                ],
+            )
+        case PlayerConflict():
+            return PlayerConflictRead(
+                player_name=inputs.player_names[conflict.player_id],
+                fixtures=[
+                    _conflict_fixture(fixture_id, inputs)
+                    for fixture_id in conflict.fixture_ids
+                ],
+            )
+        case _:
+            assert_never(conflict)
 
 
 def run_schedule_solve(schedule_solve_id: str) -> None:
@@ -1257,6 +1359,21 @@ async def _apply_result(
                 # has no ``unknown``, and a run that proved nothing has none.
                 row.status = ScheduleSolveStatus.failed
                 row.error = TIME_CAP_ERROR
+
+        # Placement conflicts are orthogonal to the verdict (ADR "overlapping
+        # in-progress matches are tolerated and reported"): the solver reports
+        # in-progress-vs-in-progress overlaps on ANY verdict — a fully-placed
+        # ``optimal``/``feasible`` board can carry them, and so can an
+        # ``infeasible``/``unknown`` one — so this write is NOT gated on a
+        # branch above. Resolved (ids → player names, table labels) against the
+        # same fingerprint-matched ``fresh`` maps the reasons use, and always a
+        # list (``[]`` when there were none) so the read boundary never sees
+        # NULL for an applied run. Parsed back at read via
+        # ``schemas.schedule_solve.parse_placement_conflicts``.
+        row.placement_conflicts = [
+            _resolve_conflict(conflict, fresh).model_dump()
+            for conflict in result.conflicts
+        ]
 
         if rerun_was_requested:
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)

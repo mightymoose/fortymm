@@ -385,6 +385,9 @@ async def test_solve_strip_carries_the_newest_row_by_requested_at(
     # Never-infeasible rows carry an empty list, never a null — the client never
     # null-checks ``infeasibility_reasons``.
     assert strip["infeasibility_reasons"] == []
+    # A row that never reached its apply carries ``[]`` conflicts, never a null —
+    # the client never null-checks ``placement_conflicts`` either.
+    assert strip["placement_conflicts"] == []
 
 
 async def test_solve_strip_carries_resolved_infeasibility_reasons(
@@ -439,6 +442,71 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
     assert over_capacity["required_min"] == 600
     assert over_capacity["capacity_min"] == 480
     assert over_capacity["table_count"] == 1
+
+
+async def test_solve_strip_carries_resolved_placement_conflicts(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A solve whose applied board still overlaps in-progress matches carries the
+    resolved conflicts on the strip — orthogonal to the verdict, so a ``succeeded``
+    run can flag them. Parsed from the ledger's raw ``placement_conflicts`` JSONB
+    into the typed union at the read boundary: a table conflict resolved to its
+    ``table_label`` and a player conflict to its ``player_name``, each colliding
+    fixture named by its matchup — so a client renders them without any further
+    lookup."""
+    client, owner = authed_client
+    tournament_id, _ = await _make_tournament(db_session, owner)
+    solve = ScheduleSolve(
+        tournament_id=tournament_id,
+        trigger=ScheduleSolveTrigger.manual,
+        status=ScheduleSolveStatus.succeeded,
+        verdict=SolverVerdict.optimal,
+        requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
+        placement_conflicts=[
+            {
+                "kind": "table_conflict",
+                "table_label": "Table 1",
+                "fixtures": [
+                    {"fixture_id": "f-1", "player_a": "Ada", "player_b": "Babbage"},
+                    {"fixture_id": "f-2", "player_a": "Carol", "player_b": "Dave"},
+                ],
+            },
+            {
+                "kind": "player_conflict",
+                "player_name": "Ada",
+                "fixtures": [
+                    {"fixture_id": "f-1", "player_a": "Ada", "player_b": "Babbage"},
+                    {"fixture_id": "f-3", "player_a": "Ada", "player_b": "Erin"},
+                ],
+            },
+        ],
+    )
+    db_session.add(solve)
+    await db_session.commit()
+
+    strip = (await client.get(_detail_url(tournament_id))).json()[
+        "latest_schedule_solve"
+    ]
+
+    assert strip["id"] == str(solve.id)
+    assert strip["status"] == "succeeded"
+    # A non-infeasible verdict, yet conflicts still ride along — the two are
+    # orthogonal.
+    assert strip["infeasibility_reasons"] == []
+    conflicts = strip["placement_conflicts"]
+    assert [c["kind"] for c in conflicts] == ["table_conflict", "player_conflict"]
+    table = conflicts[0]
+    assert table["table_label"] == "Table 1"
+    assert [f["fixture_id"] for f in table["fixtures"]] == ["f-1", "f-2"]
+    assert table["fixtures"][0] == {
+        "fixture_id": "f-1",
+        "player_a": "Ada",
+        "player_b": "Babbage",
+    }
+    player = conflicts[1]
+    assert player["player_name"] == "Ada"
+    assert [f["fixture_id"] for f in player["fixtures"]] == ["f-1", "f-3"]
 
 
 async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_page(
