@@ -1088,22 +1088,19 @@ def _resolve_conflict(
     An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
     an arm to :data:`app.scheduling.PlacementConflict` is a type error here until
     it is handled."""
+    fixtures = [
+        _conflict_fixture(fixture_id, inputs) for fixture_id in conflict.fixture_ids
+    ]
     match conflict:
         case TableConflict():
             return TableConflictRead(
                 table_label=inputs.table_labels[conflict.table_id],
-                fixtures=[
-                    _conflict_fixture(fixture_id, inputs)
-                    for fixture_id in conflict.fixture_ids
-                ],
+                fixtures=fixtures,
             )
         case PlayerConflict():
             return PlayerConflictRead(
                 player_name=inputs.player_names[conflict.player_id],
-                fixtures=[
-                    _conflict_fixture(fixture_id, inputs)
-                    for fixture_id in conflict.fixture_ids
-                ],
+                fixtures=fixtures,
             )
         case _:
             assert_never(conflict)

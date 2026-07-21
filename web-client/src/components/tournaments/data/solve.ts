@@ -22,6 +22,7 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 
+import { conjoinWithAnd } from './helpers'
 import type { TournamentStatus } from './types'
 
 type ScheduleSolveWire = components['schemas']['ScheduleSolveRead']
@@ -654,19 +655,13 @@ export function conflictFixtureLabel(fixture: ConflictFixture): string {
   return `${fixture.playerA}-vs-${fixture.playerB}`
 }
 
-/** Join fixture labels into a natural list: `A and B`, `A, B and C`. */
-function joinFixtureLabels(labels: string[]): string {
-  if (labels.length <= 1) return labels[0] ?? ''
-  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
-}
-
 /** One conflict as the director's caution sentence, naming the colliding matches
  * and the shared resource: `crafty-vs-spiked and dazed-vs-confused overlap on
  * Table 1` (table) / `… overlap on spiked-frigatebird` (human). Exhaustive over
  * `kind` — a `never` default makes a third arm a compile error until it has
  * words, so a conflict can never reach the UI as a blank line. */
 export function placementConflictSentence(conflict: PlacementConflict): string {
-  const matches = joinFixtureLabels(conflict.fixtures.map(conflictFixtureLabel))
+  const matches = conjoinWithAnd(conflict.fixtures.map(conflictFixtureLabel))
   switch (conflict.kind) {
     case 'table_conflict':
       return `${matches} overlap on ${conflict.tableLabel}`
