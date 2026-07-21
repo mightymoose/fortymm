@@ -2,10 +2,13 @@ import type { TimelineBarData, TimelinePlayerBarData } from '../../data/timeline
 import type { TimelineBarProps } from './timeline-bar'
 
 /** One placed, **unpinned** Bo5 fixture — `player.1 vs player.4`, U1200 Singles
- * Pool A, on `T1` at `09:00` for 35 estimated minutes: the ordinary `estimate`
- * tier every solve produces. A test that wants a call passes
- * `{ tier: 'called', pinnedAt: '…', callNotifiedCount: 1 }`; a started bar
- * passes `{ tier: 'started', status: 'in_progress' }` — keep each set
+ * Pool A, on `T1` at `9:00 AM CDT` for 35 estimated minutes: the ordinary
+ * `estimate` tier every solve produces. Its clocks are the server-rendered
+ * venue-local labels (`startClock`/`endClock`) with a `tz` abbrev — never a
+ * client-sliced datetime (ADR "a schedule surface always labels the timezone").
+ * A test that wants a call passes
+ * `{ tier: 'called', pinnedAt: buildFixtureTime('…'), callNotifiedCount: 1 }`; a
+ * started bar passes `{ tier: 'started', status: 'in_progress' }` — keep each set
  * consistent, the way the wire delivers them. */
 export function buildTimelineBarData(
   overrides: Partial<TimelineBarData> = {},
@@ -23,8 +26,9 @@ export function buildTimelineBarData(
     startMin: 540,
     endMin: 575,
     durationMin: 35,
-    startClock: '09:00',
-    endClock: '09:35',
+    startClock: '9:00 AM',
+    endClock: '9:35 AM',
+    tz: 'CDT',
     tier: 'estimate',
     status: null,
     pinnedAt: null,

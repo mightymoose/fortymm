@@ -178,6 +178,13 @@ class TournamentEvent(Base):
     # NULL means "no cap" (ADR-0935). A present cap is positive by CHECK.
     max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)
     entry_fee: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
+    # The venue timezone (IANA name, e.g. ``America/Chicago``) that ANCHORS this
+    # event's wall-clock ``slot`` windows to real instants (ADR "tournament times are
+    # timezone-aware instants"). NOT NULL: a wall-clock window without a zone cannot be
+    # placed on the same instant axis as ``now``, which is the defect the ADR fixes. It
+    # does not reshape the ``slot`` JSONB — it is the frame those strings are read in.
+    # Validated as a real IANA zone at the API boundary (``EventTimezone``).
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     # There is deliberately no ``entered`` column. The registration count is
     # derived from the live ``entries`` below (ADR-0016) — a stored counter is a
     # second copy of the truth that can drift from the rows it counts.

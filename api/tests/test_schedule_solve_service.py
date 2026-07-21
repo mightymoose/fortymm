@@ -27,8 +27,9 @@ import asyncio
 import threading
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import pytest
@@ -87,6 +88,7 @@ from app.scheduling import (
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
+    PastWindowReasonRead,
     PlayerConflictRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
@@ -94,12 +96,17 @@ from app.schemas.schedule_solve import (
     parse_infeasibility_reasons,
     parse_placement_conflicts,
 )
+from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
 
 DATE = "2030-01-01"
-#: The tournament's minute-frame origin: the (single) pool window's start.
-BASE = datetime(2030, 1, 1, 9, 0)
+#: The event's venue timezone — the IANA zone anchoring its wall-clock windows
+#: to real instants (ADR "tournament times are timezone-aware instants").
+VENUE_TZ = ZoneInfo("America/Chicago")
+#: The tournament's minute-frame origin: the (single) pool window's start, as a
+#: timezone-aware instant in the venue frame (``09:00`` local on ``DATE``).
+BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +135,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1", "t2"),
     window: tuple[str, str] = ("09:00", "17:00"),
     length_games: int = 3,
+    slot_date: str = DATE,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """A published tournament with a table catalogue, one pooled round-robin
     event whose single pool spans every table, ``entrants`` entered players,
@@ -166,13 +174,14 @@ async def _make_tournament(
         draw_type=DrawType.round_robin,
         max_players=None,
         entry_fee=Decimal("0.00"),
-        slot={"date": DATE, "start": window[0], "end": window[1]},
+        timezone="America/Chicago",
+        slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
         pools=[
             {
                 "id": "pool-a",
                 "name": "Pool A",
-                "slot": {"date": DATE, "start": window[0], "end": window[1]},
+                "slot": {"date": slot_date, "start": window[0], "end": window[1]},
                 "table_ids": list(tables),
             }
         ],
@@ -928,6 +937,64 @@ class TestSolveJob:
         assert {f.id: (f.table_id, f.scheduled_start) for f in again} == placements
         assert len(await _solve_rows(db_session, tournament_id)) == 1
 
+    async def test_evening_venue_window_is_placeable_when_now_is_past_midnight_utc(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#1068: a venue-evening window is schedulable when ``now`` falls inside
+        it, even though that instant is already past midnight in UTC.
+
+        The event is ``America/Chicago`` (CST = UTC-6) with a window of
+        ``18:00``-``23:00`` on ``2030-01-01`` — i.e. ``00:00``-``05:00`` UTC on
+        ``2030-01-02``. ``now`` is set to ``02:00`` UTC on ``2030-01-02``, which
+        is ``20:00`` **in the venue** — squarely inside the window, but a
+        *different calendar day* in UTC.
+
+        Under the old naive frame the window (naive ``18:00``) and ``now`` (a UTC
+        wall-clock) landed on the same axis at different positions, so ``now``
+        read as hours past the window's end and the only fixture was instantly
+        unschedulable. Anchored to one instant axis, ``now`` sits mid-window and
+        the fixture is placed. The assertions below fail on any frame where
+        ``now`` and the windows are not venue-anchored onto one instant axis.
+        """
+        # 20:00 America/Chicago (CST) == 02:00 UTC the next calendar day.
+        now = datetime(2030, 1, 2, 2, 0, tzinfo=UTC)
+        window_start = datetime(2030, 1, 1, 18, 0, tzinfo=VENUE_TZ)
+        window_end = datetime(2030, 1, 1, 23, 0, tzinfo=VENUE_TZ)
+        assert window_start < now < window_end  # mid-window, guarding the setup
+        monkeypatch.setattr(schedule_solves, "_wall_now", lambda: now)
+
+        tournament_id, event_id = await _make_tournament(
+            db_session, entrants=2, tables=("t1",), window=("18:00", "23:00")
+        )
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        # Placeable, not "the day doesn't fit": a real verdict, the fixture down.
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.verdict in (SolverVerdict.optimal, SolverVerdict.feasible)
+        assert ledger.fixtures_placed == 1
+
+        (fixture,) = await _fixtures_of(db_session, event_id)
+        assert fixture.table_id == "t1"
+        assert fixture.scheduled_start is not None
+        # Placed at/after ``now`` and finishing inside the venue window — the
+        # instant axis the whole epic hinges on. Aware/aware comparisons across
+        # frames compare real instants, so these are frame-agnostic and true
+        # only when now and the window share one axis.
+        assert now <= fixture.scheduled_start
+        assert fixture.scheduled_start < window_end
+
     @pytest.mark.parametrize(
         "env_value, expected",
         [
@@ -1066,6 +1133,50 @@ class TestSolveJob:
         assert ledger.fixtures_placed is None
         assert ledger.fixtures_pinned is None
         assert ledger.finished_at is not None
+        # A current-but-too-tight window is a *generic* capacity infeasibility —
+        # it carries a structural reason, but never the ``past_window`` one
+        # (contrast the past-window case below).
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert not any(reason.kind == "past_window" for reason in reasons)
+
+    async def test_past_dated_window_names_the_past_window_reason_with_its_date(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """A window dated wholly in the past (the director left a stale date) is
+        infeasible with the specific, machine-readable ``past_window`` reason
+        carrying the offending venue-local date — distinct from a capacity
+        shortfall (ADR "a past day is named, not disguised"). The reason surfaces
+        on the ``ScheduleSolveRead`` the client consumes."""
+        # Dated years before ``now`` in the event's venue frame: every grid start
+        # must be >= now, so the whole window is unreachable — a past day, not a
+        # tight one. The pool spans two tables over a full 09:00–17:00 day, so it
+        # is comfortably *large enough* — only its date makes it infeasible.
+        tournament_id, event_id = await _make_tournament(
+            db_session, slot_date="2020-03-14"
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+        assert ledger.verdict is SolverVerdict.infeasible
+        # Past window is the most specific pre-live cause and suppresses the
+        # tight-window / over-capacity arms for the same pool, so it is the only
+        # resolved reason, carrying the offending venue-local date.
+        reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert reasons == [PastWindowReasonRead(date=date(2020, 3, 14))]
+        # And it rides onto the client-facing read as a structured reason.
+        read = ScheduleSolveRead.model_validate(ledger)
+        assert read.infeasibility_reasons == [
+            PastWindowReasonRead(date=date(2020, 3, 14))
+        ]
 
     async def test_unknown_verdict_is_failed_with_the_time_cap_error(
         self,

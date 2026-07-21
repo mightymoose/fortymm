@@ -109,6 +109,7 @@ async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
         draw_type=DrawType.rr_then_ko,
         max_players=64,
         entry_fee=Decimal("45"),
+        timezone="America/Chicago",
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],

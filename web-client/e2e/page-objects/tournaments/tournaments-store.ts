@@ -6,6 +6,7 @@ import {
   manualPlacementPin,
   NO_DRAWN_EVENTS_MESSAGE,
   queuedSolveRow,
+  simFixtureTime,
   SOLVE_TICK_DWELL_MS,
   solveRowInFlight,
   stepScheduleSolve,
@@ -1388,7 +1389,10 @@ export class TournamentsStore {
     const updated: TournamentFixtureRead = {
       ...found,
       table_id,
-      scheduled_start,
+      // The wire ships the predicted start as a `FixtureTimeRead` (ADR "tournament
+      // times are timezone-aware instants"); the PATCH body names a naive venue
+      // wall-clock, so the stub composes the read shape the client parses.
+      scheduled_start: scheduled_start === null ? null : simFixtureTime(scheduled_start),
       ...manualPlacementPin(
         this.detail.events,
         found,

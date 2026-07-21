@@ -13,7 +13,7 @@ regardless of how many events there are. A per-event count would be an N+1, and
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,12 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings.rated import is_rated_member
-from app.schemas.tournament import TournamentEntrantRead, TournamentFixtureRead
+from app.schemas.tournament import (
+    FixtureTimeRead,
+    TournamentEntrantRead,
+    TournamentFixtureRead,
+)
+from app.venue_time import venue_local
 
 # The statuses in which a tournament has been ANNOUNCED to the world. Publishing
 # is the act that makes a tournament public (ADR-0017), and nothing walks
@@ -235,13 +240,14 @@ async def fixtures_by_event(
     The same join also carries the match's **actual completion time**
     (``completed_at``) — the Gantt chart's real end anchor once a slot is played,
     as opposed to ``scheduled_start``, which stays the solver's *predicted* one
-    forever. ``Match.completed_at`` is a normal timezone-aware UTC column, but
-    ``scheduled_start``/``pinned_at`` are naive wall-clock in the venue's local frame
-    (the ADR-0790 exemption — see ``TournamentFixture.scheduled_start``), so it is
-    converted to that same naive frame here, at the loader, with ``_to_wall_clock``
-    below. Mixed representations across the three timestamps on
-    ``TournamentFixtureRead`` would silently break a client doing simple arithmetic
-    between them (e.g. a Gantt bar's width).
+    forever. All three displayed times (``scheduled_start``, ``pinned_at``,
+    ``completed_at``) are shaped into a :class:`FixtureTimeRead` here, at the loader,
+    by ``_fixture_time`` below — a venue-local label + tz abbreviation composed in the
+    **event's timezone** with ``zoneinfo`` (so no client does timezone math, ADR
+    "tournament times are timezone-aware instants"), alongside the raw UTC instant for
+    tz-agnostic geometry. The event's ``timezone`` rides on this same statement (the
+    ``TournamentEvent`` join), so the label is composed from a fact the query holds,
+    not one the serializer has to fetch per row.
 
     The rows are validated into read models here, at the loader — the same boundary the
     entrants cross — so no ORM instance and no lazily-loadable relationship escapes into
@@ -254,7 +260,13 @@ async def fixtures_by_event(
         return fixtures
     rows = (
         await db.execute(
-            select(TournamentFixture, Match.status, Match.completed_at)
+            select(
+                TournamentFixture,
+                TournamentEvent.timezone,
+                Match.status,
+                Match.completed_at,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(TournamentFixture.event_id.in_(fixtures.keys()))
             .order_by(
@@ -264,7 +276,7 @@ async def fixtures_by_event(
             )
         )
     ).all()
-    for fixture, match_status, match_completed_at in rows:
+    for fixture, event_timezone, match_status, match_completed_at in rows:
         fixtures[fixture.event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
@@ -277,33 +289,40 @@ async def fixtures_by_event(
                 match_id=fixture.match_id,
                 match_status=match_status,
                 table_id=fixture.table_id,
-                scheduled_start=fixture.scheduled_start,
-                pinned_at=fixture.pinned_at,
+                scheduled_start=_fixture_time(fixture.scheduled_start, event_timezone),
+                pinned_at=_fixture_time(fixture.pinned_at, event_timezone),
                 call_notified_count=fixture.call_notified_count,
-                completed_at=(
-                    _to_wall_clock(match_completed_at)
-                    if match_completed_at is not None
-                    else None
-                ),
+                completed_at=_fixture_time(match_completed_at, event_timezone),
             )
         )
     return fixtures
 
 
-def _to_wall_clock(value: datetime) -> datetime:
-    """Convert an offset-**aware** timestamp to the same naive wall-clock frame
-    ``scheduled_start``/``pinned_at`` already live in (the ADR-0790 exemption).
+def _fixture_time(instant: datetime | None, timezone: str) -> FixtureTimeRead | None:
+    """Shape one displayed fixture time into a :class:`FixtureTimeRead`, or ``None``
+    when the time is unassigned.
 
-    Those two columns are never converted on read because they are never anything
-    but naive to begin with — the solver and the pin writer both stamp them with
-    ``app.match_calls._wall_now()``, which is exactly ``datetime.now()`` with no
-    timezone attached (the process's own local clock, standing in for "the venue's
-    clock" until real per-tournament timezones exist). ``Match.completed_at`` is a
-    normal aware UTC column, so producing a value in that same frame means doing the
-    inverse: convert to the process's local timezone, the frame ``_wall_now()``
-    reads from, then drop the offset now that both sides agree what it was.
+    The stored value is a ``timestamptz`` instant (asyncpg hands it back UTC-aware; a
+    just-written venue-offset value is the same instant in a different offset). We
+    render it in the **event's** timezone (:func:`app.venue_time.venue_local`) for
+    the human-readable label + abbreviation, and normalize the raw ``instant`` to
+    UTC (``+00:00``) so every read path emits one string for one moment.
     """
-    return value.astimezone().replace(tzinfo=None)
+    if instant is None:
+        return None
+    local = venue_local(instant, timezone)
+    return FixtureTimeRead(
+        instant=instant.astimezone(UTC),
+        local_label=_local_label(local),
+        tz_abbrev=local.strftime("%Z"),
+    )
+
+
+def _local_label(local: datetime) -> str:
+    """A 12-hour venue wall-clock label with no leading zero: ``"6:00 PM"``,
+    ``"12:05 AM"``. ``%-I`` is a glibc-only extension, so strip the zero pad by hand
+    for portability across the dev (macOS) and CI (Linux) platforms."""
+    return local.strftime("%I:%M %p").lstrip("0")
 
 
 async def game_counts_by_match(

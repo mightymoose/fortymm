@@ -1,3 +1,4 @@
+import { buildFixtureTime } from '../../data/seed.factory'
 import { buildTimelineBarData } from './timeline-bar.factory'
 import { timelineBarPage as page } from './timeline-bar.page'
 
@@ -7,9 +8,11 @@ describe('TimelineBar', () => {
     const bar = page.getBar('fx-a-1')
     expect(page.getTier('fx-a-1')).toBe('estimate')
     expect(bar).toHaveClass('border-dashed')
-    expect(bar).toHaveTextContent('09:00–09:35 · est')
+    // The bar's clock reads the server's venue-local labels + tz abbrev, never a
+    // client-sliced datetime (ADR "a schedule surface always labels the timezone").
+    expect(bar).toHaveTextContent('9:00 AM–9:35 AM CDT · est')
     expect(bar).toHaveAccessibleName(
-      'player.1 vs player.4, U1200 Singles · Pool A, T1, 09:00–09:35. Estimate — the scheduler may still move it.',
+      'player.1 vs player.4, U1200 Singles · Pool A, T1, 9:00 AM–9:35 AM CDT. Estimate — the scheduler may still move it.',
     )
   })
 
@@ -17,7 +20,7 @@ describe('TimelineBar', () => {
     page.render({
       bar: buildTimelineBarData({
         tier: 'called',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 1,
       }),
     })
@@ -29,7 +32,7 @@ describe('TimelineBar', () => {
     // cost never depends on the tooltip opening. One notification is the
     // ordinary call — no `notified n×` counter yet.
     expect(bar).toHaveAccessibleName(
-      /Called — the players were notified\. Called 08:50\.$/,
+      /Called — the players were notified\. Called 8:50 AM CDT\.$/,
     )
   })
 
@@ -40,7 +43,7 @@ describe('TimelineBar', () => {
     page.render({
       bar: buildTimelineBarData({
         tier: 'called',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 0,
       }),
     })
@@ -81,18 +84,18 @@ describe('TimelineBar', () => {
       bar: buildTimelineBarData({
         tier: 'started',
         status: 'in_progress',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 1,
       }),
     })
     const bar = page.getBar('fx-a-1')
     expect(page.getTier('fx-a-1')).toBe('started')
     expect(bar).toHaveAccessibleName(
-      /Underway or up next — scores can be entered\. Called 08:50\.$/,
+      /Underway or up next — scores can be entered\. Called 8:50 AM CDT\.$/,
     )
     page.focusBar('fx-a-1')
     const tip = await page.findTooltip()
-    expect(tip).toHaveTextContent('Called 08:50')
+    expect(tip).toHaveTextContent('Called 8:50 AM CDT')
   })
 
   it('marks a pinned-untold in_progress bar `Pinned` — the pin holds, and still claims no call', async () => {
@@ -100,7 +103,7 @@ describe('TimelineBar', () => {
       bar: buildTimelineBarData({
         tier: 'started',
         status: 'in_progress',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 0,
       }),
     })
@@ -118,7 +121,7 @@ describe('TimelineBar', () => {
       bar: buildTimelineBarData({
         tier: 'started',
         status: 'completed',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 2,
       }),
     })
@@ -154,7 +157,7 @@ describe('TimelineBar', () => {
     const tip = await page.findTooltip()
     expect(tip).toHaveTextContent('player.1 vs player.4')
     expect(tip).toHaveTextContent('U1200 Singles · Pool A')
-    expect(tip).toHaveTextContent('T1 · Jun 13 · 09:00–09:35')
+    expect(tip).toHaveTextContent('T1 · Jun 13 · 9:00 AM–9:35 AM CDT')
     expect(tip).toHaveTextContent('Estimate — the scheduler may still move it')
   })
 
@@ -162,14 +165,14 @@ describe('TimelineBar', () => {
     page.render({
       bar: buildTimelineBarData({
         tier: 'called',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 1,
       }),
     })
     page.focusBar('fx-a-1')
     const tip = await page.findTooltip()
     expect(tip).toHaveTextContent('Called — the players were notified')
-    expect(tip).toHaveTextContent('Called 08:50')
+    expect(tip).toHaveTextContent('Called 8:50 AM CDT')
     // One call, no corrections: the counter stays off the marker.
     expect(tip).not.toHaveTextContent('notified 1×')
   })
@@ -178,16 +181,16 @@ describe('TimelineBar', () => {
     page.render({
       bar: buildTimelineBarData({
         tier: 'called',
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 2,
       }),
     })
     page.focusBar('fx-a-1')
     expect(await page.findTooltip()).toHaveTextContent(
-      'Called 08:50 · notified 2×',
+      'Called 8:50 AM CDT · notified 2×',
     )
     expect(page.getBar('fx-a-1')).toHaveAccessibleName(
-      /Called 08:50 · notified 2×\.$/,
+      /Called 8:50 AM CDT · notified 2×\.$/,
     )
   })
 

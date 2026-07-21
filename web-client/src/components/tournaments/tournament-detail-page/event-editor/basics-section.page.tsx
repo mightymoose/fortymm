@@ -29,6 +29,16 @@ const scoped = (container: Container) => ({
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },
+  /** The searchable IANA timezone picker's trigger (ADR 20260719). A combobox, like
+   * the format/draw-type selects — but backed by `Popover` + `Command`, not `Select`. */
+  getTimezoneTrigger() {
+    return container.getByRole('combobox', { name: 'Timezone' })
+  },
+  /** The timezone caption beside the Time slot — the frame the wall-clock window is
+   * in, shown to editor and reader alike (`event-timezone-label`). */
+  getTimezoneLabel() {
+    return container.getByTestId('event-timezone-label')
+  },
   /** The draw-type select. Present-but-**disabled** once the event's draw is cut
    * (ADR-0786) — so it is queried by role, not by "an enabled combobox": the state
    * under test is a control that is there, readable, and dead. */

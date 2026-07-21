@@ -3,6 +3,7 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildFixtureTime,
   buildPool,
   buildTables,
   buildTournament,
@@ -14,7 +15,6 @@ import {
   placementConsequence,
   scheduleStatusLabel,
   sideLabel,
-  timeOfDay,
 } from './schedule'
 
 const at = (time: string) => `2026-06-13T${time}:00`
@@ -106,7 +106,7 @@ describe('buildSchedule', () => {
     expect(byId.get('fx-called')!.tier).toBe('called')
     expect(byId.get('fx-live')!.tier).toBe('started')
     // The call's facts ride along verbatim, for the list row's badge.
-    expect(byId.get('fx-called')!.pinnedAt).toBe(at('09:50'))
+    expect(byId.get('fx-called')!.pinnedAt).toEqual(buildFixtureTime(at('09:50')))
     expect(byId.get('fx-called')!.callNotifiedCount).toBe(2)
     expect(byId.get('fx-est')!.pinnedAt).toBeNull()
     expect(byId.get('fx-est')!.callNotifiedCount).toBe(0)
@@ -188,12 +188,11 @@ describe('buildSchedule', () => {
 
 describe('placement helpers', () => {
   it('composes a naive timestamp from a fixed date + a chosen time', () => {
+    // The WRITE path still composes a naive venue wall-clock for the placement
+    // PATCH body; the server anchors it to the event timezone. Only the DISPLAY
+    // side stopped slicing datetimes (ADR "clients stay tz-math-free"), so there is
+    // no `timeOfDay` string-slicer to read a wall-clock back out any more.
     expect(composeScheduledStart('2026-06-13', '09:30')).toBe('2026-06-13T09:30:00')
-  })
-
-  it('reads the time-of-day back out, tolerating an unscheduled fixture', () => {
-    expect(timeOfDay('2026-06-13T09:30:00')).toBe('09:30')
-    expect(timeOfDay(null)).toBe('')
   })
 
   it('names a status in a director’s words', () => {
@@ -237,7 +236,7 @@ describe('placementConsequence', () => {
       match: {
         a: { kind: 'entrant', name: 'player.1' },
         b: { kind: 'entrant', name: 'player.4' },
-        pinnedAt: '2026-06-13T09:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T09:50:00'),
         callNotifiedCount: 1,
         ...over.match,
       },

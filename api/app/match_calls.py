@@ -101,7 +101,7 @@ import uuid
 from collections.abc import Callable, Collection, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import ColumnElement, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -139,6 +139,7 @@ from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
 from app.tournament_draws import event_pools
+from app.venue_time import anchor_wallclock, venue_local
 
 log = logging.getLogger(__name__)
 
@@ -163,12 +164,15 @@ _FANOUT_CHANNELS = [NotificationChannel.PUSH, NotificationChannel.EMAIL]
 
 
 def _wall_now() -> datetime:
-    """Naive wall-clock now — the frame ``scheduled_start``, ``pinned_at``
-    and the pool windows live in (the deliberate ADR-0790 exemption from
-    aware datetimes). One definition for both halves of the pipeline:
-    ``app.schedule_solves`` imports this one, and each module's tests
-    monkeypatch their own module's binding."""
-    return datetime.now()
+    """The call's ``now`` as a timezone-aware **instant** (UTC) — the real
+    moment a pin is made or a fixture is judged due. Since the 2026-07-19 ADR
+    "tournament times are timezone-aware instants" moved ``scheduled_start``,
+    ``pinned_at`` and the composed pool windows onto one instant axis, ``now``
+    is a real instant too: an aware UTC ``now`` and the venue-anchored windows
+    compare correctly whatever the venue's offset (the #1068 fix). One
+    definition for both halves of the pipeline: ``app.schedule_solves`` imports
+    this one, and each module's tests monkeypatch their own module's binding."""
+    return datetime.now(UTC)
 
 
 def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
@@ -462,7 +466,11 @@ async def call_due_fixtures(
         # to the raw id rather than dropping the call (the *next* solve's
         # snapshot detects the broken pin and repairs it).
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
-        build = _called_copy(table_label, fixture.scheduled_start, context)
+        build = _called_copy(
+            table_label,
+            venue_local(fixture.scheduled_start, event.timezone),
+            context,
+        )
         calls.append((fixture, user_a, user_b, build))
 
     in_app_ids = await _in_app_allowed(
@@ -568,7 +576,11 @@ async def notify_pin_repairs(
             continue
         context = ingredients.context_for(tournament, event, fixture.pool_id)
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
-        build = _moved_copy(table_label, fixture.scheduled_start, context)
+        build = _moved_copy(
+            table_label,
+            venue_local(fixture.scheduled_start, event.timezone),
+            context,
+        )
         moves.append((fixture, user_a, user_b, build))
 
     # Cancellations go to the REMAINING entrant only (docstring above).
@@ -658,6 +670,7 @@ async def apply_manual_placement(
     *,
     table_id: str | None,
     scheduled_start: datetime | None,
+    event_timezone: str,
 ) -> list[NotificationJob]:
     """Write a manual placement **and its pin consequences** — "a manual
     placement is a pin" (ADR): the director's hand is a human commitment the
@@ -705,7 +718,16 @@ async def apply_manual_placement(
     live = tournament.status is TournamentStatus.live
 
     fixture.table_id = table_id
-    fixture.scheduled_start = scheduled_start
+    # The director enters ``scheduled_start`` as venue-local wall-clock; anchor it
+    # to a real instant with the event's timezone before it hits the timestamptz
+    # column, so it shares the solver's one instant axis (ADR "tournament times are
+    # timezone-aware instants"). The naive ``scheduled_start`` local is kept below
+    # for the venue-local notification copy and the placement's control flow.
+    fixture.scheduled_start = (
+        anchor_wallclock(scheduled_start, event_timezone)
+        if scheduled_start is not None
+        else None
+    )
 
     if table_id is None or scheduled_start is None:
         # The clear: whatever these columns now say, they are not a full

@@ -79,6 +79,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         draw_type=DrawType.round_robin,
         max_players=64,
         entry_fee=Decimal("20.00"),
+        timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
         pools=[{"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []}],
@@ -212,6 +213,7 @@ async def test_schedule_solve_read_refuses_an_unknown_enum_value(
         "wall_time_ms": None,
         "fixtures_placed": None,
         "fixtures_pinned": None,
+        "overrunning": False,
         "error": None,
         "infeasibility_reasons": [],
         "placement_conflicts": [],
@@ -266,19 +268,20 @@ async def test_a_fresh_fixture_is_unpinned_and_never_notified(
 async def test_a_pinned_fixture_round_trips_its_pin_facts(
     db_session: AsyncSession,
 ) -> None:
-    """A called fixture's ``pinned_at`` comes back as the NAIVE wall-clock moment
-    it was written (the same deliberate ADR-0790 frame as ``scheduled_start`` —
-    no timezone attached by the round trip), and the notified count comes back
+    """A called fixture's ``pinned_at`` round-trips as the same timezone-aware
+    **instant** it was written (both it and ``scheduled_start`` are now
+    ``timestamptz`` — ADR "tournament times are timezone-aware instants",
+    superseding ADR-0790's naive frame), and the notified count comes back
     exact."""
     event = await _make_event(db_session)
-    called_at = datetime(2026, 8, 1, 14, 30)
+    called_at = datetime(2026, 8, 1, 14, 30, tzinfo=UTC)
     fixture = TournamentFixture(
         event_id=event.id,
         pool_id="pool-a",
         round=1,
         position=1,
         table_id="table-3",
-        scheduled_start=datetime(2026, 8, 1, 14, 40),
+        scheduled_start=datetime(2026, 8, 1, 14, 40, tzinfo=UTC),
         pinned_at=called_at,
         call_notified_count=2,
     )
@@ -293,5 +296,5 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
         )
     ).scalar_one()
     assert fresh.pinned_at == called_at
-    assert fresh.pinned_at is not None and fresh.pinned_at.tzinfo is None
+    assert fresh.pinned_at is not None and fresh.pinned_at.tzinfo is not None
     assert fresh.call_notified_count == 2

@@ -1,3 +1,5 @@
+import userEvent from '@testing-library/user-event'
+
 import { fireEvent, screen } from '@/test/utilities'
 
 import { buildDrawnEvent, buildEvent } from '../../data/seed.factory'
@@ -78,6 +80,41 @@ describe('BasicsSection', () => {
     })
     expect(basicsSectionPage.getNameInput()).toHaveValue('Open Singles')
     expect(basicsSectionPage.getFormatTrigger()).toHaveTextContent('Singles')
+  })
+
+  // The timezone anchors the wall-clock windows (ADR 20260719): the picker carries
+  // the event's zone, and the caption beside the Time slot labels the frame those
+  // times are read in.
+  it('shows the event timezone on the picker and beside the window', () => {
+    basicsSectionPage.render({
+      event: buildEvent({ timezone: 'America/Denver' }),
+    })
+    expect(basicsSectionPage.getTimezoneTrigger()).toHaveTextContent(
+      'America/Denver',
+    )
+    expect(basicsSectionPage.getTimezoneLabel()).toHaveTextContent(
+      'America/Denver',
+    )
+  })
+
+  // Picking a zone emits the whole event with the new timezone, through the same
+  // `onChange` every other Basics field writes back through.
+  it('emits the chosen timezone', async () => {
+    const onChange = vi.fn()
+    basicsSectionPage.render({
+      event: buildEvent({ timezone: 'America/Chicago' }),
+      onChange,
+    })
+    const user = userEvent.setup()
+    await user.click(basicsSectionPage.getTimezoneTrigger())
+    await user.type(
+      await screen.findByPlaceholderText('Search timezones…'),
+      'Denver',
+    )
+    await user.click(await screen.findByRole('option', { name: 'America/Denver' }))
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ timezone: 'America/Denver' }),
+    )
   })
 
   it('emits a numeric player limit', () => {
@@ -272,6 +309,21 @@ describe('BasicsSection', () => {
       )
       expect(basicsSectionPage.getFieldValue('Start')).toHaveTextContent('09:00')
       expect(basicsSectionPage.getFieldValue('End')).toHaveTextContent('18:00')
+    })
+
+    // The timezone is a fact about the event a reader is owed too (ADR 20260719) —
+    // as text, never a live picker (which would be a control leak the guard forbids).
+    it('renders the timezone as text, with its caption', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ timezone: 'America/New_York' }),
+        canEdit: false,
+      })
+      expect(basicsSectionPage.getFieldValue('Timezone')).toHaveTextContent(
+        'America/New_York',
+      )
+      expect(basicsSectionPage.getTimezoneLabel()).toHaveTextContent(
+        'America/New_York',
+      )
     })
 
     // `YYYY-MM-DD` is what an `<input type="date">` wants, not what a person

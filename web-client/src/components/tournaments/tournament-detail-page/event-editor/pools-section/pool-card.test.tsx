@@ -28,6 +28,14 @@ describe('PoolCard', () => {
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 
+  // The pool window carries the event's timezone as a caption (ADR 20260719) — the
+  // frame its wall-clock times are in. A pool holds no zone of its own; the event's
+  // is handed down.
+  it('labels the window with the event timezone', () => {
+    poolCardPage.render({ timezone: 'America/Denver' })
+    expect(poolCardPage.getTimezoneLabel()).toHaveTextContent('America/Denver')
+  })
+
   /**
    * The name box is the one control on this card that can author a pool the server
    * refuses (`Pool.name`, `min_length=1`) — the id and the default name are minted. The
@@ -218,6 +226,13 @@ describe('PoolCard', () => {
     it('hides the remove button', () => {
       poolCardPage.render({ canEdit: false })
       expect(poolCardPage.queryRemoveButton()).toBeNull()
+    })
+
+    // The timezone caption is a fact about the window a reader is owed too — and it
+    // is a plain caption, not a control, so it survives the read-only guard.
+    it('still labels the window with the timezone', () => {
+      poolCardPage.render({ timezone: 'America/New_York', canEdit: false })
+      expect(poolCardPage.getTimezoneLabel()).toHaveTextContent('America/New_York')
     })
   })
 })

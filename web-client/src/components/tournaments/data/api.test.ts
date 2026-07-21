@@ -569,6 +569,7 @@ const event: TournamentEvent = {
   drawType: 'rr-then-ko',
   maxPlayers: 48,
   entryFee: 30,
+  timezone: 'America/Chicago',
   // Two active entrants, so the derived count is 2 — the count and the list are
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
@@ -608,6 +609,9 @@ describe('eventToCreateBody', () => {
     expect(body.draw_type).toBe('rr-then-ko')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
+    // The IANA timezone anchors the windows (ADR 20260719) — carried on the create
+    // body, `NOT NULL` on the server.
+    expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
     expect(body.pools).toEqual([
       {
@@ -691,6 +695,7 @@ describe('eventToUpdateBody', () => {
     expect(body.draw_type).toBe('rr-then-ko')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
+    expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
     expect(body.pools).toEqual([
       {

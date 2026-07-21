@@ -98,6 +98,9 @@ export const PoolsSection = ({
   // A new pool defaults to the event's own window; watched so it tracks the
   // Basics slot as the organizer edits it.
   const eventSlot = useWatch({ control, name: 'slot' })
+  // The event's timezone (ADR 20260719) — shown as a caption beside every pool
+  // window. Watched, so changing it on the Basics tab relabels the pools live.
+  const timezone = useWatch({ control, name: 'timezone' })
 
   // Clean domain pools (no `rhfKey`) for the conflict check and the cards, so an
   // edit never writes the field array's internal key back into form state.
@@ -223,6 +226,7 @@ export const PoolsSection = ({
               key={field.id}
               pool={pools[i]}
               tables={tables}
+              timezone={timezone ?? ''}
               canEdit={canEdit}
               // ONLY the removal freezes. The card's name box, its window and its table
               // chips stay live under a cut draw — that is the case the freeze exists to

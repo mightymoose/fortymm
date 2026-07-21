@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import date, datetime
 from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AfterValidator,
@@ -154,6 +155,46 @@ class Address(BaseModel):
     region: str
     postal: str
     country: str
+
+
+def _is_iana_timezone(value: str) -> str:
+    """Refuse a timezone that names no real IANA zone (422 at the boundary).
+
+    A tournament's times are wall-clock *intents* anchored to real instants by this
+    zone (ADR "tournament times are timezone-aware instants"): the solver composes
+    ``(date, start, end, timezone)`` into an instant with stdlib ``zoneinfo``, and a
+    display renders it to a venue-local label. A string that ``ZoneInfo`` cannot load
+    would detonate deep in that composition — every read and every solve — so it is
+    refused *here*, once, rather than let a bad zone reach the column and fail far from
+    its source (parse-at-boundaries, api/CLAUDE.md).
+
+    ``ZoneInfo`` raises ``ZoneInfoNotFoundError`` (a ``KeyError``) for an unknown key
+    and ``ValueError`` for a malformed one (an empty string, a path-traversal attempt);
+    both are the same "not a zone" fault to a caller, so both become one 422.
+    """
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"{value!r} is not a known IANA timezone (e.g. 'America/Chicago')."
+        ) from exc
+    return value
+
+
+EventTimezone = Annotated[str, Field(min_length=1), AfterValidator(_is_iana_timezone)]
+"""An event's venue timezone: an IANA zone name (e.g. ``America/Chicago``) that
+ANCHORS the event's wall-clock ``Slot`` windows to real instants (ADR "tournament
+times are timezone-aware instants").
+
+It does **not** reshape those windows — a ``Slot`` stays ``{date, start, end}``
+wall-clock strings — it is the frame they are read in. ``min_length=1`` gives the empty
+string a
+clean under-the-field message and a real ``minLength`` in the OpenAPI schema; the
+``AfterValidator`` then refuses any string that is not a loadable zone, so an unknown or
+malformed zone is a 422 rather than a value the solver/display cannot compose.
+
+Shared verbatim by the create and update schemas so the rule cannot drift between the
+two verbs, exactly as ``EventMaxPlayers`` and ``EventPools`` are."""
 
 
 class Slot(BaseModel):
@@ -491,6 +532,52 @@ class TournamentEntrantRead(BaseModel):
     rating: float | None
 
 
+class FixtureTimeRead(BaseModel):
+    """One displayed fixture time, shaped so no client does ANY timezone math
+    (ADR "tournament times are timezone-aware instants" — "all timezone arithmetic
+    lives on the server; clients stay tz-math-free").
+
+    The same moment, carried two ways for two different jobs:
+
+    * ``local_label`` + ``tz_abbrev`` — the moment already rendered in the **event's
+      venue timezone** with stdlib ``zoneinfo``, server-side, for a human to READ: a
+      12-hour wall-clock label (e.g. ``"6:00 PM"``) and its timezone abbreviation
+      (e.g. ``"CDT"``). A client displays ``f"{local_label} {tz_abbrev}"`` verbatim —
+      it never slices a datetime or picks a zone. ``tz_abbrev`` rides alongside the
+      label because a tournament-wide schedule can put fixtures from different venue
+      timezones on one timeline, and each rendered time must name its frame so equal
+      columns do not imply simultaneity across frames (ADR "a schedule surface always
+      labels the timezone").
+    * ``instant`` — the same moment as an unambiguous, offset-bearing ISO-8601
+      timestamp, for GEOMETRY: Gantt bar positions are tz-agnostic *differencing*,
+      which a client does on instants with no timezone library. It is always
+      **normalized to UTC** (``+00:00``) on the way out, so every read path — a detail
+      GET, a placement PATCH echo — emits the identical string for the identical
+      moment (asyncpg hands ``timestamptz`` back as UTC; an in-memory venue-offset
+      value like ``-05:00`` for the same instant is re-normalized here, so the two
+      never diverge as strings).
+
+    Carrying both is *not* carrying a field and its own derivation (api/CLAUDE.md):
+    the label is for reading and the instant is for math, and neither is derivable
+    from the other **without** the timezone library this model exists to keep off the
+    client. ``null`` (on the field that holds this model) means the time is
+    unassigned — a fact, never a missing value to fill in.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The moment, as an offset-aware ISO-8601 timestamp normalized to UTC (``+00:00``).
+    #: For client-side geometry (bar positions) only — display uses ``local_label``.
+    instant: datetime
+    #: The moment rendered in the event's venue timezone as a 12-hour wall-clock label
+    #: (e.g. ``"6:00 PM"``), no leading zero, no timezone suffix — pair it with
+    #: ``tz_abbrev`` for display.
+    local_label: str
+    #: The venue timezone's abbreviation at that instant (e.g. ``"CDT"``, ``"CST"`` —
+    #: DST-correct, resolved by ``zoneinfo``). Shown next to ``local_label``.
+    tz_abbrev: str
+
+
 class TournamentFixtureRead(BaseModel):
     """One planned pairing of an event's draw (ADR-0786): a round and a position —
     plus a pool, when the draw is pooled — whose sides may still be unknown.
@@ -523,25 +610,27 @@ class TournamentFixtureRead(BaseModel):
       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
       tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
       the same pattern as ``pool_id``.
-    * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
-      means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
-      venue's frame, a prediction rather than a commitment — a match starting
-      off-prediction is normal, not an error.
+    * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
+      **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
+      label + tz abbrev for display, plus the raw UTC instant for geometry — composed
+      server-side in the event's timezone (ADR "tournament times are timezone-aware
+      instants", superseding ADR-0790's naive-wall-clock frame). A prediction rather
+      than a commitment — a match starting off-prediction is normal, not an error.
     * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
       the call is pinned"): ``null`` means the placement is still an estimate the
       solver may move freely. When set, the placement is a promise — the players were
-      notified, and no later solve will rearrange it. Naive wall-clock in the venue's
-      frame, like ``scheduled_start``.
+      notified, and no later solve will rearrange it — carried as a
+      :class:`FixtureTimeRead` in the event's timezone, like ``scheduled_start``.
     * ``completed_at`` — the match's **actual** completion time, as opposed to
       ``scheduled_start``'s *predicted* one: ``null`` until the match is actually
-      decided (win or void), then the moment it was. This is the value a Gantt-style
-      schedule view should use as a played slot's real end, instead of projecting
-      ``scheduled_start + an estimated duration`` past a match that has already
-      finished. Converted to the same naive wall-clock frame as ``scheduled_start``
-      and ``pinned_at`` (ADR-0790) even though the underlying ``Match.completed_at``
-      column is an ordinary timezone-aware UTC timestamp — so a client can do simple
-      arithmetic across all three fields (e.g. a bar's width) without juggling
-      timezones itself.
+      decided (win or void), then the moment it was, as a :class:`FixtureTimeRead`.
+      This is the value a Gantt-style schedule view should use as a played slot's real
+      end, instead of projecting ``scheduled_start + an estimated duration`` past a
+      match that has already finished. All three times share the one
+      :class:`FixtureTimeRead` shape — a UTC ``instant`` for tz-agnostic arithmetic
+      (e.g. a bar's width) and a pre-rendered venue-local label — so a client juggles
+      no timezones itself, even though ``Match.completed_at`` is stored as an ordinary
+      UTC timestamp and the two placement columns are venue-anchored instants.
 
     The entries are carried as **ids only**. The name and username behind
     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -564,20 +653,23 @@ class TournamentFixtureRead(BaseModel):
     # Read from the match row on every load (never snapshotted), so it tracks the match
     # as it is played rather than freezing at go-live. See ``match_id`` above.
     match_status: MatchStatus | None
-    # A placement (ADR-0790). ``table_id`` string-refs the tournament's table_catalogue;
-    # ``scheduled_start`` is a naive wall-clock prediction. Both ``null`` = unassigned.
+    # A placement. ``table_id`` string-refs the tournament's table_catalogue; both it
+    # and ``scheduled_start`` ``null`` = unassigned. ``scheduled_start`` is the
+    # predicted start as a ``FixtureTimeRead`` (venue-local label + tz abbrev + raw
+    # UTC instant), composed server-side in the event's timezone.
     table_id: str | None
-    scheduled_start: datetime | None
-    # The pin facts (see the docstring): ``pinned_at`` null = estimate, set = promise;
+    scheduled_start: FixtureTimeRead | None
+    # The pin facts (see the docstring): ``pinned_at`` null = estimate, set = promise
+    # (a ``FixtureTimeRead``, same shape as ``scheduled_start``);
     # ``call_notified_count`` is how many times the players were told (call +
     # corrections), the number the UI prices a re-drag with.
-    pinned_at: datetime | None
+    pinned_at: FixtureTimeRead | None
     call_notified_count: int
-    # The match's actual completion time — ``null`` until it is decided — already
-    # converted to the same naive wall-clock frame as ``scheduled_start``/``pinned_at``
-    # above (see the docstring). This is the Gantt chart's real end anchor for a
-    # played slot, as opposed to ``scheduled_start``'s predicted one.
-    completed_at: datetime | None
+    # The match's actual completion time — ``null`` until it is decided — as a
+    # ``FixtureTimeRead`` in the event's timezone (see the docstring). This is the Gantt
+    # chart's real end anchor for a played slot, as opposed to ``scheduled_start``'s
+    # predicted one.
+    completed_at: FixtureTimeRead | None
 
 
 class ScheduleSolveRead(BaseModel):
@@ -604,11 +696,21 @@ class ScheduleSolveRead(BaseModel):
       apply is whole-or-nothing.
     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
 
+    ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
+    on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+    end while the tournament is **live** — the window went soft so the day keeps being
+    scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
+    wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
+    run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
+    to label the day "overrunning".
+
     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
     every row that is not ``infeasible`` (so a client never null-checks it). An
     ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
-    minutes to format); every other row carries ``[]``. Parsed from the ledger's
+    minutes to format) — including the pre-live ``past_window`` cause (ADR "a
+    past day is named, not disguised"), which carries the offending venue-local
+    ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
     raw JSONB at this boundary so no downstream reader touches a bare dict.
 
     ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
@@ -633,6 +735,7 @@ class ScheduleSolveRead(BaseModel):
     wall_time_ms: int | None
     fixtures_placed: int | None
     fixtures_pinned: int | None
+    overrunning: bool
     error: str | None
     infeasibility_reasons: list[ResolvedReason]
     placement_conflicts: list[ResolvedConflict]
@@ -740,6 +843,11 @@ class TournamentEventRead(BaseModel):
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
     # Numeric(8,2) column coerces cleanly into float at the read boundary.
     entry_fee: float
+    # The venue timezone (IANA name) that ANCHORS this event's wall-clock windows to
+    # real instants (ADR "tournament times are timezone-aware instants"). It rides on
+    # the read so a client (and later the display BFF) knows the frame every ``Slot``
+    # of this event is stated in; the ``Slot`` strings themselves are unchanged.
+    timezone: str
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate]
@@ -982,6 +1090,14 @@ class TournamentEventCreate(BaseModel):
     # the row.
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee
+    # Required and validated: the event's wall-clock windows are meaningless without a
+    # zone to anchor them (ADR "tournament times are timezone-aware instants"), so a
+    # create must name one and it must be a real IANA zone (an unknown zone is a 422).
+    # The client derives the default from the browser
+    # (``Intl.DateTimeFormat().resolvedOptions().timeZone``) and sends it explicitly —
+    # there is no server default, because "the event's venue is UTC" is a guess no
+    # single-venue tournament would want silently made for it.
+    timezone: EventTimezone
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
@@ -1019,6 +1135,10 @@ class TournamentEventUpdate(BaseModel):
     draw_type: DrawType | None = None
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee | None = None
+    # The same validated IANA zone create requires — correcting the venue timezone is a
+    # supported edit (ADR: "picked Chicago, the venue is Denver"). Its column is NOT
+    # NULL, so an explicit ``null`` is rejected below; an unknown zone is still a 422.
+    timezone: EventTimezone | None = None
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
@@ -1033,6 +1153,7 @@ class TournamentEventUpdate(BaseModel):
         "format",
         "draw_type",
         "entry_fee",
+        "timezone",
         "slot",
         "match_settings",
         "predicates",
@@ -1049,19 +1170,23 @@ class TournamentEventUpdate(BaseModel):
 
 
 def _naive_wall_clock(value: datetime) -> datetime:
-    """A placement's ``scheduled_start`` is a **naive** wall-clock timestamp, in the
-    venue's local frame (ADR-0790), stored in a ``TIMESTAMP WITHOUT TIME ZONE`` column
-    — a deliberate exemption from the "datetimes are always timezone-aware" rule,
-    because it is checked against a pool's ``Slot`` window, which is itself naive
-    wall-clock.
+    """A placement's ``scheduled_start`` arrives on the wire as a **naive** venue
+    wall-clock timestamp (what the director typed, e.g. "18:00"), in the event's
+    local frame (ADR "tournament times are timezone-aware instants"). The server
+    anchors it to a real instant via the event's ``timezone``
+    (``anchor_wallclock`` does ``naive.replace(tzinfo=...)``, which requires a
+    naive input) before it is stored in the ``timestamptz`` column.
 
-    An offset-**aware** datetime carries a timezone this domain does not model, and
-    asyncpg cannot bind one to a ``timestamp without time zone`` parameter — so it is
-    refused *here*, at the boundary (422), rather than reaching the driver as a 500.
-    Same reasoning as the fee/player-limit bounds above: a boundary that admits what
-    the column cannot hold is not a boundary. This is a representational floor, not one
-    of the *soft* placement constraints (table-in-pool, time-in-window, no
-    double-booking) ADR-0790 keeps off the write path — those still save.
+    So an offset-**aware** value is a client bug: the wire contract is a naive
+    wall-clock the server anchors, and a value that carries its own timezone is
+    both redundant with the event's frame and un-anchorable by
+    ``anchor_wallclock`` (``replace(tzinfo=...)`` on an already-aware value would
+    silently discard the offset). It is refused *here*, at the boundary (422),
+    rather than leaking inward. Same reasoning as the fee/player-limit bounds
+    above: a boundary that admits what the domain cannot honestly represent is not
+    a boundary. This is a representational floor, not one of the *soft* placement
+    constraints (table-in-pool, time-in-window, no double-booking) ADR-0790 keeps
+    off the write path — those still save.
     """
     if value.tzinfo is not None:
         raise ValueError(
@@ -1072,10 +1197,11 @@ def _naive_wall_clock(value: datetime) -> datetime:
 
 
 PlacementStart = Annotated[datetime, AfterValidator(_naive_wall_clock)]
-"""A placement's predicted start: a naive wall-clock ``datetime`` (ADR-0790). The
-``AfterValidator`` refuses an offset-aware value (422) rather than let it 500 in the
-driver against the naive column; it contributes nothing to the JSON schema, exactly like
-``_fits_the_fee_column``."""
+"""A placement's predicted start: a naive venue wall-clock ``datetime`` the server
+anchors to an instant via the event's timezone (ADR "tournament times are
+timezone-aware instants"). The ``AfterValidator`` refuses an offset-aware value (422),
+which the naive-anchoring contract cannot honestly represent; it contributes nothing to
+the JSON schema, exactly like ``_fits_the_fee_column``."""
 
 
 class TournamentFixturePlacementUpdate(BaseModel):

@@ -8,6 +8,7 @@ import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
 import { Field } from '../../field'
 import { SectionHeader } from '../section-header'
 import { OptionSelect } from './option-select'
+import { TimezoneSelect } from './timezone-select'
 
 /** Inline validation messages for the scalar fields this section owns, mapped
  * from the editor's React-Hook-Form state. Present only for a field the resolver
@@ -17,6 +18,10 @@ export interface BasicsFieldErrors {
   name?: string
   maxPlayers?: string
   entryFee?: string
+  /** The timezone is chosen from a picker that only ever offers real IANA zones, so
+   * this is a backstop for a malformed draft the resolver still rejects (an empty
+   * `timezone`, ADR 20260719) — never a message the picker itself can produce. */
+  timezone?: string
 }
 
 export interface BasicsSectionProps {
@@ -254,7 +259,40 @@ export const BasicsSection = ({
           Time slot
         </span>
         <span className="h-px flex-1 bg-[color:var(--border-subtle)]" />
+        {/* The frame the wall-clock times below are in (ADR 20260719): the event's
+            timezone, beside the window so the director reads the two together. A
+            reader sees it too — it is a fact about the event, not a control. The
+            picker below is what *changes* it; this is the label. */}
+        <span
+          data-testid="event-timezone-label"
+          className="font-mono text-[11px] text-[color:var(--fg-2)]"
+        >
+          {event.timezone}
+        </span>
       </div>
+
+      {/* The IANA timezone that anchors this event's windows to real instants
+          (ADR 20260719). A searchable picker for an editor; the zone as text for a
+          reader (`Field`'s read-only branch). Pre-filled from the browser's resolved
+          zone on a new event (`emptyEvent`, `data/helpers`). */}
+      <Field
+        label="Timezone"
+        required
+        readOnly={readOnly}
+        value={event.timezone}
+        error={!!errors.timezone}
+        hint={errors.timezone}
+      >
+        {(id, hintId) => (
+          <TimezoneSelect
+            id={id}
+            ariaLabel="Timezone"
+            value={event.timezone}
+            describedById={hintId}
+            onChange={(tz) => set({ timezone: tz })}
+          />
+        )}
+      </Field>
 
       {/* The row that was still off the screen after round three's responsive pass fixed
           the rule row one tab over — the identical bug, in the identical shape, on the

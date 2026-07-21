@@ -2422,12 +2422,16 @@ internal enum Components {
             internal var fixturesPlaced: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/fixtures_pinned`.
             internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/overrunning`.
+            internal var overrunning: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/error`.
             internal var error: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload`.
             internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/NoSingleCauseRead`.
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PastWindowReasonRead`.
+                case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -2446,6 +2450,8 @@ internal enum Components {
                     switch discriminator {
                     case "no_single_cause":
                         self = .noSingleCause(try .init(from: decoder))
+                    case "past_window":
+                        self = .pastWindow(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -2463,6 +2469,8 @@ internal enum Components {
                 internal func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
                     case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .pastWindow(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
@@ -2539,6 +2547,7 @@ internal enum Components {
             ///   - wallTimeMs:
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
+            ///   - overrunning:
             ///   - error:
             ///   - infeasibilityReasons:
             ///   - placementConflicts:
@@ -2557,6 +2566,7 @@ internal enum Components {
                 wallTimeMs: Swift.Int? = nil,
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
+                overrunning: Swift.Bool,
                 error: Swift.String? = nil,
                 infeasibilityReasons: Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayload,
                 placementConflicts: Components.Schemas.AdminScheduleSolveRead.PlacementConflictsPayload,
@@ -2575,6 +2585,7 @@ internal enum Components {
                 self.wallTimeMs = wallTimeMs
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
+                self.overrunning = overrunning
                 self.error = error
                 self.infeasibilityReasons = infeasibilityReasons
                 self.placementConflicts = placementConflicts
@@ -2594,6 +2605,7 @@ internal enum Components {
                 case wallTimeMs = "wall_time_ms"
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
+                case overrunning
                 case error
                 case infeasibilityReasons = "infeasibility_reasons"
                 case placementConflicts = "placement_conflicts"
@@ -3521,6 +3533,65 @@ internal enum Components {
                 case pools
                 case complete
                 case champion
+            }
+        }
+        /// One displayed fixture time, shaped so no client does ANY timezone math
+        /// (ADR "tournament times are timezone-aware instants" — "all timezone arithmetic
+        /// lives on the server; clients stay tz-math-free").
+        ///
+        /// The same moment, carried two ways for two different jobs:
+        ///
+        /// * ``local_label`` + ``tz_abbrev`` — the moment already rendered in the **event's
+        ///   venue timezone** with stdlib ``zoneinfo``, server-side, for a human to READ: a
+        ///   12-hour wall-clock label (e.g. ``"6:00 PM"``) and its timezone abbreviation
+        ///   (e.g. ``"CDT"``). A client displays ``f"{local_label} {tz_abbrev}"`` verbatim —
+        ///   it never slices a datetime or picks a zone. ``tz_abbrev`` rides alongside the
+        ///   label because a tournament-wide schedule can put fixtures from different venue
+        ///   timezones on one timeline, and each rendered time must name its frame so equal
+        ///   columns do not imply simultaneity across frames (ADR "a schedule surface always
+        ///   labels the timezone").
+        /// * ``instant`` — the same moment as an unambiguous, offset-bearing ISO-8601
+        ///   timestamp, for GEOMETRY: Gantt bar positions are tz-agnostic *differencing*,
+        ///   which a client does on instants with no timezone library. It is always
+        ///   **normalized to UTC** (``+00:00``) on the way out, so every read path — a detail
+        ///   GET, a placement PATCH echo — emits the identical string for the identical
+        ///   moment (asyncpg hands ``timestamptz`` back as UTC; an in-memory venue-offset
+        ///   value like ``-05:00`` for the same instant is re-normalized here, so the two
+        ///   never diverge as strings).
+        ///
+        /// Carrying both is *not* carrying a field and its own derivation (api/CLAUDE.md):
+        /// the label is for reading and the instant is for math, and neither is derivable
+        /// from the other **without** the timezone library this model exists to keep off the
+        /// client. ``null`` (on the field that holds this model) means the time is
+        /// unassigned — a fact, never a missing value to fill in.
+        ///
+        /// - Remark: Generated from `#/components/schemas/FixtureTimeRead`.
+        internal struct FixtureTimeRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FixtureTimeRead/instant`.
+            internal var instant: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/FixtureTimeRead/local_label`.
+            internal var localLabel: Swift.String
+            /// - Remark: Generated from `#/components/schemas/FixtureTimeRead/tz_abbrev`.
+            internal var tzAbbrev: Swift.String
+            /// Creates a new `FixtureTimeRead`.
+            ///
+            /// - Parameters:
+            ///   - instant:
+            ///   - localLabel:
+            ///   - tzAbbrev:
+            internal init(
+                instant: Foundation.Date,
+                localLabel: Swift.String,
+                tzAbbrev: Swift.String
+            ) {
+                self.instant = instant
+                self.localLabel = localLabel
+                self.tzAbbrev = tzAbbrev
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case instant
+                case localLabel = "local_label"
+                case tzAbbrev = "tz_abbrev"
             }
         }
         /// - Remark: Generated from `#/components/schemas/HTTPValidationError`.
@@ -5510,6 +5581,43 @@ internal enum Components {
                 case description
             }
         }
+        /// A pool whose **entire** planned window is already in the past — the day
+        /// was dated behind ``now`` (most easily via the silent "today" default on an
+        /// event now a day old), so it cannot run until it is moved to a future day
+        /// (ADR "a past day is named, not disguised"). The most specific pre-live cause,
+        /// fixed by "move the date", not "add tables/time". Resolved: the offending
+        /// ``date`` — the venue-local calendar day the director gave a window for, in
+        /// the event's own timezone frame — so the client says which day to move with
+        /// no timezone math of its own. The DB-aware mirror of
+        /// :class:`app.scheduling.PastWindow`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PastWindowReasonRead`.
+        internal struct PastWindowReasonRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PastWindowReasonRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pastWindow = "past_window"
+            }
+            /// - Remark: Generated from `#/components/schemas/PastWindowReasonRead/kind`.
+            internal var kind: Components.Schemas.PastWindowReasonRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/PastWindowReasonRead/date`.
+            internal var date: Swift.String
+            /// Creates a new `PastWindowReasonRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - date:
+            internal init(
+                kind: Components.Schemas.PastWindowReasonRead.KindPayload? = nil,
+                date: Swift.String
+            ) {
+                self.kind = kind
+                self.date = date
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case date
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/PermissionCreate`.
         internal struct PermissionCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/PermissionCreate/name`.
@@ -7295,11 +7403,21 @@ internal enum Components {
         ///   apply is whole-or-nothing.
         /// * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
         ///
+        /// ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
+        /// on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+        /// end while the tournament is **live** — the window went soft so the day keeps being
+        /// scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
+        /// wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
+        /// run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
+        /// to label the day "overrunning".
+        ///
         /// ``infeasibility_reasons`` is **never null** — it is always a list, empty on
         /// every row that is not ``infeasible`` (so a client never null-checks it). An
         /// ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
         /// could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
-        /// minutes to format); every other row carries ``[]``. Parsed from the ledger's
+        /// minutes to format) — including the pre-live ``past_window`` cause (ADR "a
+        /// past day is named, not disguised"), which carries the offending venue-local
+        /// ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
         /// raw JSONB at this boundary so no downstream reader touches a bare dict.
         ///
         /// ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
@@ -7351,12 +7469,16 @@ internal enum Components {
             internal var fixturesPlaced: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/fixtures_pinned`.
             internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/overrunning`.
+            internal var overrunning: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/error`.
             internal var error: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload`.
             internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/NoSingleCauseRead`.
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PastWindowReasonRead`.
+                case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -7375,6 +7497,8 @@ internal enum Components {
                     switch discriminator {
                     case "no_single_cause":
                         self = .noSingleCause(try .init(from: decoder))
+                    case "past_window":
+                        self = .pastWindow(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -7392,6 +7516,8 @@ internal enum Components {
                 internal func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
                     case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .pastWindow(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
@@ -7460,6 +7586,7 @@ internal enum Components {
             ///   - wallTimeMs:
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
+            ///   - overrunning:
             ///   - error:
             ///   - infeasibilityReasons:
             ///   - placementConflicts:
@@ -7474,6 +7601,7 @@ internal enum Components {
                 wallTimeMs: Swift.Int? = nil,
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
+                overrunning: Swift.Bool,
                 error: Swift.String? = nil,
                 infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload,
                 placementConflicts: Components.Schemas.ScheduleSolveRead.PlacementConflictsPayload
@@ -7488,6 +7616,7 @@ internal enum Components {
                 self.wallTimeMs = wallTimeMs
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
+                self.overrunning = overrunning
                 self.error = error
                 self.infeasibilityReasons = infeasibilityReasons
                 self.placementConflicts = placementConflicts
@@ -7503,6 +7632,7 @@ internal enum Components {
                 case wallTimeMs = "wall_time_ms"
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
+                case overrunning
                 case error
                 case infeasibilityReasons = "infeasibility_reasons"
                 case placementConflicts = "placement_conflicts"
@@ -8246,6 +8376,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/entry_fee`.
             internal var entryFee: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/timezone`.
+            internal var timezone: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/match_settings`.
@@ -8262,6 +8394,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -8272,6 +8405,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
+                timezone: Swift.String,
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate]? = nil,
@@ -8282,6 +8416,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -8293,6 +8428,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -8320,6 +8456,10 @@ internal enum Components {
                     Swift.Double.self,
                     forKey: .entryFee
                 )
+                self.timezone = try container.decode(
+                    Swift.String.self,
+                    forKey: .timezone
+                )
                 self.slot = try container.decode(
                     Components.Schemas.Slot.self,
                     forKey: .slot
@@ -8342,6 +8482,7 @@ internal enum Components {
                     "draw_type",
                     "max_players",
                     "entry_fee",
+                    "timezone",
                     "slot",
                     "match_settings",
                     "predicates",
@@ -8365,6 +8506,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
             internal var entryFee: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/timezone`.
+            internal var timezone: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/match_settings`.
@@ -8464,6 +8607,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -8483,6 +8627,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
+                timezone: Swift.String,
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate],
@@ -8502,6 +8647,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -8522,6 +8668,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -8603,6 +8750,8 @@ internal enum Components {
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/entry_fee`.
             internal var entryFee: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/timezone`.
+            internal var timezone: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/slot`.
             internal struct SlotPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/slot/value1`.
@@ -8655,6 +8804,7 @@ internal enum Components {
             ///   - drawType:
             ///   - maxPlayers:
             ///   - entryFee:
+            ///   - timezone:
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
@@ -8665,6 +8815,7 @@ internal enum Components {
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double? = nil,
+                timezone: Swift.String? = nil,
                 slot: Components.Schemas.TournamentEventUpdate.SlotPayload? = nil,
                 matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload? = nil,
                 predicates: [Components.Schemas.Predicate]? = nil,
@@ -8675,6 +8826,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
+                self.timezone = timezone
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
@@ -8686,6 +8838,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
+                case timezone
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
@@ -8713,6 +8866,10 @@ internal enum Components {
                     Swift.Double.self,
                     forKey: .entryFee
                 )
+                self.timezone = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .timezone
+                )
                 self.slot = try container.decodeIfPresent(
                     Components.Schemas.TournamentEventUpdate.SlotPayload.self,
                     forKey: .slot
@@ -8735,6 +8892,7 @@ internal enum Components {
                     "draw_type",
                     "max_players",
                     "entry_fee",
+                    "timezone",
                     "slot",
                     "match_settings",
                     "predicates",
@@ -8840,25 +8998,27 @@ internal enum Components {
         ///   **unassigned to a table**. When set, it names a ``TournamentTable`` in the
         ///   tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
         ///   the same pattern as ``pool_id``.
-        /// * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
-        ///   means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
-        ///   venue's frame, a prediction rather than a commitment — a match starting
-        ///   off-prediction is normal, not an error.
+        /// * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
+        ///   **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
+        ///   label + tz abbrev for display, plus the raw UTC instant for geometry — composed
+        ///   server-side in the event's timezone (ADR "tournament times are timezone-aware
+        ///   instants", superseding ADR-0790's naive-wall-clock frame). A prediction rather
+        ///   than a commitment — a match starting off-prediction is normal, not an error.
         /// * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
         ///   the call is pinned"): ``null`` means the placement is still an estimate the
         ///   solver may move freely. When set, the placement is a promise — the players were
-        ///   notified, and no later solve will rearrange it. Naive wall-clock in the venue's
-        ///   frame, like ``scheduled_start``.
+        ///   notified, and no later solve will rearrange it — carried as a
+        ///   :class:`FixtureTimeRead` in the event's timezone, like ``scheduled_start``.
         /// * ``completed_at`` — the match's **actual** completion time, as opposed to
         ///   ``scheduled_start``'s *predicted* one: ``null`` until the match is actually
-        ///   decided (win or void), then the moment it was. This is the value a Gantt-style
-        ///   schedule view should use as a played slot's real end, instead of projecting
-        ///   ``scheduled_start + an estimated duration`` past a match that has already
-        ///   finished. Converted to the same naive wall-clock frame as ``scheduled_start``
-        ///   and ``pinned_at`` (ADR-0790) even though the underlying ``Match.completed_at``
-        ///   column is an ordinary timezone-aware UTC timestamp — so a client can do simple
-        ///   arithmetic across all three fields (e.g. a bar's width) without juggling
-        ///   timezones itself.
+        ///   decided (win or void), then the moment it was, as a :class:`FixtureTimeRead`.
+        ///   This is the value a Gantt-style schedule view should use as a played slot's real
+        ///   end, instead of projecting ``scheduled_start + an estimated duration`` past a
+        ///   match that has already finished. All three times share the one
+        ///   :class:`FixtureTimeRead` shape — a UTC ``instant`` for tz-agnostic arithmetic
+        ///   (e.g. a bar's width) and a pre-rendered venue-local label — so a client juggles
+        ///   no timezones itself, even though ``Match.completed_at`` is stored as an ordinary
+        ///   UTC timestamp and the two placement columns are venue-anchored instants.
         ///
         /// The entries are carried as **ids only**. The name and username behind
         /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -8907,13 +9067,67 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/table_id`.
             internal var tableId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start`.
-            internal var scheduledStart: Foundation.Date?
+            internal struct ScheduledStartPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start/value1`.
+                internal var value1: Components.Schemas.FixtureTimeRead
+                /// Creates a new `ScheduledStartPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.FixtureTimeRead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start`.
+            internal var scheduledStart: Components.Schemas.TournamentFixtureRead.ScheduledStartPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at`.
-            internal var pinnedAt: Foundation.Date?
+            internal struct PinnedAtPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at/value1`.
+                internal var value1: Components.Schemas.FixtureTimeRead
+                /// Creates a new `PinnedAtPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.FixtureTimeRead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at`.
+            internal var pinnedAt: Components.Schemas.TournamentFixtureRead.PinnedAtPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/call_notified_count`.
             internal var callNotifiedCount: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/completed_at`.
-            internal var completedAt: Foundation.Date?
+            internal struct CompletedAtPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/completed_at/value1`.
+                internal var value1: Components.Schemas.FixtureTimeRead
+                /// Creates a new `CompletedAtPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.FixtureTimeRead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/completed_at`.
+            internal var completedAt: Components.Schemas.TournamentFixtureRead.CompletedAtPayload?
             /// Creates a new `TournamentFixtureRead`.
             ///
             /// - Parameters:
@@ -8942,10 +9156,10 @@ internal enum Components {
                 matchId: Swift.String? = nil,
                 matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil,
                 tableId: Swift.String? = nil,
-                scheduledStart: Foundation.Date? = nil,
-                pinnedAt: Foundation.Date? = nil,
+                scheduledStart: Components.Schemas.TournamentFixtureRead.ScheduledStartPayload? = nil,
+                pinnedAt: Components.Schemas.TournamentFixtureRead.PinnedAtPayload? = nil,
                 callNotifiedCount: Swift.Int,
-                completedAt: Foundation.Date? = nil
+                completedAt: Components.Schemas.TournamentFixtureRead.CompletedAtPayload? = nil
             ) {
                 self.id = id
                 self.poolId = poolId

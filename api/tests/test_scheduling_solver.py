@@ -25,6 +25,7 @@ from app.scheduling import (
     InProgressMatch,
     MatchLength,
     NoSingleCause,
+    PastWindow,
     Pin,
     PlacedFixture,
     PlayerConflict,
@@ -735,6 +736,107 @@ class TestInfeasibility:
         result = solve(_one_pool_snapshot(()), time_cap_s=CAP)
         assert result.verdict is Verdict.optimal
         assert result.reasons == ()
+
+    def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
+        """A pre-live pool whose ENTIRE window is already behind ``now`` is
+        infeasible with a specific, machine-readable ``past_window`` reason that
+        identifies the offending pool — the most specific pre-live cause, distinct
+        from a too-tight current window (ADR "a past day is named, not disguised",
+        #1101). The pure module is minute-only, so the reason carries only the
+        pool id; the DB-aware layer resolves it to a date."""
+        p1, p2 = _players(2)
+        # Window [0, 60) is wholly before now (minute 120): no grid start >= now
+        # can ever land inside it — a dated-in-the-past day, not too-tight.
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            window=(0, 60),
+            now_min=120,
+        )
+        assert snapshot.is_live is False
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.overrunning is False
+        # Past window dominates: it is the only reason (the tight-window arm is
+        # suppressed for the same pool), and it names the offending pool.
+        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        (reason,) = result.reasons
+        assert isinstance(reason, PastWindow)
+        assert reason.kind == "past_window"
+
+
+class TestSoftWindowOnceLive:
+    """Once the tournament is live, a pool window's end is advisory: real time
+    passing it makes the day *overrunning*, not instantly infeasible (ADR "the
+    solver stops wedging", #1067). Pre-live the window stays a hard constraint."""
+
+    def test_live_day_past_its_window_end_overruns_rather_than_wedging(
+        self,
+    ) -> None:
+        """A live snapshot whose pool window END is already behind ``now`` still
+        places its unplayed fixture — into the overrun — and reports feasible +
+        ``overrunning``, instead of the 0-ms infeasible wedge."""
+        p1, p2 = _players(2)
+        # Window closes at minute 60; it is now minute 120 — a full hour past
+        # the planned end, with a 25-minute (best-of-3) match still to play.
+        snapshot = dataclasses.replace(
+            _one_pool_snapshot(
+                (_fixture(1, p1, p2),),
+                window=(0, 60),
+                now_min=120,
+            ),
+            is_live=True,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        assert result.overrunning is True
+        # A solved live day carries no infeasibility reason — the past-window
+        # reason is strictly the pre-live/hard-window case, so the two never
+        # coexist.
+        assert result.reasons == ()
+        (placement,) = result.placements
+        assert placement.fixture_id == FixtureId("F1")
+        # Placed into the overrun: no earlier than now, and past the planned
+        # window end — which is exactly what "overrunning" names.
+        assert placement.start_min >= snapshot.now_min
+        assert placement.end_min > 60
+
+    def test_same_past_window_is_infeasible_pre_live(self) -> None:
+        """The soft window is live-only: the identical snapshot pre-live still
+        proves infeasible (a provisional plan must flag "won't fit")."""
+        p1, p2 = _players(2)
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            window=(0, 60),
+            now_min=120,
+        )
+        assert snapshot.is_live is False
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.overrunning is False
+        # Pre-live, the wholly-past window is named as a past window (pool A).
+        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+
+    def test_live_day_within_its_window_is_not_flagged_overrunning(self) -> None:
+        """Live but comfortably inside the window: a normal success, not
+        overrunning — the flag names an actual spill past the planned end."""
+        p1, p2 = _players(2)
+        snapshot = dataclasses.replace(
+            _one_pool_snapshot(
+                (_fixture(1, p1, p2),),
+                window=(0, 480),
+                now_min=0,
+            ),
+            is_live=True,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.overrunning is False
+        (placement,) = result.placements
+        assert placement.end_min <= 60
 
 
 class TestInProgress:

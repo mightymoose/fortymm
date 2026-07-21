@@ -17,10 +17,15 @@ lock or Redis key to drift from it.
 **The job is three phases, and the transaction boundaries are the design.**
 
 (a) *Snapshot*: mark the row ``running``, read every solver input for the
-    tournament, compute the input fingerprint, commit. Wall-clock times (naive
-    ``scheduled_start`` timestamps, pool ``Slot`` date+HH:MM strings) become
-    minute offsets from a per-tournament base — the earliest pool window start
-    — because the pure module speaks only ``int`` minutes in one shared frame.
+    tournament, compute the input fingerprint, commit. Times become minute
+    offsets from a per-tournament base — the earliest pool window start —
+    because the pure module speaks only ``int`` minutes in one shared frame.
+    Every time is first put on **one real-instant axis**: pool ``Slot``
+    date+HH:MM components are anchored to instants by the event's venue
+    ``timezone``, ``scheduled_start``/``pinned_at`` are ``timestamptz``
+    instants, and ``now`` is an aware UTC instant — so ``now`` and the windows
+    finally share an axis (ADR "tournament times are timezone-aware instants",
+    the #1068 fix).
 (b) *Solve*: call ``app.scheduling.solve`` **outside any transaction**. A
     CP-SAT run can take seconds; holding row locks (or even an idle-in-
     transaction connection) across it would block every writer at the venue.
@@ -31,14 +36,15 @@ lock or Redis key to drift from it.
     with ``error='inputs changed during solve; superseded by re-run'`` and a
     ``rerun`` solve is requested in the same transaction. That is honest (this
     run produced nothing) and keeps the status enum closed. On a match, every
-    returned placement for an *unpinned* fixture is written back as wall-clock
-    (``base + minutes``); a pinned fixture's **table** is never rewritten, and
-    its start is left byte-identical when the solver echoes it unchanged (a
-    promise is not rewritten even with its own bytes) — but a called match the
-    solver slid **later** on its (unchanged) table has that later start
-    persisted with ``pinned_at`` refreshed and fires the same "moved"
-    correction as a broken-pin move (ADR "a called match holds its table and
-    slides later"). (Physics moving a pin is the other exception — see the
+    returned placement for an *unpinned* fixture is written back as an instant
+    (``base + minutes``, and ``base`` is an aware instant); a pinned fixture's
+    **table** is never rewritten, and its start is left byte-identical when the
+    solver echoes it unchanged (a promise is not rewritten even with its own
+    bytes) — but a called match the solver slid **later** on its (unchanged)
+    table has that later start persisted with ``pinned_at`` refreshed and fires
+    the same "moved" correction as a broken-pin move (ADR "a called match holds
+    its table and slides later"). (Physics moving a pin is the other exception —
+    see the
     broken-pins section below.) No per-fixture merging, ever: the output is
     taken whole or not at all.
 
@@ -123,8 +129,9 @@ import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, assert_never
+from zoneinfo import ZoneInfo
 
 from redis.exceptions import RedisError
 from sqlalchemy import exists, select, update
@@ -158,6 +165,7 @@ from app.scheduling import (
     InfeasibilityReason,
     InProgressMatch,
     NoSingleCause,
+    PastWindow,
     Pin,
     PlacementConflict,
     PlayerConflict,
@@ -181,6 +189,7 @@ from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
     ConflictFixtureRead,
     NoSingleCauseRead,
+    PastWindowReasonRead,
     PlayerConflictRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
@@ -529,6 +538,13 @@ class SolveInputs:
     fingerprint: str
     base: datetime
     fixtures: dict[uuid.UUID, TournamentFixture]
+    #: Each namespaced pool id (``"{event.id}:{pool.id}"``) mapped to its
+    #: offending-day resolver: the venue-local calendar date of its window, in
+    #: the event's own timezone frame. The apply reads this to turn a pure
+    #: :class:`~app.scheduling.PastWindow` reason (minute offsets + pool id) into
+    #: a named ``past_window`` date on the ledger row — the pure solver stays
+    #: minute-only, and naming the wall-clock day is this DB-aware layer's job.
+    pool_dates: dict[str, date] = field(default_factory=dict)
     broken_pin_moves: frozenset[uuid.UUID] = frozenset()
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
@@ -550,12 +566,16 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _slot_bounds(slot: Slot) -> tuple[datetime, datetime]:
-    """A pool ``Slot``'s window as naive wall-clock datetimes — the venue's own
-    frame, the same one ``scheduled_start`` lives in (ADR-0790)."""
+def _slot_bounds(slot: Slot, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """A pool ``Slot``'s window as timezone-aware **instants**, composed from its
+    ``{date, start, end}`` wall-clock components anchored by the event's venue
+    ``timezone`` (ADR "tournament times are timezone-aware instants"). Anchoring
+    is what puts the window on the same real-instant axis as ``now``, so an
+    evening/"today" venue window is no longer mis-compared against a UTC
+    wall-clock (#1068)."""
     start = datetime.strptime(f"{slot.date} {slot.start}", "%Y-%m-%d %H:%M")
     end = datetime.strptime(f"{slot.date} {slot.end}", "%Y-%m-%d %H:%M")
-    return start, end
+    return start.replace(tzinfo=tz), end.replace(tzinfo=tz)
 
 
 def _rest_shadows_for(
@@ -573,16 +593,16 @@ def _rest_shadows_for(
     completion stamp — no stamp (completed via winner alone) means no anchor, so
     no shadow. Round the anchor UP to the whole minute in the shared offset
     frame (NOT ``to_min``, which floors) so a grid-snapped start never lands a
-    sub-minute short of the floor, normalizing the aware stamp into the naive
-    wall-clock frame ``now`` and ``base`` live in first. Skip a window that has
-    already closed relative to ``now`` — no future grid start >= now can overlap
-    it (pure waste). One shadow per real human, on user-level ids so rest holds
-    across events.
+    sub-minute short of the floor. ``completed_at`` and ``base`` are both
+    timezone-aware instants now (ADR "tournament times are timezone-aware
+    instants"), so the difference is a straight instant subtraction. Skip a
+    window that has already closed relative to ``now`` — no future grid start >=
+    now can overlap it (pure waste). One shadow per real human, on user-level ids
+    so rest holds across events.
     """
     if completed_at is None:
         return []
-    completed_local = completed_at.astimezone().replace(tzinfo=None)
-    completed_at_min = math.ceil((completed_local - base).total_seconds() / 60)
+    completed_at_min = math.ceil((completed_at - base).total_seconds() / 60)
     if completed_at_min + REST_MIN <= now_min:
         return []
     return [
@@ -746,6 +766,12 @@ async def _load_solver_inputs(
     # ``SchedulePool``s are built from these same specs below (only ``base``
     # — which needs every window start first — stands between the two).
     pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
+    # The offending-day resolver for a past-window reason: each pool's
+    # venue-local date is exactly the day the director entered in its Slot, in
+    # the event's own frame — taken verbatim so the apply can name it without
+    # re-deriving a date from minute offsets. Keyed by the same namespaced pool
+    # id the pure module carries on its ``PastWindow`` reason.
+    pool_dates: dict[str, date] = {}
     # Resolution lookups the apply humanizes an infeasible solve's reasons
     # through: solver ``PoolId`` → the pool's display name + ``HH:MM`` bounds,
     # and fixture id → its event's ``length_games`` (``best_of``). Built off the
@@ -758,15 +784,20 @@ async def _load_solver_inputs(
     # Built in the fixture loop below, alongside ``fixture_best_of``.
     fixture_matchups: dict[str, tuple[str, str]] = {}
     for event, _settings, pools in parsed_events:
+        # The event's IANA zone anchors its pools' wall-clock windows to real
+        # instants; it is boundary-validated on write (``EventTimezone``), so
+        # ``ZoneInfo`` here cannot raise on a stored value.
+        event_tz = ZoneInfo(event.timezone)
         for pool in pools:
             key = f"{event.id}:{pool.id}"
-            start, end = _slot_bounds(pool.slot)
+            start, end = _slot_bounds(pool.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
                 for table_id in pool.table_ids
                 if TableId(table_id) in catalogue_ids
             )
             pool_specs.append((key, tables, start, end))
+            pool_dates[key] = date.fromisoformat(pool.slot.date)
             pool_resolutions[key] = _PoolResolution(
                 name=pool.name,
                 window_start=pool.slot.start,
@@ -938,6 +969,11 @@ async def _load_solver_inputs(
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
         rest_shadows=coalesce_rest_shadows(rest_shadows),
+        # Soft-window policy fact (ADR "the solver stops wedging"): once the
+        # tournament is live, a pool window's end is advisory so wall-clock
+        # passing it makes the day "overrunning", not instantly infeasible.
+        # Pre-live keeps the hard window (a provisional plan flags a misfit).
+        is_live=tournament.status is TournamentStatus.live,
     )
 
     # The fingerprint payload is the *wall-clock* form of exactly these inputs
@@ -956,6 +992,11 @@ async def _load_solver_inputs(
                         "date": pool.slot.date,
                         "start": pool.slot.start,
                         "end": pool.slot.end,
+                        # The event ``timezone`` anchors this window's wall-clock
+                        # to the instant the solver reads (ADR "tournament times
+                        # are timezone-aware instants"), so a mid-solve zone
+                        # change is input drift the apply must discard as stale.
+                        "timezone": event.timezone,
                         "table_ids": list(pool.table_ids),
                     }
                     for pool in pools
@@ -998,6 +1039,7 @@ async def _load_solver_inputs(
         fingerprint=_fingerprint(payload),
         base=base,
         fixtures={fixture.id: fixture for fixture in fixture_rows},
+        pool_dates=pool_dates,
         broken_pin_moves=frozenset(broken_pin_moves),
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
@@ -1057,6 +1099,11 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 required_min=reason.required_min,
                 available_min=reason.available_min,
             )
+        case PastWindow():
+            # The offending pool resolves to the venue-local calendar day it was
+            # dated for (``inputs.pool_dates`` — from the same fingerprinted read,
+            # so the pool is present), the actionable "which day to move" fact.
+            return PastWindowReasonRead(date=inputs.pool_dates[reason.pool_id])
         case _:
             assert_never(reason)
 
@@ -1298,6 +1345,11 @@ async def _apply_result(
                 )
                 row.fixtures_placed = placed
                 row.fixtures_pinned = pinned
+                # A live day whose soft window let the plan spill past a planned
+                # pool window is recorded as overrunning, not failed — the
+                # schedule shows "overrunning" rather than "doesn't fit" (ADR
+                # "the solver stops wedging"). False on every pre-live solve.
+                row.overrunning = result.overrunning
                 # One ingredients batch serves both the repair corrections and
                 # the call evaluation below (they read the same fixture set) —
                 # loaded only while live, since both are live-gated no-ops
@@ -1347,10 +1399,20 @@ async def _apply_result(
                 # ``schemas.schedule_solve.parse_infeasibility_reasons``).
                 row.status = ScheduleSolveStatus.infeasible
                 row.verdict = SolverVerdict.infeasible
+                # Each structured, id-and-minute reason (including the pre-live
+                # ``PastWindow`` "a past day is named, not disguised" cause, whose
+                # pool id resolves to its venue-local date via ``fresh.pool_dates``)
+                # is humanized against ``fresh``'s maps and stored as JSONB.
                 resolved: list[ResolvedReason] = [
                     _resolve_reason(reason, fresh) for reason in result.reasons
                 ]
-                row.infeasibility_reasons = [reason.model_dump() for reason in resolved]
+                # ``mode="json"`` so JSON-native types land in JSONB — the
+                # ``past_window`` reason carries a ``date``, which asyncpg's JSONB
+                # codec cannot serialize raw; it round-trips back to a ``date`` at
+                # read via ``parse_infeasibility_reasons``.
+                row.infeasibility_reasons = [
+                    reason.model_dump(mode="json") for reason in resolved
+                ]
             case scheduling.Verdict.unknown:
                 # The cap ran out before any answer. No verdict — the DB enum
                 # has no ``unknown``, and a run that proved nothing has none.

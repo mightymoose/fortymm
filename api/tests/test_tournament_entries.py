@@ -145,6 +145,7 @@ async def _make_event(
         draw_type=DrawType.single_elim,
         max_players=max_players,
         entry_fee=Decimal("20.00"),
+        timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=predicates if predicates is not None else [],

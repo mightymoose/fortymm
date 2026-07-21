@@ -1544,10 +1544,12 @@ export interface components {
             fixtures_placed: number | null;
             /** Fixtures Pinned */
             fixtures_pinned: number | null;
+            /** Overrunning */
+            overrunning: boolean;
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
@@ -1937,6 +1939,49 @@ export interface components {
             complete: boolean;
             /** Champion */
             champion: string | null;
+        };
+        /**
+         * FixtureTimeRead
+         * @description One displayed fixture time, shaped so no client does ANY timezone math
+         *     (ADR "tournament times are timezone-aware instants" — "all timezone arithmetic
+         *     lives on the server; clients stay tz-math-free").
+         *
+         *     The same moment, carried two ways for two different jobs:
+         *
+         *     * ``local_label`` + ``tz_abbrev`` — the moment already rendered in the **event's
+         *       venue timezone** with stdlib ``zoneinfo``, server-side, for a human to READ: a
+         *       12-hour wall-clock label (e.g. ``"6:00 PM"``) and its timezone abbreviation
+         *       (e.g. ``"CDT"``). A client displays ``f"{local_label} {tz_abbrev}"`` verbatim —
+         *       it never slices a datetime or picks a zone. ``tz_abbrev`` rides alongside the
+         *       label because a tournament-wide schedule can put fixtures from different venue
+         *       timezones on one timeline, and each rendered time must name its frame so equal
+         *       columns do not imply simultaneity across frames (ADR "a schedule surface always
+         *       labels the timezone").
+         *     * ``instant`` — the same moment as an unambiguous, offset-bearing ISO-8601
+         *       timestamp, for GEOMETRY: Gantt bar positions are tz-agnostic *differencing*,
+         *       which a client does on instants with no timezone library. It is always
+         *       **normalized to UTC** (``+00:00``) on the way out, so every read path — a detail
+         *       GET, a placement PATCH echo — emits the identical string for the identical
+         *       moment (asyncpg hands ``timestamptz`` back as UTC; an in-memory venue-offset
+         *       value like ``-05:00`` for the same instant is re-normalized here, so the two
+         *       never diverge as strings).
+         *
+         *     Carrying both is *not* carrying a field and its own derivation (api/CLAUDE.md):
+         *     the label is for reading and the instant is for math, and neither is derivable
+         *     from the other **without** the timezone library this model exists to keep off the
+         *     client. ``null`` (on the field that holds this model) means the time is
+         *     unassigned — a fact, never a missing value to fill in.
+         */
+        FixtureTimeRead: {
+            /**
+             * Instant
+             * Format: date-time
+             */
+            instant: string;
+            /** Local Label */
+            local_label: string;
+            /** Tz Abbrev */
+            tz_abbrev: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2699,6 +2744,30 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /**
+         * PastWindowReasonRead
+         * @description A pool whose **entire** planned window is already in the past — the day
+         *     was dated behind ``now`` (most easily via the silent "today" default on an
+         *     event now a day old), so it cannot run until it is moved to a future day
+         *     (ADR "a past day is named, not disguised"). The most specific pre-live cause,
+         *     fixed by "move the date", not "add tables/time". Resolved: the offending
+         *     ``date`` — the venue-local calendar day the director gave a window for, in
+         *     the event's own timezone frame — so the client says which day to move with
+         *     no timezone math of its own. The DB-aware mirror of
+         *     :class:`app.scheduling.PastWindow`.
+         */
+        PastWindowReasonRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "past_window";
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+        };
         /** PermissionCreate */
         PermissionCreate: {
             /** Name */
@@ -3447,11 +3516,21 @@ export interface components {
          *       apply is whole-or-nothing.
          *     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
          *
+         *     ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
+         *     on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+         *     end while the tournament is **live** — the window went soft so the day keeps being
+         *     scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
+         *     wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
+         *     run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
+         *     to label the day "overrunning".
+         *
          *     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
          *     every row that is not ``infeasible`` (so a client never null-checks it). An
          *     ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
          *     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
-         *     minutes to format); every other row carries ``[]``. Parsed from the ledger's
+         *     minutes to format) — including the pre-live ``past_window`` cause (ADR "a
+         *     past day is named, not disguised"), which carries the offending venue-local
+         *     ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
          *     raw JSONB at this boundary so no downstream reader touches a bare dict.
          *
          *     ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
@@ -3487,10 +3566,12 @@ export interface components {
             fixtures_placed: number | null;
             /** Fixtures Pinned */
             fixtures_pinned: number | null;
+            /** Overrunning */
+            overrunning: boolean;
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
@@ -3818,6 +3899,8 @@ export interface components {
             max_players?: number | null;
             /** Entry Fee */
             entry_fee: number;
+            /** Timezone */
+            timezone: string;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
@@ -3845,6 +3928,8 @@ export interface components {
             max_players: number | null;
             /** Entry Fee */
             entry_fee: number;
+            /** Timezone */
+            timezone: string;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
@@ -3909,6 +3994,8 @@ export interface components {
             max_players?: number | null;
             /** Entry Fee */
             entry_fee?: number | null;
+            /** Timezone */
+            timezone?: string | null;
             slot?: components["schemas"]["Slot"] | null;
             match_settings?: components["schemas"]["MatchSettings"] | null;
             /** Predicates */
@@ -3986,25 +4073,27 @@ export interface components {
          *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
          *       tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
          *       the same pattern as ``pool_id``.
-         *     * ``scheduled_start`` — the placement's **predicted** start (ADR-0790): ``null``
-         *       means **unscheduled**. It is a *naive* wall-clock timestamp (no timezone), in the
-         *       venue's frame, a prediction rather than a commitment — a match starting
-         *       off-prediction is normal, not an error.
+         *     * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
+         *       **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
+         *       label + tz abbrev for display, plus the raw UTC instant for geometry — composed
+         *       server-side in the event's timezone (ADR "tournament times are timezone-aware
+         *       instants", superseding ADR-0790's naive-wall-clock frame). A prediction rather
+         *       than a commitment — a match starting off-prediction is normal, not an error.
          *     * ``pinned_at`` — when the fixture was **called** (ADR "the schedule is solved,
          *       the call is pinned"): ``null`` means the placement is still an estimate the
          *       solver may move freely. When set, the placement is a promise — the players were
-         *       notified, and no later solve will rearrange it. Naive wall-clock in the venue's
-         *       frame, like ``scheduled_start``.
+         *       notified, and no later solve will rearrange it — carried as a
+         *       :class:`FixtureTimeRead` in the event's timezone, like ``scheduled_start``.
          *     * ``completed_at`` — the match's **actual** completion time, as opposed to
          *       ``scheduled_start``'s *predicted* one: ``null`` until the match is actually
-         *       decided (win or void), then the moment it was. This is the value a Gantt-style
-         *       schedule view should use as a played slot's real end, instead of projecting
-         *       ``scheduled_start + an estimated duration`` past a match that has already
-         *       finished. Converted to the same naive wall-clock frame as ``scheduled_start``
-         *       and ``pinned_at`` (ADR-0790) even though the underlying ``Match.completed_at``
-         *       column is an ordinary timezone-aware UTC timestamp — so a client can do simple
-         *       arithmetic across all three fields (e.g. a bar's width) without juggling
-         *       timezones itself.
+         *       decided (win or void), then the moment it was, as a :class:`FixtureTimeRead`.
+         *       This is the value a Gantt-style schedule view should use as a played slot's real
+         *       end, instead of projecting ``scheduled_start + an estimated duration`` past a
+         *       match that has already finished. All three times share the one
+         *       :class:`FixtureTimeRead` shape — a UTC ``instant`` for tz-agnostic arithmetic
+         *       (e.g. a bar's width) and a pre-rendered venue-local label — so a client juggles
+         *       no timezones itself, even though ``Match.completed_at`` is stored as an ordinary
+         *       UTC timestamp and the two placement columns are venue-anchored instants.
          *
          *     The entries are carried as **ids only**. The name and username behind
          *     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -4035,14 +4124,11 @@ export interface components {
             match_status: components["schemas"]["MatchStatus"] | null;
             /** Table Id */
             table_id: string | null;
-            /** Scheduled Start */
-            scheduled_start: string | null;
-            /** Pinned At */
-            pinned_at: string | null;
+            scheduled_start: components["schemas"]["FixtureTimeRead"] | null;
+            pinned_at: components["schemas"]["FixtureTimeRead"] | null;
             /** Call Notified Count */
             call_notified_count: number;
-            /** Completed At */
-            completed_at: string | null;
+            completed_at: components["schemas"]["FixtureTimeRead"] | null;
         };
         /** TournamentRead */
         TournamentRead: {

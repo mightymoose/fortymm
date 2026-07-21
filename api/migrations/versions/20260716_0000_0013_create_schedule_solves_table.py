@@ -102,6 +102,16 @@ def upgrade() -> None:
         # its guarded apply.
         sa.Column("fixtures_placed", sa.Integer(), nullable=True),
         sa.Column("fixtures_pinned", sa.Integer(), nullable=True),
+        # Whether a live day's plan ran past a planned pool window into the
+        # overrun (ADR "the solver stops wedging"). A success qualifier on a
+        # ``succeeded`` solve while live; false pre-live and on any run that
+        # placed nothing.
+        sa.Column(
+            "overrunning",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
         # Hash of the input snapshot the job solved against — the drift guard's
         # comparison key. NULL for a run that never snapshotted.
         sa.Column("input_fingerprint", sa.Text(), nullable=True),
@@ -119,13 +129,14 @@ def upgrade() -> None:
         ["tournament_id", sa.text("requested_at DESC")],
     )
 
-    # The pin facts on the fixture itself. ``pinned_at`` is NAIVE wall-clock
-    # (TIMESTAMP WITHOUT TIME ZONE) in the venue's frame, like the
-    # ``scheduled_start`` beside it — the same deliberate ADR-0790 exemption
-    # from the "datetimes are always timezone-aware" rule. NULL = unpinned.
+    # The pin facts on the fixture itself. ``pinned_at`` is a ``timestamptz``
+    # instant (TIMESTAMP WITH TIME ZONE) — the call's ``now`` — like the
+    # ``scheduled_start`` beside it. The 2026-07-19 ADR "tournament times are
+    # timezone-aware instants" supersedes ADR-0790's naive exemption and moves
+    # both onto timezone-aware instants. NULL = unpinned.
     op.add_column(
         "tournament_fixtures",
-        sa.Column("pinned_at", sa.DateTime(timezone=False), nullable=True),
+        sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=True),
     )
     # How many times the players were told about this fixture's placement —
     # the initial call plus every moved/cancelled correction. 0 = never.
