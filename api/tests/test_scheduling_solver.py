@@ -27,6 +27,7 @@ from app.scheduling import (
     NoSingleCause,
     Pin,
     PlacedFixture,
+    PlayerConflict,
     PlayerId,
     PoolHasNoTables,
     PoolId,
@@ -37,6 +38,7 @@ from app.scheduling import (
     SchedulePool,
     ScheduleSnapshot,
     SolveResult,
+    TableConflict,
     TableId,
     Verdict,
     Window,
@@ -915,6 +917,103 @@ class TestRestShadows:
         assert len(started_at_zero) == 2
         for fixture in started_at_zero:
             assert p1 not in (fixture.player_a_id, fixture.player_b_id)
+
+
+class TestInProgressConflicts:
+    """Two *fully-fixed in-progress* blocks that overlap on one resource are
+    physically impossible data (a table holds one match, a human plays one) that
+    can only arrive via a director's soft manual placement PATCH. They are
+    tolerated-and-reported, never fatal (#1144): the solver merges the
+    overlapping fixed occupancy so the board still places, and reports the
+    collision on ``result.conflicts`` for the director to resolve — it never
+    picks a survivor and never moves a live match."""
+
+    def test_overlap_on_a_table_is_tolerated_and_reported(self) -> None:
+        """Two in-progress matches recorded on the SAME table at overlapping
+        times. Before #1144 this handed two rigid, overlapping fixed intervals
+        to ``AddNoOverlap`` and proved the WHOLE day ``infeasible`` with zero
+        placements. Now the occupancy is merged, so the board still solves: the
+        other active fixture is placed, the two running matches stay excluded
+        from output, and the table collision is reported once with both
+        fixtures."""
+        p1, p2, p3, p4, p5, p6 = _players(6)
+        tables = _tables(2)
+        snapshot = ScheduleSnapshot(
+            table_ids=tables,
+            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                _fixture(1, p1, p2),  # in-progress on T1 → occupancy [0, 25)
+                _fixture(2, p3, p4),  # in-progress on T1 → occupancy [10, 35)
+                _fixture(3, p5, p6),  # active, unpinned — must still be placed
+            ),
+            now_min=0,
+            in_progress=(
+                InProgressMatch(FixtureId("F1"), TableId("T1"), 0),
+                InProgressMatch(FixtureId("F2"), TableId("T1"), 10),
+            ),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        # Tolerated, not fatal: a placed board that also carries the conflict.
+        assert result.verdict in SOLVED
+        assert result.placements != ()
+        assert {p.fixture_id for p in result.placements} == {FixtureId("F3")}
+        assert result.conflicts == (
+            TableConflict(TableId("T1"), (FixtureId("F1"), FixtureId("F2"))),
+        )
+
+    def test_overlap_on_a_player_is_tolerated_and_reported(self) -> None:
+        """Variant sharing a HUMAN on different tables: P1 is recorded in two
+        in-progress matches at once. Same tolerate-and-report outcome, but the
+        collision is a ``PlayerConflict`` on the shared human (no table conflict,
+        since the two matches are on different tables)."""
+        p1, p2, p3, p4, p5 = _players(5)
+        tables = _tables(3)
+        snapshot = ScheduleSnapshot(
+            table_ids=tables,
+            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                _fixture(1, p1, p2),  # in-progress on T1, human P1
+                _fixture(2, p1, p3),  # in-progress on T2, human P1 again — clash
+                _fixture(3, p4, p5),  # active, unpinned — must still be placed
+            ),
+            now_min=0,
+            in_progress=(
+                InProgressMatch(FixtureId("F1"), TableId("T1"), 0),
+                InProgressMatch(FixtureId("F2"), TableId("T2"), 10),
+            ),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.placements != ()
+        assert {p.fixture_id for p in result.placements} == {FixtureId("F3")}
+        assert result.conflicts == (
+            PlayerConflict(PlayerId("P1"), (FixtureId("F1"), FixtureId("F2"))),
+        )
+
+    def test_non_overlapping_in_progress_yields_no_conflicts(self) -> None:
+        """A clean snapshot — one running match, no double-booking — reports an
+        empty conflict tuple, the contract's other half."""
+        p1, p2, p3, p4 = _players(4)
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2), _fixture(2, p3, p4)),
+            in_progress=(InProgressMatch(FixtureId("F1"), TableId("T1"), 0),),
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.conflicts == ()
+
+    def test_conflict_free_day_reports_no_conflicts(self) -> None:
+        """No in-progress matches at all: a plain solvable day carries no
+        conflicts."""
+        p1, p2, p3, p4 = _players(4)
+        result = solve(
+            _one_pool_snapshot((_fixture(1, p1, p2), _fixture(2, p3, p4))),
+            time_cap_s=CAP,
+        )
+        assert result.verdict in SOLVED
+        assert result.conflicts == ()
 
 
 class TestDegenerateAndStability:

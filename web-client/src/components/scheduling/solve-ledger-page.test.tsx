@@ -7,6 +7,8 @@ import {
   buildAdminScheduleSolveRead,
   buildLedgerRows,
   buildLedgerVariety,
+  buildPlayerConflictRead,
+  buildTableConflictRead,
 } from './solve-ledger-page.factory'
 import { solveLedgerPage } from './solve-ledger-page.page'
 
@@ -161,6 +163,52 @@ describe('SolveLedgerPage', () => {
     expect(detail).toHaveTextContent('Input fingerprint')
     // No reason list is rendered when the (normally ≥1) list is somehow empty.
     expect(detail?.querySelector('.solve-ledger-detail-reasons')).toBeNull()
+  })
+
+  it('expands a SUCCEEDED row that carries a placement conflict — a caution, not a failure headline — naming both matches and the shared table AND human', async () => {
+    solveLedgerPage.render([
+      buildAdminScheduleSolveRead({
+        id: 'sv-conflicts',
+        status: 'succeeded',
+        verdict: 'feasible',
+        fixtures_placed: 9,
+        fixtures_pinned: 2,
+        placement_conflicts: [buildTableConflictRead(), buildPlayerConflictRead()],
+      }),
+    ])
+    const user = solveLedgerPage.user()
+
+    const row = await solveLedgerPage.findRow('sv-conflicts')
+    // A placed board still reads "Solved" — the conflict is a caution, orthogonal.
+    expect(within(row).getByText('Solved')).toBeInTheDocument()
+
+    await user.click(within(row).getByRole('button', { name: 'Show run details' }))
+    const detail = solveLedgerPage.queryDetail('sv-conflicts')
+    expect(detail).toHaveTextContent('Overlapping matches on the board')
+    // The table conflict, named by matchup + shared table…
+    expect(detail).toHaveTextContent(
+      'crafty-vs-spiked and dazed-vs-confused overlap on Table 1',
+    )
+    // …and the player conflict, named by the shared human.
+    expect(detail).toHaveTextContent(
+      'crafty-vs-spiked-frigatebird and spiked-frigatebird-vs-nimble overlap on spiked-frigatebird',
+    )
+    // A solved board carries no failure headline — the caution never reads as a
+    // broken or infeasible run.
+    expect(detail).not.toHaveTextContent("The day doesn't fit")
+    expect(detail).not.toHaveTextContent('The scheduler hit a problem')
+    // Still the fingerprint footer, as every expansion has.
+    expect(detail).toHaveTextContent('Input fingerprint')
+  })
+
+  it('offers no expansion on a clean solved board (placement_conflicts: [])', async () => {
+    solveLedgerPage.render([
+      buildAdminScheduleSolveRead({ id: 'sv-clean', status: 'succeeded', placement_conflicts: [] }),
+    ])
+    const clean = await solveLedgerPage.findRow('sv-clean')
+    expect(
+      within(clean).queryByRole('button', { name: /run details/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('renders the designed empty state when no solver has ever run', async () => {

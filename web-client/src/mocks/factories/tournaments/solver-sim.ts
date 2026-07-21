@@ -59,6 +59,8 @@ export function queuedSolveRow(id: string): ScheduleSolveRead {
     error: null,
     // Always a list; a queued run has reached no infeasibility.
     infeasibility_reasons: [],
+    // Always a list; a queued run has placed nothing, so no overlap to report.
+    placement_conflicts: [],
   }
 }
 

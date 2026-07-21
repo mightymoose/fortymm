@@ -21,7 +21,10 @@ from app.db import get_session
 from app.models import ScheduleSolve, Tournament
 from app.rbac import require_permission
 from app.schemas.admin import AdminScheduleSolveListResponse, AdminScheduleSolveRead
-from app.schemas.schedule_solve import parse_infeasibility_reasons
+from app.schemas.schedule_solve import (
+    parse_infeasibility_reasons,
+    parse_placement_conflicts,
+)
 
 # Gates the Administration area's solve-ledger page. Seeded (scripts/seed_rbac.py)
 # and granted to the Administrator role, like the other admin-tool permissions.
@@ -51,6 +54,7 @@ def _serialize(solve: ScheduleSolve, tournament_name: str) -> AdminScheduleSolve
         fixtures_pinned=solve.fixtures_pinned,
         error=solve.error,
         infeasibility_reasons=parse_infeasibility_reasons(solve.infeasibility_reasons),
+        placement_conflicts=parse_placement_conflicts(solve.placement_conflicts),
         input_fingerprint=solve.input_fingerprint,
         rerun_requested=solve.rerun_requested,
         tournament_id=solve.tournament_id,

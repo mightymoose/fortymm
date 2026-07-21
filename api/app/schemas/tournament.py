@@ -21,7 +21,12 @@ from app.models.schedule_solve import (
     SolverVerdict,
 )
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
-from app.schemas.schedule_solve import ResolvedReason, parse_infeasibility_reasons
+from app.schemas.schedule_solve import (
+    ResolvedConflict,
+    ResolvedReason,
+    parse_infeasibility_reasons,
+    parse_placement_conflicts,
+)
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
 
@@ -605,6 +610,15 @@ class ScheduleSolveRead(BaseModel):
     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
     minutes to format); every other row carries ``[]``. Parsed from the ledger's
     raw JSONB at this boundary so no downstream reader touches a bare dict.
+
+    ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
+    every row without conflicts (so a client never null-checks it). It is
+    orthogonal to the verdict: even a fully-*placed* board can flag overlapping
+    in-progress matches (two matches on one table, or one human in two at once,
+    from a soft manual placement PATCH). It carries the resolved, DB-humanized
+    conflicts — table labels and player names, each colliding fixture named by
+    its matchup — parsed from the ledger's raw JSONB at this boundary so no
+    downstream reader touches a bare dict.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -621,6 +635,7 @@ class ScheduleSolveRead(BaseModel):
     fixtures_pinned: int | None
     error: str | None
     infeasibility_reasons: list[ResolvedReason]
+    placement_conflicts: list[ResolvedConflict]
 
     @field_validator("infeasibility_reasons", mode="before")
     @classmethod
@@ -632,6 +647,17 @@ class ScheduleSolveRead(BaseModel):
         inward. A value already parsed to typed reasons passes back through
         unchanged."""
         return parse_infeasibility_reasons(value)
+
+    @field_validator("placement_conflicts", mode="before")
+    @classmethod
+    def _parse_placement_conflicts(cls, value: Any) -> list[ResolvedConflict]:
+        """Parse the ledger's raw ``placement_conflicts`` JSONB
+        (``list[dict] | None``) into the typed union at the boundary, mapping the
+        NULL of a row that never reached its apply to ``[]`` — so
+        ``model_validate`` on a ``ScheduleSolve`` row never fails on a null
+        column and no raw dict leaks inward. A value already parsed to typed
+        conflicts passes back through unchanged."""
+        return parse_placement_conflicts(value)
 
 
 class StandingRowRead(BaseModel):

@@ -99,3 +99,74 @@ def parse_infeasibility_reasons(
     if raw is None:
         return []
     return _REASONS_ADAPTER.validate_python(raw)
+
+
+class ConflictFixtureRead(BaseModel):
+    """One of the in-progress matches caught in a conflict, named the way the
+    director reads a fixture — by its **matchup**, the two players facing off
+    (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
+    ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
+    it from the names. Resolved once at apply from the pure conflict's fixture
+    ids; the client formats the ``a vs b`` label itself."""
+
+    fixture_id: str
+    player_a: str
+    player_b: str
+
+
+class TableConflictRead(BaseModel):
+    """Two or more in-progress matches recorded on the *same table* at
+    overlapping times — physically impossible (a table holds one match), so
+    contradictory data from a soft manual placement PATCH. Resolved: the table's
+    catalogue ``table_label`` (never the raw value-object id) and the colliding
+    ``fixtures``, each named by its matchup. The DB-aware mirror of
+    :class:`app.scheduling.TableConflict`."""
+
+    kind: Literal["table_conflict"] = "table_conflict"
+    table_label: str
+    fixtures: list[ConflictFixtureRead]
+
+
+class PlayerConflictRead(BaseModel):
+    """Two or more in-progress matches sharing a *human* whose occupancy
+    overlaps — physically impossible (a human plays one match at a time), so
+    contradictory data from a soft manual PATCH. Resolved: the human's display
+    ``player_name`` and the colliding ``fixtures``, each named by its matchup.
+    The DB-aware mirror of :class:`app.scheduling.PlayerConflict`."""
+
+    kind: Literal["player_conflict"] = "player_conflict"
+    player_name: str
+    fixtures: list[ConflictFixtureRead]
+
+
+#: The closed set of *resolved* placement conflicts a solve can report — the
+#: DB-aware mirror of :data:`app.scheduling.PlacementConflict`, humanized once at
+#: apply (ids → player names, table labels) and parsed back here at every read.
+#: Discriminated on ``kind`` so a renderer is a total function of it (add an arm
+#: → a type error until handled). Distinct from :data:`ResolvedReason`: a
+#: conflict is orthogonal to the verdict — a fully-placed board can carry one.
+ResolvedConflict = Annotated[
+    TableConflictRead | PlayerConflictRead,
+    Field(discriminator="kind"),
+]
+
+#: Parses the ledger's raw ``placement_conflicts`` JSONB (``list[dict]``) back
+#: into the typed union in one place (parse, don't validate). Built once at
+#: import — a ``TypeAdapter`` is reusable and cached.
+_CONFLICTS_ADAPTER: TypeAdapter[list[ResolvedConflict]] = TypeAdapter(
+    list[ResolvedConflict]
+)
+
+
+def parse_placement_conflicts(
+    raw: list[dict[str, Any]] | None,
+) -> list[ResolvedConflict]:
+    """Turn the ledger's ``placement_conflicts`` JSONB into typed conflicts.
+
+    ``None`` (a solve that never reached its apply left the column NULL) parses
+    to the empty list — no conflicts to report, not an error. A solve that did
+    apply writes ``[]`` for the (overwhelmingly common) no-conflict case, which
+    parses to the same empty list."""
+    if raw is None:
+        return []
+    return _CONFLICTS_ADAPTER.validate_python(raw)

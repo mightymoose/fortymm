@@ -1548,6 +1548,8 @@ export interface components {
             error: string | null;
             /** Infeasibility Reasons */
             infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            /** Placement Conflicts */
+            placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
             input_fingerprint: string | null;
             /** Rerun Requested */
@@ -1668,6 +1670,23 @@ export interface components {
              * @default false
              */
             skip_merge: boolean;
+        };
+        /**
+         * ConflictFixtureRead
+         * @description One of the in-progress matches caught in a conflict, named the way the
+         *     director reads a fixture — by its **matchup**, the two players facing off
+         *     (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
+         *     ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
+         *     it from the names. Resolved once at apply from the pure conflict's fixture
+         *     ids; the client formats the ``a vs b`` label itself.
+         */
+        ConflictFixtureRead: {
+            /** Fixture Id */
+            fixture_id: string;
+            /** Player A */
+            player_a: string;
+            /** Player B */
+            player_b: string;
         };
         /** ConsumeLoginRequest */
         ConsumeLoginRequest: {
@@ -2743,6 +2762,25 @@ export interface components {
             league_count: number;
         };
         /**
+         * PlayerConflictRead
+         * @description Two or more in-progress matches sharing a *human* whose occupancy
+         *     overlaps — physically impossible (a human plays one match at a time), so
+         *     contradictory data from a soft manual PATCH. Resolved: the human's display
+         *     ``player_name`` and the colliding ``fixtures``, each named by its matchup.
+         *     The DB-aware mirror of :class:`app.scheduling.PlayerConflict`.
+         */
+        PlayerConflictRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "player_conflict";
+            /** Player Name */
+            player_name: string;
+            /** Fixtures */
+            fixtures: components["schemas"]["ConflictFixtureRead"][];
+        };
+        /**
          * PlayerDetail
          * @description Profile-page bundle: the hero (`PlayerSummary` fields + the standing
          *     block below) plus the player's six most recent matches inline. Saves a round
@@ -3415,6 +3453,15 @@ export interface components {
          *     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
          *     minutes to format); every other row carries ``[]``. Parsed from the ledger's
          *     raw JSONB at this boundary so no downstream reader touches a bare dict.
+         *
+         *     ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
+         *     every row without conflicts (so a client never null-checks it). It is
+         *     orthogonal to the verdict: even a fully-*placed* board can flag overlapping
+         *     in-progress matches (two matches on one table, or one human in two at once,
+         *     from a soft manual placement PATCH). It carries the resolved, DB-humanized
+         *     conflicts — table labels and player names, each colliding fixture named by
+         *     its matchup — parsed from the ledger's raw JSONB at this boundary so no
+         *     downstream reader touches a bare dict.
          */
         ScheduleSolveRead: {
             /**
@@ -3444,6 +3491,8 @@ export interface components {
             error: string | null;
             /** Infeasibility Reasons */
             infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            /** Placement Conflicts */
+            placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
         /**
          * ScheduleSolveStatus
@@ -3575,6 +3624,26 @@ export interface components {
          * @enum {string}
          */
         Status: "scheduled" | "live" | "final";
+        /**
+         * TableConflictRead
+         * @description Two or more in-progress matches recorded on the *same table* at
+         *     overlapping times — physically impossible (a table holds one match), so
+         *     contradictory data from a soft manual placement PATCH. Resolved: the table's
+         *     catalogue ``table_label`` (never the raw value-object id) and the colliding
+         *     ``fixtures``, each named by its matchup. The DB-aware mirror of
+         *     :class:`app.scheduling.TableConflict`.
+         */
+        TableConflictRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "table_conflict";
+            /** Table Label */
+            table_label: string;
+            /** Fixtures */
+            fixtures: components["schemas"]["ConflictFixtureRead"][];
+        };
         /**
          * TestNotificationResponse
          * @description Outcome of firing a test push to the current user's devices.

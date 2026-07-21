@@ -10,6 +10,9 @@ type EventResultsRead = components['schemas']['EventResultsRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
+type ConflictFixtureRead = components['schemas']['ConflictFixtureRead']
+type TableConflictRead = components['schemas']['TableConflictRead']
+type PlayerConflictRead = components['schemas']['PlayerConflictRead']
 type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 type AdminScheduleSolveListResponse =
   components['schemas']['AdminScheduleSolveListResponse']
@@ -126,6 +129,65 @@ export function buildScheduleSolveRead(
     // A succeeded run has no infeasibility reasons; the field is always a list
     // (`[]` off the infeasible path). Infeasible fixtures override this.
     infeasibility_reasons: [],
+    // A clean board has no overlapping in-progress matches; the field is always a
+    // list (`[]` on a clean board) and orthogonal to the verdict — a fixture
+    // proving the caution passes `placement_conflicts` on ANY status.
+    placement_conflicts: [],
+    ...overrides,
+  }
+}
+
+/** One in-progress match caught in a placement conflict, on the wire — named by
+ * its matchup (`crafty` vs `spiked`, resolved usernames), the raw `fixture_id`
+ * riding along. */
+export function buildConflictFixtureRead(
+  overrides: Partial<ConflictFixtureRead> = {},
+): ConflictFixtureRead {
+  return {
+    fixture_id: 'fx-conflict-a',
+    player_a: 'crafty',
+    player_b: 'spiked',
+    ...overrides,
+  }
+}
+
+/** A **table** placement conflict on the wire (ADR "overlapping-in-progress-
+ * matches-are-tolerated-and-reported"): two in-progress matches recorded on the
+ * same table (`Table 1`). */
+export function buildTableConflictRead(
+  overrides: Partial<TableConflictRead> = {},
+): TableConflictRead {
+  return {
+    kind: 'table_conflict',
+    table_label: 'Table 1',
+    fixtures: [
+      buildConflictFixtureRead({ fixture_id: 'fx-conflict-a', player_a: 'crafty', player_b: 'spiked' }),
+      buildConflictFixtureRead({ fixture_id: 'fx-conflict-b', player_a: 'dazed', player_b: 'confused' }),
+    ],
+    ...overrides,
+  }
+}
+
+/** A **player** placement conflict on the wire: two in-progress matches sharing a
+ * human (`spiked-frigatebird`). */
+export function buildPlayerConflictRead(
+  overrides: Partial<PlayerConflictRead> = {},
+): PlayerConflictRead {
+  return {
+    kind: 'player_conflict',
+    player_name: 'spiked-frigatebird',
+    fixtures: [
+      buildConflictFixtureRead({
+        fixture_id: 'fx-conflict-c',
+        player_a: 'crafty',
+        player_b: 'spiked-frigatebird',
+      }),
+      buildConflictFixtureRead({
+        fixture_id: 'fx-conflict-d',
+        player_a: 'spiked-frigatebird',
+        player_b: 'nimble',
+      }),
+    ],
     ...overrides,
   }
 }

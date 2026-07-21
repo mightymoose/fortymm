@@ -35,6 +35,8 @@
 
 import { validationFields, ApiError, extractDetail } from '@/api/client'
 
+import { conjoinWithAnd } from './helpers'
+
 /**
  * What happened when the save was refused.
  *
@@ -212,12 +214,6 @@ function refusedLabels(failure: SaveFailure, target: SaveTarget): string[] {
     .filter((label): label is string => label !== undefined)
 }
 
-/** Join field labels the way a sentence does: "the Event name and the Player limit". */
-function list(labels: string[]): string {
-  if (labels.length === 1) return labels[0]
-  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
-}
-
 /**
  * What the organizer is told. Every sentence here is the client's — the only one
  * that is not is the `refused` arm's, which is a sentence the API *wrote for a
@@ -238,7 +234,7 @@ export function saveFailureMessage(
         // thing we know is that something in this draft is not acceptable.
         return `Some of this ${target.subject}'s details were rejected. Check the fields and try again.`
       }
-      return `The ${list(labels)} ${
+      return `The ${conjoinWithAnd(labels)} ${
         labels.length === 1 ? 'was' : 'were'
       } rejected. Check ${labels.length === 1 ? 'that field' : 'those fields'} and try again.`
     }

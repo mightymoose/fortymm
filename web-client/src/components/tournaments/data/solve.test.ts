@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/api/client'
 import { buildScheduleSolveRead } from '@/mocks/factories/tournaments/tournament.factory'
 
-import { buildScheduleSolve } from './seed.factory'
+import {
+  buildPlayerConflict,
+  buildScheduleSolve,
+  buildTableConflict,
+} from './seed.factory'
 import {
   LIVE_POLL_MS,
   SOLVE_IN_FLIGHT_POLL_MS,
@@ -14,6 +18,8 @@ import {
   infeasibilityReasonSchema,
   parseLatestScheduleSolve,
   parseScheduleSolve,
+  placementConflictSchema,
+  placementConflictSentence,
   runSchedulerNotice,
   scheduleRefetchInterval,
   solveInFlight,
@@ -171,6 +177,125 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
 
   it('defaults to an empty list off the infeasible path', () => {
     expect(parseLatestScheduleSolve(buildScheduleSolveRead())?.infeasibilityReasons).toEqual([])
+  })
+})
+
+// ----- the placement conflicts: parse boundary --------------------------------
+
+describe('placementConflictSchema (the parse boundary)', () => {
+  it('parses a table_conflict into its client arm, snake→camel, fixtures named by matchup', () => {
+    expect(
+      placementConflictSchema.parse({
+        kind: 'table_conflict',
+        table_label: 'Table 1',
+        fixtures: [
+          { fixture_id: 'fx-a', player_a: 'crafty', player_b: 'spiked' },
+          { fixture_id: 'fx-b', player_a: 'dazed', player_b: 'confused' },
+        ],
+      }),
+    ).toEqual({
+      kind: 'table_conflict',
+      tableLabel: 'Table 1',
+      fixtures: [
+        { fixtureId: 'fx-a', playerA: 'crafty', playerB: 'spiked' },
+        { fixtureId: 'fx-b', playerA: 'dazed', playerB: 'confused' },
+      ],
+    })
+  })
+
+  it('parses a player_conflict into its client arm', () => {
+    expect(
+      placementConflictSchema.parse({
+        kind: 'player_conflict',
+        player_name: 'spiked-frigatebird',
+        fixtures: [{ fixture_id: 'fx-c', player_a: 'crafty', player_b: 'spiked-frigatebird' }],
+      }),
+    ).toEqual({
+      kind: 'player_conflict',
+      playerName: 'spiked-frigatebird',
+      fixtures: [{ fixtureId: 'fx-c', playerA: 'crafty', playerB: 'spiked-frigatebird' }],
+    })
+  })
+
+  it('refuses a conflict kind this client has no words for — it must fail the parse, not blank the warning', () => {
+    expect(() =>
+      placementConflictSchema.parse({ kind: 'venue_conflict', fixtures: [] }),
+    ).toThrow()
+  })
+
+  it('carries conflicts onto the domain row — on a SUCCEEDED board (orthogonal to the verdict)', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'feasible',
+        placement_conflicts: [
+          {
+            kind: 'table_conflict',
+            table_label: 'Table 1',
+            fixtures: [{ fixture_id: 'fx-a', player_a: 'crafty', player_b: 'spiked' }],
+          },
+        ],
+      }),
+    )
+    expect(parsed?.placementConflicts).toEqual([
+      {
+        kind: 'table_conflict',
+        tableLabel: 'Table 1',
+        fixtures: [{ fixtureId: 'fx-a', playerA: 'crafty', playerB: 'spiked' }],
+      },
+    ])
+  })
+
+  it('fails the whole solve row when one conflict arm is unknown — the boundary rejects', () => {
+    expect(() =>
+      parseLatestScheduleSolve(
+        buildScheduleSolveRead({
+          placement_conflicts: [{ kind: 'poltergeist', fixtures: [] }] as never,
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('defaults to an empty list on a clean board', () => {
+    expect(parseLatestScheduleSolve(buildScheduleSolveRead())?.placementConflicts).toEqual([])
+  })
+
+  it('refuses an ABSENT placement_conflicts — an array the API guarantees present cannot be dropped', () => {
+    const { placement_conflicts, ...missing } = buildScheduleSolveRead()
+    void placement_conflicts
+    expect(() => parseLatestScheduleSolve(missing)).toThrow()
+  })
+})
+
+// ----- the placement conflicts: shared copy -----------------------------------
+
+describe('placementConflictSentence', () => {
+  it('names a table conflict as the two matches overlapping on the table', () => {
+    expect(placementConflictSentence(buildTableConflict())).toBe(
+      'crafty-vs-spiked and dazed-vs-confused overlap on Table 1',
+    )
+  })
+
+  it('names a player conflict as the two matches overlapping on the human', () => {
+    expect(placementConflictSentence(buildPlayerConflict())).toBe(
+      'crafty-vs-spiked-frigatebird and spiked-frigatebird-vs-nimble overlap on spiked-frigatebird',
+    )
+  })
+
+  it('lists three overlapping matches with an Oxford-style join', () => {
+    expect(
+      placementConflictSentence(
+        buildTableConflict({
+          fixtures: [
+            { fixtureId: 'a', playerA: 'crafty', playerB: 'spiked' },
+            { fixtureId: 'b', playerA: 'dazed', playerB: 'confused' },
+            { fixtureId: 'c', playerA: 'nimble', playerB: 'quick' },
+          ],
+        }),
+      ),
+    ).toBe(
+      'crafty-vs-spiked, dazed-vs-confused and nimble-vs-quick overlap on Table 1',
+    )
   })
 })
 

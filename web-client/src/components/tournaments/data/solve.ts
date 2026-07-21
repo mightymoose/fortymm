@@ -22,6 +22,7 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 
+import { conjoinWithAnd } from './helpers'
 import type { TournamentStatus } from './types'
 
 type ScheduleSolveWire = components['schemas']['ScheduleSolveRead']
@@ -223,6 +224,114 @@ export function infeasibilityReasonFromWire(
 export const infeasibilityReasonSchema =
   infeasibilityReasonWireSchema.transform(infeasibilityReasonFromWire)
 
+// ----- overlapping in-progress matches: the resolved placement conflicts ------
+//
+// A solve tolerates two *in-progress* matches that a soft manual PATCH parked on
+// the same table or the same human (the ADR "overlapping-in-progress-matches-
+// are-tolerated-and-reported") — it never blanks the board over contradictory
+// data, it keeps the fixed blocks binding and *reports* the overlap. The report
+// is DB-resolved at apply (ids → a table label / a human's name, each fixture
+// named by its matchup) and shipped on `ScheduleSolveRead.placement_conflicts`:
+// ALWAYS a list, `[]` on a clean board — and, unlike the infeasibility reasons,
+// present on ANY verdict (a *placed* board can still carry a caution; the two
+// are orthogonal). The `kind` discriminant is data the surfaces switch on, so —
+// like the infeasibility arms — a conflict kind this client has no words for
+// must FAIL the parse here, not blank a warning row two components later. Names
+// are data (a `player_name` is like a username); the *sentence* is the client's,
+// minted in `placementConflictSentence` below.
+
+type ConflictFixtureWire = components['schemas']['ConflictFixtureRead']
+type TableConflictWire = components['schemas']['TableConflictRead']
+type PlayerConflictWire = components['schemas']['PlayerConflictRead']
+
+/** One in-progress match caught in a conflict, named the way the director reads
+ * a fixture — by its **matchup**, the two players facing off. The raw `fixtureId`
+ * rides along so a surface can key/deep-link without re-deriving it. */
+export interface ConflictFixture {
+  fixtureId: string
+  playerA: string
+  playerB: string
+}
+
+/**
+ * One resolved placement conflict a solve carries, in the domain's camelCase — a
+ * discriminated union over `kind`, one arm per shared resource two overlapping
+ * in-progress matches can contradict. The `kind` string stays snake_case (it is
+ * the wire's discriminant); every other field is mapped snake→camel.
+ *
+ * - **`table_conflict`** — two in-progress matches recorded on the same table at
+ *   overlapping times (a table holds one match).
+ * - **`player_conflict`** — two in-progress matches sharing a human whose
+ *   occupancy overlaps (a human plays one match at a time).
+ */
+export type PlacementConflict =
+  | { kind: 'table_conflict'; tableLabel: string; fixtures: ConflictFixture[] }
+  | { kind: 'player_conflict'; playerName: string; fixtures: ConflictFixture[] }
+
+/** The wire fixture, as it really arrives: snake_case. `satisfies` it against the
+ * generated schema so a field renamed in the API is a compile error here. */
+const conflictFixtureWireSchema = z.object({
+  fixture_id: z.string(),
+  player_a: z.string(),
+  player_b: z.string(),
+}) satisfies z.ZodType<ConflictFixtureWire>
+
+const tableConflictWireSchema = z.object({
+  kind: z.literal('table_conflict'),
+  table_label: z.string(),
+  fixtures: z.array(conflictFixtureWireSchema),
+}) satisfies z.ZodType<TableConflictWire>
+
+const playerConflictWireSchema = z.object({
+  kind: z.literal('player_conflict'),
+  player_name: z.string(),
+  fixtures: z.array(conflictFixtureWireSchema),
+}) satisfies z.ZodType<PlayerConflictWire>
+
+/** The two arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind` has
+ * no arm and throws, which is exactly the boundary rule: a conflict this client
+ * cannot render must fail the parse, not blank the warning. */
+export const placementConflictWireSchema = z.discriminatedUnion('kind', [
+  tableConflictWireSchema,
+  playerConflictWireSchema,
+])
+
+function conflictFixtureFromWire(f: ConflictFixtureWire): ConflictFixture {
+  return { fixtureId: f.fixture_id, playerA: f.player_a, playerB: f.player_b }
+}
+
+/** One wire arm → one domain `PlacementConflict`. Annotated so the union above
+ * and the wire arms are one thing. Exhaustive over `kind` (a `never` default), so
+ * a third arm added to the API cannot slip through unmapped. */
+export function placementConflictFromWire(
+  c: z.infer<typeof placementConflictWireSchema>,
+): PlacementConflict {
+  switch (c.kind) {
+    case 'table_conflict':
+      return {
+        kind: c.kind,
+        tableLabel: c.table_label,
+        fixtures: c.fixtures.map(conflictFixtureFromWire),
+      }
+    case 'player_conflict':
+      return {
+        kind: c.kind,
+        playerName: c.player_name,
+        fixtures: c.fixtures.map(conflictFixtureFromWire),
+      }
+    default: {
+      const exhaustive: never = c
+      return exhaustive
+    }
+  }
+}
+
+/** The per-conflict parser: the wire arm plus the snake→camel mapping, one Zod
+ * pipeline. Embedded in `scheduleSolveWireSchema` below, which the admin ledger's
+ * wire schema `.extend()`s — so both surfaces parse conflicts through this arm. */
+export const placementConflictSchema =
+  placementConflictWireSchema.transform(placementConflictFromWire)
+
 /**
  * One row of the tournament's **solve ledger**, in the domain's spelling — the
  * latest run of the placement solver, as the detail payload carries it.
@@ -250,6 +359,11 @@ export interface ScheduleSolve {
    * nullable stage marker like the fields above: the API guarantees the array is
    * present, and an absent key is a payload we reject rather than read as `[]`. */
   infeasibilityReasons: InfeasibilityReason[]
+  /** Overlapping in-progress matches the solve *tolerated and reported* — **always
+   * a list**, never null (`[]` on a clean board). Orthogonal to the verdict: a
+   * placed/succeeded board can still carry a caution here. Like the reasons, an
+   * absent key is a payload we reject rather than read as `[]`. */
+  placementConflicts: PlacementConflict[]
 }
 
 /** The wire shape (`ScheduleSolveRead`), as it really arrives: snake_case, every
@@ -272,6 +386,10 @@ export const scheduleSolveWireSchema = z.object({
   // Always present (a non-nullable list); each element is parsed through the
   // discriminated union, so an unknown arm `kind` fails the whole row.
   infeasibility_reasons: z.array(infeasibilityReasonSchema),
+  // Always present too, and on ANY verdict (a placed board can still carry a
+  // caution); each element parsed through the conflict union, so an unknown arm
+  // `kind` fails the whole row.
+  placement_conflicts: z.array(placementConflictSchema),
 })
 
 /** The snake→camel mapping, one wire row → one domain `ScheduleSolve`. Annotated
@@ -296,6 +414,8 @@ export function scheduleSolveFromWire(
     error: s.error,
     // Already snake→camel-mapped by `infeasibilityReasonSchema`'s transform.
     infeasibilityReasons: s.infeasibility_reasons,
+    // Already snake→camel-mapped by `placementConflictSchema`'s transform.
+    placementConflicts: s.placement_conflicts,
   }
 }
 
@@ -519,6 +639,48 @@ export function infeasibilityReasonKey(reason: InfeasibilityReason, i: number): 
   return 'poolName' in reason
     ? `${reason.kind}:${reason.poolName}:${i}`
     : `${reason.kind}:${i}`
+}
+
+// ----- copy: the placement conflicts → the director's words -------------------
+//
+// ONE shared module, in the spirit of `infeasibilityReasonCopy`: both the
+// Schedule-tab solve strip and the admin solve ledger import
+// `placementConflictSentence` and render the SAME warning, so the two surfaces
+// cannot drift on how a conflict reads. Pure functions, unit-tested here.
+
+/** A fixture's matchup label — the two players facing off, `crafty-vs-spiked`.
+ * How the director already reads a fixture, so the warning names matches, not
+ * ids. */
+export function conflictFixtureLabel(fixture: ConflictFixture): string {
+  return `${fixture.playerA}-vs-${fixture.playerB}`
+}
+
+/** One conflict as the director's caution sentence, naming the colliding matches
+ * and the shared resource: `crafty-vs-spiked and dazed-vs-confused overlap on
+ * Table 1` (table) / `… overlap on spiked-frigatebird` (human). Exhaustive over
+ * `kind` — a `never` default makes a third arm a compile error until it has
+ * words, so a conflict can never reach the UI as a blank line. */
+export function placementConflictSentence(conflict: PlacementConflict): string {
+  const matches = conjoinWithAnd(conflict.fixtures.map(conflictFixtureLabel))
+  switch (conflict.kind) {
+    case 'table_conflict':
+      return `${matches} overlap on ${conflict.tableLabel}`
+    case 'player_conflict':
+      return `${matches} overlap on ${conflict.playerName}`
+    default: {
+      const exhaustive: never = conflict
+      return exhaustive
+    }
+  }
+}
+
+/** A stable-enough React key for one placement conflict: its `kind`, the resource
+ * it names, and the list index. Shared so every surface that lists the conflicts
+ * keys them the same way by import, not by convention. */
+export function placementConflictKey(conflict: PlacementConflict, i: number): string {
+  const resource =
+    conflict.kind === 'table_conflict' ? conflict.tableLabel : conflict.playerName
+  return `${conflict.kind}:${resource}:${i}`
 }
 
 // ----- polling ----------------------------------------------------------------

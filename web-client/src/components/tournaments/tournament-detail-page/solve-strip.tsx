@@ -19,6 +19,8 @@ import {
   fmtWallTime,
   infeasibilityReasonCopy,
   infeasibilityReasonKey,
+  placementConflictKey,
+  placementConflictSentence,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
@@ -182,6 +184,40 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
 }
 
 /**
+ * Overlapping in-progress matches the solve **tolerated and reported** (ADR
+ * "overlapping-in-progress-matches-are-tolerated-and-reported") — a *placed board
+ * with a caution*, deliberately distinct from the `infeasible` "nothing placed"
+ * banner: the board is fine, but two live matches contradict each other on a
+ * table or a human, and only the director can fix it. A warn-toned `Alert` (the
+ * pools double-booked precedent), rendered only when the (always-present) list is
+ * non-empty. Orthogonal to the solve's state, so it renders under whatever the
+ * `SolveState` line above says.
+ */
+const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
+  if (solve === null || solve.placementConflicts.length === 0) return null
+  return (
+    <Alert
+      data-testid="solve-strip-conflicts"
+      className="mt-2.5 border-[color:var(--warn)]/40 bg-[color:var(--warn)]/10"
+    >
+      <TriangleAlert className="text-[color:var(--warn)]" />
+      <AlertTitle className="text-[color:var(--warn)]">
+        Overlapping matches on the board
+      </AlertTitle>
+      <AlertDescription className="text-[color:var(--fg-3)]">
+        <ul className="space-y-1">
+          {solve.placementConflicts.map((conflict, i) => (
+            <li key={placementConflictKey(conflict, i)}>
+              {placementConflictSentence(conflict)}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/**
  * The Schedule tab's **solve strip** (ADR "the schedule is solved; the call is
  * pinned"): what the latest run of the placement solver has to say, plus the
  * owner's **Run scheduler** button.
@@ -253,6 +289,11 @@ export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
           )}
         </div>
       </Card>
+
+      {/* A placed board's caution: overlapping in-progress matches the solve
+          tolerated rather than blanked the board over. Orthogonal to the state
+          above, so it rides under whatever the strip says. */}
+      <ConflictWarning solve={solve} />
 
       {/* The refusal, where the click was — an `Alert` (the app talking back),
           never a toast that leaves in four seconds. */}

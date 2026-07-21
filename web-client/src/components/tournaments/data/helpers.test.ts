@@ -1,4 +1,5 @@
 import {
+  conjoinWithAnd,
   daysBetween,
   effectiveDateRange,
   fmtDateRange,
@@ -272,5 +273,23 @@ describe('findPoolConflicts', () => {
       buildPool({ slot: { date: '2026-06-14', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
     ])
     expect(conflicts).toEqual([])
+  })
+})
+
+describe('conjoinWithAnd', () => {
+  it('joins with commas and a trailing "and": A, B and C', () => {
+    expect(conjoinWithAnd(['A', 'B', 'C'])).toBe('A, B and C')
+  })
+
+  it('two labels join with a bare "and", no comma', () => {
+    expect(conjoinWithAnd(['A', 'B'])).toBe('A and B')
+  })
+
+  it('a single label stands alone', () => {
+    expect(conjoinWithAnd(['A'])).toBe('A')
+  })
+
+  it('an empty list is the empty string, never "undefined"', () => {
+    expect(conjoinWithAnd([])).toBe('')
   })
 })

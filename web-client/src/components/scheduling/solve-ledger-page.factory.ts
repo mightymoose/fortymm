@@ -1,9 +1,13 @@
 import type { components } from '@/api/schema'
-import { buildAdminScheduleSolveRead } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildAdminScheduleSolveRead,
+  buildPlayerConflictRead,
+  buildTableConflictRead,
+} from '@/mocks/factories/tournaments/tournament.factory'
 
 type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 
-export { buildAdminScheduleSolveRead }
+export { buildAdminScheduleSolveRead, buildTableConflictRead, buildPlayerConflictRead }
 
 /**
  * The variety page: one row per designed outcome, newest first — the seed the

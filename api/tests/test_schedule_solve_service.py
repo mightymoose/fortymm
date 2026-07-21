@@ -64,6 +64,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
     TournamentStatus,
+    User,
 )
 from app.schedule_solves import (
     JOB_TIMEOUT_MARGIN_S,
@@ -86,9 +87,12 @@ from app.scheduling import (
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
+    PlayerConflictRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
+    TableConflictRead,
     parse_infeasibility_reasons,
+    parse_placement_conflicts,
 )
 from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
@@ -288,6 +292,19 @@ async def _fixture_user_ids(
     ).all()
     by_entry = {entry_id: str(user_id) for entry_id, user_id in rows}
     return by_entry[entry_a_id], by_entry[entry_b_id]
+
+
+async def _entry_username(db: AsyncSession, entry_id: uuid.UUID) -> str:
+    """The display username behind a tournament entry — what a placement
+    conflict resolves a player/matchup id to."""
+    user_id = (
+        await db.execute(
+            select(TournamentEntry.user_id).where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    return (
+        await db.execute(select(User.username).where(User.id == user_id))
+    ).scalar_one()
 
 
 async def _link_match(
@@ -1269,6 +1286,137 @@ class TestSolveJob:
         (ledger,) = await _solve_rows(db_session, tournament_id)
         assert ledger.status is ScheduleSolveStatus.failed
         assert ledger.infeasibility_reasons is None
+
+    async def test_placement_conflicts_are_resolved_and_persisted_on_placed_board(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two in-progress matches recorded on one table AND sharing a player
+        are contradictory data the solver tolerates (it merges the occupancy so
+        the board still places) yet REPORTS. At apply the id-and-minute
+        conflicts are humanized — table label, player name, each colliding
+        fixture named by its matchup — and persisted to ``placement_conflicts``
+        on the (optimal/feasible) verdict, NOT gated on infeasible."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        first_fixture = fixtures[0]
+        partner: TournamentFixture | None = None
+        shared_entry_id: uuid.UUID | None = None
+        for candidate in fixtures[1:]:
+            common = {first_fixture.entry_a_id, first_fixture.entry_b_id} & {
+                candidate.entry_a_id,
+                candidate.entry_b_id,
+            }
+            if common:
+                shared_entry_id = next(iter(common))
+                partner = candidate
+                break
+        assert partner is not None and shared_entry_id is not None
+
+        # Stage both as physically underway on the SAME table at the SAME start
+        # (a soft double-book): pinned, live, promised start already arrived.
+        colliding = (first_fixture, partner)
+        for fixture in colliding:
+            await _link_match(db_session, fixture, status=MatchStatus.in_progress)
+            fixture.table_id = "t1"
+            fixture.scheduled_start = BASE
+            fixture.pinned_at = BASE - timedelta(minutes=5)
+        await db_session.commit()
+
+        # Capture ids/entries before the session is expired below (an expired
+        # ORM instance would sync-lazy-load — MissingGreenlet).
+        fixture_entries: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID]] = {}
+        for fixture in colliding:
+            assert fixture.entry_a_id is not None and fixture.entry_b_id is not None
+            fixture_entries[fixture.id] = (fixture.entry_a_id, fixture.entry_b_id)
+        colliding_ids = set(fixture_entries)
+
+        # The frame is 2030 and the job's wall-clock ``now`` is years off, so
+        # compute the genuine solve at a moment INSIDE the in-progress window
+        # (where the pins read as underway) and replay it through the ``_solve``
+        # seam — the same deterministic-staging trick ``_slide_pin_later`` uses.
+        # The conflicts on this result are the pure module's own, from the real
+        # overlapping in-progress data.
+        controlled_now = BASE + timedelta(minutes=30)
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=controlled_now, lock=False
+        )
+        assert inputs is not None
+        genuine = scheduling.solve(inputs.snapshot)
+        assert genuine.verdict in (Verdict.optimal, Verdict.feasible)
+        assert {conflict.kind for conflict in genuine.conflicts} == {
+            "table_conflict",
+            "player_conflict",
+        }
+
+        monkeypatch.setattr(
+            schedule_solves,
+            "_solve",
+            lambda snapshot, time_cap_s, num_search_workers: genuine,
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+
+        conflicts = parse_placement_conflicts(ledger.placement_conflicts)
+        (table_conflict,) = [c for c in conflicts if isinstance(c, TableConflictRead)]
+        (player_conflict,) = [c for c in conflicts if isinstance(c, PlayerConflictRead)]
+
+        # The catalogue LABEL, never the raw ``t1`` value-object id.
+        assert table_conflict.table_label == "T1"
+        # Both colliding matches, each named by its matchup (the two players).
+        assert {f.fixture_id for f in table_conflict.fixtures} == {
+            str(fixture_id) for fixture_id in colliding_ids
+        }
+
+        # The shared human, resolved to their display name; same two fixtures.
+        shared_username = await _entry_username(db_session, shared_entry_id)
+        assert player_conflict.player_name == shared_username
+        assert {f.fixture_id for f in player_conflict.fixtures} == {
+            str(fixture_id) for fixture_id in colliding_ids
+        }
+
+        # Each colliding fixture is named by BOTH its players' usernames, in
+        # (entry_a, entry_b) order — the id→name resolution is correct.
+        for fixture_id, (entry_a, entry_b) in fixture_entries.items():
+            named = next(
+                f for f in table_conflict.fixtures if f.fixture_id == str(fixture_id)
+            )
+            assert named.player_a == await _entry_username(db_session, entry_a)
+            assert named.player_b == await _entry_username(db_session, entry_b)
+
+    async def test_clean_solve_persists_empty_placement_conflicts(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """A solve with no overlapping in-progress data still writes
+        ``placement_conflicts`` — an empty list, never NULL — on the applied
+        verdict, so the read boundary parses a placed board that simply has
+        nothing to report the same way it parses one that does."""
+        tournament_id, _event_id = await _make_tournament(db_session)
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.placement_conflicts == []
+        assert parse_placement_conflicts(ledger.placement_conflicts) == []
 
 
 class TestDriftGuard:

@@ -146,6 +146,17 @@ class ScheduleSolve(Base):
     infeasibility_reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, nullable=True
     )
+    #: Resolved in-progress-vs-in-progress placement conflicts a solve reported
+    #: (ADR "overlapping in-progress matches are tolerated and reported") — ids
+    #: humanized to player names and table labels, kept raw here; a later
+    #: boundary parses this into Pydantic models. Distinct from
+    #: ``infeasibility_reasons``: a conflict is orthogonal to the verdict, so
+    #: this is written on **any** verdict where the solver ran (a placed
+    #: ``optimal``/``feasible`` board can still carry conflicts) — ``[]`` when
+    #: there were none. ``NULL`` only before a solve reaches its apply.
+    placement_conflicts: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     #: The coalesced enqueue's second arm: a trigger that lands while this row is
     #: ``running`` cannot be absorbed by a queued row (there isn't one) and must
     #: not enqueue a second job (one solve in flight per tournament) — so it sets

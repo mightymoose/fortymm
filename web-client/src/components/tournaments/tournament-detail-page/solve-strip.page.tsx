@@ -43,6 +43,15 @@ const scoped = (container: Container) => ({
     fireEvent.click(container.getByTestId('run-scheduler'))
   },
 
+  /** The placed-board caution: overlapping in-progress matches the solve
+   * tolerated and reported — present only when the solve carries conflicts. */
+  queryConflicts() {
+    return container.queryByTestId('solve-strip-conflicts')
+  },
+  getConflictsText() {
+    return text(container.getByTestId('solve-strip-conflicts'))
+  },
+
   /** The inline refusal (the strip's only error surface — there is no toast). */
   queryNotice() {
     return container.queryByTestId('run-scheduler-notice')
