@@ -1422,6 +1422,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/schedule/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Schedule Preview
+         * @description Enqueue an ephemeral **schedule preview** for a pre-live tournament and
+         *     answer with a token plus the immediately-known structure.
+         *
+         *     A preview asks *"given my tables, windows, formats and games-per-match, would
+         *     the schedule even fit — and roughly how long is the day?"* **before anyone has
+         *     registered**. It runs the same CP-SAT engine a live tournament uses over a
+         *     **synthetic field**, but persists nothing: the whole answer lives only in the
+         *     job's Redis result with a short TTL. Poll `GET …/schedule/preview/{token}` for
+         *     it (the `202` is honest — the solve is accepted, not done).
+         *
+         *     The body is optional per-event field-size overrides (`{"overrides": {"<event
+         *     id>": N}}`) to explore a "what if N show up" scenario; omit it and each event
+         *     fills to its own cap (or the uncapped default).
+         *
+         *     Owner-only, and only while the tournament is **pre-live** — a `draft` or a
+         *     `published` (registration open, nothing drawn) tournament. An absent tournament
+         *     is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
+         *     (there is a real field and a real solve to look at, or it is over). Rate
+         *     limited per owner: too many previews in quick succession is a `429`.
+         */
+        post: operations["request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/schedule/preview/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Schedule Preview
+         * @description Poll an ephemeral **schedule preview** by its token and answer with the
+         *     job's state — `queued`, `running`, `done` (carrying the `PreviewResult`), or
+         *     `failed` (carrying an error string, including a result that has already expired
+         *     out of Redis).
+         *
+         *     Owner-gated the same way the enqueue is: the tournament is re-loaded and the
+         *     caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
+         *     `live`/`archived` tournament a `409`) before the ephemeral job — which is not
+         *     itself scoped to a tournament in Redis — is read. A missing/expired token is
+         *     not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
+         *     it again" rather than a transport error.
+         */
+        get: operations["read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Schedule Preview
+         * @description Best-effort cancel an ephemeral **schedule preview** by its token — the
+         *     director navigated away, so stop the in-flight solve from holding a worker
+         *     slot. Answers `204` whether the job was queued, running, already finished, or
+         *     never existed: a cancel is advisory and idempotent, its only invariant "this
+         *     ephemeral job is no longer consuming a worker", which an absent/finished job
+         *     already satisfies. A cancelled preview's result is dropped, so it cannot be
+         *     polled back as a stale success.
+         *
+         *     Owner-gated exactly as the poll is (`404`/`403`/`409`) before the
+         *     tournament-blind Redis job is touched, so a token cannot be cancelled by
+         *     anyone but the tournament's owner.
+         */
+        delete: operations["cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/schedule-solves": {
         parameters: {
             query?: never;
@@ -3168,6 +3250,188 @@ export interface components {
             /** Value */
             value: number | (number | null)[] | null;
         };
+        /**
+         * PreviewEnqueued
+         * @description What the enqueue verb hands back the instant a preview is requested: the
+         *     :attr:`token` addressing the ephemeral job (poll / wait on it for the result),
+         *     plus the immediately-known structure — the per-event field sizes and the drawn
+         *     fixtures — so a caller renders the field, the match/bye skeleton and the grid
+         *     outline before the solve has finished (ADR "instant structure and a streamed
+         *     solve").
+         */
+        PreviewEnqueued: {
+            /** Token */
+            token: string;
+            /** Field Summaries */
+            field_summaries: components["schemas"]["PreviewFieldSummary"][];
+            /** Fixtures */
+            fixtures: components["schemas"]["PreviewFixture"][];
+        };
+        /**
+         * PreviewEventBreakdown
+         * @description One event's contribution to the preview summary: how many matches its
+         *     synthetic field draws, how many byes that field takes, and how long the event
+         *     itself runs.
+         *
+         *     ``matches`` is the drawn pairing count (stable regardless of verdict — the draw
+         *     is instant and always completes); ``byes`` is the round-robin sit-outs the
+         *     field incurs (a pool of an odd number of players gives one bye per round —
+         *     every player byes exactly once — so an odd pool of ``P`` contributes ``P``,
+         *     an even pool ``0``). ``duration_min`` is the event's own makespan span (last
+         *     placement end minus first placement start, in minutes) — ``None`` when the
+         *     solve produced no plan (infeasible / unknown), where there is nothing to
+         *     span.
+         */
+        PreviewEventBreakdown: {
+            /** Event Id */
+            event_id: string;
+            /** Name */
+            name: string;
+            /** Matches */
+            matches: number;
+            /** Byes */
+            byes: number;
+            /** Duration Min */
+            duration_min: number | null;
+        };
+        /**
+         * PreviewFieldSummary
+         * @description One event's synthetic field size — the count the preview drew a field to
+         *     (the override, the event's cap, or the uncapped default). The immediate,
+         *     pre-solve structure a caller renders a skeleton from, and the ingredient the
+         *     honest-notes strip names per event.
+         */
+        PreviewFieldSummary: {
+            /** Event Id */
+            event_id: string;
+            /** Field Size */
+            field_size: number;
+        };
+        /**
+         * PreviewFixture
+         * @description One drawn synthetic pairing, known the instant the draw runs (before the
+         *     solve returns) so a caller can render the grid skeleton immediately. The
+         *     synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
+         *     sides are always known (the pool stage of a round-robin draw).
+         */
+        PreviewFixture: {
+            /** Fixture Id */
+            fixture_id: string;
+            /** Event Id */
+            event_id: string;
+            /** Pool Id */
+            pool_id: string;
+            /** Player A Id */
+            player_a_id: string;
+            /** Player B Id */
+            player_b_id: string;
+        };
+        /**
+         * PreviewJobState
+         * @description A single read of a preview job's status by token: the :attr:`status`, the
+         *     :attr:`result` when (and only when) it is ``done``, and the :attr:`error`
+         *     string when it ``failed``. Make-illegal-states-unrepresentable is deferred to
+         *     the constructor (:func:`app.schedule_preview_solve.preview_job_state` only ever
+         *     sets ``result`` on ``done`` and ``error`` on ``failed``); this is the boundary
+         *     value the poll endpoint and the MCP tool project.
+         */
+        PreviewJobState: {
+            status: components["schemas"]["PreviewJobStatus"];
+            result?: components["schemas"]["PreviewResult"] | null;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * PreviewJobStatus
+         * @description Where an ephemeral preview job is in its life — the four states a caller
+         *     polling (HTTP) or waiting (MCP) on the token can see. ``queued`` (waiting for a
+         *     free worker slot, possibly behind an in-flight real solve), ``running`` (the
+         *     CP-SAT solve is under way), ``done`` (the :class:`PreviewResult` is ready), or
+         *     ``failed`` (the job errored, was cancelled, or its short-TTL result has already
+         *     expired out of Redis).
+         * @enum {string}
+         */
+        PreviewJobStatus: "queued" | "running" | "done" | "failed";
+        /**
+         * PreviewRequest
+         * @description The request body of a schedule-preview enqueue: the optional per-event
+         *     **field-size overrides** a caller explores a ``"what if N show up"`` scenario
+         *     with. Each key is an event id and each value the synthetic count to draw that
+         *     event's field to; an omitted event fills to its own cap (or the uncapped
+         *     default), so the whole body — and :attr:`overrides` itself — is optional.
+         *
+         *     ``extra="forbid"`` so an unknown key is a ``422`` client bug, not a silently
+         *     dropped field (api/CLAUDE.md — "request models reject the unexpected"). An
+         *     override naming an event this tournament does not have is ignored by the
+         *     builder rather than rejected: a preview is advisory, and a stale event id is
+         *     not worth a refusal.
+         */
+        PreviewRequest: {
+            /** Overrides */
+            overrides?: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * PreviewResult
+         * @description A schedule preview's whole answer — verdict-first, then the day's shape.
+         *
+         *     The headline is :attr:`verdict` (does the synthetic field fit?) and
+         *     :attr:`estimated_duration_min` (the day's makespan, in minutes from its first
+         *     window opening), with :attr:`estimated_finish` its wall-clock form when the
+         *     tournament's windows carry real times. Below that: the total match and bye
+         *     counts, the peak concurrent-tables load and its utilization, and a per-event
+         *     breakdown. When it does *not* fit, :attr:`infeasibility_reasons` carries the
+         *     resolved, machine-readable reasons (the same union a real infeasible solve
+         *     records). :attr:`notes` is the always-present honest-notes strip — at minimum
+         *     the disjoint-field caveat and the synthetic counts assumed per event.
+         *
+         *     A preview is **optimistic by construction**: its synthetic field is disjoint
+         *     across events (no player is in two), so the duration estimate ignores the
+         *     cross-event contention a multi-event human would cause. That is a stated floor,
+         *     surfaced in :attr:`notes`, not a hidden simplification (ADR).
+         */
+        PreviewResult: {
+            verdict: components["schemas"]["PreviewVerdict"];
+            /** Estimated Duration Min */
+            estimated_duration_min: number | null;
+            /** Estimated Finish */
+            estimated_finish: string | null;
+            /** Total Matches */
+            total_matches: number;
+            /** Total Byes */
+            total_byes: number;
+            /** Peak Concurrent Tables */
+            peak_concurrent_tables: number;
+            /** Table Utilization */
+            table_utilization: number;
+            /** Events */
+            events: components["schemas"]["PreviewEventBreakdown"][];
+            /** Infeasibility Reasons */
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            /** Notes */
+            notes: string[];
+            /**
+             * Fits
+             * @description Whether the day fits — a pure function of :attr:`verdict`
+             *     (``optimal``/``feasible``), exposed as a derived field so the two can
+             *     never drift (api/CLAUDE.md — "don't carry a field and its own
+             *     derivation").
+             */
+            readonly fits: boolean;
+        };
+        /**
+         * PreviewVerdict
+         * @description A preview's answer — the DB-blind mirror of :class:`app.scheduling.Verdict`.
+         *
+         *     ``optimal``/``feasible`` mean the day fits (the synthetic field can be placed);
+         *     ``infeasible`` means the engine *proved* it cannot; ``unknown`` means the
+         *     (short) preview time cap ran out before any answer — a preview is deliberately
+         *     cap-bounded, so ``unknown`` is "ask again / the day is large", never "your day
+         *     doesn't fit" (that is ``infeasible`` alone).
+         * @enum {string}
+         */
+        PreviewVerdict: "optimal" | "feasible" | "infeasible" | "unknown";
         /**
          * RatingChange
          * @description What one completed match did to a player's rating — and there are two kinds
@@ -6746,6 +7010,115 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScheduleSolveRead"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewEnqueued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                tournament_id: string;
+                token: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewJobState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                tournament_id: string;
+                token: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
