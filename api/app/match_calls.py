@@ -102,7 +102,6 @@ from collections.abc import Callable, Collection, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -140,6 +139,7 @@ from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
 from app.tournament_draws import event_pools
+from app.venue_time import anchor_wallclock, venue_local
 
 log = logging.getLogger(__name__)
 
@@ -173,15 +173,6 @@ def _wall_now() -> datetime:
     definition for both halves of the pipeline: ``app.schedule_solves`` imports
     this one, and each module's tests monkeypatch their own module's binding."""
     return datetime.now(UTC)
-
-
-def _venue_local(instant: datetime, timezone: str) -> datetime:
-    """Render a stored ``timestamptz`` instant (which asyncpg hands back as
-    UTC-aware) back into the event's venue frame, so a call/moved notification
-    shows the venue's wall-clock time — not UTC (#1104) — when it strftimes it.
-    The event ``timezone`` is boundary-validated (``EventTimezone``), so
-    ``ZoneInfo`` cannot raise here."""
-    return instant.astimezone(ZoneInfo(timezone))
 
 
 def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
@@ -477,7 +468,7 @@ async def call_due_fixtures(
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
         build = _called_copy(
             table_label,
-            _venue_local(fixture.scheduled_start, event.timezone),
+            venue_local(fixture.scheduled_start, event.timezone),
             context,
         )
         calls.append((fixture, user_a, user_b, build))
@@ -587,7 +578,7 @@ async def notify_pin_repairs(
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
         build = _moved_copy(
             table_label,
-            _venue_local(fixture.scheduled_start, event.timezone),
+            venue_local(fixture.scheduled_start, event.timezone),
             context,
         )
         moves.append((fixture, user_a, user_b, build))
@@ -733,7 +724,7 @@ async def apply_manual_placement(
     # timezone-aware instants"). The naive ``scheduled_start`` local is kept below
     # for the venue-local notification copy and the placement's control flow.
     fixture.scheduled_start = (
-        scheduled_start.replace(tzinfo=ZoneInfo(event_timezone))
+        anchor_wallclock(scheduled_start, event_timezone)
         if scheduled_start is not None
         else None
     )

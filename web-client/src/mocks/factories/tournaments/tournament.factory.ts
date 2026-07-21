@@ -1,5 +1,6 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
+import { simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
@@ -82,19 +83,7 @@ export function buildTournamentEntrantReads(
  * `instant` (deterministic geometry across a single-venue seed), renders `local_label`
  * as a 12-hour clock, and tags it `CDT`. Shared with the dev-world solver sim and both
  * store stubs, so all three worlds emit the identical shape the server does. */
-export function buildFixtureTimeRead(naive: string): FixtureTimeRead {
-  const [date, time = '00:00'] = naive.split('T')
-  const [h = 0, m = 0] = time.split(':').map(Number)
-  const hh = String(h).padStart(2, '0')
-  const mm = String(m).padStart(2, '0')
-  const ampm = h < 12 ? 'AM' : 'PM'
-  const h12 = h % 12 || 12
-  return {
-    instant: `${date}T${hh}:${mm}:00Z`,
-    local_label: `${h12}:${mm} ${ampm}`,
-    tz_abbrev: 'CDT',
-  }
-}
+export const buildFixtureTimeRead = simFixtureTime
 
 /** A wire fixture time override: the full `FixtureTimeRead`, or the convenient naive
  * wall-clock string (coerced through `buildFixtureTimeRead`), or `null`. */

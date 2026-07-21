@@ -334,14 +334,12 @@ class PastWindow:
     so a past window is a pre-live/hard-window fact and can never coexist with
     ``overrunning`` (that rides on a *solved* live day).
 
-    Minute-only and id-only, like every value this pure module emits: it carries
-    the ``pool_id`` and the offending window's minute offsets, and resolving
-    those to a venue-local calendar *date* is the DB-aware caller's job.
+    Id-only, like every value this pure module emits: it carries just the
+    ``pool_id``, and resolving that to the offending venue-local calendar *date*
+    (via the pool's ``Slot``) is the DB-aware caller's job.
     """
 
     pool_id: PoolId
-    window_start_min: int
-    window_end_min: int
     kind: Literal["past_window"] = "past_window"
 
 
@@ -575,11 +573,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             if pool.id in unpinned_pool_ids and pool.window.end_min <= now:
                 return _no_plan(
                     Verdict.infeasible,
-                    reason=PastWindow(
-                        pool_id=pool.id,
-                        window_start_min=pool.window.start_min,
-                        window_end_min=pool.window.end_min,
-                    ),
+                    reason=PastWindow(pool_id=pool.id),
                 )
 
     # Structural feasibility first: a fixture whose window cannot hold its

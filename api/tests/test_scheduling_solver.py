@@ -442,11 +442,7 @@ class TestInfeasibility:
         assert result.overrunning is False
         reason = result.reason
         assert isinstance(reason, PastWindow)
-        assert reason == PastWindow(
-            pool_id=PoolId("A"),
-            window_start_min=0,
-            window_end_min=60,
-        )
+        assert reason == PastWindow(pool_id=PoolId("A"))
         assert reason.kind == "past_window"
 
 

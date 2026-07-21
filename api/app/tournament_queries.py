@@ -14,7 +14,6 @@ regardless of how many events there are. A per-event count would be an N+1, and
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +36,7 @@ from app.schemas.tournament import (
     TournamentEntrantRead,
     TournamentFixtureRead,
 )
+from app.venue_time import venue_local
 
 
 async def active_entrants_by_event(
@@ -237,14 +237,13 @@ def _fixture_time(instant: datetime | None, timezone: str) -> FixtureTimeRead | 
 
     The stored value is a ``timestamptz`` instant (asyncpg hands it back UTC-aware; a
     just-written venue-offset value is the same instant in a different offset). We
-    render it in the **event's** timezone with ``zoneinfo`` for the human-readable
-    label + abbreviation, and normalize the raw ``instant`` to UTC (``+00:00``) so
-    every read path emits one string for one moment. The event ``timezone`` is
-    boundary-validated (``EventTimezone``), so ``ZoneInfo`` cannot raise here.
+    render it in the **event's** timezone (:func:`app.venue_time.venue_local`) for
+    the human-readable label + abbreviation, and normalize the raw ``instant`` to
+    UTC (``+00:00``) so every read path emits one string for one moment.
     """
     if instant is None:
         return None
-    local = instant.astimezone(ZoneInfo(timezone))
+    local = venue_local(instant, timezone)
     return FixtureTimeRead(
         instant=instant.astimezone(UTC),
         local_label=_local_label(local),
