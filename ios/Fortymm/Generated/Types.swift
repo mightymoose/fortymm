@@ -2477,6 +2477,47 @@ internal enum Components {
             internal typealias InfeasibilityReasonsPayload = [Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayloadPayload]
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasibility_reasons`.
             internal var infeasibilityReasons: Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayload
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/PlacementConflictsPayload`.
+            internal enum PlacementConflictsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/PlacementConflictsPayload/PlayerConflictRead`.
+                case playerConflict(Components.Schemas.PlayerConflictRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/PlacementConflictsPayload/TableConflictRead`.
+                case tableConflict(Components.Schemas.TableConflictRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "player_conflict":
+                        self = .playerConflict(try .init(from: decoder))
+                    case "table_conflict":
+                        self = .tableConflict(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .playerConflict(value):
+                        try value.encode(to: encoder)
+                    case let .tableConflict(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/placement_conflicts`.
+            internal typealias PlacementConflictsPayload = [Components.Schemas.AdminScheduleSolveRead.PlacementConflictsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/placement_conflicts`.
+            internal var placementConflicts: Components.Schemas.AdminScheduleSolveRead.PlacementConflictsPayload
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/input_fingerprint`.
             internal var inputFingerprint: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/rerun_requested`.
@@ -2500,6 +2541,7 @@ internal enum Components {
             ///   - fixturesPinned:
             ///   - error:
             ///   - infeasibilityReasons:
+            ///   - placementConflicts:
             ///   - inputFingerprint:
             ///   - rerunRequested:
             ///   - tournamentId:
@@ -2517,6 +2559,7 @@ internal enum Components {
                 fixturesPinned: Swift.Int? = nil,
                 error: Swift.String? = nil,
                 infeasibilityReasons: Components.Schemas.AdminScheduleSolveRead.InfeasibilityReasonsPayload,
+                placementConflicts: Components.Schemas.AdminScheduleSolveRead.PlacementConflictsPayload,
                 inputFingerprint: Swift.String? = nil,
                 rerunRequested: Swift.Bool,
                 tournamentId: Swift.String,
@@ -2534,6 +2577,7 @@ internal enum Components {
                 self.fixturesPinned = fixturesPinned
                 self.error = error
                 self.infeasibilityReasons = infeasibilityReasons
+                self.placementConflicts = placementConflicts
                 self.inputFingerprint = inputFingerprint
                 self.rerunRequested = rerunRequested
                 self.tournamentId = tournamentId
@@ -2552,6 +2596,7 @@ internal enum Components {
                 case fixturesPinned = "fixtures_pinned"
                 case error
                 case infeasibilityReasons = "infeasibility_reasons"
+                case placementConflicts = "placement_conflicts"
                 case inputFingerprint = "input_fingerprint"
                 case rerunRequested = "rerun_requested"
                 case tournamentId = "tournament_id"
@@ -2882,6 +2927,42 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case token
                 case skipMerge = "skip_merge"
+            }
+        }
+        /// One of the in-progress matches caught in a conflict, named the way the
+        /// director reads a fixture — by its **matchup**, the two players facing off
+        /// (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
+        /// ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
+        /// it from the names. Resolved once at apply from the pure conflict's fixture
+        /// ids; the client formats the ``a vs b`` label itself.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConflictFixtureRead`.
+        internal struct ConflictFixtureRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConflictFixtureRead/fixture_id`.
+            internal var fixtureId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ConflictFixtureRead/player_a`.
+            internal var playerA: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ConflictFixtureRead/player_b`.
+            internal var playerB: Swift.String
+            /// Creates a new `ConflictFixtureRead`.
+            ///
+            /// - Parameters:
+            ///   - fixtureId:
+            ///   - playerA:
+            ///   - playerB:
+            internal init(
+                fixtureId: Swift.String,
+                playerA: Swift.String,
+                playerB: Swift.String
+            ) {
+                self.fixtureId = fixtureId
+                self.playerA = playerA
+                self.playerB = playerB
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case fixtureId = "fixture_id"
+                case playerA = "player_a"
+                case playerB = "player_b"
             }
         }
         /// - Remark: Generated from `#/components/schemas/ConsumeLoginRequest`.
@@ -5619,6 +5700,45 @@ internal enum Components {
                 case leagueCount = "league_count"
             }
         }
+        /// Two or more in-progress matches sharing a *human* whose occupancy
+        /// overlaps — physically impossible (a human plays one match at a time), so
+        /// contradictory data from a soft manual PATCH. Resolved: the human's display
+        /// ``player_name`` and the colliding ``fixtures``, each named by its matchup.
+        /// The DB-aware mirror of :class:`app.scheduling.PlayerConflict`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerConflictRead`.
+        internal struct PlayerConflictRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerConflictRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case playerConflict = "player_conflict"
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerConflictRead/kind`.
+            internal var kind: Components.Schemas.PlayerConflictRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerConflictRead/player_name`.
+            internal var playerName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerConflictRead/fixtures`.
+            internal var fixtures: [Components.Schemas.ConflictFixtureRead]
+            /// Creates a new `PlayerConflictRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - playerName:
+            ///   - fixtures:
+            internal init(
+                kind: Components.Schemas.PlayerConflictRead.KindPayload? = nil,
+                playerName: Swift.String,
+                fixtures: [Components.Schemas.ConflictFixtureRead]
+            ) {
+                self.kind = kind
+                self.playerName = playerName
+                self.fixtures = fixtures
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case playerName = "player_name"
+                case fixtures
+            }
+        }
         /// Profile-page bundle: the hero (`PlayerSummary` fields + the standing
         /// block below) plus the player's six most recent matches inline. Saves a round
         /// trip on initial load — `GET /v1/players/{id}` returns this so the profile
@@ -7182,6 +7302,15 @@ internal enum Components {
         /// minutes to format); every other row carries ``[]``. Parsed from the ledger's
         /// raw JSONB at this boundary so no downstream reader touches a bare dict.
         ///
+        /// ``placement_conflicts`` is **never null** either — always a list, ``[]`` on
+        /// every row without conflicts (so a client never null-checks it). It is
+        /// orthogonal to the verdict: even a fully-*placed* board can flag overlapping
+        /// in-progress matches (two matches on one table, or one human in two at once,
+        /// from a soft manual placement PATCH). It carries the resolved, DB-humanized
+        /// conflicts — table labels and player names, each colliding fixture named by
+        /// its matchup — parsed from the ledger's raw JSONB at this boundary so no
+        /// downstream reader touches a bare dict.
+        ///
         /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead`.
         internal struct ScheduleSolveRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/id`.
@@ -7277,6 +7406,47 @@ internal enum Components {
             internal typealias InfeasibilityReasonsPayload = [Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayloadPayload]
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasibility_reasons`.
             internal var infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/PlacementConflictsPayload`.
+            internal enum PlacementConflictsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/PlacementConflictsPayload/PlayerConflictRead`.
+                case playerConflict(Components.Schemas.PlayerConflictRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/PlacementConflictsPayload/TableConflictRead`.
+                case tableConflict(Components.Schemas.TableConflictRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "player_conflict":
+                        self = .playerConflict(try .init(from: decoder))
+                    case "table_conflict":
+                        self = .tableConflict(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .playerConflict(value):
+                        try value.encode(to: encoder)
+                    case let .tableConflict(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/placement_conflicts`.
+            internal typealias PlacementConflictsPayload = [Components.Schemas.ScheduleSolveRead.PlacementConflictsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/placement_conflicts`.
+            internal var placementConflicts: Components.Schemas.ScheduleSolveRead.PlacementConflictsPayload
             /// Creates a new `ScheduleSolveRead`.
             ///
             /// - Parameters:
@@ -7292,6 +7462,7 @@ internal enum Components {
             ///   - fixturesPinned:
             ///   - error:
             ///   - infeasibilityReasons:
+            ///   - placementConflicts:
             internal init(
                 id: Swift.String,
                 trigger: Components.Schemas.ScheduleSolveTrigger,
@@ -7304,7 +7475,8 @@ internal enum Components {
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
                 error: Swift.String? = nil,
-                infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload
+                infeasibilityReasons: Components.Schemas.ScheduleSolveRead.InfeasibilityReasonsPayload,
+                placementConflicts: Components.Schemas.ScheduleSolveRead.PlacementConflictsPayload
             ) {
                 self.id = id
                 self.trigger = trigger
@@ -7318,6 +7490,7 @@ internal enum Components {
                 self.fixturesPinned = fixturesPinned
                 self.error = error
                 self.infeasibilityReasons = infeasibilityReasons
+                self.placementConflicts = placementConflicts
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7332,6 +7505,7 @@ internal enum Components {
                 case fixturesPinned = "fixtures_pinned"
                 case error
                 case infeasibilityReasons = "infeasibility_reasons"
+                case placementConflicts = "placement_conflicts"
             }
         }
         /// The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:
@@ -7650,6 +7824,46 @@ internal enum Components {
             case scheduled = "scheduled"
             case live = "live"
             case final = "final"
+        }
+        /// Two or more in-progress matches recorded on the *same table* at
+        /// overlapping times — physically impossible (a table holds one match), so
+        /// contradictory data from a soft manual placement PATCH. Resolved: the table's
+        /// catalogue ``table_label`` (never the raw value-object id) and the colliding
+        /// ``fixtures``, each named by its matchup. The DB-aware mirror of
+        /// :class:`app.scheduling.TableConflict`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TableConflictRead`.
+        internal struct TableConflictRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TableConflictRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case tableConflict = "table_conflict"
+            }
+            /// - Remark: Generated from `#/components/schemas/TableConflictRead/kind`.
+            internal var kind: Components.Schemas.TableConflictRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/TableConflictRead/table_label`.
+            internal var tableLabel: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TableConflictRead/fixtures`.
+            internal var fixtures: [Components.Schemas.ConflictFixtureRead]
+            /// Creates a new `TableConflictRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - tableLabel:
+            ///   - fixtures:
+            internal init(
+                kind: Components.Schemas.TableConflictRead.KindPayload? = nil,
+                tableLabel: Swift.String,
+                fixtures: [Components.Schemas.ConflictFixtureRead]
+            ) {
+                self.kind = kind
+                self.tableLabel = tableLabel
+                self.fixtures = fixtures
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case tableLabel = "table_label"
+                case fixtures
+            }
         }
         /// Outcome of firing a test push to the current user's devices.
         ///

@@ -11,6 +11,8 @@ import {
   fmtWallTime,
   infeasibilityReasonCopy,
   infeasibilityReasonKey,
+  placementConflictKey,
+  placementConflictSentence,
 } from '@/components/tournaments/data/solve'
 import { fmtDateTimeShort } from '@/lib/dates'
 
@@ -269,7 +271,12 @@ function LedgerRow({
   // A local, so `hasFailureDetail`'s type predicate narrows it for the
   // `FAILURE_HEADLINE` lookup below (a property access won't stay narrowed).
   const status = solve.status
-  const expandable = hasFailureDetail(status)
+  const hasFailure = hasFailureDetail(status)
+  // A placed board can still carry a caution (ADR "overlapping-in-progress-
+  // matches-are-tolerated-and-reported") — orthogonal to the verdict, so a
+  // succeeded row with overlapping in-progress matches is expandable too.
+  const hasConflicts = solve.placementConflicts.length > 0
+  const expandable = hasFailure || hasConflicts
   const detailId = `solve-detail-${solve.id}`
 
   return (
@@ -342,11 +349,14 @@ function LedgerRow({
         <tr className="solve-ledger-detail-row">
           <td colSpan={COLUMN_COUNT}>
             <div id={detailId} data-testid={detailId} className="solve-ledger-detail">
-              <div className="solve-ledger-detail-title">
-                {/* `expandable` is `hasFailureDetail`'s type predicate, so
-                    `status` is already narrowed to the two headline keys here. */}
-                {FAILURE_HEADLINE[status]}
-              </div>
+              {/* `hasFailure` is `hasFailureDetail`'s type predicate, so `status`
+                  is narrowed to the two headline keys here. A placed board with
+                  only a conflict caution has no failure headline. */}
+              {hasFailure && (
+                <div className="solve-ledger-detail-title">
+                  {FAILURE_HEADLINE[status]}
+                </div>
+              )}
               {/* The server's own account of why the job broke — the one wire
                   sentence this page carries, because it is the actionable
                   content (the solve strip's precedent). */}
@@ -374,6 +384,27 @@ function LedgerRow({
                     )
                   })}
                 </ul>
+              )}
+              {/* Overlapping in-progress matches the solve TOLERATED and reported
+                  — the SAME caution the Schedule tab's strip shows, rendered
+                  through the one shared `placementConflictSentence` so the two
+                  surfaces cannot drift. Present on ANY verdict (a placed board
+                  can still carry it), so it is not gated on `status`. */}
+              {hasConflicts && (
+                <div className="solve-ledger-detail-conflicts">
+                  <div className="solve-ledger-detail-title solve-ledger-detail-conflicts-title">
+                    Overlapping matches on the board
+                  </div>
+                  <ul className="solve-ledger-detail-reasons">
+                    {solve.placementConflicts.map((conflict, i) => (
+                      <li key={placementConflictKey(conflict, i)}>
+                        <span className="solve-ledger-detail-reason-sentence">
+                          {placementConflictSentence(conflict)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               <div className="solve-ledger-detail-fingerprint">
                 <span className="solve-ledger-detail-label">

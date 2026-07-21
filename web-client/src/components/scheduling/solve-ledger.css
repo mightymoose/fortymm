@@ -133,6 +133,17 @@
 .match-list-page .solve-ledger-detail-reason-sentence {
   color: var(--fg-2);
 }
+/* The placed-board caution — overlapping in-progress matches the solve tolerated
+ * and reported. Warn-toned title, distinct from the --loss failure headline, so
+ * a solved board's caution never reads as a broken run. */
+.match-list-page .solve-ledger-detail-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.match-list-page .solve-ledger-detail-conflicts-title {
+  color: var(--warn);
+}
 .match-list-page .solve-ledger-detail-reason-remedy {
   color: var(--fg-3);
 }

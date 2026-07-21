@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import { waitFor } from '@/test/utilities'
 
-import { buildScheduleSolve } from '../data/seed.factory'
+import {
+  buildPlayerConflict,
+  buildScheduleSolve,
+  buildTableConflict,
+} from '../data/seed.factory'
 import { solveStripPage } from './solve-strip.page'
 
 /** The refusal the route really sends for "nothing is drawn" — the ADR-0968
@@ -159,6 +163,39 @@ describe('SolveStrip', () => {
     // A broken job is NOT the infeasible outcome — no resolved reason leaks in.
     expect(text).not.toContain('has no tables assigned')
     expect(text).not.toContain("The day doesn't fit")
+  })
+
+  // ----- the placed-board caution: overlapping in-progress matches -----------
+
+  it('warns about overlapping in-progress matches on a SUCCEEDED board — a caution, not the infeasible banner — naming both matches and the shared table AND human', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'succeeded',
+        verdict: 'feasible',
+        placementConflicts: [buildTableConflict(), buildPlayerConflict()],
+      }),
+    })
+    // The board is still solved — the caution rides UNDER the success line.
+    expect(solveStripPage.getStateText('succeeded')).toContain('Schedule solved')
+    const text = solveStripPage.getConflictsText()
+    expect(text).toContain('Overlapping matches on the board')
+    // The table conflict: both matches, named by matchup, and the shared table.
+    expect(text).toContain('crafty-vs-spiked and dazed-vs-confused overlap on Table 1')
+    // The player conflict: the shared human.
+    expect(text).toContain(
+      'crafty-vs-spiked-frigatebird and spiked-frigatebird-vs-nimble overlap on spiked-frigatebird',
+    )
+    // It is a caution, not the "nothing placed" infeasible banner.
+    expect(text).not.toContain("The day doesn't fit")
+    // And not a refusal — no notice rings.
+    expect(solveStripPage.queryNotice()).toBeNull()
+  })
+
+  it('renders NO conflict warning on a clean board (placement_conflicts: [])', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', placementConflicts: [] }),
+    })
+    expect(solveStripPage.queryConflicts()).toBeNull()
   })
 
   // ----- the Run-scheduler button --------------------------------------------
