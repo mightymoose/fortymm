@@ -21,6 +21,17 @@ class Settings(BaseSettings):
     #: well past the default — there is deliberately no upper clamp.
     solver_time_cap_s: float = 10.0
 
+    #: The CP-SAT wall-clock time cap, in seconds, for a **schedule preview**
+    #: solve — the ephemeral, non-persistent solve over a synthetic field (ADR
+    #: "a schedule preview is a non-persistent solve over a synthetic field").
+    #: Deliberately far tighter than ``solver_time_cap_s``: a preview's
+    #: feasibility verdict is cap-independent (SAT is SAT) and only its makespan
+    #: estimate loosens slightly under a short cap — a conservative over-estimate
+    #: is safe for a preview — while the browser request behind it must not sit
+    #: for the full real-solve budget. The dedicated ``preview`` queue jumps it
+    #: ahead of pending real solves, so a low cap keeps a preview snappy.
+    preview_solver_time_cap_s: float = 5.0
+
 
 def get_settings() -> Settings:
     """Read settings from the environment.

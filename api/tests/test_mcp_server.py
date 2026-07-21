@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import fakeredis
 import httpx
 import pytest
 from fastmcp import Client
@@ -31,6 +32,7 @@ from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import queue as queue_module
 from app.api_token_auth import API_TOKEN_CONTEXT
 from app.main import app as fastapi_app
 from app.main import mcp_app
@@ -1967,3 +1969,248 @@ async def test_request_schedule_solve_non_owner_raises_tool_error(
         .all()
     )
     assert solves == []
+
+
+# ----- preview_schedule tool (preview_mcp) ---------------------------------
+#
+# The synchronous MCP preview adapter (chore 1d): enqueue the ephemeral preview,
+# wait internally, and return the whole ``PreviewResult`` in ONE call. The tests
+# are named ``*preview_mcp*`` so ``pytest -k preview_mcp`` selects exactly them.
+
+
+@pytest.fixture
+def sync_preview_queue(monkeypatch: pytest.MonkeyPatch) -> Queue:
+    """A SYNCHRONOUS (``is_async=False``) RQ queue on fakeredis standing in for the
+    real ``preview`` queue: the DB-blind preview job runs INLINE at enqueue time and
+    its ``PreviewResult`` lands in the job's Redis result, exactly as a deployed
+    worker would leave it — so the tool's internal ``wait_for_preview`` reads back a
+    finished job on its first poll and returns the result in one call. Both the
+    enqueue verb and the wait go through this same monkeypatched
+    ``get_preview_queue``, so they share the one fakeredis connection."""
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.PREVIEW_QUEUE, connection=connection, is_async=False)
+    monkeypatch.setattr(queue_module, "get_preview_queue", lambda: q)
+    return q
+
+
+async def _seed_previewable_tournament(
+    db_session: AsyncSession,
+    owner: User,
+    league: League,
+    *,
+    status: TournamentStatus = TournamentStatus.draft,
+    draw_type: DrawType = DrawType.round_robin,
+) -> tuple[Tournament, TournamentEvent]:
+    """A tournament owned by ``owner`` with one SMALL round-robin singles event
+    (capped at four, one pool over both tables), seeded directly. No
+    ``TournamentEntry`` rows — a preview draws a SYNTHETIC field, so the inline solve
+    is a tiny four-player round-robin. ``draw_type`` is knobbed to reach the
+    un-schedulable refusal (a non-round-robin event)."""
+    tournament = Tournament(
+        name="MCP Preview Cup",
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        table_catalogue=[
+            {"id": "t1", "label": "Table 1", "court": "A"},
+            {"id": "t2", "label": "Table 2", "court": "A"},
+        ],
+        league_id=league.id,
+        created_by_user_id=owner.id,
+        status=status,
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await db_session.refresh(tournament)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_type=draw_type,
+        max_players=4,
+        entry_fee=Decimal("0"),
+        slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=[
+            {
+                "id": "pool-a",
+                "name": "Pool A",
+                "slot": {"date": "2030-01-01", "start": "09:00", "end": "17:00"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+    )
+    db_session.add(event)
+    await db_session.commit()
+    await db_session.refresh(event)
+    return tournament, event
+
+
+async def test_preview_mcp_tool_is_registered(db_session: AsyncSession) -> None:
+    """The synchronous preview verb is exposed as a tool to an authenticated
+    caller."""
+    user = await make_user(db_session, "preview-mcp-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        names = {tool.name for tool in await client.list_tools()}
+    assert "preview_schedule" in names
+
+
+async def test_preview_mcp_owner_gets_result_synchronously(
+    db_session: AsyncSession,
+    default_league: League,
+    sync_preview_queue: Queue,
+) -> None:
+    """An owner driving ``preview_schedule`` on a ``draft`` tournament gets the whole
+    ``PreviewResult`` back in ONE call — a fitting verdict, the estimated duration,
+    the counts (four synthetic entrants over one pool → six round-robin matches), a
+    per-event breakdown, and the always-present honest-notes strip. No poll."""
+    owner = await make_user(db_session, "preview-mcp-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _ = await _seed_previewable_tournament(
+        db_session, owner, default_league
+    )
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "preview_schedule", {"tournament_id": str(tournament.id)}
+        )
+
+    assert result.isError is False
+    body = result.structuredContent
+    assert body is not None
+    # Verdict-first: the tiny four-player day fits, computed by the real engine.
+    assert body["verdict"] in ("optimal", "feasible")
+    assert body["fits"] is True
+    # Estimated duration is a real makespan (a plan was placed), and the counts come
+    # straight off the instant draw.
+    assert body["estimated_duration_min"] is not None
+    assert body["total_matches"] == 6
+    # A per-event breakdown for the one event, and the honest-notes strip.
+    assert len(body["events"]) == 1
+    assert body["events"][0]["matches"] == 6
+    assert body["notes"]
+
+
+async def test_preview_mcp_overrides_size_the_synthetic_field(
+    db_session: AsyncSession,
+    default_league: League,
+    sync_preview_queue: Queue,
+) -> None:
+    """The optional per-event ``overrides`` argument sizes the synthetic field: six
+    entrants draws fifteen round-robin matches, not the capped four's six — and the
+    result still comes back synchronously in one call."""
+    owner = await make_user(db_session, "preview-mcp-override-owner")
+    raw = await _mint(db_session, owner)
+    tournament, event = await _seed_previewable_tournament(
+        db_session, owner, default_league
+    )
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "preview_schedule",
+            {
+                "tournament_id": str(tournament.id),
+                "overrides": {str(event.id): 6},
+            },
+        )
+
+    assert result.isError is False
+    body = result.structuredContent
+    assert body is not None
+    assert body["total_matches"] == 15
+    assert body["events"][0]["matches"] == 15
+
+
+async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+    sync_preview_queue: Queue,
+) -> None:
+    """An event whose draw type is not round-robin (here single-elim) refuses the
+    WHOLE preview with an actionable ``ToolError`` naming round-robin — never a
+    partial result — because a preview must not invent a schedule for a format
+    production cannot run. The refusal happens at snapshot build, before anything is
+    queued."""
+    owner = await make_user(db_session, "preview-mcp-ko-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _ = await _seed_previewable_tournament(
+        db_session, owner, default_league, draw_type=DrawType.single_elim
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="round-robin"):
+            await client.call_tool(
+                "preview_schedule", {"tournament_id": str(tournament.id)}
+            )
+
+    # Nothing was queued — the refusal is raised before the enqueue.
+    assert sync_preview_queue.jobs == []
+
+
+async def test_preview_mcp_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+    sync_preview_queue: Queue,
+) -> None:
+    """A preview is owner-gated: a caller who is not the tournament's creator gets a
+    ``ToolError``, and nothing is queued."""
+    owner = await make_user(db_session, "preview-mcp-real-owner")
+    tournament, _ = await _seed_previewable_tournament(
+        db_session, owner, default_league
+    )
+
+    outsider = await make_user(db_session, "preview-mcp-outsider")
+    outsider_token = await _mint(db_session, outsider)
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool(
+                "preview_schedule", {"tournament_id": str(tournament.id)}
+            )
+
+    assert sync_preview_queue.jobs == []
+
+
+async def test_preview_mcp_post_live_tournament_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+    sync_preview_queue: Queue,
+) -> None:
+    """A preview answers a pre-registration question, so a ``live`` tournament is
+    refused with a status-aware ``ToolError`` (draft/published only), and nothing is
+    queued."""
+    owner = await make_user(db_session, "preview-mcp-live-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _ = await _seed_previewable_tournament(
+        db_session, owner, default_league, status=TournamentStatus.live
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="draft or published"):
+            await client.call_tool(
+                "preview_schedule", {"tournament_id": str(tournament.id)}
+            )
+
+    assert sync_preview_queue.jobs == []
+
+
+async def test_preview_mcp_unknown_tournament_raises_tool_error(
+    db_session: AsyncSession,
+    sync_preview_queue: Queue,
+) -> None:
+    """An id that matches no tournament surfaces as a not-found ``ToolError`` at the
+    caller."""
+    owner = await make_user(db_session, "preview-mcp-unknown-owner")
+    raw = await _mint(db_session, owner)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("preview_schedule", {"tournament_id": unknown})

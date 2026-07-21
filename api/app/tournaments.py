@@ -1,7 +1,9 @@
+import hashlib
 import uuid
 from typing import Literal, assert_never
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pyrate_limiter import Duration, Rate
 from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,8 +32,21 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.rate_limiting import RedisRateLimiter
 from app.rbac import require_permission, user_has_permission
+from app.schedule_preview_solve import (
+    cancel_preview,
+    preview_job_state,
+)
+from app.schedule_preview_solve import (
+    request_schedule_preview as _request_schedule_preview,
+)
 from app.schedule_solves import request_solve
+from app.schemas.schedule_preview import (
+    PreviewEnqueued,
+    PreviewJobState,
+    PreviewRequest,
+)
 from app.schemas.tournament import (
     MatchSettings,
     ScheduleSolveRead,
@@ -50,7 +65,7 @@ from app.schemas.tournament import (
     TournamentUpdate,
     named_list,
 )
-from app.sessions import get_current_user
+from app.sessions import SESSION_COOKIE_NAME, get_current_user
 from app.tournament_draw_service import cut_event_draw as _cut_event_draw
 from app.tournament_draw_service import uncut_event_draw as _uncut_event_draw
 from app.tournament_draws import (
@@ -76,6 +91,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
     TournamentNotFoundError,
+    TournamentNotPreLiveError,
 )
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_materialization import materialize_live_draw
@@ -2323,3 +2339,188 @@ async def request_schedule_solve(
             ),
         ) from exc
     return ScheduleSolveRead.model_validate(row)
+
+
+async def _preview_rate_limit_key(request: Request) -> str:
+    """Key the schedule-preview limiter by the caller's hashed session cookie so
+    the budget is per **owner** (a preview is owner-gated), independent of other
+    directors. The raw cookie is a bearer credential, so it is sha256-hashed
+    before it becomes a Redis key (matching the email limiters). A cookie-less
+    request falls back to client IP — it will 401 downstream anyway, but the
+    limiter still counts the attempt."""
+    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie:
+        return f"session:{hashlib.sha256(cookie.encode('utf-8')).hexdigest()}"
+    client = request.client
+    return f"ip:{client.host if client else 'unknown'}"
+
+
+# A preview runs the full CP-SAT engine, so it is the expensive click on this
+# router — rate-limited per owner, a few a minute, comfortably above a director
+# tweaking a knob and re-previewing but well below anything that would keep the
+# preview worker saturated. The poll (GET) and cancel (DELETE) are cheap and
+# unlimited.
+preview_request_rate_limit = RedisRateLimiter(
+    rates=[Rate(6, Duration.MINUTE)],
+    bucket_key="schedule-preview",
+    identifier=_preview_rate_limit_key,
+)
+
+
+@router.post(
+    "/tournaments/{tournament_id}/schedule/preview",
+    response_model=PreviewEnqueued,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(preview_request_rate_limit)],
+)
+async def request_schedule_preview(
+    tournament_id: uuid.UUID,
+    body: PreviewRequest | None = None,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> PreviewEnqueued:
+    """Enqueue an ephemeral **schedule preview** for a pre-live tournament and
+    answer with a token plus the immediately-known structure.
+
+    A preview asks *"given my tables, windows, formats and games-per-match, would
+    the schedule even fit — and roughly how long is the day?"* **before anyone has
+    registered**. It runs the same CP-SAT engine a live tournament uses over a
+    **synthetic field**, but persists nothing: the whole answer lives only in the
+    job's Redis result with a short TTL. Poll `GET …/schedule/preview/{token}` for
+    it (the `202` is honest — the solve is accepted, not done).
+
+    The body is optional per-event field-size overrides (`{"overrides": {"<event
+    id>": N}}`) to explore a "what if N show up" scenario; omit it and each event
+    fills to its own cap (or the uncapped default).
+
+    Owner-only, and only while the tournament is **pre-live** — a `draft` or a
+    `published` (registration open, nothing drawn) tournament. An absent tournament
+    is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
+    (there is a real field and a real solve to look at, or it is over). Rate
+    limited per owner: too many previews in quick succession is a `429`.
+    """
+    # Thin adapter over the transport-neutral ``request_schedule_preview`` verb: it
+    # owns the owner gate (404 → 403), the pre-live gate, the synchronous snapshot
+    # build and the ephemeral enqueue, signalling each refusal with a domain
+    # exception this handler maps back to its exact status:
+    #
+    #   TournamentNotFoundError        -> 404 "Tournament not found."
+    #   NotTournamentOwnerError        -> 403 "You can only modify tournaments you …"
+    #   TournamentNotPreLiveError      -> 409, the status-carrying domain sentence
+    #   DrawError (the family)         -> 422, the sentence ``_draw_refusal`` composes
+    #   ScheduleQueueUnavailableError  -> 503 "The scheduling queue is unavailable, …"
+    overrides = body.overrides if body is not None else {}
+    try:
+        return await _request_schedule_preview(
+            db,
+            tournament_id=tournament_id,
+            actor=current_user,
+            count_overrides=overrides or None,
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # Shared arms: the 404 (absent) and the 403 (not the owner). The verb never
+        # raises the event/draw-under-way members of the tuple, so they cannot fire
+        # here — but catching the whole tuple keeps the one shared mapper.
+        raise _map_tournament_write_error(exc) from exc
+    except TournamentNotPreLiveError as exc:
+        # A ``live``/``archived`` tournament: a preview is a pre-registration
+        # question, refused with the status-carrying sentence the domain authored.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DrawError as error:
+        # A non-round-robin (or otherwise degenerate) draw the synthetic field
+        # cannot be planned — the same 422 the cut route produces, in words a
+        # director can read.
+        raise _draw_refusal(error) from error
+    except ScheduleQueueUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The scheduling queue is unavailable, so the preview was not "
+                "queued. Try again in a moment."
+            ),
+        ) from exc
+
+
+@router.get(
+    "/tournaments/{tournament_id}/schedule/preview/{token}",
+    response_model=PreviewJobState,
+)
+async def read_schedule_preview(
+    tournament_id: uuid.UUID,
+    token: str,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> PreviewJobState:
+    """Poll an ephemeral **schedule preview** by its token and answer with the
+    job's state — `queued`, `running`, `done` (carrying the `PreviewResult`), or
+    `failed` (carrying an error string, including a result that has already expired
+    out of Redis).
+
+    Owner-gated the same way the enqueue is: the tournament is re-loaded and the
+    caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
+    `live`/`archived` tournament a `409`) before the ephemeral job — which is not
+    itself scoped to a tournament in Redis — is read. A missing/expired token is
+    not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
+    it again" rather than a transport error.
+    """
+    # Re-apply the owner + pre-live gate before reading the (tournament-blind)
+    # Redis job, so a token cannot be polled by anyone but the tournament's owner.
+    try:
+        await _ensure_preview_access(db, tournament_id, current_user)
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except TournamentNotPreLiveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return preview_job_state(token)
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/schedule/preview/{token}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_schedule_preview(
+    tournament_id: uuid.UUID,
+    token: str,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Best-effort cancel an ephemeral **schedule preview** by its token — the
+    director navigated away, so stop the in-flight solve from holding a worker
+    slot. Answers `204` whether the job was queued, running, already finished, or
+    never existed: a cancel is advisory and idempotent, its only invariant "this
+    ephemeral job is no longer consuming a worker", which an absent/finished job
+    already satisfies. A cancelled preview's result is dropped, so it cannot be
+    polled back as a stale success.
+
+    Owner-gated exactly as the poll is (`404`/`403`/`409`) before the
+    tournament-blind Redis job is touched, so a token cannot be cancelled by
+    anyone but the tournament's owner.
+    """
+    try:
+        await _ensure_preview_access(db, tournament_id, current_user)
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except TournamentNotPreLiveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    cancel_preview(token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _ensure_preview_access(
+    db: AsyncSession, tournament_id: uuid.UUID, actor: User
+) -> None:
+    """Owner + pre-live gate for the token-addressed preview reads (poll/cancel),
+    reusing the enqueue verb's exact ordering (404 → 403 → pre-live). The ephemeral
+    job is not scoped to a tournament in Redis, so the gate is re-applied here
+    against the tournament in the path before the token is touched — a preview is
+    the owner's, so its token is too. Raises the same tournament-write / pre-live
+    domain exceptions the enqueue does, which the caller adapts to HTTP."""
+    tournament = (
+        await db.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise TournamentNotFoundError()
+    if tournament.created_by_user_id != actor.id:
+        raise NotTournamentOwnerError()
+    if tournament.status not in (TournamentStatus.draft, TournamentStatus.published):
+        raise TournamentNotPreLiveError(tournament.status.value)

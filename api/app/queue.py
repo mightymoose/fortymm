@@ -4,6 +4,12 @@ from redis import Redis
 from rq import Queue
 
 SOLVER_QUEUE = "solver"
+#: The dedicated queue an ephemeral **schedule preview** solve runs on (ADR "a
+#: schedule preview is a non-persistent solve over a synthetic field"). The
+#: worker lists it *ahead of* ``solver`` (``rq worker preview solver``) so a
+#: preview is dequeued before pending real solves but never preempts one already
+#: in flight; its job persists nothing and its result lives only in Redis.
+PREVIEW_QUEUE = "preview"
 EMAIL_QUEUE = "email"
 RATINGS_QUEUE = "ratings"
 NOTIFICATIONS_QUEUE = "notifications"
@@ -22,6 +28,10 @@ def _connection() -> Redis:
 
 def get_queue() -> Queue:
     return Queue(SOLVER_QUEUE, connection=_connection())
+
+
+def get_preview_queue() -> Queue:
+    return Queue(PREVIEW_QUEUE, connection=_connection())
 
 
 def get_email_queue() -> Queue:
