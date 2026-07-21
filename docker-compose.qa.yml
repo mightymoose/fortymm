@@ -117,7 +117,7 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
-    command: rq worker --url redis://redis:6379/0 solver email ratings notifications
+    command: rq worker --url redis://redis:6379/0 preview solver email ratings notifications
 
   # Periodic retirement sweep (task #9 / ADR 0007 O8): auto-accepts lapsed
   # standing results and sends due deadline-nearing reminders. The sweep runs
