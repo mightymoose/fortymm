@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -1265,7 +1266,11 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     tournament_id = await _create_tournament(api_client)
     event_id = await _first_event_id(db_session, tournament_id)
 
-    scheduled_start = datetime(2026, 8, 1, 9, 0)
+    # Aware, so asyncpg stores a deterministic instant regardless of the test
+    # runner's local timezone (a naive value is read in the session tz — 14:00Z on
+    # a US-Central dev box, 09:00Z in a UTC CI runner). 9:00 AM America/Chicago
+    # (CDT on this August date) = 14:00Z, which the BFF renders back as "9:00 AM CDT".
+    scheduled_start = datetime(2026, 8, 1, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
     fixture = await _seed_placed_fixture(
         db_session, event_id, table_id="t1", scheduled_start=scheduled_start
     )
