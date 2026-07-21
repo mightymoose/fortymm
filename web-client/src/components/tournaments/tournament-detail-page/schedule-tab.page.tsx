@@ -118,6 +118,28 @@ const scoped = (container: Container) => ({
     return container.queryByTestId(`place-clear-${fixtureId}`)
   },
 
+  /** The **Preview schedule** trigger — the owner's pre-live-only affordance
+   * (ADR "a schedule preview is a non-persistent solve over a synthetic field").
+   * Absent for a non-owner and for a `live` / `archived` tournament. */
+  queryPreviewTrigger() {
+    return container.queryByTestId('preview-schedule-trigger')
+  },
+  getPreviewTrigger() {
+    return container.getByTestId('preview-schedule-trigger')
+  },
+  /** Click the trigger to open the preview modal. */
+  openPreview() {
+    fireEvent.click(container.getByTestId('preview-schedule-trigger'))
+  },
+  /** The preview modal — it portals to the body, so this resolves against the
+   * whole document by the dialog title, not the tab subtree. */
+  queryPreviewModal() {
+    return screen.queryByRole('dialog', { name: 'Preview schedule' })
+  },
+  findPreviewModal() {
+    return screen.findByRole('dialog', { name: 'Preview schedule' })
+  },
+
   /** The solve strip (its own quartet — `solve-strip.page` has the fine-grained
    * accessors; these are the joints the TAB's tests drive). */
   getSolveStrip() {

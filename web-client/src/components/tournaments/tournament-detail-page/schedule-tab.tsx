@@ -1,5 +1,6 @@
 import {
   CalendarClock,
+  FlaskConical,
   LayoutGrid,
   List,
   MapPin,
@@ -47,6 +48,7 @@ import {
   type PlacementSummary,
 } from './confirm-call-dialog'
 import { OptionSelect } from './event-editor/option-select'
+import { SchedulePreviewModal } from './schedule-preview-modal'
 import { BoardEmpty } from './schedule-tab/board-empty'
 import { GanttBoard } from './schedule-tab/gantt-board'
 import { PlayerTimelineBoard } from './schedule-tab/player-timeline-board'
@@ -520,6 +522,15 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   // every poll-driven re-render.
   const schedule = useMemo(() => buildSchedule(tournament, tables), [tournament, tables])
   const [view, setView] = useState<ScheduleView>('list')
+  // The **Preview schedule** trigger is the owner's alone and pre-live only (ADR
+  // "a schedule preview is a non-persistent solve over a synthetic field": the
+  // verb is owner-gated and refused on `live`/`archived`). A non-owner, or a
+  // tournament past `published`, is offered nothing — the affordance is hidden,
+  // never disabled (ADR-0015). Open-state lives here; the modal drives the solve.
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const canPreview =
+    canEdit &&
+    (tournament.status === 'draft' || tournament.status === 'published')
   // Freshness is POLLING while this tab is on screen (ADR "the schedule is
   // solved"): ~3s while a solve is in flight, ~15s while the tournament is live,
   // none otherwise. Mounted here — not on the page — so only the Schedule tab
@@ -545,7 +556,35 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             ? 'Every match, by table. Place a match on a table and a predicted time — the date comes from its pool window.'
             : 'Every match, by table, with its predicted start time.'
         }
+        action={
+          canPreview && (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="preview-schedule-trigger"
+              onClick={() => setPreviewOpen(true)}
+            >
+              <FlaskConical size={14} />
+              Preview schedule
+            </Button>
+          )
+        }
       />
+
+      {/* The pre-live dry run over a synthetic field — mounted only for the
+          owner, so a non-owner never even carries its open-state. The modal
+          enqueues on open and cancels on close; nothing is created or saved. */}
+      {canPreview && (
+        <SchedulePreviewModal
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+          tournamentId={tournament.id}
+          events={tournament.events.map((event) => ({
+            id: event.id,
+            name: event.name,
+          }))}
+        />
+      )}
 
       {/* The solve strip renders in EVERY schedule state, the empty one included:
           "no plan yet" over an uncut tournament is exactly where the owner meets
