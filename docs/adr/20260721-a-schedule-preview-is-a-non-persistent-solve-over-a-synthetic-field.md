@@ -33,8 +33,11 @@ Three facts about the existing code make a clean, non-persistent preview possibl
 
 - **The draw is pure.** `api/app/draws.py` "issues no query, imports no FastAPI and
   no SQLAlchemy construct." It turns value-object `Entrant`s into `PlannedFixture`s;
-  `strategy_for(draw_type)` raises `UnsupportedDrawType` for the unimplemented enum
-  stubs (single/double-elim, swiss).
+  `strategy_for(draw_type)` is an exhaustive match with no catch-all: only
+  `round_robin` has a strategy; `single_elim | double_elim | rr_then_ko | swiss` all
+  raise `UnsupportedDrawType` (they are enum stubs — `rr_then_ko` included), and the
+  real `cut_draw` picks its strategy the same way, so production cannot draw those
+  formats at all today.
 - **The solver is pure.** `api/app/scheduling.py:solve(snapshot, …)` takes a frozen
   `ScheduleSnapshot` and returns a frozen `SolveResult`, touching no DB. The
   DB-aware orchestration (`schedule_solves.py:_apply_result`) that *persists* onto
@@ -112,16 +115,19 @@ Timeout budget (grounded in `solver_time_cap_s = 10.0`, real job_timeout `cap + 
   if queued, `send_stop_job_command` if running — requires the forking Worker) to
   reclaim the single throttled slot; `job_timeout` + TTL bound the waste if it misses.
 
-### Draw coverage is partial with honest notes, never a misleading grid
+### Draw coverage is round-robin only; every other type is refused loud
 
-The preview covers what `plan_initial` can produce before any results exist:
+A preview must not invent a schedule for a format production cannot run — that is the
+false-confidence failure the real-engine decision exists to prevent. Since
+`strategy_for` implements only `round_robin` and raises `UnsupportedDrawType` for
+everything else (elim, swiss, **and rr-then-ko**), the preview covers:
 
 - **round-robin** — fully (the whole draw);
-- **rr-then-ko** — the **pool stage only** (the KO bracket is computed by `advance()`
-  from pool results that a preview does not have), with an explicit "Knockout stage
-  not included" note;
-- **unsupported draw types** on *any* event — the whole preview is **refused loud**
-  with an actionable, machine-readable reason (ADR-0968), never a partial grid.
+- **every other draw type, rr-then-ko included** — the whole preview is **refused
+  loud** with an actionable, machine-readable reason (ADR-0968), never a partial
+  grid. (An earlier draft of this ADR assumed rr-then-ko was implemented and would
+  preview its pool stage; it is not. When `draws.py` grows an rr-then-ko strategy,
+  previewing its pool stage is a natural follow-up.)
 
 ### The summary is feasibility-first, with the full synthetic grid available
 
@@ -151,8 +157,9 @@ wait state (`Queued → "waiting for an in-progress solve"` vs `Running → "Sol
   so it **does** contribute to `openapi.json` → run `mise run regen-api-types` and
   commit `schema.d.ts` (and `regen-ios-api-types` for the drift guard). The
   `preview_schedule` MCP tool is MCP-only and never reaches `schema.d.ts`.
-- **The preview is optimistic.** Disjoint fake fields ignore multi-event contention;
-  the duration estimate is a floor, stated as such. Overlap modeling and previewing
-  KO stages are deliberate follow-ups.
+- **The preview is optimistic, and round-robin-only.** Disjoint fake fields ignore
+  multi-event contention; the duration estimate is a floor, stated as such. Overlap
+  modeling and extending coverage past round-robin (elim/swiss/rr-then-ko, once
+  `draws.py` implements them) are deliberate follow-ups.
 - **"Fake schedule" is retired as vocabulary** in favor of **schedule preview** over a
   **synthetic field** (`CONTEXT.md`) — consistent with "solve", not "simulation".
