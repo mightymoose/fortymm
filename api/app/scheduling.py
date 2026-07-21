@@ -321,6 +321,40 @@ class SolveStats:
 
 
 @dataclass(frozen=True, slots=True)
+class PastWindow:
+    """A pool whose **entire** playable window lies at or before ``now`` — the
+    day was dated in the past (most easily via the silent "today" default on an
+    event that is now a day old, #1101), so no grid start ``≥ now`` can ever
+    land inside ``[start_min, end_min)``. Distinct from a *capacity* shortfall:
+    a past window is unschedulable because of *when* it is, not how much has to
+    fit, and the fix is "move the date", not "add tables/time".
+
+    Named only **pre-live** — once the day is live the window end goes soft and
+    the remainder overruns instead of wedging (:attr:`SolveResult.overrunning`),
+    so a past window is a pre-live/hard-window fact and can never coexist with
+    ``overrunning`` (that rides on a *solved* live day).
+
+    Minute-only and id-only, like every value this pure module emits: it carries
+    the ``pool_id`` and the offending window's minute offsets, and resolving
+    those to a venue-local calendar *date* is the DB-aware caller's job.
+    """
+
+    pool_id: PoolId
+    window_start_min: int
+    window_end_min: int
+    kind: Literal["past_window"] = "past_window"
+
+
+#: The closed set of *named*, machine-readable causes an ``infeasible`` verdict
+#: can carry (ADR-0968's code-not-prose pattern). A discriminated union over
+#: ``kind`` so a downstream humanizer can ``match`` exhaustively; extensible,
+#: with ``past_window`` the only member today. A ``None`` reason on an infeasible
+#: verdict is the honest residual: a generic capacity infeasibility with no
+#: single named cause (the window is current, just too tight for the fixtures).
+InfeasibilityReason = PastWindow
+
+
+@dataclass(frozen=True, slots=True)
 class SolveResult:
     """A solve's whole answer. Placements cover every active fixture that is
     not in progress — pins echoed verbatim, unpinned fixtures solved — or are
@@ -334,19 +368,34 @@ class SolveResult:
     wedging infeasible. It is always ``False`` pre-live (the window is hard),
     and on an ``infeasible``/``unknown`` outcome (which placed nothing). A
     schedule surface reads it to say "overrunning" rather than "doesn't fit".
+
+    ``reason`` rides **only** on an ``infeasible`` verdict and is ``None`` for
+    every other outcome (optimal / feasible / unknown). It is the structured,
+    machine-readable explanation of *why* the day does not fit — see
+    :data:`InfeasibilityReason`. ``None`` on an infeasible verdict means a
+    generic capacity infeasibility with no single named cause; a
+    :class:`PastWindow` means the offending pool's whole window is already in
+    the past. Because ``reason`` is a past-window fact and ``overrunning`` a
+    solved-live fact, the two never coexist.
     """
 
     verdict: Verdict
     placements: tuple[PlacedFixture, ...]
     stats: SolveStats
     overrunning: bool = False
+    reason: InfeasibilityReason | None = None
 
 
-def _no_plan(verdict: Verdict, wall_time_ms: int = 0) -> SolveResult:
+def _no_plan(
+    verdict: Verdict,
+    wall_time_ms: int = 0,
+    reason: InfeasibilityReason | None = None,
+) -> SolveResult:
     return SolveResult(
         verdict=verdict,
         placements=(),
         stats=SolveStats(wall_time_ms=wall_time_ms, objective=None),
+        reason=reason,
     )
 
 
@@ -511,12 +560,37 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     for end in occupancy_ends.values():
         horizon = max(horizon, end)
 
+    # Name a past day *before* the generic tight-window check (ADR "a past day
+    # is named, not disguised", #1101). Pre-live only: a pool that still carries
+    # unpinned demand but whose ENTIRE window ends at or before ``now`` is
+    # unschedulable because of *when* it is — no grid start ``≥ now`` can land
+    # inside it — which is a different fact from a current-but-too-tight window,
+    # and the fix is "move the date", not "add tables/time". Checked in snapshot
+    # pool order so the reported pool is deterministic. While live the window end
+    # is soft (the remainder overruns), so this never fires and a past window is
+    # strictly the pre-live/hard-window case.
+    if not is_live:
+        unpinned_pool_ids = {f.pool_id for f in unpinned}
+        for pool in snapshot.pools:
+            if pool.id in unpinned_pool_ids and pool.window.end_min <= now:
+                return _no_plan(
+                    Verdict.infeasible,
+                    reason=PastWindow(
+                        pool_id=pool.id,
+                        window_start_min=pool.window.start_min,
+                        window_end_min=pool.window.end_min,
+                    ),
+                )
+
     # Structural feasibility first: a fixture whose window cannot hold its
     # duration at all needs no solver to refuse. (Whole-or-nothing: one
-    # unplaceable fixture makes the entire day infeasible, by design.) The
-    # ``latest`` bound uses the *effective* end — softened while live — so a
-    # live day never wedges here; ``planned_ends`` keeps the *planned* end so
-    # :func:`solve` can tell whether the plan actually overran it.
+    # unplaceable fixture makes the entire day infeasible, by design.) A window
+    # that is current but simply too tight for the fixtures is a *generic*
+    # capacity infeasibility — it carries no named reason (the past-window case
+    # above already claimed the only named pre-live cause). The ``latest`` bound
+    # uses the *effective* end — softened while live — so a live day never wedges
+    # here; ``planned_ends`` keeps the *planned* end so :func:`solve` can tell
+    # whether the plan actually overran it.
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
     planned_ends: dict[FixtureId, int] = {}
     for fixture in unpinned:

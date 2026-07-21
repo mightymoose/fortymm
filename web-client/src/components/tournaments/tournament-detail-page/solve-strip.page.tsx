@@ -49,6 +49,13 @@ const scoped = (container: Container) => ({
     return container.queryByTestId('solve-strip-overrunning')
   },
 
+  /** The specific dated message on an infeasible solve whose cause the API named
+   * (today: a wholly-past window) — present only when `infeasible_reason` is set,
+   * never on a generic capacity infeasibility. */
+  queryPastWindow() {
+    return container.queryByTestId('solve-strip-past-window')
+  },
+
   /** The inline refusal (the strip's only error surface — there is no toast). */
   queryNotice() {
     return container.queryByTestId('run-scheduler-notice')

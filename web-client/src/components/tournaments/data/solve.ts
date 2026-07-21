@@ -22,6 +22,7 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 
+import { fmtDate } from './helpers'
 import type { TournamentStatus } from './types'
 
 type ScheduleSolveWire = components['schemas']['ScheduleSolveRead']
@@ -68,6 +69,58 @@ export type ScheduleSolveTrigger = z.infer<typeof scheduleSolveTriggerSchema>
 export type ScheduleSolveStatus = z.infer<typeof scheduleSolveStatusSchema>
 export type SolverVerdict = z.infer<typeof solverVerdictSchema>
 
+// ----- the named infeasibility reason: why "infeasible" specifically ----------
+//
+// An `infeasible` verdict is no longer always one opaque "the day doesn't fit".
+// The API's solver pre-check distinguishes a *named* cause from a generic
+// capacity shortfall (ADR "a past day is named, not disguised") and ships it on
+// `ScheduleSolveRead.infeasible_reason`: `null` for every non-infeasible run AND
+// for a generic capacity infeasibility (a current-but-too-tight window, no single
+// named cause), non-null ONLY for a named cause. Today the sole named cause is
+// `past_window` — a pool's ENTIRE planned window is already behind now — carrying
+// the offending venue-local `date` (`YYYY-MM-DD`, resolved server-side in the
+// event's own timezone frame, so the client does no tz math of its own).
+//
+// The `code` is *data* the strip switches on, so — like `status`/`trigger`/
+// `verdict` — a code this client has no words for must FAIL the parse HERE, in the
+// queryFn, not fall out of a `switch` two components later as a blank line
+// (`z.discriminatedUnion` rejects an unknown discriminator). The *sentence* is
+// still the client's, minted in `infeasibleReasonMessage` below.
+
+type PastWindowReasonWire = components['schemas']['PastWindowReason']
+
+/** The named cause of a `past_window` infeasibility, in the domain's spelling: a
+ * pool's whole planned window is a day already behind now, so it cannot run until
+ * it is moved to a future day. `code` is the machine-readable discriminator; `date`
+ * is the offending venue-local calendar day (`YYYY-MM-DD`), which the strip names
+ * so the director knows exactly which day to move. */
+export interface PastWindowReason {
+  code: 'past_window'
+  date: string
+}
+
+/** The named infeasibility reason a solve can carry — a discriminated union over
+ * `code`, one arm today (`past_window`). Modelled as a union (not a lone object)
+ * so a second named cause added to the API is a compile error here until it is
+ * given copy in `infeasibleReasonMessage`, never a raw code on screen. */
+export type InfeasibleReason = PastWindowReason
+
+/** The wire arm, as it really arrives — `code` a literal so the union can
+ * discriminate on it. `satisfies` it against the generated schema so a field
+ * renamed in the API is a compile error here, not a silent `undefined`. */
+const pastWindowReasonWireSchema = z.object({
+  code: z.literal('past_window'),
+  date: z.string(),
+}) satisfies z.ZodType<PastWindowReasonWire>
+
+/** The named reason as one `z.discriminatedUnion('code', …)` — an unknown `code`
+ * has no arm and throws, which is exactly the boundary rule: a reason this client
+ * cannot render must fail the parse, not blank the line. `date` is single-word, so
+ * the domain shape equals the wire shape (no snake→camel mapping needed). */
+export const infeasibleReasonSchema = z.discriminatedUnion('code', [
+  pastWindowReasonWireSchema,
+])
+
 /**
  * One row of the tournament's **solve ledger**, in the domain's spelling — the
  * latest run of the placement solver, as the detail payload carries it.
@@ -98,6 +151,13 @@ export interface ScheduleSolve {
   fixturesPinned: number | null
   overrunning: boolean
   error: string | null
+  /** The named, machine-readable cause of an `infeasible` verdict, or `null`.
+   * `null` for every non-infeasible run AND for a generic capacity infeasibility
+   * (a current-but-too-tight window, no single named cause); non-null only for a
+   * named cause — today, a `past_window` naming the offending venue-local day
+   * (ADR "a past day is named, not disguised"). Not a stage marker: it is the
+   * *why* behind one specific status, and an absent key is a payload we reject. */
+  infeasibleReason: InfeasibleReason | null
 }
 
 /** The wire shape (`ScheduleSolveRead`), as it really arrives: snake_case, every
@@ -118,6 +178,10 @@ export const scheduleSolveWireSchema = z.object({
   fixtures_pinned: z.number().int().nullable(),
   overrunning: z.boolean(),
   error: z.string().nullable(),
+  // Present on every row (a nullable, never optional — an absent key is a payload
+  // we reject, not a "generic infeasibility"); non-null only for a named cause,
+  // parsed through the discriminated union so an unknown `code` fails the row.
+  infeasible_reason: infeasibleReasonSchema.nullable(),
 })
 
 /** The snake→camel mapping, one wire row → one domain `ScheduleSolve`. Annotated
@@ -141,6 +205,9 @@ export function scheduleSolveFromWire(
     fixturesPinned: s.fixtures_pinned,
     overrunning: s.overrunning,
     error: s.error,
+    // Domain shape equals the wire shape (single-word fields), so it carries
+    // straight through — already parsed by `infeasibleReasonSchema`.
+    infeasibleReason: s.infeasible_reason,
   }
 }
 
@@ -192,7 +259,16 @@ export type SolveStripState =
       finishedAt: string | null
       trigger: ScheduleSolveTrigger
     }
-  | { kind: 'infeasible'; finishedAt: string | null; trigger: ScheduleSolveTrigger }
+  | {
+      kind: 'infeasible'
+      finishedAt: string | null
+      trigger: ScheduleSolveTrigger
+      /** The named cause when there is one — today only `past_window` (the event's
+       * whole planned window is a day already behind now), which the strip renders
+       * as a *specific, dated* message instead of the generic "doesn't fit". `null`
+       * for a generic capacity infeasibility, which keeps the generic message. */
+      reason: InfeasibleReason | null
+    }
   | {
       kind: 'failed'
       /** The server's own account of why the job broke, or `null`. Shown as
@@ -235,6 +311,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
         kind: 'infeasible',
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,
+        reason: solve.infeasibleReason,
       }
     case 'failed':
       return { kind: 'failed', error: solve.error, trigger: solve.trigger }
@@ -281,6 +358,29 @@ export function fmtWallTime(ms: number | null): string | null {
   if (ms === null) return null
   if (ms < 1000) return `${Math.round(ms)} ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+/**
+ * The specific, actionable sentence for a *named* infeasibility reason — the
+ * client's own copy (raw wire strings never reach the UI), naming the offending
+ * day so the director knows exactly what to fix (ADR "a past day is named, not
+ * disguised"). The venue-local `date` is formatted through the tournament's own
+ * date formatter (`fmtDate`, tz-safe local-midnight — no hand-slicing, no drift).
+ *
+ * Exhaustive over `code` — a `never` default makes a second named cause added to
+ * the API a compile error here until it has words, so a reason can never reach the
+ * UI as a blank line. A generic infeasibility carries `null` and never reaches
+ * here: the strip keeps its generic "the day doesn't fit" copy for that case.
+ */
+export function infeasibleReasonMessage(reason: InfeasibleReason): string {
+  switch (reason.code) {
+    case 'past_window':
+      return `This event's window (${fmtDate(reason.date)}) has already passed — update the date.`
+    default: {
+      const exhaustive: never = reason.code
+      return exhaustive
+    }
+  }
 }
 
 // ----- polling ----------------------------------------------------------------

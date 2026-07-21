@@ -1,9 +1,10 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -55,6 +56,22 @@ class SolverVerdict(enum.Enum):
     optimal = "optimal"
     feasible = "feasible"
     infeasible = "infeasible"
+
+
+class InfeasibleReasonCode(enum.Enum):
+    """The named, machine-readable cause of an ``infeasible`` verdict (ADR-0968's
+    code-not-prose pattern; ADR "a past day is named, not disguised"). The column
+    is ``NULL`` for every non-infeasible run, and also for a *generic* capacity
+    infeasibility — a current window simply too tight for the fixtures, which has
+    no single named cause. Extensible; ``past_window`` is the only member today.
+
+    * ``past_window`` — a pool's entire planned window is already in the past
+      (the day was dated behind ``now``), so it cannot run without a new date.
+      Paired with a non-``NULL`` ``past_window_date`` naming the offending
+      venue-local day.
+    """
+
+    past_window = "past_window"
 
 
 class ScheduleSolve(Base):
@@ -143,6 +160,24 @@ class ScheduleSolve(Base):
     overrunning: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    #: The named, machine-readable cause of an ``infeasible`` verdict (ADR "a
+    #: past day is named, not disguised"). ``NULL`` on every non-infeasible run,
+    #: and on a *generic* capacity infeasibility with no single named cause (a
+    #: current window too tight for the fixtures). Non-``NULL`` only pairs with
+    #: ``status = infeasible`` / ``verdict = infeasible``.
+    infeasible_reason_code: Mapped[InfeasibleReasonCode | None] = mapped_column(
+        Enum(
+            InfeasibleReasonCode,
+            name="infeasible_reason_code",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=True,
+    )
+    #: The offending venue-local calendar day for a ``past_window`` reason — the
+    #: date the director gave a window that is already wholly in the past, in the
+    #: event's own ``timezone`` frame. ``NULL`` unless ``infeasible_reason_code``
+    #: is ``past_window`` (the two are written together, or neither).
+    past_window_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: Hash of the input snapshot the job solved against — the drift guard's
     #: comparison key. ``NULL`` for a run that never snapshotted.
     input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)

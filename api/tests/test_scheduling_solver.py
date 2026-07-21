@@ -23,6 +23,7 @@ from app.scheduling import (
     IncoherentSnapshot,
     InProgressMatch,
     MatchLength,
+    PastWindow,
     Pin,
     PlacedFixture,
     PlayerId,
@@ -384,6 +385,9 @@ class TestInfeasibility:
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.stats.objective is None
+        # A *current* window that is simply too tight is a generic capacity
+        # infeasibility — no named reason (it is not a past window).
+        assert result.reason is None
 
     def test_combinatorially_overfull_day_is_infeasible(self) -> None:
         """Each match fits its window alone; three of them cannot share the
@@ -396,6 +400,8 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
+        # Current window, too tight to pack: capacity, not a past window.
+        assert result.reason is None
 
     def test_pool_with_no_tables_is_infeasible(self) -> None:
         p1, p2 = _players(2)
@@ -409,6 +415,39 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
+        # No tables is a structural cause of its own, not a past window.
+        assert result.reason is None
+
+    def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
+        """A pre-live pool whose ENTIRE window is already behind ``now`` is
+        infeasible with a specific, machine-readable ``past_window`` reason that
+        identifies the offending pool and window — distinct from a capacity
+        shortfall, whose reason is ``None`` (ADR "a past day is named, not
+        disguised", #1101). The pure module is minute-only, so the reason carries
+        the window's minute offsets; the DB-aware layer resolves them to a date.
+        """
+        p1, p2 = _players(2)
+        # Window [0, 60) is wholly before now (minute 120): no grid start >= now
+        # can ever land inside it — a dated-in-the-past day, not too-tight.
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            window=(0, 60),
+            now_min=120,
+        )
+        assert snapshot.is_live is False
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.overrunning is False
+        reason = result.reason
+        assert isinstance(reason, PastWindow)
+        assert reason == PastWindow(
+            pool_id=PoolId("A"),
+            window_start_min=0,
+            window_end_min=60,
+        )
+        assert reason.kind == "past_window"
 
 
 class TestSoftWindowOnceLive:
@@ -437,6 +476,10 @@ class TestSoftWindowOnceLive:
 
         assert result.verdict in SOLVED
         assert result.overrunning is True
+        # A solved live day carries no infeasibility reason — the past-window
+        # reason is strictly the pre-live/hard-window case, so the two never
+        # coexist.
+        assert result.reason is None
         (placement,) = result.placements
         assert placement.fixture_id == FixtureId("F1")
         # Placed into the overrun: no earlier than now, and past the planned
@@ -458,6 +501,8 @@ class TestSoftWindowOnceLive:
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.overrunning is False
+        # Pre-live, the wholly-past window is named as a past window (E1).
+        assert isinstance(result.reason, PastWindow)
 
     def test_live_day_within_its_window_is_not_flagged_overrunning(self) -> None:
         """Live but comfortably inside the window: a normal success, not

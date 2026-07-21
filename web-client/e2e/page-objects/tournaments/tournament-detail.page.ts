@@ -594,6 +594,14 @@ export class TournamentDetailPage {
     return this.page.getByTestId('solve-strip-overrunning')
   }
 
+  /** The specific dated message on an infeasible solve whose cause the API named
+   * (today: a wholly-past window, ADR "a past day is named, not disguised") —
+   * present only when `infeasible_reason` crossed the wire, never on a generic
+   * capacity infeasibility. */
+  get pastWindowMessage(): Locator {
+    return this.page.getByTestId('solve-strip-past-window')
+  }
+
   /** The owner's Run-scheduler button — absent, not disabled, for a viewer. */
   get runScheduler(): Locator {
     return this.page.getByTestId('run-scheduler')

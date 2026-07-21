@@ -26,7 +26,7 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -50,6 +50,7 @@ from app.leagues import get_default_league
 from app.models import (
     DrawType,
     EventFormat,
+    InfeasibleReasonCode,
     Match,
     MatchSettings,
     MatchStatus,
@@ -79,6 +80,7 @@ from app.scheduling import (
     SolveStats,
     Verdict,
 )
+from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
 from tests._helpers import hijack_solve, make_user
 
@@ -116,6 +118,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1", "t2"),
     window: tuple[str, str] = ("09:00", "17:00"),
     length_games: int = 3,
+    slot_date: str = DATE,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """A published tournament with a table catalogue, one pooled round-robin
     event whose single pool spans every table, ``entrants`` entered players,
@@ -155,13 +158,13 @@ async def _make_tournament(
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
-        slot={"date": DATE, "start": window[0], "end": window[1]},
+        slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
         pools=[
             {
                 "id": "pool-a",
                 "name": "Pool A",
-                "slot": {"date": DATE, "start": window[0], "end": window[1]},
+                "slot": {"date": slot_date, "start": window[0], "end": window[1]},
                 "table_ids": list(tables),
             }
         ],
@@ -979,6 +982,47 @@ class TestSolveJob:
         assert ledger.fixtures_placed is None
         assert ledger.fixtures_pinned is None
         assert ledger.finished_at is not None
+        # A current-but-too-tight window is a *generic* capacity infeasibility:
+        # no named reason, no offending date (contrast the past-window case).
+        assert ledger.infeasible_reason_code is None
+        assert ledger.past_window_date is None
+
+    async def test_past_dated_window_names_the_past_window_reason_with_its_date(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """A window dated wholly in the past (the director left a stale date) is
+        infeasible with the specific, machine-readable ``past_window`` reason
+        carrying the offending venue-local date — distinct from a capacity
+        shortfall (ADR "a past day is named, not disguised"). The reason surfaces
+        on the ``ScheduleSolveRead`` the client consumes."""
+        # Dated years before ``now`` in the event's venue frame: every grid start
+        # must be >= now, so the whole window is unreachable — a past day, not a
+        # tight one. The pool spans two tables over a full 09:00–17:00 day, so it
+        # is comfortably *large enough* — only its date makes it infeasible.
+        tournament_id, event_id = await _make_tournament(
+            db_session, slot_date="2020-03-14"
+        )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+        assert ledger.verdict is SolverVerdict.infeasible
+        assert ledger.infeasible_reason_code is InfeasibleReasonCode.past_window
+        assert ledger.past_window_date == date(2020, 3, 14)
+        # And it rides onto the client-facing read as a structured reason.
+        read = ScheduleSolveRead.model_validate(ledger)
+        reason = read.infeasible_reason
+        assert reason is not None
+        assert reason.code == "past_window"
+        assert reason.date == date(2020, 3, 14)
 
     async def test_unknown_verdict_is_failed_with_the_time_cap_error(
         self,

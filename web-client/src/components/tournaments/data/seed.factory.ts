@@ -327,6 +327,10 @@ export function buildScheduleSolve(
     fixturesPinned: 0,
     overrunning: false,
     error: null,
+    // No named infeasibility cause on a succeeded run — `null` is the ordinary
+    // state; an infeasible fixture that wants the specific dated message overrides
+    // `infeasibleReason: { code: 'past_window', date: '…' }`.
+    infeasibleReason: null,
     ...overrides,
   }
 }

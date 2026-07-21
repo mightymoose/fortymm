@@ -124,8 +124,8 @@ import os
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -138,6 +138,7 @@ from app import queue as queue_module
 from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
+    InfeasibleReasonCode,
     Match,
     MatchStatus,
     ScheduleSolve,
@@ -158,6 +159,7 @@ from app.scheduling import (
     EventSettings,
     FixtureId,
     InProgressMatch,
+    PastWindow,
     Pin,
     PlayerId,
     PoolId,
@@ -484,6 +486,13 @@ class SolveInputs:
     fingerprint: str
     base: datetime
     fixtures: dict[uuid.UUID, TournamentFixture]
+    #: Each namespaced pool id (``"{event.id}:{pool.id}"``) mapped to its
+    #: offending-day resolver: the venue-local calendar date of its window, in
+    #: the event's own timezone frame. The apply reads this to turn a pure
+    #: :class:`~app.scheduling.PastWindow` reason (minute offsets + pool id) into
+    #: a named ``past_window`` date on the ledger row — the pure solver stays
+    #: minute-only, and naming the wall-clock day is this DB-aware layer's job.
+    pool_dates: dict[str, date] = field(default_factory=dict)
     broken_pin_moves: frozenset[uuid.UUID] = frozenset()
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
@@ -678,6 +687,12 @@ async def _load_solver_inputs(
     # ``SchedulePool``s are built from these same specs below (only ``base``
     # — which needs every window start first — stands between the two).
     pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
+    # The offending-day resolver for a past-window reason: each pool's
+    # venue-local date is exactly the day the director entered in its Slot, in
+    # the event's own frame — taken verbatim so the apply can name it without
+    # re-deriving a date from minute offsets. Keyed by the same namespaced pool
+    # id the pure module carries on its ``PastWindow`` reason.
+    pool_dates: dict[str, date] = {}
     for event, _settings, pools in parsed_events:
         # The event's IANA zone anchors its pools' wall-clock windows to real
         # instants; it is boundary-validated on write (``EventTimezone``), so
@@ -692,6 +707,7 @@ async def _load_solver_inputs(
                 if TableId(table_id) in catalogue_ids
             )
             pool_specs.append((key, tables, start, end))
+            pool_dates[key] = date.fromisoformat(pool.slot.date)
 
     # The minute frame's origin: the earliest pool window start. Everything —
     # windows, pins, previous placements, ``now`` itself — is offset from it,
@@ -909,6 +925,7 @@ async def _load_solver_inputs(
         fingerprint=_fingerprint(payload),
         base=base,
         fixtures={fixture.id: fixture for fixture in fixture_rows},
+        pool_dates=pool_dates,
         broken_pin_moves=frozenset(broken_pin_moves),
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
@@ -1142,6 +1159,18 @@ async def _apply_result(
                 # (the last accepted plan) stand.
                 row.status = ScheduleSolveStatus.infeasible
                 row.verdict = SolverVerdict.infeasible
+                # Name a past day (ADR "a past day is named, not disguised").
+                # The pure reason is minute-only + a pool id; resolve that pool
+                # to the venue-local date it was given (``fresh.pool_dates`` —
+                # from the same fingerprinted read, so the pool is present) and
+                # record the machine-readable code + date. Both columns are set
+                # together or neither: a generic capacity infeasibility (reason
+                # ``None``) leaves them ``NULL``.
+                if isinstance(result.reason, PastWindow):
+                    offending_date = fresh.pool_dates.get(result.reason.pool_id)
+                    if offending_date is not None:
+                        row.infeasible_reason_code = InfeasibleReasonCode.past_window
+                        row.past_window_date = offending_date
             case scheduling.Verdict.unknown:
                 # The cap ran out before any answer. No verdict — the DB enum
                 # has no ``unknown``, and a run that proved nothing has none.

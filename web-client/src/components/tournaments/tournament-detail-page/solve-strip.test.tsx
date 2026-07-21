@@ -132,6 +132,35 @@ describe('SolveStrip', () => {
     expect(text).not.toContain('infeasible')
     // And it is a state, not a refusal: no notice rings.
     expect(solveStripPage.queryNotice()).toBeNull()
+    // No named cause here (generic capacity infeasibility): NO specific dated
+    // message, only the generic copy — the discriminating case.
+    expect(solveStripPage.queryPastWindow()).toBeNull()
+  })
+
+  it('names a wholly-past window with a specific dated message — "already passed, update the date", NOT the generic "doesn\'t fit"', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibleReason: { code: 'past_window', date: '2026-07-18' },
+      }),
+    })
+    // Still the designed infeasible state, not an error banner.
+    expect(solveStripPage.queryState('infeasible')).not.toBeNull()
+    expect(solveStripPage.queryState('failed')).toBeNull()
+    expect(solveStripPage.queryNotice()).toBeNull()
+    // The specific, dated, actionable message names the offending venue-local day.
+    expect(solveStripPage.queryPastWindow()).not.toBeNull()
+    const text = solveStripPage.getStateText('infeasible')
+    expect(text).toContain('Jul 18, 2026')
+    expect(text).toContain('has already passed')
+    expect(text).toContain('update the date')
+    // INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
+    expect(text).not.toContain('Add tables, widen a pool window')
+    // The raw wire code never reaches the UI.
+    expect(text).not.toContain('past_window')
   })
 
   it('renders a failed run under our headline, with the server\'s account as detail', () => {

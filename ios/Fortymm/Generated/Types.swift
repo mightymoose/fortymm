@@ -2434,6 +2434,40 @@ internal enum Components {
             internal var tournamentId: Swift.String
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/tournament_name`.
             internal var tournamentName: Swift.String
+            /// The named, machine-readable cause of an ``infeasible`` verdict, or
+            /// ``null`` for every other outcome and for a generic capacity
+            /// infeasibility with no single named cause. Today the only named cause is
+            /// a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+            /// from the row's reason columns; a half-written pair degrades to ``null``
+            /// rather than a partial reason.)
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasible_reason`.
+            internal struct InfeasibleReasonPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasible_reason/value1`.
+                internal var value1: Components.Schemas.PastWindowReason
+                /// Creates a new `InfeasibleReasonPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PastWindowReason) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The named, machine-readable cause of an ``infeasible`` verdict, or
+            /// ``null`` for every other outcome and for a generic capacity
+            /// infeasibility with no single named cause. Today the only named cause is
+            /// a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+            /// from the row's reason columns; a half-written pair degrades to ``null``
+            /// rather than a partial reason.)
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/infeasible_reason`.
+            internal var infeasibleReason: Components.Schemas.AdminScheduleSolveRead.InfeasibleReasonPayload?
             /// Creates a new `AdminScheduleSolveRead`.
             ///
             /// - Parameters:
@@ -2453,6 +2487,7 @@ internal enum Components {
             ///   - rerunRequested:
             ///   - tournamentId:
             ///   - tournamentName:
+            ///   - infeasibleReason: The named, machine-readable cause of an ``infeasible`` verdict, or
             internal init(
                 id: Swift.String,
                 trigger: Components.Schemas.ScheduleSolveTrigger,
@@ -2469,7 +2504,8 @@ internal enum Components {
                 inputFingerprint: Swift.String? = nil,
                 rerunRequested: Swift.Bool,
                 tournamentId: Swift.String,
-                tournamentName: Swift.String
+                tournamentName: Swift.String,
+                infeasibleReason: Components.Schemas.AdminScheduleSolveRead.InfeasibleReasonPayload? = nil
             ) {
                 self.id = id
                 self.trigger = trigger
@@ -2487,6 +2523,7 @@ internal enum Components {
                 self.rerunRequested = rerunRequested
                 self.tournamentId = tournamentId
                 self.tournamentName = tournamentName
+                self.infeasibleReason = infeasibleReason
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -2505,6 +2542,7 @@ internal enum Components {
                 case rerunRequested = "rerun_requested"
                 case tournamentId = "tournament_id"
                 case tournamentName = "tournament_name"
+                case infeasibleReason = "infeasible_reason"
             }
         }
         /// The freshly minted raw token. Returned exactly once.
@@ -3572,6 +3610,21 @@ internal enum Components {
                 case database
                 case solver
             }
+        }
+        /// The named, machine-readable cause of an ``infeasible`` verdict (ADR-0968's
+        /// code-not-prose pattern; ADR "a past day is named, not disguised"). The column
+        /// is ``NULL`` for every non-infeasible run, and also for a *generic* capacity
+        /// infeasibility — a current window simply too tight for the fixtures, which has
+        /// no single named cause. Extensible; ``past_window`` is the only member today.
+        ///
+        /// * ``past_window`` — a pool's entire planned window is already in the past
+        ///   (the day was dated behind ``now``), so it cannot run without a new date.
+        ///   Paired with a non-``NULL`` ``past_window_date`` naming the offending
+        ///   venue-local day.
+        ///
+        /// - Remark: Generated from `#/components/schemas/InfeasibleReasonCode`.
+        internal enum InfeasibleReasonCode: String, Codable, Hashable, Sendable, CaseIterable {
+            case pastWindow = "past_window"
         }
         /// 202 body for the magic-link request endpoint. Always echoes the
         /// submitted address — identical whether or not it maps to a real account,
@@ -5400,6 +5453,41 @@ internal enum Components {
                 case description
             }
         }
+        /// The named cause of a ``past_window`` infeasibility: a pool's **entire**
+        /// planned window is already in the past (the day was dated behind now), so it
+        /// cannot run until it is moved to a future day (ADR "a past day is named, not
+        /// disguised"). ``code`` is the machine-readable discriminator the client
+        /// switches on (ADR-0968: code, not prose); ``date`` is the offending
+        /// venue-local calendar day, in the event's own timezone frame, so the client
+        /// can say which day to move without any timezone math of its own.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PastWindowReason`.
+        internal struct PastWindowReason: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PastWindowReason/code`.
+            internal enum CodePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pastWindow = "past_window"
+            }
+            /// - Remark: Generated from `#/components/schemas/PastWindowReason/code`.
+            internal var code: Components.Schemas.PastWindowReason.CodePayload?
+            /// - Remark: Generated from `#/components/schemas/PastWindowReason/date`.
+            internal var date: Swift.String
+            /// Creates a new `PastWindowReason`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - date:
+            internal init(
+                code: Components.Schemas.PastWindowReason.CodePayload? = nil,
+                date: Swift.String
+            ) {
+                self.code = code
+                self.date = date
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case date
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/PermissionCreate`.
         internal struct PermissionCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/PermissionCreate/name`.
@@ -7062,6 +7150,16 @@ internal enum Components {
         /// run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
         /// to label the day "overrunning".
         ///
+        /// ``infeasible_reason`` is the structured, machine-readable *why* behind an
+        /// ``infeasible`` verdict (ADR "a past day is named, not disguised"; ADR-0968:
+        /// code, not prose). It is ``null`` for every non-infeasible run, and ``null``
+        /// on an ``infeasible`` run that is a *generic* capacity infeasibility — a
+        /// current window simply too tight for the fixtures, with no single named cause.
+        /// It is non-``null`` only for a named cause: today, a ``past_window`` whose
+        /// ``date`` is the offending venue-local day. Because a past window is a
+        /// pre-live/hard-window fact and ``overrunning`` a solved-live one, the two are
+        /// never both set.
+        ///
         /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead`.
         internal struct ScheduleSolveRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/id`.
@@ -7106,6 +7204,40 @@ internal enum Components {
             internal var overrunning: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/error`.
             internal var error: Swift.String?
+            /// The named, machine-readable cause of an ``infeasible`` verdict, or
+            /// ``null`` for every other outcome and for a generic capacity
+            /// infeasibility with no single named cause. Today the only named cause is
+            /// a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+            /// from the row's reason columns; a half-written pair degrades to ``null``
+            /// rather than a partial reason.)
+            ///
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasible_reason`.
+            internal struct InfeasibleReasonPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasible_reason/value1`.
+                internal var value1: Components.Schemas.PastWindowReason
+                /// Creates a new `InfeasibleReasonPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PastWindowReason) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The named, machine-readable cause of an ``infeasible`` verdict, or
+            /// ``null`` for every other outcome and for a generic capacity
+            /// infeasibility with no single named cause. Today the only named cause is
+            /// a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+            /// from the row's reason columns; a half-written pair degrades to ``null``
+            /// rather than a partial reason.)
+            ///
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/infeasible_reason`.
+            internal var infeasibleReason: Components.Schemas.ScheduleSolveRead.InfeasibleReasonPayload?
             /// Creates a new `ScheduleSolveRead`.
             ///
             /// - Parameters:
@@ -7121,6 +7253,7 @@ internal enum Components {
             ///   - fixturesPinned:
             ///   - overrunning:
             ///   - error:
+            ///   - infeasibleReason: The named, machine-readable cause of an ``infeasible`` verdict, or
             internal init(
                 id: Swift.String,
                 trigger: Components.Schemas.ScheduleSolveTrigger,
@@ -7133,7 +7266,8 @@ internal enum Components {
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
                 overrunning: Swift.Bool,
-                error: Swift.String? = nil
+                error: Swift.String? = nil,
+                infeasibleReason: Components.Schemas.ScheduleSolveRead.InfeasibleReasonPayload? = nil
             ) {
                 self.id = id
                 self.trigger = trigger
@@ -7147,6 +7281,7 @@ internal enum Components {
                 self.fixturesPinned = fixturesPinned
                 self.overrunning = overrunning
                 self.error = error
+                self.infeasibleReason = infeasibleReason
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -7161,6 +7296,7 @@ internal enum Components {
                 case fixturesPinned = "fixtures_pinned"
                 case overrunning
                 case error
+                case infeasibleReason = "infeasible_reason"
             }
         }
         /// The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:

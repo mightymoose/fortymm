@@ -8,6 +8,8 @@ import {
   LIVE_POLL_MS,
   SOLVE_IN_FLIGHT_POLL_MS,
   fmtWallTime,
+  infeasibleReasonMessage,
+  infeasibleReasonSchema,
   parseLatestScheduleSolve,
   parseScheduleSolve,
   runSchedulerNotice,
@@ -63,6 +65,80 @@ describe('parseLatestScheduleSolve', () => {
     const { verdict, ...missing } = buildScheduleSolveRead()
     void verdict
     expect(() => parseLatestScheduleSolve(missing)).toThrow()
+  })
+})
+
+// ----- the named infeasibility reason: parse boundary + copy ------------------
+
+describe('infeasibleReasonSchema (the parse boundary)', () => {
+  it('parses a past_window reason, carrying the offending venue-local date', () => {
+    expect(
+      infeasibleReasonSchema.parse({ code: 'past_window', date: '2026-07-18' }),
+    ).toEqual({ code: 'past_window', date: '2026-07-18' })
+  })
+
+  it('refuses a code this client has no words for — an unknown reason must fail the parse, not blank the line', () => {
+    expect(() =>
+      infeasibleReasonSchema.parse({ code: 'sunspots', date: '2026-07-18' }),
+    ).toThrow()
+  })
+
+  it('carries a past_window reason onto the domain row', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasible_reason: { code: 'past_window', date: '2026-07-18' },
+      }),
+    )
+    expect(parsed?.infeasibleReason).toEqual({
+      code: 'past_window',
+      date: '2026-07-18',
+    })
+  })
+
+  it('is null off the named-cause path — a generic capacity infeasibility carries no named reason', () => {
+    expect(
+      parseLatestScheduleSolve(
+        buildScheduleSolveRead({ status: 'infeasible', verdict: 'infeasible' }),
+      )?.infeasibleReason,
+    ).toBeNull()
+  })
+
+  it('fails the whole solve row when the reason code is unknown — the boundary rejects, the query fails', () => {
+    expect(() =>
+      parseLatestScheduleSolve(
+        buildScheduleSolveRead({
+          status: 'infeasible',
+          verdict: 'infeasible',
+          infeasible_reason: { code: 'gremlins', date: '2026-07-18' } as never,
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('refuses an ABSENT infeasible_reason — a nullable the API guarantees present cannot be dropped', () => {
+    const { infeasible_reason, ...missing } = buildScheduleSolveRead()
+    void infeasible_reason
+    expect(() => parseLatestScheduleSolve(missing)).toThrow()
+  })
+})
+
+describe('infeasibleReasonMessage', () => {
+  it('words a past_window reason as a specific, dated "already passed — update the date" sentence', () => {
+    expect(
+      infeasibleReasonMessage({ code: 'past_window', date: '2026-07-18' }),
+    ).toBe(
+      "This event's window (Jul 18, 2026) has already passed — update the date.",
+    )
+  })
+
+  it('formats the venue-local date without a timezone shift — the day named is the day sent', () => {
+    // A plain `YYYY-MM-DD` must render as that calendar day whatever the runner's
+    // timezone (fmtDate parses to local midnight, never a UTC instant).
+    expect(
+      infeasibleReasonMessage({ code: 'past_window', date: '2026-01-01' }),
+    ).toContain('Jan 1, 2026')
   })
 })
 
@@ -128,6 +204,27 @@ describe('solveStripState', () => {
         buildScheduleSolve({ status: 'infeasible', verdict: 'infeasible' }),
       ),
     ).toMatchObject({ kind: 'infeasible' })
+  })
+
+  it('threads a named past_window reason onto the infeasible arm', () => {
+    const state = solveStripState(
+      buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasibleReason: { code: 'past_window', date: '2026-07-18' },
+      }),
+    )
+    expect(state).toMatchObject({
+      kind: 'infeasible',
+      reason: { code: 'past_window', date: '2026-07-18' },
+    })
+  })
+
+  it('carries a null reason for a generic infeasibility — the discriminating case', () => {
+    const state = solveStripState(
+      buildScheduleSolve({ status: 'infeasible', verdict: 'infeasible' }),
+    )
+    expect(state).toMatchObject({ kind: 'infeasible', reason: null })
   })
 
   it('maps failed to its arm, carrying the server error for the detail line', () => {

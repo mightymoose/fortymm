@@ -19,6 +19,7 @@ import {
   TRIGGER_LABEL,
   VERDICT_LABEL,
   fmtWallTime,
+  infeasibleReasonMessage,
   runSchedulerNotice,
   solveInFlight,
   solveStripState,
@@ -141,22 +142,40 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
         </div>
       )
     }
-    case 'infeasible':
+    case 'infeasible': {
       // A DESIGNED outcome, not an error banner: the solver *proved* the plan
-      // impossible, which is exactly what a pre-live run is for.
+      // impossible, which is exactly what a pre-live run is for. When the API
+      // named a *specific* cause (today: a wholly-past window), the strip names
+      // it and the offending day to fix — INSTEAD of the generic "the day doesn't
+      // fit" (ADR "a past day is named, not disguised"). A generic capacity
+      // infeasibility (`reason: null`) keeps the generic copy below.
+      const named = state.reason
       return (
         <div data-testid="solve-strip-infeasible">
           <Line
             icon={<TriangleAlert size={18} />}
             tint="text-[color:var(--warn)]"
-            title="The day doesn't fit"
+            title={
+              named?.code === 'past_window'
+                ? 'This day has already passed'
+                : "The day doesn't fit"
+            }
           >
-            The matches can't all fit inside their windows on the tables
-            available. Add tables, widen a pool window, or trim an event's field —
-            then run the scheduler again.
+            {named ? (
+              <span data-testid="solve-strip-past-window">
+                {infeasibleReasonMessage(named)}
+              </span>
+            ) : (
+              <>
+                The matches can't all fit inside their windows on the tables
+                available. Add tables, widen a pool window, or trim an event's
+                field — then run the scheduler again.
+              </>
+            )}
           </Line>
         </div>
       )
+    }
     case 'failed':
       return (
         <div data-testid="solve-strip-failed">

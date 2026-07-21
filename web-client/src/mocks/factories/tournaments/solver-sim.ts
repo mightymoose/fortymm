@@ -87,6 +87,8 @@ export function queuedSolveRow(id: string): ScheduleSolveRead {
     fixtures_pinned: null,
     overrunning: false,
     error: null,
+    // A queued run has reached no verdict, so no named infeasibility cause.
+    infeasible_reason: null,
   }
 }
 

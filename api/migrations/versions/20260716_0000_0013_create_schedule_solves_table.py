@@ -57,6 +57,14 @@ solver_verdict_enum = postgresql.ENUM(
     name="solver_verdict",
     create_type=False,
 )
+# The named, machine-readable cause of an ``infeasible`` verdict (ADR "a past
+# day is named, not disguised"). NULL for a generic capacity infeasibility with
+# no single named cause; ``past_window`` names a wholly-past pool window.
+infeasible_reason_code_enum = postgresql.ENUM(
+    "past_window",
+    name="infeasible_reason_code",
+    create_type=False,
+)
 
 
 def upgrade() -> None:
@@ -64,6 +72,7 @@ def upgrade() -> None:
     schedule_solve_trigger_enum.create(bind, checkfirst=True)
     schedule_solve_status_enum.create(bind, checkfirst=True)
     solver_verdict_enum.create(bind, checkfirst=True)
+    infeasible_reason_code_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "schedule_solves",
@@ -112,6 +121,14 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("false"),
         ),
+        # The named cause of an ``infeasible`` verdict (ADR "a past day is named,
+        # not disguised"). NULL on every non-infeasible run and on a generic
+        # capacity infeasibility; ``past_window`` pairs with ``past_window_date``.
+        sa.Column("infeasible_reason_code", infeasible_reason_code_enum, nullable=True),
+        # The offending venue-local calendar day for a ``past_window`` reason —
+        # in the event's own timezone frame. NULL unless the reason is
+        # ``past_window`` (the two are written together, or neither).
+        sa.Column("past_window_date", sa.Date(), nullable=True),
         # Hash of the input snapshot the job solved against — the drift guard's
         # comparison key. NULL for a run that never snapshotted.
         sa.Column("input_fingerprint", sa.Text(), nullable=True),
@@ -157,6 +174,7 @@ def downgrade() -> None:
     op.drop_table("schedule_solves")
 
     bind = op.get_bind()
+    infeasible_reason_code_enum.drop(bind, checkfirst=True)
     solver_verdict_enum.drop(bind, checkfirst=True)
     schedule_solve_status_enum.drop(bind, checkfirst=True)
     schedule_solve_trigger_enum.drop(bind, checkfirst=True)

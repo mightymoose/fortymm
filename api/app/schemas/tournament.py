@@ -14,9 +14,11 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from app.models.match import MatchStatus
 from app.models.schedule_solve import (
+    InfeasibleReasonCode,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
     SolverVerdict,
@@ -666,6 +668,28 @@ class TournamentFixtureRead(BaseModel):
     completed_at: FixtureTimeRead | None
 
 
+class PastWindowReason(BaseModel):
+    """The named cause of a ``past_window`` infeasibility: a pool's **entire**
+    planned window is already in the past (the day was dated behind now), so it
+    cannot run until it is moved to a future day (ADR "a past day is named, not
+    disguised"). ``code`` is the machine-readable discriminator the client
+    switches on (ADR-0968: code, not prose); ``date`` is the offending
+    venue-local calendar day, in the event's own timezone frame, so the client
+    can say which day to move without any timezone math of its own."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: Literal["past_window"] = "past_window"
+    date: date
+
+
+#: The closed, extensible set of *named* infeasibility reasons a solve read can
+#: carry (ADR-0968's code-not-prose pattern). ``past_window`` is the only member
+#: today; a ``null`` ``infeasible_reason`` on an ``infeasible`` run is a generic
+#: capacity infeasibility with no single named cause.
+InfeasibleReason = PastWindowReason
+
+
 class ScheduleSolveRead(BaseModel):
     """One row of a tournament's **solve ledger** (ADR "the schedule is solved, the
     call is pinned") — a single run of the placement solver, which the admin page
@@ -697,6 +721,16 @@ class ScheduleSolveRead(BaseModel):
     wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
     run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
     to label the day "overrunning".
+
+    ``infeasible_reason`` is the structured, machine-readable *why* behind an
+    ``infeasible`` verdict (ADR "a past day is named, not disguised"; ADR-0968:
+    code, not prose). It is ``null`` for every non-infeasible run, and ``null``
+    on an ``infeasible`` run that is a *generic* capacity infeasibility — a
+    current window simply too tight for the fixtures, with no single named cause.
+    It is non-``null`` only for a named cause: today, a ``past_window`` whose
+    ``date`` is the offending venue-local day. Because a past window is a
+    pre-live/hard-window fact and ``overrunning`` a solved-live one, the two are
+    never both set.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -713,6 +747,28 @@ class ScheduleSolveRead(BaseModel):
     fixtures_pinned: int | None
     overrunning: bool
     error: str | None
+    # Source columns for ``infeasible_reason`` below — read from the ORM row via
+    # ``from_attributes`` but kept off the wire (the public shape is the assembled
+    # nested reason, not two flat columns that could drift apart).
+    infeasible_reason_code: SkipJsonSchema[InfeasibleReasonCode | None] = Field(
+        default=None, exclude=True
+    )
+    past_window_date: SkipJsonSchema[date | None] = Field(default=None, exclude=True)
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
+    @property
+    def infeasible_reason(self) -> InfeasibleReason | None:
+        """The named, machine-readable cause of an ``infeasible`` verdict, or
+        ``null`` for every other outcome and for a generic capacity
+        infeasibility with no single named cause. Today the only named cause is
+        a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+        from the row's reason columns; a half-written pair degrades to ``null``
+        rather than a partial reason.)"""
+        match self.infeasible_reason_code:
+            case InfeasibleReasonCode.past_window if self.past_window_date is not None:
+                return PastWindowReason(date=self.past_window_date)
+            case _:
+                return None
 
 
 class StandingRowRead(BaseModel):

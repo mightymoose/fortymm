@@ -1559,6 +1559,15 @@ export interface components {
             tournament_id: string;
             /** Tournament Name */
             tournament_name: string;
+            /**
+             * @description The named, machine-readable cause of an ``infeasible`` verdict, or
+             *     ``null`` for every other outcome and for a generic capacity
+             *     infeasibility with no single named cause. Today the only named cause is
+             *     a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+             *     from the row's reason columns; a half-written pair degrades to ``null``
+             *     rather than a partial reason.)
+             */
+            readonly infeasible_reason: components["schemas"]["PastWindowReason"] | null;
         };
         /**
          * ApiTokenCreated
@@ -2023,6 +2032,21 @@ export interface components {
             database: components["schemas"]["ComponentHealth"];
             solver: components["schemas"]["ComponentHealth"];
         };
+        /**
+         * InfeasibleReasonCode
+         * @description The named, machine-readable cause of an ``infeasible`` verdict (ADR-0968's
+         *     code-not-prose pattern; ADR "a past day is named, not disguised"). The column
+         *     is ``NULL`` for every non-infeasible run, and also for a *generic* capacity
+         *     infeasibility — a current window simply too tight for the fixtures, which has
+         *     no single named cause. Extensible; ``past_window`` is the only member today.
+         *
+         *     * ``past_window`` — a pool's entire planned window is already in the past
+         *       (the day was dated behind ``now``), so it cannot run without a new date.
+         *       Paired with a non-``NULL`` ``past_window_date`` naming the offending
+         *       venue-local day.
+         * @enum {string}
+         */
+        InfeasibleReasonCode: "past_window";
         /**
          * LoginRequestAccepted
          * @description 202 body for the magic-link request endpoint. Always echoes the
@@ -2705,6 +2729,29 @@ export interface components {
             short: string;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * PastWindowReason
+         * @description The named cause of a ``past_window`` infeasibility: a pool's **entire**
+         *     planned window is already in the past (the day was dated behind now), so it
+         *     cannot run until it is moved to a future day (ADR "a past day is named, not
+         *     disguised"). ``code`` is the machine-readable discriminator the client
+         *     switches on (ADR-0968: code, not prose); ``date`` is the offending
+         *     venue-local calendar day, in the event's own timezone frame, so the client
+         *     can say which day to move without any timezone math of its own.
+         */
+        PastWindowReason: {
+            /**
+             * Code
+             * @default past_window
+             * @constant
+             */
+            code: "past_window";
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
         };
         /** PermissionCreate */
         PermissionCreate: {
@@ -3402,6 +3449,16 @@ export interface components {
          *     wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
          *     run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
          *     to label the day "overrunning".
+         *
+         *     ``infeasible_reason`` is the structured, machine-readable *why* behind an
+         *     ``infeasible`` verdict (ADR "a past day is named, not disguised"; ADR-0968:
+         *     code, not prose). It is ``null`` for every non-infeasible run, and ``null``
+         *     on an ``infeasible`` run that is a *generic* capacity infeasibility — a
+         *     current window simply too tight for the fixtures, with no single named cause.
+         *     It is non-``null`` only for a named cause: today, a ``past_window`` whose
+         *     ``date`` is the offending venue-local day. Because a past window is a
+         *     pre-live/hard-window fact and ``overrunning`` a solved-live one, the two are
+         *     never both set.
          */
         ScheduleSolveRead: {
             /**
@@ -3431,6 +3488,15 @@ export interface components {
             overrunning: boolean;
             /** Error */
             error: string | null;
+            /**
+             * @description The named, machine-readable cause of an ``infeasible`` verdict, or
+             *     ``null`` for every other outcome and for a generic capacity
+             *     infeasibility with no single named cause. Today the only named cause is
+             *     a ``past_window`` carrying the offending venue-local ``date``. (Assembled
+             *     from the row's reason columns; a half-written pair degrades to ``null``
+             *     rather than a partial reason.)
+             */
+            readonly infeasible_reason: components["schemas"]["PastWindowReason"] | null;
         };
         /**
          * ScheduleSolveStatus

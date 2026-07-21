@@ -164,6 +164,10 @@ export function buildScheduleSolveRead(
     fixtures_pinned: 0,
     overrunning: false,
     error: null,
+    // No named infeasibility cause by default — `null` covers every non-infeasible
+    // run and a generic capacity infeasibility. An infeasible fixture that wants the
+    // specific dated message overrides `infeasible_reason: { code: 'past_window', date }`.
+    infeasible_reason: null,
     ...overrides,
   }
 }
