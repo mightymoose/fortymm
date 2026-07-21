@@ -312,11 +312,15 @@ def coalesce_rest_shadows(shadows: Iterable[RestShadow]) -> tuple[RestShadow, ..
 
     :class:`RestShadow`'s contract is one entry per human, not per match — but a
     player who completed two matches within :data:`REST_MIN` of each other yields
-    a shadow *per completion*, i.e. two fixed rest intervals that land under the
-    solver's per-player ``AddNoOverlap`` and are mutually unsatisfiable, turning
-    ONE player's close completions into a whole-tournament ``infeasible`` (#1145).
-    Rest is "time since your last match", so the max ``completed_at_min`` per
-    human subsumes every earlier one's floor — keep only that one."""
+    a shadow *per completion*, i.e. two fixed rest intervals for one player that
+    would once have landed mutually-unsatisfiable under the solver's per-player
+    ``AddNoOverlap``, turning ONE player's close completions into a whole-tournament
+    ``infeasible`` (#1145). The per-resource fixed-obstacle merge in
+    :func:`_build_model` now absorbs any such fixed-vs-fixed overlap, so this is no
+    longer the sole guard against that infeasibility — but keeping one shadow per
+    human is still correct deduplication: rest is "time since your last match", so
+    the max ``completed_at_min`` per human subsumes every earlier one's floor —
+    keep only that one."""
     latest: dict[PlayerId, RestShadow] = {}
     for shadow in shadows:
         existing = latest.get(shadow.player_id)
