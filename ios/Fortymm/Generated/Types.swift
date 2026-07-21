@@ -2422,6 +2422,8 @@ internal enum Components {
             internal var fixturesPlaced: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/fixtures_pinned`.
             internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/overrunning`.
+            internal var overrunning: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/error`.
             internal var error: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/input_fingerprint`.
@@ -2445,6 +2447,7 @@ internal enum Components {
             ///   - wallTimeMs:
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
+            ///   - overrunning:
             ///   - error:
             ///   - inputFingerprint:
             ///   - rerunRequested:
@@ -2461,6 +2464,7 @@ internal enum Components {
                 wallTimeMs: Swift.Int? = nil,
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
+                overrunning: Swift.Bool,
                 error: Swift.String? = nil,
                 inputFingerprint: Swift.String? = nil,
                 rerunRequested: Swift.Bool,
@@ -2477,6 +2481,7 @@ internal enum Components {
                 self.wallTimeMs = wallTimeMs
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
+                self.overrunning = overrunning
                 self.error = error
                 self.inputFingerprint = inputFingerprint
                 self.rerunRequested = rerunRequested
@@ -2494,6 +2499,7 @@ internal enum Components {
                 case wallTimeMs = "wall_time_ms"
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
+                case overrunning
                 case error
                 case inputFingerprint = "input_fingerprint"
                 case rerunRequested = "rerun_requested"
@@ -7048,6 +7054,14 @@ internal enum Components {
         ///   apply is whole-or-nothing.
         /// * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
         ///
+        /// ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
+        /// on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+        /// end while the tournament is **live** — the window went soft so the day keeps being
+        /// scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
+        /// wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
+        /// run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
+        /// to label the day "overrunning".
+        ///
         /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead`.
         internal struct ScheduleSolveRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/id`.
@@ -7088,6 +7102,8 @@ internal enum Components {
             internal var fixturesPlaced: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/fixtures_pinned`.
             internal var fixturesPinned: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/overrunning`.
+            internal var overrunning: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/error`.
             internal var error: Swift.String?
             /// Creates a new `ScheduleSolveRead`.
@@ -7103,6 +7119,7 @@ internal enum Components {
             ///   - wallTimeMs:
             ///   - fixturesPlaced:
             ///   - fixturesPinned:
+            ///   - overrunning:
             ///   - error:
             internal init(
                 id: Swift.String,
@@ -7115,6 +7132,7 @@ internal enum Components {
                 wallTimeMs: Swift.Int? = nil,
                 fixturesPlaced: Swift.Int? = nil,
                 fixturesPinned: Swift.Int? = nil,
+                overrunning: Swift.Bool,
                 error: Swift.String? = nil
             ) {
                 self.id = id
@@ -7127,6 +7145,7 @@ internal enum Components {
                 self.wallTimeMs = wallTimeMs
                 self.fixturesPlaced = fixturesPlaced
                 self.fixturesPinned = fixturesPinned
+                self.overrunning = overrunning
                 self.error = error
             }
             internal enum CodingKeys: String, CodingKey {
@@ -7140,6 +7159,7 @@ internal enum Components {
                 case wallTimeMs = "wall_time_ms"
                 case fixturesPlaced = "fixtures_placed"
                 case fixturesPinned = "fixtures_pinned"
+                case overrunning
                 case error
             }
         }

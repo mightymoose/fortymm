@@ -43,6 +43,12 @@ const scoped = (container: Container) => ({
     fireEvent.click(container.getByTestId('run-scheduler'))
   },
 
+  /** The calm "overrunning" badge on a succeeded solve — present only when the
+   * live day ran past its planned window (never on a normal success). */
+  queryOverrunning() {
+    return container.queryByTestId('solve-strip-overrunning')
+  },
+
   /** The inline refusal (the strip's only error surface — there is no toast). */
   queryNotice() {
     return container.queryByTestId('run-scheduler-notice')

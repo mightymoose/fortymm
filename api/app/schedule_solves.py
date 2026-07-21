@@ -844,6 +844,11 @@ async def _load_solver_inputs(
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
         rest_shadows=tuple(rest_shadows),
+        # Soft-window policy fact (ADR "the solver stops wedging"): once the
+        # tournament is live, a pool window's end is advisory so wall-clock
+        # passing it makes the day "overrunning", not instantly infeasible.
+        # Pre-live keeps the hard window (a provisional plan flags a misfit).
+        is_live=tournament.status is TournamentStatus.live,
     )
 
     # The fingerprint payload is the *wall-clock* form of exactly these inputs
@@ -1089,6 +1094,11 @@ async def _apply_result(
                 )
                 row.fixtures_placed = placed
                 row.fixtures_pinned = pinned
+                # A live day whose soft window let the plan spill past a planned
+                # pool window is recorded as overrunning, not failed — the
+                # schedule shows "overrunning" rather than "doesn't fit" (ADR
+                # "the solver stops wedging"). False on every pre-live solve.
+                row.overrunning = result.overrunning
                 # One ingredients batch serves both the repair corrections and
                 # the call evaluation below (they read the same fixture set) —
                 # loaded only while live, since both are live-gated no-ops

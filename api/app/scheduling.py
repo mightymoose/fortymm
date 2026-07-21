@@ -273,6 +273,16 @@ class ScheduleSnapshot:
     not be scheduled before it. ``rest_shadows`` carries the rest obligation
     of humans who just finished a match — orthogonal to ``fixtures``, whose
     completed entries stay dropped and unplaced.
+
+    ``is_live`` is the one policy fact the pure module needs about the
+    tournament's lifecycle: while the day is **live** a pool window's END is
+    treated as *advisory* — the effective end extends into the overrun so the
+    unplayed remainder keeps being placed instead of the solve wedging
+    infeasible the instant real time passes the window (ADR "the solver stops
+    wedging"). Pre-live (``False``, the default) the window stays a hard
+    constraint, so a provisional plan still flags "won't fit the planned
+    window". The fact is threaded in from the snapshot builder — this module
+    never looks up a tournament's status itself.
     """
 
     table_ids: tuple[TableId, ...]
@@ -283,6 +293,7 @@ class ScheduleSnapshot:
     in_progress: tuple[InProgressMatch, ...] = ()
     previous_plan: tuple[PreviousPlacement, ...] = ()
     rest_shadows: tuple[RestShadow, ...] = ()
+    is_live: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,11 +325,21 @@ class SolveResult:
     """A solve's whole answer. Placements cover every active fixture that is
     not in progress — pins echoed verbatim, unpinned fixtures solved — or are
     empty when ``verdict`` produced no plan. Deterministically ordered by
-    ``(start, table, fixture)``."""
+    ``(start, table, fixture)``.
+
+    ``overrunning`` is a *success qualifier*, never a failure: it is ``True``
+    only on a solved (``optimal``/``feasible``) live day whose plan actually
+    runs a placed fixture past its pool's **planned** window end — the soft
+    window let the remainder spill into the overrun rather than the day
+    wedging infeasible. It is always ``False`` pre-live (the window is hard),
+    and on an ``infeasible``/``unknown`` outcome (which placed nothing). A
+    schedule surface reads it to say "overrunning" rather than "doesn't fit".
+    """
 
     verdict: Verdict
     placements: tuple[PlacedFixture, ...]
     stats: SolveStats
+    overrunning: bool = False
 
 
 def _no_plan(verdict: Verdict, wall_time_ms: int = 0) -> SolveResult:
@@ -410,7 +431,10 @@ class _SolverModel:
     touching the production solver parameters. ``model`` carries the hints;
     ``starts``/``presences`` recover each unpinned fixture's chosen start and
     table, ``durations`` its ``end_min``, and ``pinned_placements`` are echoed
-    verbatim."""
+    verbatim. ``planned_ends`` is each unpinned fixture's pool's **planned**
+    (pre-overrun) window end, and ``is_live`` whether the window was softened —
+    together they let :func:`solve` decide whether the applied plan actually
+    ran past its planned window (the ``overrunning`` qualifier)."""
 
     model: cp_model.CpModel
     unpinned: tuple[ScheduleFixture, ...]
@@ -418,6 +442,8 @@ class _SolverModel:
     presences: dict[FixtureId, dict[TableId, Any]]
     durations: dict[FixtureId, int]
     pinned_placements: tuple[PlacedFixture, ...]
+    planned_ends: dict[FixtureId, int]
+    is_live: bool
 
 
 def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
@@ -456,10 +482,30 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for f in in_progress
     }
 
+    # Soft window once live (ADR "the solver stops wedging"). While the day is
+    # live a pool window's END is advisory: the effective end extends to
+    # ``max(window_end, now + overrun_span)`` so the unplayed remainder keeps
+    # being placed into the overrun rather than the solve going instantly
+    # infeasible the moment real time passes the window. ``overrun_span`` is
+    # enough room to serialize every unplaced fixture back-to-back on one table
+    # (its rest padding included) — a deliberately conservative bound so the
+    # window can never *itself* cause infeasibility while live; the objective
+    # still packs everything as early as possible, so a looser end only widens
+    # the search domain, never the answer. Pre-live the window stays hard (a
+    # provisional plan should still flag "won't fit the planned window"). Pins
+    # are unaffected either way: they carry no window constraint at all.
+    is_live = snapshot.is_live
+    overrun_span = sum(duration_of(f) + REST_MIN for f in unpinned) if is_live else 0
+
+    def effective_end(pool: SchedulePool) -> int:
+        if is_live:
+            return max(pool.window.end_min, now + overrun_span)
+        return pool.window.end_min
+
     # The latest minute anything can end — start-variable and makespan bounds.
     horizon = now + BUCKET_MIN
     for pool in snapshot.pools:
-        horizon = max(horizon, pool.window.end_min)
+        horizon = max(horizon, effective_end(pool))
     for fixture, pin in pinned:
         horizon = max(horizon, pin.start_min + duration_of(fixture))
     for end in occupancy_ends.values():
@@ -467,19 +513,24 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
 
     # Structural feasibility first: a fixture whose window cannot hold its
     # duration at all needs no solver to refuse. (Whole-or-nothing: one
-    # unplaceable fixture makes the entire day infeasible, by design.)
+    # unplaceable fixture makes the entire day infeasible, by design.) The
+    # ``latest`` bound uses the *effective* end — softened while live — so a
+    # live day never wedges here; ``planned_ends`` keeps the *planned* end so
+    # :func:`solve` can tell whether the plan actually overran it.
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
+    planned_ends: dict[FixtureId, int] = {}
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
         if not pool.table_ids:
             return _no_plan(Verdict.infeasible)
         earliest = max(now, pool.window.start_min)
-        latest = pool.window.end_min - duration_of(fixture)
+        latest = effective_end(pool) - duration_of(fixture)
         lo = -(-earliest // BUCKET_MIN)  # ceil: first grid start not in the past
         hi = latest // BUCKET_MIN  # floor: last grid start that still fits
         if lo > hi:
             return _no_plan(Verdict.infeasible)
         bucket_bounds[fixture.id] = (lo, hi)
+        planned_ends[fixture.id] = pool.window.end_min
 
     model = cp_model.CpModel()
     table_intervals: defaultdict[TableId, list[Any]] = defaultdict(list)
@@ -668,6 +719,8 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         presences=presences,
         durations=durations,
         pinned_placements=tuple(pinned_placements),
+        planned_ends=planned_ends,
+        is_live=is_live,
     )
 
 
@@ -715,15 +768,23 @@ def solve(
         return _no_plan(Verdict.unknown, wall_time_ms)
 
     placements = list(built.pinned_placements)
+    # Overrunning: a live day whose soft window let a placed fixture actually
+    # run past its pool's *planned* end (see :class:`SolveResult`). Only
+    # unpinned placements are considered — pins outrank windows and may sit past
+    # their window by design (that is not the overrun the flag names).
+    overrunning = False
     for fixture in built.unpinned:
         start_value = int(solver.Value(built.starts[fixture.id]))
         table = _chosen_table(solver, built.presences[fixture.id], fixture.id)
+        end_min = start_value + built.durations[fixture.id]
+        if built.is_live and end_min > built.planned_ends[fixture.id]:
+            overrunning = True
         placements.append(
             PlacedFixture(
                 fixture_id=fixture.id,
                 table_id=table,
                 start_min=start_value,
-                end_min=start_value + built.durations[fixture.id],
+                end_min=end_min,
             )
         )
     placements.sort(key=lambda p: (p.start_min, p.table_id, p.fixture_id))
@@ -735,6 +796,7 @@ def solve(
             wall_time_ms=wall_time_ms,
             objective=int(solver.ObjectiveValue()),
         ),
+        overrunning=overrunning,
     )
 
 

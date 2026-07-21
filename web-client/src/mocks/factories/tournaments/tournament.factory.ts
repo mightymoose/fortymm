@@ -162,6 +162,7 @@ export function buildScheduleSolveRead(
     wall_time_ms: 850,
     fixtures_placed: 9,
     fixtures_pinned: 0,
+    overrunning: false,
     error: null,
     ...overrides,
   }

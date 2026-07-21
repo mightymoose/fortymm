@@ -77,6 +77,13 @@ export type SolverVerdict = z.infer<typeof solverVerdictSchema>
  * failed before reaching it); `startedAt`/`finishedAt` are null while the run is
  * still queued/running; `wallTimeMs` and the two apply counts are null until it
  * finishes; `error` is set only on a `failed` run.
+ *
+ * `overrunning` is a *success qualifier*, not a stage: `true` only on a
+ * `succeeded` run whose plan ran a fixture past its pool's **planned** window
+ * end while the tournament is **live** (the window went soft so the day keeps
+ * being scheduled into the overrun instead of wedging "doesn't fit", ADR
+ * "the solver stops wedging"). Always `false` pre-live and on any run that
+ * placed nothing (`infeasible` / `failed`) — never `null`.
  */
 export interface ScheduleSolve {
   id: string
@@ -89,6 +96,7 @@ export interface ScheduleSolve {
   wallTimeMs: number | null
   fixturesPlaced: number | null
   fixturesPinned: number | null
+  overrunning: boolean
   error: string | null
 }
 
@@ -108,6 +116,7 @@ export const scheduleSolveWireSchema = z.object({
   wall_time_ms: z.number().nullable(),
   fixtures_placed: z.number().int().nullable(),
   fixtures_pinned: z.number().int().nullable(),
+  overrunning: z.boolean(),
   error: z.string().nullable(),
 })
 
@@ -130,6 +139,7 @@ export function scheduleSolveFromWire(
     wallTimeMs: s.wall_time_ms,
     fixturesPlaced: s.fixtures_placed,
     fixturesPinned: s.fixtures_pinned,
+    overrunning: s.overrunning,
     error: s.error,
   }
 }
@@ -172,6 +182,12 @@ export type SolveStripState =
        * `succeeded` row whose verdict is missing degrades to `feasible` — the
        * modest claim — rather than inventing optimality or refusing to render. */
       verdict: 'optimal' | 'feasible'
+      /** The plan ran a fixture past its pool's planned window while the
+       * tournament is live — the soft-window overrun (ADR "the solver stops
+       * wedging"). The strip surfaces this as a calm "overrunning" badge, NOT a
+       * "doesn't fit" error: the day is still being scheduled, just past plan.
+       * Only ever `true` on this `succeeded` arm. */
+      overrunning: boolean
       wallTimeMs: number | null
       finishedAt: string | null
       trigger: ScheduleSolveTrigger
@@ -209,6 +225,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
       return {
         kind: 'succeeded',
         verdict: succeededVerdict(solve.verdict),
+        overrunning: solve.overrunning,
         wallTimeMs: solve.wallTimeMs,
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,

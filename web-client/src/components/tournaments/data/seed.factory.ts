@@ -325,6 +325,7 @@ export function buildScheduleSolve(
     wallTimeMs: 850,
     fixturesPlaced: 9,
     fixturesPinned: 0,
+    overrunning: false,
     error: null,
     ...overrides,
   }

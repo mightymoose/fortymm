@@ -102,6 +102,16 @@ def upgrade() -> None:
         # its guarded apply.
         sa.Column("fixtures_placed", sa.Integer(), nullable=True),
         sa.Column("fixtures_pinned", sa.Integer(), nullable=True),
+        # Whether a live day's plan ran past a planned pool window into the
+        # overrun (ADR "the solver stops wedging"). A success qualifier on a
+        # ``succeeded`` solve while live; false pre-live and on any run that
+        # placed nothing.
+        sa.Column(
+            "overrunning",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
         # Hash of the input snapshot the job solved against — the drift guard's
         # comparison key. NULL for a run that never snapshotted.
         sa.Column("input_fingerprint", sa.Text(), nullable=True),

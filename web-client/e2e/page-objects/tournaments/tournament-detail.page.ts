@@ -587,6 +587,13 @@ export class TournamentDetailPage {
     return this.page.getByTestId(`solve-strip-${state}`)
   }
 
+  /** The calm "overrunning" badge — present only on a succeeded solve whose live
+   * day ran past its planned window (ADR "the solver stops wedging"), never on a
+   * normal in-window success. */
+  get overrunningBadge(): Locator {
+    return this.page.getByTestId('solve-strip-overrunning')
+  }
+
   /** The owner's Run-scheduler button — absent, not disabled, for a viewer. */
   get runScheduler(): Locator {
     return this.page.getByTestId('run-scheduler')

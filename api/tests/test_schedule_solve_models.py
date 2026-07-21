@@ -213,6 +213,7 @@ async def test_schedule_solve_read_refuses_an_unknown_enum_value(
         "wall_time_ms": None,
         "fixtures_placed": None,
         "fixtures_pinned": None,
+        "overrunning": False,
         "error": None,
     }
     assert ScheduleSolveRead.model_validate(payload).trigger is (

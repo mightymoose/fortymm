@@ -134,6 +134,15 @@ class ScheduleSolve(Base):
     wall_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fixtures_placed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fixtures_pinned: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Whether a **live** day's plan ran past a planned pool window into the
+    #: overrun (ADR "the solver stops wedging"). ``True`` only on a ``succeeded``
+    #: solve whose soft window let unplayed fixtures spill past their planned end
+    #: while the tournament is live — a success qualifier, never a failure. Stays
+    #: ``False`` pre-live (the window is a hard constraint) and on any run that
+    #: placed nothing (infeasible / failed): an honest "this run did not overrun".
+    overrunning: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     #: Hash of the input snapshot the job solved against — the drift guard's
     #: comparison key. ``NULL`` for a run that never snapshotted.
     input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)

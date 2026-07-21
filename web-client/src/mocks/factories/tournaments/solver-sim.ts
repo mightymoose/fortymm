@@ -85,6 +85,7 @@ export function queuedSolveRow(id: string): ScheduleSolveRead {
     wall_time_ms: null,
     fixtures_placed: null,
     fixtures_pinned: null,
+    overrunning: false,
     error: null,
   }
 }

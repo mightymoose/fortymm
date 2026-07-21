@@ -689,6 +689,14 @@ class ScheduleSolveRead(BaseModel):
       was discarded for drift re-runs rather than reporting partial counts — the
       apply is whole-or-nothing.
     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+
+    ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
+    on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+    end while the tournament is **live** — the window went soft so the day keeps being
+    scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
+    wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
+    run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
+    to label the day "overrunning".
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -703,6 +711,7 @@ class ScheduleSolveRead(BaseModel):
     wall_time_ms: int | None
     fixtures_placed: int | None
     fixtures_pinned: int | None
+    overrunning: bool
     error: str | None
 
 

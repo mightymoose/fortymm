@@ -48,6 +48,7 @@ def _serialize(solve: ScheduleSolve, tournament_name: str) -> AdminScheduleSolve
         wall_time_ms=solve.wall_time_ms,
         fixtures_placed=solve.fixtures_placed,
         fixtures_pinned=solve.fixtures_pinned,
+        overrunning=solve.overrunning,
         error=solve.error,
         input_fingerprint=solve.input_fingerprint,
         rerun_requested=solve.rerun_requested,

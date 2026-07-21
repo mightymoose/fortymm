@@ -90,6 +90,32 @@ describe('SolveStrip', () => {
     )
   })
 
+  it('renders an overrunning succeeded run as a calm badge on the success line — never a "doesn\'t fit" error', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', overrunning: true }),
+    })
+    // Still the success state, not the infeasible/failed arms.
+    expect(solveStripPage.queryState('succeeded')).not.toBeNull()
+    expect(solveStripPage.queryState('infeasible')).toBeNull()
+    expect(solveStripPage.queryState('failed')).toBeNull()
+    // The explicit overrunning surface: badge + calm explanatory line.
+    expect(solveStripPage.queryOverrunning()).not.toBeNull()
+    const text = solveStripPage.getStateText('succeeded')
+    expect(text).toContain('Overrunning')
+    expect(text).toContain('running past its planned window')
+    // Calm, not error framing.
+    expect(text).not.toContain("doesn't fit")
+  })
+
+  it('shows NO overrunning surface on a normal (in-window) succeeded solve — the discriminating case', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', overrunning: false }),
+    })
+    expect(solveStripPage.queryState('succeeded')).not.toBeNull()
+    expect(solveStripPage.queryOverrunning()).toBeNull()
+    expect(solveStripPage.getStateText('succeeded')).not.toContain('Overrunning')
+  })
+
   it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({

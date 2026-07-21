@@ -30,6 +30,7 @@ describe('parseLatestScheduleSolve', () => {
         verdict: 'feasible',
         wall_time_ms: 1200,
         fixtures_placed: 7,
+        overrunning: true,
       }),
     )
     expect(parsed).toMatchObject({
@@ -37,6 +38,7 @@ describe('parseLatestScheduleSolve', () => {
       verdict: 'feasible',
       wallTimeMs: 1200,
       fixturesPlaced: 7,
+      overrunning: true,
       requestedAt: '2026-06-13T09:00:00Z',
     })
   })
@@ -101,10 +103,18 @@ describe('solveStripState', () => {
     ).toEqual({
       kind: 'succeeded',
       verdict: 'optimal',
+      overrunning: false,
       wallTimeMs: 850,
       finishedAt: '2026-06-13T09:00:02Z',
       trigger: 'go_live',
     })
+  })
+
+  it('carries the overrunning qualifier onto the succeeded arm — the soft-window overrun, not a failure', () => {
+    const state = solveStripState(
+      buildScheduleSolve({ status: 'succeeded', overrunning: true }),
+    )
+    expect(state).toMatchObject({ kind: 'succeeded', overrunning: true })
   })
 
   it('degrades a succeeded row with no verdict to the modest claim (feasible), never a blank', () => {

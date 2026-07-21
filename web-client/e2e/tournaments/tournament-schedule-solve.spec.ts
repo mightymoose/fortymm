@@ -63,6 +63,52 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expectAxeClean(page, 'schedule tab — succeeded solve on the strip')
   })
 
+  test('an overrunning succeeded solve shows a calm "overrunning" badge on the strip — the live day ran past its planned window, still scheduled, never a "doesn’t fit" error', async ({
+    page,
+  }) => {
+    // The `overrunning` boolean crosses the real wire on the schedule-solve read;
+    // the client Zod-parses it in the queryFn and the strip surfaces it here.
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      status: 'live',
+      latestSolve: buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'feasible',
+        trigger: 'match_completed',
+        overrunning: true,
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('succeeded')
+    await expect(state).toBeVisible()
+    await expect(pom.overrunningBadge).toBeVisible()
+    await expect(state).toContainText('Overrunning')
+    await expect(state).toContainText('running past its planned window')
+    // A calm success qualifier, NOT the infeasible "doesn't fit" arm.
+    await expect(pom.solveStripState('infeasible')).toHaveCount(0)
+    await expect(state).not.toContainText("doesn't fit")
+
+    await expectAxeClean(page, 'schedule tab — overrunning solve on the strip')
+  })
+
+  test('a normal in-window succeeded solve shows NO overrunning badge — the discriminating case', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'optimal',
+        overrunning: false,
+      }),
+    })
+    await pom.openScheduleTab()
+
+    await expect(pom.solveStripState('succeeded')).toBeVisible()
+    await expect(pom.overrunningBadge).toHaveCount(0)
+  })
+
   test('Run scheduler POSTs, and the strip walks solving → succeeded on the polling loop — placements landing with it', async ({
     page,
   }) => {
