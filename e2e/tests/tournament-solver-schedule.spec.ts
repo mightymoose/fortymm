@@ -31,7 +31,6 @@ const TABLES = [
 
 /** The `HH:MM` of a naive wire timestamp (`YYYY-MM-DDTHH:MM:SS`) — the same
  * clock text the schedule list renders for a placement. */
-const hhmm = (naive: string): string => naive.slice(11, 16)
 
 /**
  * End-to-end proof of the tournament-day scheduling loop (ADR "the schedule is
@@ -163,7 +162,7 @@ test.describe('Tournament — solver schedule', () => {
         schedule.placedRow(fixture.table_id!, fixture.id),
       ).toBeVisible()
       await expect(schedule.matchRow(fixture.id)).toContainText(
-        hhmm(fixture.scheduled_start!),
+        fixture.scheduled_start!.local_label,
       )
     }
 
@@ -192,7 +191,7 @@ test.describe('Tournament — solver schedule', () => {
     expect(tracked.scheduled_start).not.toBeNull()
     expect(tracked.call_notified_count).toBeGreaterThan(0)
     const trackedTable = TABLES.find((t) => t.id === tracked.table_id)!
-    const trackedTime = hhmm(tracked.scheduled_start!)
+    const trackedTime = tracked.scheduled_start!.local_label
 
     // Record the called fixture's placement on the Gantt board: its bar exists
     // on the tracked table's plan, and its tier is NOT a movable estimate — a
@@ -276,7 +275,9 @@ test.describe('Tournament — solver schedule', () => {
       .fixtures.find((f) => f.id === tracked.id)!
     expect(after.pinned_at).not.toBeNull()
     expect(after.table_id).toBe(tracked.table_id)
-    expect(after.scheduled_start).toBe(tracked.scheduled_start)
+    // scheduled_start is now a FixtureTime object (a fresh parse each read), so
+    // compare by value — the placement survived the re-solve byte for byte.
+    expect(after.scheduled_start).toEqual(tracked.scheduled_start)
 
     for (const guest of guests) await guest.ctx.dispose()
   })
