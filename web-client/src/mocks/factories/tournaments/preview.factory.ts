@@ -33,7 +33,10 @@ export function buildPreviewFixture(
   return {
     fixture_id: 'pfx-1',
     event_id: 'ev-1',
-    pool_id: 'pp-1',
+    // The namespaced `{event_id}:{pool_id}` composite the solver keys by, plus the
+    // human `pool_name` the grid actually heads a column with.
+    pool_id: 'ev-1:pool-1',
+    pool_name: 'Pool A',
     player_a_id: 'placeholder-1',
     player_b_id: 'placeholder-2',
     ...overrides,
@@ -45,10 +48,14 @@ export function buildPreviewFixture(
  * grid skeleton whose match count matches its field size. */
 export function buildRoundRobinFixtures(
   n: number,
-  opts: { eventId?: string; poolId?: string } = {},
+  opts: { eventId?: string; poolId?: string; poolName?: string } = {},
 ): PreviewFixture[] {
   const eventId = opts.eventId ?? 'ev-1'
-  const poolId = opts.poolId ?? 'pp-1'
+  // The solver's namespaced composite (`{event_id}:{pool_id}`), plus the human
+  // pool name the grid heads its column with — a realistic pair so a card renders
+  // "Pool A", never the raw composite.
+  const poolId = opts.poolId ?? `${eventId}:pool-1`
+  const poolName = opts.poolName ?? 'Pool A'
   const fixtures: PreviewFixture[] = []
   for (let a = 1; a <= n; a += 1) {
     for (let b = a + 1; b <= n; b += 1) {
@@ -57,6 +64,7 @@ export function buildRoundRobinFixtures(
           fixture_id: `pfx-${eventId}-${a}-${b}`,
           event_id: eventId,
           pool_id: poolId,
+          pool_name: poolName,
           player_a_id: `placeholder-${a}`,
           player_b_id: `placeholder-${b}`,
         }),

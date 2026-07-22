@@ -76,7 +76,10 @@ describe('useEnqueueSchedulePreview', () => {
     expect(enqueued.fixtures[0]).toMatchObject({
       fixtureId: expect.any(String),
       eventId: 'ev-1',
-      poolId: 'pp-1',
+      // The namespaced composite the solver keys by is carried, but the human
+      // pool name is what the grid renders.
+      poolId: 'ev-1:pool-1',
+      poolName: 'Pool A',
       playerAId: 'placeholder-1',
       playerBId: 'placeholder-2',
     })

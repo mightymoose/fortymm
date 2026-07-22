@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 
+import { ApiError } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -17,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import {
   type PreviewEnqueued,
   type PreviewFixture,
+  type PreviewJobState,
   type PreviewVerdict,
   schedulePreviewQueryOptions,
   useCancelSchedulePreview,
@@ -27,7 +29,7 @@ import {
   infeasibilityReasonCopy,
   infeasibilityReasonKey,
 } from '../data/solve'
-import { timeOfDay } from '../data/timeline'
+import { fmt12 } from '../data/timeline'
 import type { UnscheduledFixture } from '../data/timeline'
 import { UnscheduledRail } from './schedule-tab/unscheduled-rail'
 
@@ -72,6 +74,76 @@ function roundRobinByes(n: number): number {
   return n % 2 === 1 ? n : 0
 }
 
+/** The estimated-finish instant as a **venue-local** wall-clock (`"6:30 PM"`) —
+ * consistent with how the real schedule renders a projected time (`fmt12`, ADR
+ * "tournament times are timezone-aware instants"). The server sends a tz-aware
+ * datetime whose date/time components are already the venue wall-clock (it anchored
+ * the frame in the event's timezone), so the client reads that wall-clock straight
+ * off the string rather than doing any timezone math or picking a zone of its own.
+ * `null` for a string that doesn't carry a `T`HH:MM (an unexpected shape the caller
+ * then drops the clause for). */
+function fmtPreviewFinish(iso: string): string | null {
+  const m = /T(\d{2}):(\d{2})/.exec(iso)
+  if (!m) return null
+  return fmt12(Number(m[1]) * 60 + Number(m[2]))
+}
+
+/** The four refusals the enqueue POST can answer with, each a designed notice in
+ * the director's words — never the server's prose (`DEFINITION_OF_COMPLETE.md`).
+ * The trigger button is NOT gated on draw type, so a `422` (only round-robin is
+ * previewable today) is a real, reachable refusal, not a bug. */
+interface PreviewEnqueueNotice {
+  title: string
+  description: string
+}
+
+/** Map an enqueue refusal to its inline notice. `422` — the draw type can't be
+ * previewed yet (only round-robin is); `409` — the tournament is no longer pre-live;
+ * `429` — the single preview slot is busy (retry in a moment); `403` — not the
+ * owner; status `0` — the server was never reached; anything else — the honest
+ * generic. */
+function previewEnqueueNotice(error: unknown): PreviewEnqueueNotice {
+  if (error instanceof ApiError) {
+    if (error.status === 422) {
+      return {
+        title: "This schedule can't be previewed yet",
+        description:
+          'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+      }
+    }
+    if (error.status === 409) {
+      return {
+        title: 'The preview is only for a pre-live schedule',
+        description:
+          'This tournament is already live, so there is nothing to preview — the real schedule is on the board.',
+      }
+    }
+    if (error.status === 429) {
+      return {
+        title: 'A preview is already running',
+        description:
+          'Only one preview runs at a time. Wait a moment for the current one to finish, then try again.',
+      }
+    }
+    if (error.status === 403) {
+      return {
+        title: 'The preview wasn’t run',
+        description: 'Only the tournament owner can preview the schedule.',
+      }
+    }
+    if (error.status === 0) {
+      return {
+        title: "Couldn't reach the server",
+        description: 'Check your connection and try the preview again.',
+      }
+    }
+  }
+  return {
+    title: "Couldn't start the preview",
+    description: 'Something went wrong on our side. Try again in a moment.',
+  }
+}
+
 /** One synthetic fixture → the `UnscheduledFixture` the reused schedule grid renders,
  * with `Placeholder N` names so the preview grid looks identical to the real one. A
  * preview carries no per-fixture placement, so every fixture is a structural card. */
@@ -82,7 +154,9 @@ function fixtureToRailItem(
   return {
     fixtureId: fixture.fixtureId,
     eventName: eventName(fixture.eventId),
-    poolName: fixture.poolId,
+    // The human pool name (`"Pool A"`), never the namespaced `{event}:{pool}`
+    // composite the solver keys by — the card heads with a name a director reads.
+    poolName: fixture.poolName,
     label: `${placeholderName(fixture.playerAId)} vs ${placeholderName(fixture.playerBId)}`,
     tableLabel: null,
     statusLabel: '',
@@ -139,90 +213,101 @@ function useElapsedSeconds(running: boolean): number {
   return sec
 }
 
+/** True when a per-event override the director typed cannot drive an honest re-run:
+ * an emptied field (`NaN`) or a sub-2 count (a round-robin needs two players). The
+ * displayed value falls back to the drawn field size (`overrides[id] ?? fieldSize`),
+ * so an untouched field is never "invalid" — only a value they actually typed is. */
+function hasInvalidOverride(
+  fieldSummaries: PreviewEnqueued['fieldSummaries'],
+  overrides: Record<string, number>,
+): boolean {
+  return fieldSummaries.some((s) => {
+    const typed = overrides[s.eventId]
+    return typed !== undefined && (!Number.isFinite(typed) || typed < 2)
+  })
+}
+
+interface PreviewBodyProps {
+  events: PreviewEventMeta[]
+  enqueue: ReturnType<typeof useEnqueueSchedulePreview>
+  poll: UseQueryResult<PreviewJobState>
+  overrides: Record<string, number>
+  setOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>
+  onRerun: () => void
+  onRetry: () => void
+  onClose: () => void
+}
+
 /**
  * The live body of the preview, mounted only while the dialog is open (it lives
- * inside `DialogContent`, which radix renders only when open) — so it enqueues on
- * mount and **cancels on unmount**, and a re-open starts a fresh preview with clean
- * state, with no set-state-in-an-effect reset dance.
+ * inside `DialogContent`, which radix renders only when open). The enqueue itself is
+ * driven from the dialog-**open event** up in `SchedulePreviewModal` — never a mount
+ * effect here — so it fires exactly once per open even under StrictMode (which
+ * `npm run dev` and the composed e2e stack both use), instead of burning a second
+ * preview worker slot on a phantom job.
  *
  * The whole point is that this is never a blank spinner: the enqueue's *instant
  * structure* (the synthetic field sizes, the match/bye counts, and the grid
- * skeleton) renders the moment the 202 lands, and only the verdict + placements
- * stream in when the polled solve returns (ADR "instant structure and a streamed
- * solve").
+ * skeleton) renders the moment the 202 lands, only the verdict + placements stream
+ * in when the polled solve returns (ADR "instant structure and a streamed solve") —
+ * and a **refused** enqueue is surfaced as an actionable inline error, never an
+ * infinite "Preparing preview…".
  */
 const PreviewBody = ({
-  tournamentId,
   events,
-}: {
-  tournamentId: string
-  events: PreviewEventMeta[]
-}) => {
-  const enqueue = useEnqueueSchedulePreview(tournamentId)
-  const cancel = useCancelSchedulePreview(tournamentId)
-
+  enqueue,
+  poll,
+  overrides,
+  setOverrides,
+  onRerun,
+  onRetry,
+  onClose,
+}: PreviewBodyProps) => {
   const enqueued: PreviewEnqueued | undefined = enqueue.data
-  const token = enqueued?.token ?? null
 
-  const poll = useQuery(schedulePreviewQueryOptions(tournamentId, token))
   const status = poll.data?.status
   const result = poll.data?.result ?? null
+  const token = enqueued?.token ?? null
 
   const elapsed = useElapsedSeconds(status === 'running')
 
-  // The per-event override map the director edits; empty until they touch a field,
-  // so the displayed value falls back to the size the preview actually drew to
-  // (`overrides[id] ?? fieldSize`) — no seeding state in an effect.
-  const [overrides, setOverrides] = useState<Record<string, number>>({})
+  const eventName = (id: string) => events.find((e) => e.id === id)?.name ?? id
 
-  // Enqueue on open. This *deliberately* carries no once-only ref guard: under
-  // StrictMode (which `npm run dev` and the composed e2e stack both use) a mount
-  // effect runs setup→cleanup→setup, and the first setup's `mutate` rides a
-  // MutationObserver that the cleanup tears down — its 202 is delivered to a
-  // discarded observer and never reaches `enqueue.data`. A ref guard would then
-  // block the surviving second setup, leaving the modal stranded on
-  // "Preparing preview…" with zero polls (repo memory "StrictMode latches a
-  // cleanup-only ref"). Re-firing on the surviving mount lands the enqueue on the
-  // live observer instead; the ADR's cancel-on-close reclaims the throttled slot
-  // of any duplicate the discarded observer left in flight, so a re-fire is safe.
-  useEffect(() => {
-    enqueue.mutate({})
-    // enqueue.mutate is stable; empty deps make this fire on (re)mount only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Cancel-on-close: closing the dialog unmounts this body, and its cleanup fires a
-  // best-effort cancel for the live token (ADR "cancel-on-close"). Fire-and-forget —
-  // read via refs so the cleanup never re-subscribes and never blocks the close. The
-  // refs are kept current in a commit-time effect (never assigned during render).
-  const tokenRef = useRef<string | null>(null)
-  const cancelRef = useRef(cancel.mutate)
-  useEffect(() => {
-    tokenRef.current = token
-    cancelRef.current = cancel.mutate
-  })
-  useEffect(
-    () => () => {
-      const live = tokenRef.current
-      if (live) cancelRef.current(live)
-    },
-    [],
-  )
-
-  const eventName = (id: string) =>
-    events.find((e) => e.id === id)?.name ?? id
-
-  const rerun = () => {
-    if (!enqueued) return
-    const merged = Object.fromEntries(
-      enqueued.fieldSummaries.map((s) => [
-        s.eventId,
-        overrides[s.eventId] ?? s.fieldSize,
-      ]),
+  // Refused loud (ADR): the enqueue POST was rejected (422 unpreviewable draw type,
+  // 409 not pre-live, 429 rate-limited, 403, network), so there is no structure to
+  // render — show the actionable notice with a Close/Retry, never a permanent
+  // spinner.
+  if (!enqueued && enqueue.isError) {
+    const notice = previewEnqueueNotice(enqueue.error)
+    return (
+      <Alert variant="destructive" data-testid="preview-enqueue-error" className="mt-2">
+        <TriangleAlert size={16} />
+        <AlertTitle>{notice.title}</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3">
+          {notice.description}
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="preview-enqueue-retry"
+              onClick={onRetry}
+              disabled={enqueue.isPending}
+            >
+              <RotateCw size={14} />
+              Try again
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="preview-enqueue-close"
+              onClick={onClose}
+            >
+              Close
+            </Button>
+          </div>
+        </AlertDescription>
+      </Alert>
     )
-    // Reclaim the current job's throttled slot before queuing the next one.
-    if (token) cancel.mutate(token)
-    enqueue.mutate({ overrides: merged })
   }
 
   if (!enqueued) {
@@ -258,6 +343,12 @@ const PreviewBody = ({
 
   const infeasible = result !== null && !result.fits
 
+  const finishClock =
+    result && result.estimatedFinish ? fmtPreviewFinish(result.estimatedFinish) : null
+
+  const rerunDisabled =
+    enqueue.isPending || hasInvalidOverride(enqueued.fieldSummaries, overrides)
+
   return (
     <div data-testid="schedule-preview">
       {/* The instant structure — the fake field and its match/bye counts, rendered
@@ -287,8 +378,7 @@ const PreviewBody = ({
               <span className="font-normal text-[color:var(--fg-2)]">
                 {' '}
                 · about {fmtTableTime(result.estimatedDurationMin)}
-                {result.estimatedFinish &&
-                  ` · finishes ${timeOfDay(result.estimatedFinish)}`}
+                {finishClock && ` · finishes ${finishClock}`}
               </span>
             )}
             <span className="font-normal text-[color:var(--fg-2)]">
@@ -316,28 +406,37 @@ const PreviewBody = ({
         data-testid="preview-overrides"
         className="mt-4 flex flex-wrap items-end gap-3"
       >
-        {enqueued.fieldSummaries.map((s) => (
-          <label
-            key={s.eventId}
-            className="flex flex-col gap-1 text-[12px] text-[color:var(--fg-2)]"
-          >
-            {eventName(s.eventId)}
-            <Input
-              type="number"
-              min={2}
-              aria-label={`Field size for ${eventName(s.eventId)}`}
-              className="w-24"
-              value={String(overrides[s.eventId] ?? s.fieldSize)}
-              onChange={(e) =>
-                setOverrides((prev) => ({
-                  ...prev,
-                  [s.eventId]: Number(e.target.value),
-                }))
-              }
-            />
-          </label>
-        ))}
-        <Button variant="outline" onClick={rerun} disabled={enqueue.isPending}>
+        {enqueued.fieldSummaries.map((s) => {
+          const typed = overrides[s.eventId]
+          // Fall back to the drawn field size until the director types; render an
+          // emptied field as blank (not the string "NaN").
+          const shown = typed ?? s.fieldSize
+          return (
+            <label
+              key={s.eventId}
+              className="flex flex-col gap-1 text-[12px] text-[color:var(--fg-2)]"
+            >
+              {eventName(s.eventId)}
+              <Input
+                type="number"
+                min={2}
+                aria-label={`Field size for ${eventName(s.eventId)}`}
+                className="w-24"
+                value={Number.isFinite(shown) ? String(shown) : ''}
+                onChange={(e) =>
+                  setOverrides((prev) => ({
+                    ...prev,
+                    // An empty field is `NaN`, not `0` — a blanked input must not
+                    // silently drive a re-run with a broken count (it disables
+                    // Re-run instead).
+                    [s.eventId]: e.target.value === '' ? NaN : Number(e.target.value),
+                  }))
+                }
+              />
+            </label>
+          )
+        })}
+        <Button variant="outline" onClick={onRerun} disabled={rerunDisabled}>
           <RotateCw size={14} />
           Re-run
         </Button>
@@ -395,29 +494,116 @@ const PreviewBody = ({
  * over a synthetic field") — a pre-live dialog that shows what a synthetic field's
  * schedule would look like before anyone has registered.
  *
- * The trigger button (owner-viewed, pre-live only) is a later chore; this modal
- * takes `open`/`onOpenChange` and drives the whole preview: enqueue on open, the
- * instant structure from the first frame, a labeled streamed solve, a per-event
- * override + Re-run, and a best-effort cancel on close. The live logic lives in
- * `PreviewBody`, which radix mounts only while open — so opening enqueues and
- * closing cancels, with no manual reset.
+ * The modal is persistently mounted for the owner and takes `open`/`onOpenChange`.
+ * It drives the whole preview: it **enqueues on the open transition** (an event, not
+ * a mount effect — so it fires exactly once per open, never a StrictMode phantom
+ * double-POST), resets state on each open, streams the labeled solve, offers the
+ * per-event override + Re-run, and fires a best-effort cancel on close. A refused
+ * enqueue is surfaced as an inline error (Close/Retry), never an infinite spinner.
  */
 export const SchedulePreviewModal = ({
   open,
   onOpenChange,
   tournamentId,
   events,
-}: SchedulePreviewModalProps) => (
-  <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[720px]">
-      <DialogHeader>
-        <DialogTitle>Preview schedule</DialogTitle>
-        <DialogDescription>
-          A dry run over a synthetic field — no entrants are created, nothing is
-          saved.
-        </DialogDescription>
-      </DialogHeader>
-      {open && <PreviewBody tournamentId={tournamentId} events={events} />}
-    </DialogContent>
-  </Dialog>
-)
+}: SchedulePreviewModalProps) => {
+  const enqueue = useEnqueueSchedulePreview(tournamentId)
+  const cancel = useCancelSchedulePreview(tournamentId)
+
+  const enqueued = enqueue.data
+  const token = enqueued?.token ?? null
+
+  const poll = useQuery(schedulePreviewQueryOptions(tournamentId, token))
+
+  // The per-event override map the director edits; empty until they touch a field,
+  // so the displayed value falls back to the size the preview actually drew to.
+  // Reset to `{}` on every open (below), so a re-open starts clean.
+  const [overrides, setOverrides] = useState<Record<string, number>>({})
+
+  // Live refs for the fire-and-forget cancel: read from a cleanup/handler without
+  // re-subscribing. Kept current in a commit-time effect (never during render).
+  const tokenRef = useRef<string | null>(null)
+  const cancelRef = useRef(cancel.mutate)
+  useEffect(() => {
+    tokenRef.current = token
+    cancelRef.current = cancel.mutate
+  })
+
+  // Enqueue from the OPEN transition, not a mount effect. `SchedulePreviewModal` is
+  // persistently mounted for the owner, so this effect fires on the `open` prop
+  // going false→true — a dependency *change*, which StrictMode does NOT
+  // double-invoke (it only double-invokes effects on mount). The `wasOpen` ref
+  // (set in the effect body, never only in cleanup — repo memory "StrictMode
+  // latches a cleanup-only ref") keeps the initial-open case (a test/route that
+  // renders `open` already true) to a single enqueue too. On close it fires the
+  // best-effort cancel that reclaims the worker's single throttled slot (ADR
+  // "cancel-on-close").
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      wasOpen.current = true
+      setOverrides({})
+      enqueue.reset()
+      enqueue.mutate({})
+    } else if (!open && wasOpen.current) {
+      wasOpen.current = false
+      const live = tokenRef.current
+      if (live) cancelRef.current(live)
+    }
+    // `enqueue.mutate`/`.reset` are stable; the open transition is the only trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // Cancel any still-live token if the modal unmounts while open (navigation away,
+  // owner-flag flip) — the close-transition above handles the ordinary close.
+  useEffect(
+    () => () => {
+      const live = tokenRef.current
+      if (live) cancelRef.current(live)
+    },
+    [],
+  )
+
+  const rerun = () => {
+    if (!enqueued) return
+    if (hasInvalidOverride(enqueued.fieldSummaries, overrides)) return
+    const merged = Object.fromEntries(
+      enqueued.fieldSummaries.map((s) => [
+        s.eventId,
+        overrides[s.eventId] ?? s.fieldSize,
+      ]),
+    )
+    // Reclaim the current job's throttled slot before queuing the next one.
+    if (token) cancel.mutate(token)
+    enqueue.mutate({ overrides: merged })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle>Preview schedule</DialogTitle>
+          <DialogDescription>
+            A dry run over a synthetic field — no entrants are created, nothing is
+            saved.
+          </DialogDescription>
+        </DialogHeader>
+        {open && (
+          <PreviewBody
+            events={events}
+            enqueue={enqueue}
+            poll={poll}
+            overrides={overrides}
+            setOverrides={setOverrides}
+            onRerun={rerun}
+            onRetry={() => {
+              enqueue.reset()
+              enqueue.mutate({})
+            }}
+            onClose={() => onOpenChange(false)}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}

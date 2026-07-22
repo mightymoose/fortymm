@@ -6,14 +6,19 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor } from '@/test/utilities'
 import {
   mockSchedulePreviewCancelEndpoint,
+  mockSchedulePreviewEnqueueEndpoint,
   mockSchedulePreviewPollEndpoint,
 } from '@/mocks/endpoints/tournaments/preview.endpoint'
 import {
   buildInfeasiblePreviewResult,
   buildPreviewJobState,
+  buildPreviewResult,
 } from '@/mocks/factories/tournaments/preview.factory'
 import { server } from '@/mocks/server'
-import { resetSchedulePreviewStore } from '@/mocks/schedule-preview-store'
+import {
+  enqueuePreview,
+  resetSchedulePreviewStore,
+} from '@/mocks/schedule-preview-store'
 
 import { SchedulePreviewModal } from './schedule-preview-modal'
 import { buildSchedulePreviewModalProps } from './schedule-preview-modal.factory'
@@ -73,15 +78,43 @@ describe('SchedulePreviewModal', () => {
   // "Preparing preview…" with zero poll requests. vitest and `vite build` don't use
   // StrictMode, so every other test in this file missed it — the wrapper below is
   // the whole point. This must reach the streamed result, not the spinner.
-  it('reaches the streamed result under StrictMode double-mount (not a stuck spinner)', async () => {
-    render(
+  it('reaches the streamed result under StrictMode when opened, enqueuing exactly once', async () => {
+    // Count the enqueue POSTs while still walking the store's default queued →
+    // running → done, so the assertion covers both the no-stuck-spinner intent AND
+    // the double-POST regression: firing from the open *transition* (not a mount
+    // effect) must not burn a phantom second preview slot under StrictMode.
+    let enqueueCalls = 0
+    mockSchedulePreviewEnqueueEndpoint(server, async ({ request }) => {
+      enqueueCalls += 1
+      const body = (await request.json()) as { overrides?: Record<string, number> } | null
+      return HttpResponse.json(enqueuePreview(body ?? null), { status: 202 })
+    })
+    // Resolve the poll to `done` at once — this test is about the enqueue firing
+    // once and reaching a result, not the queued→running→done cadence, so skip the
+    // multi-poll walk that would otherwise race the test budget.
+    mockSchedulePreviewPollEndpoint(server, () =>
+      HttpResponse.json(buildPreviewJobState({ status: 'done', result: buildPreviewResult() })),
+    )
+
+    // The modal is never *mounted* open in the real app — the owner clicks the
+    // trigger, which flips `open` false→true on the already-mounted modal. Mirror
+    // that here: mount closed under StrictMode, then open. The enqueue rides that
+    // transition (a dep change StrictMode does NOT double-invoke), so it lands on a
+    // settled mutation observer instead of one the mount double-invoke tore down.
+    const closed = (
       <StrictMode>
-        <SchedulePreviewModal {...buildSchedulePreviewModalProps()} />
+        <SchedulePreviewModal {...buildSchedulePreviewModalProps({ open: false })} />
+      </StrictMode>
+    )
+    const view = render(closed)
+    view.rerender(
+      <StrictMode>
+        <SchedulePreviewModal {...buildSchedulePreviewModalProps({ open: true })} />
       </StrictMode>,
     )
 
     // The instant structure lands off the enqueue 202 — proving the enqueue
-    // actually reached a live observer despite the double-invoke.
+    // actually reached a live observer.
     const summary = await schedulePreviewModalPage.findFieldSummary()
     expect(summary).toHaveTextContent('Synthetic field: Open Singles 4')
 
@@ -91,6 +124,46 @@ describe('SchedulePreviewModal', () => {
       'Best possible plan',
     )
     expect(screen.queryByTestId('preview-preparing')).toBeNull()
+
+    // Exactly one enqueue POST — no phantom second job from the StrictMode
+    // double-invoke.
+    expect(enqueueCalls).toBe(1)
+  })
+
+  // A refused enqueue must be "refused loud" (ADR): the trigger is NOT gated on draw
+  // type, so a 422 (only round-robin is previewable), a 409 (already live), or a 429
+  // (rate limit) can come back — and the modal must surface an actionable error, not
+  // hang forever on "Preparing preview…".
+  it('surfaces an enqueue refusal as an actionable error, not a permanent spinner', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'Only round-robin draws can be previewed.' },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    // The inline error, with the client's own copy — never the raw server sentence.
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    // NOT a permanent spinner.
+    expect(screen.queryByTestId('preview-preparing')).toBeNull()
+    // Actionable: a retry and a close.
+    expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
+    expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  it('heads a synthetic grid card with the human pool name, not the composite id', async () => {
+    schedulePreviewModalPage.render()
+
+    // The grid streams in with the instant structure; its cards read the human pool
+    // name (`Pool A`), never the namespaced `{event}:{pool}` composite the solver
+    // keys by.
+    await schedulePreviewModalPage.findFieldSummary()
+    const grid = await screen.findByTestId('preview-grid')
+    expect(grid).toHaveTextContent('Pool A')
+    expect(grid).not.toHaveTextContent(/ev-1:pool-1/)
   })
 
   it('shows the actionable infeasibility reasons instead of a grid', async () => {
