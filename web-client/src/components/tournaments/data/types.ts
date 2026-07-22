@@ -114,17 +114,17 @@ export interface Pool {
  * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
  *   to a table**. When set, it names a `TournamentTable` in the tournament's table
  *   catalogue — a string ref, the same pattern as `poolId`.
- * - `scheduledStart` — the placement's **predicted** start (ADR-0790): `null` means
- *   **unscheduled**. A *naive* wall-clock timestamp string (no timezone), in the venue's
- *   frame — a prediction, not a commitment, so an off-prediction start is normal, not an
- *   error. Carried as the string it arrives as (like the slot's `date`/`start`/`end`).
+ * - `scheduledStart` — the placement's **predicted** start (ADR "tournament times are
+ *   timezone-aware instants"): `null` means **unscheduled**. When set, a `FixtureTime`
+ *   — a venue-local `localLabel`/`tzAbbrev` for display plus the raw UTC `instant` for
+ *   tz-agnostic geometry — a prediction, not a commitment.
  * - `pinnedAt` — when the fixture was **called** (ADR "the schedule is solved, the
  *   call is pinned"): `null` means the placement is still an estimate the solver may
  *   move freely. When set, the placement is a promise — the players were notified,
- *   and no later solve rearranges it. Naive wall-clock, like `scheduledStart`.
+ *   and no later solve rearranges it. A `FixtureTime`, like `scheduledStart`.
  * - `completedAt` — the match's **actual** completion time, as opposed to
  *   `scheduledStart`'s *predicted* one: `null` until the match is actually decided
- *   (win or void). Naive wall-clock, like `scheduledStart`/`pinnedAt` — this is what
+ *   (win or void). A `FixtureTime`, like `scheduledStart`/`pinnedAt` — this is what
  *   a Gantt-style schedule view uses as a played slot's real end, instead of
  *   projecting the estimated duration past a match that has already finished.
  *
@@ -145,20 +145,46 @@ export interface Fixture {
   /** The placement table this fixture is assigned to (ADR-0790), or `null` when
    * **unassigned**. A string ref into the tournament's table catalogue, like `poolId`. */
   tableId: string | null
-  /** The placement's predicted start (ADR-0790): a naive wall-clock timestamp string, or
-   * `null` when **unscheduled**. A prediction, not a commitment. */
-  scheduledStart: string | null
+  /** The placement's predicted start (ADR "tournament times are timezone-aware
+   * instants"): a `FixtureTime`, or `null` when **unscheduled**. A prediction, not a
+   * commitment. */
+  scheduledStart: FixtureTime | null
   /** When this fixture was **called** — pinned and its players notified — or `null`
    * while the placement is still an estimate (ADR "the schedule is solved, the call
-   * is pinned"). Carried for the call markers a later slice renders; nothing here
-   * writes it. */
-  pinnedAt: string | null
+   * is pinned"). A `FixtureTime` when set. */
+  pinnedAt: FixtureTime | null
   /** How many call/correction notifications this fixture's players have received.
    * `0` for a never-called fixture. Read-only, like `pinnedAt`. */
   callNotifiedCount: number
   /** The match's actual completion time, or `null` until it is decided (win or
-   * void). Naive wall-clock, like `scheduledStart`/`pinnedAt`. Read-only. */
-  completedAt: string | null
+   * void). A `FixtureTime`, like `scheduledStart`/`pinnedAt`. Read-only. */
+  completedAt: FixtureTime | null
+}
+
+/**
+ * One displayed tournament time (ADR "tournament times are timezone-aware instants",
+ * superseding ADR-0790's naive-wall-clock frame). The server does **all** the timezone
+ * arithmetic and ships a client three things about one moment:
+ *
+ * - `instant` — the absolute moment as an unambiguous UTC ISO-8601 string (ends with
+ *   `Z`). This — and only this — is what a Gantt bar's geometry differences: subtracting
+ *   two instants is tz-agnostic, so positioning needs no timezone library.
+ * - `localLabel` — the moment already rendered in the **event's venue timezone**, as a
+ *   12-hour wall-clock with no zone suffix (e.g. `"6:00 PM"`). The client displays it
+ *   verbatim — it never slices a datetime or picks a zone.
+ * - `tzAbbrev` — the DST-correct zone abbreviation (e.g. `"CDT"`). Rendered right beside
+ *   `localLabel` (`{localLabel} {tzAbbrev}` → `"6:00 PM CDT"`) so that a tournament-wide
+ *   board showing events in different timezones never lets two same-column bars imply the
+ *   same instant.
+ *
+ * Carrying both label and instant is not a field and its own derivation: the label is for
+ * reading and the instant is for math, and neither is derivable from the other without the
+ * timezone library this model exists to keep off the client.
+ */
+export interface FixtureTime {
+  instant: string
+  localLabel: string
+  tzAbbrev: string
 }
 
 /**
@@ -306,6 +332,14 @@ export interface TournamentEvent {
    * reader must handle the no-cap branch rather than dividing by it. */
   maxPlayers: number | null
   entryFee: number
+  /** The IANA timezone (e.g. `America/Chicago`) that **anchors** this event's
+   * wall-clock windows to real instants (ADR 20260719 — "tournament times are
+   * timezone-aware instants"). `NOT NULL` on the server: a new event pre-fills it
+   * from the browser's resolved zone (`browserTimezone`, `./helpers`), and every
+   * displayed window carries it as a label so the director sees the frame the
+   * `slot` times are in. The server does all timezone arithmetic; the client only
+   * carries the name and shows it. */
+  timezone: string
   /** The registration count. Server-derived from the active entries — it is
    * `entrants.length`, never a stored counter, so the count and the list it
    * counts cannot disagree. Read it; never write it. */

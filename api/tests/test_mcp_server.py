@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import httpx
@@ -994,6 +995,7 @@ def _event_payload() -> dict[str, object]:
         "draw_type": "rr-then-ko",
         "max_players": 64,
         "entry_fee": 45,
+        "timezone": "America/Chicago",
         "slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
@@ -1266,7 +1268,11 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     tournament_id = await _create_tournament(api_client)
     event_id = await _first_event_id(db_session, tournament_id)
 
-    scheduled_start = datetime(2026, 8, 1, 9, 0)
+    # Aware, so asyncpg stores a deterministic instant regardless of the test
+    # runner's local timezone (a naive value is read in the session tz — 14:00Z on
+    # a US-Central dev box, 09:00Z in a UTC CI runner). 9:00 AM America/Chicago
+    # (CDT on this August date) = 14:00Z, which the BFF renders back as "9:00 AM CDT".
+    scheduled_start = datetime(2026, 8, 1, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
     fixture = await _seed_placed_fixture(
         db_session, event_id, table_id="t1", scheduled_start=scheduled_start
     )
@@ -1300,7 +1306,14 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     placed = group["fixtures"][0]
     assert placed["id"] == str(fixture.id)
     assert placed["table_id"] == "t1"
-    assert placed["scheduled_start"] == scheduled_start.isoformat()
+    # ``scheduled_start`` is now a venue-local ``FixtureTimeRead`` (ADR "tournament
+    # times are timezone-aware instants"): the 09:00 seed is anchored in the event's
+    # America/Chicago zone (= 14:00Z), rendered with its local label + tz abbrev.
+    assert placed["scheduled_start"] == {
+        "instant": "2026-08-01T14:00:00Z",
+        "local_label": "9:00 AM",
+        "tz_abbrev": "CDT",
+    }
     assert placed["pool_id"] == "p-os-1"
     assert placed["round"] == 1
     assert placed["position"] == 1
@@ -1570,6 +1583,7 @@ async def _seed_drawable_tournament(
         draw_type=draw_type,
         max_players=64,
         entry_fee=Decimal("45"),
+        timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],

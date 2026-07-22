@@ -140,7 +140,9 @@ test.describe('Tournaments · schedule boards', () => {
     // QA-caught gap: it used to vanish the moment the match materialized).
     await expect(pom.calledBadges).toHaveCount(called.length)
     await expect(pom.calledBadges.first()).toBeVisible()
-    await expect(pom.calledBadges.first()).toContainText('Called 09:00')
+    // The called-at badge reads the server's venue-local label + tz abbrev (ADR
+    // "a schedule surface always labels the timezone"), not a UTC/naive string.
+    await expect(pom.calledBadges.first()).toContainText('Called 9:00 AM CDT')
     // One call each, no corrections yet: the `notified n×` counter stays off.
     await expect(pom.notifiedMarkers).toHaveCount(0)
     // No `est` marks while live: every row's match is materialized (tier
@@ -156,7 +158,7 @@ test.describe('Tournaments · schedule boards', () => {
     await expect(pom.timelineBars.first()).toHaveAttribute('data-tier', 'started')
     await expect(pom.calledBars).toHaveCount(0)
     const calledBar = pom.timelineBar(called[0].id)
-    await expect(calledBar).toHaveAttribute('aria-label', /Called 09:00/)
+    await expect(calledBar).toHaveAttribute('aria-label', /Called 9:00 AM CDT/)
     // …and the started-tier words claim scoreability, never live play — the
     // other half of the QA finding (every bar read "In progress", hours out).
     await expect(calledBar).toHaveAttribute(

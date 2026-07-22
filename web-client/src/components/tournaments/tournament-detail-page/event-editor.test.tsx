@@ -1,14 +1,17 @@
 import { fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { afterEach } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { screen, waitFor } from '@/test/utilities'
 
+import { emptyEvent } from '../data/helpers'
 import {
   buildEvent,
   buildFixture,
   buildPool,
   buildPredicate,
+  buildTournament,
 } from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
 
@@ -913,6 +916,71 @@ describe('EventEditor', () => {
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
       expect(savePayload(onSave).pools[0].name).toBe('Championship')
+    })
+  })
+
+  /**
+   * The event timezone anchors its wall-clock windows to real instants (ADR
+   * 20260719). A new event pre-fills the picker from the browser's resolved zone; the
+   * director can change it via the searchable picker; and it rides the saved payload.
+   */
+  describe('the event timezone (ADR 20260719)', () => {
+    afterEach(() => vi.restoreAllMocks())
+
+    /** Point the browser's resolved zone at `zone` for one test — the only way to
+     * prove the default *follows the browser* is to move the browser. */
+    function stubBrowserZone(zone: string) {
+      const real = Intl.DateTimeFormat
+      vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
+        (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) => {
+          const fmt = new real(...args)
+          const opts = fmt.resolvedOptions()
+          vi.spyOn(fmt, 'resolvedOptions').mockReturnValue({
+            ...opts,
+            timeZone: zone,
+          })
+          return fmt
+        },
+      )
+    }
+
+    it("pre-fills a new event's picker and window label from the browser zone", () => {
+      stubBrowserZone('Pacific/Auckland')
+      eventEditorPage.render({ event: emptyEvent(buildTournament()) })
+
+      expect(
+        screen.getByRole('combobox', { name: 'Timezone' }),
+      ).toHaveTextContent('Pacific/Auckland')
+      expect(screen.getByTestId('event-timezone-label')).toHaveTextContent(
+        'Pacific/Auckland',
+      )
+    })
+
+    it('carries a picked timezone into the saved event', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({
+          id: 'new-1',
+          name: 'Open Singles',
+          timezone: 'America/Chicago',
+        }),
+        onSave,
+      })
+
+      await userEvent.click(screen.getByRole('combobox', { name: 'Timezone' }))
+      await userEvent.type(
+        await screen.findByPlaceholderText('Search timezones…'),
+        'Denver',
+      )
+      await userEvent.click(
+        await screen.findByRole('option', { name: 'America/Denver' }),
+      )
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ timezone: 'America/Denver' }),
+      )
     })
   })
 })

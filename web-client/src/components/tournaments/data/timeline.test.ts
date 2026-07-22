@@ -2,6 +2,7 @@ import {
   buildDrawnEvent,
   buildEntrants,
   buildFixture,
+  buildFixtureTime,
   buildPool,
   buildTables,
   buildTournament,
@@ -89,7 +90,7 @@ describe('estimatedMatchMinutes', () => {
 describe('fixtureTier', () => {
   const placed: Partial<Fixture> = {
     tableId: 't1',
-    scheduledStart: '2026-06-13T09:00:00',
+    scheduledStart: buildFixtureTime('2026-06-13T09:00:00'),
   }
 
   it('reads an unpinned placement as an estimate', () => {
@@ -131,7 +132,10 @@ describe('fixtureTier', () => {
 })
 
 describe('tierSentence', () => {
-  const told = { pinnedAt: '2026-06-13T08:50:00', callNotifiedCount: 1 }
+  const told = {
+    pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
+    callNotifiedCount: 1,
+  }
   const untold = { pinnedAt: null, callNotifiedCount: 0 }
 
   it('labels an estimate as movable and a TOLD call as notified', () => {
@@ -149,7 +153,7 @@ describe('tierSentence', () => {
     // heard nothing.
     expect(
       tierSentence('called', null, {
-        pinnedAt: '2026-06-13T08:50:00',
+        pinnedAt: buildFixtureTime('2026-06-13T08:50:00'),
         callNotifiedCount: 0,
       }),
     ).toBe('Pinned — placed by the director')
@@ -181,13 +185,21 @@ describe('isDecided', () => {
 })
 
 describe('calledAtLabel', () => {
-  it('reads the call’s wall-clock minute straight off the naive stamp', () => {
-    expect(calledAtLabel('2026-06-13T08:50:00')).toBe('Called 08:50')
-    expect(calledAtLabel('2026-06-13T14:32')).toBe('Called 14:32')
+  it('reads the call’s venue-local label + tz abbrev straight off the server-rendered FixtureTime', () => {
+    // The server already rendered the venue wall-clock; the client shows it
+    // verbatim with the timezone, never slicing a datetime or picking a zone.
+    expect(calledAtLabel(buildFixtureTime('2026-06-13T08:50:00'))).toBe(
+      'Called 8:50 AM CDT',
+    )
+    expect(calledAtLabel(buildFixtureTime('2026-06-13T14:32:00'))).toBe(
+      'Called 2:32 PM CDT',
+    )
   })
 
-  it('tolerates a bare date the way the board’s own stamp split does', () => {
-    expect(calledAtLabel('2026-06-13')).toBe('Called 00:00')
+  it('labels the timezone even for a midnight call — a same-column bar must not imply a shared instant', () => {
+    expect(calledAtLabel(buildFixtureTime('2026-06-13T00:00:00'))).toBe(
+      'Called 12:00 AM CDT',
+    )
   })
 })
 
@@ -229,13 +241,15 @@ describe('axisTicks', () => {
 })
 
 describe('buildTimelineBoard', () => {
-  it('derives the window from the earliest pool start to the latest end, padded to the half-hour', () => {
+  it('derives the window from the earliest placed bar to the latest bar end, padded to the half-hour', () => {
     const board = boardOf(buildTournament({ events: [placedEvent()] }))
-    // Pool A opens 09:00 (earliest window start) on the origin date.
+    // Instant-anchored, not pool-window-anchored (ADR "tournament times are
+    // timezone-aware instants"): the window spans the placed bars, not the naive
+    // pool windows (which can't join the instant axis). Earliest bar 09:00 on the
+    // origin date; latest bar ends 11:35, padded up to 12:00.
     expect(board.originDate).toBe('2026-06-13')
     expect(board.startMin).toBe(9 * 60)
-    // Pool B's window runs to 17:00 — later than every placement end.
-    expect(board.endMin).toBe(17 * 60)
+    expect(board.endMin).toBe(12 * 60)
   })
 
   it('stretches the window when a placement ends past its pool window', () => {
@@ -255,11 +269,14 @@ describe('buildTimelineBoard', () => {
     expect(board.endMin).toBe(13 * 60) // 12:50 padded up to 13:00
   })
 
-  it('falls back to the pools’ windows when nothing is placed yet', () => {
+  it('shows a token hour when nothing is placed yet — the naive pool windows can’t size an instant axis', () => {
     const board = boardOf(buildTournament({ events: [buildDrawnEvent()] }))
+    // Before any bar exists there is no instant to anchor to (the pool windows are
+    // naive venue wall-clock and never join the instant axis), so the board draws a
+    // token 09:00–10:00 hour and the Schedule tab shows the "run the scheduler" prompt.
     expect(board.hasBars).toBe(false)
     expect(board.startMin).toBe(9 * 60)
-    expect(board.endMin).toBe(17 * 60)
+    expect(board.endMin).toBe(10 * 60)
     // …and every fixture is in the rail, awaiting the solver.
     expect(board.unscheduled.map((u) => u.fixtureId)).toEqual([
       'fx-a-1',
@@ -276,14 +293,21 @@ describe('buildTimelineBoard', () => {
     expect(bar.startMin).toBe(9 * 60)
     expect(bar.durationMin).toBe(35) // the event is Bo5
     expect(bar.endMin).toBe(9 * 60 + 35)
-    expect(bar.startClock).toBe('09:00')
-    expect(bar.endClock).toBe('09:35')
+    // The bar shows the server's own venue-local words plus the tz abbrev — never
+    // a client-sliced datetime (ADR "a schedule surface always labels the timezone").
+    expect(bar.startClock).toBe('9:00 AM')
+    expect(bar.endClock).toBe('9:35 AM')
+    expect(bar.tz).toBe('CDT')
     expect(bar.label).toBe('player.1 vs player.4')
     expect(bar.tableLabel).toBe('T1')
     expect(bar.poolName).toBe('Pool A')
   })
 
-  it('counts minutes across days from the earliest date (a two-day board)', () => {
+  it('counts minutes across days by instant differencing, from the earliest placed bar', () => {
+    // The board minute axis is anchored to the earliest BAR's venue wall-clock and
+    // spaced by real instant differences (ADR "tournament times are timezone-aware
+    // instants"): a day-1 09:00 bar is the origin, and a day-2 09:30 bar sits a full
+    // day + 30 minutes later — 24h30m of instant difference, tz-agnostic.
     const event = buildDrawnEvent({
       pools: [
         buildPool({ id: 'p-a', name: 'Pool A' }), // 2026-06-13
@@ -295,6 +319,12 @@ describe('buildTimelineBoard', () => {
       ],
       fixtures: [
         buildFixture({
+          id: 'fx-day1',
+          poolId: 'p-a',
+          tableId: 't1',
+          scheduledStart: '2026-06-13T09:00:00',
+        }),
+        buildFixture({
           id: 'fx-day2',
           poolId: 'p-b',
           entryAId: 'entry-2',
@@ -305,10 +335,11 @@ describe('buildTimelineBoard', () => {
       ],
     })
     const board = boardOf(buildTournament({ events: [event] }))
+    // The origin is the earliest bar's venue date (day 1), not the earliest pool.
     expect(board.originDate).toBe('2026-06-13')
     const bar = board.tables.find((r) => r.tableId === 't3')!.bars[0]
     expect(bar.startMin).toBe(1440 + 9 * 60 + 30)
-    expect(bar.startClock).toBe('09:30') // wall-clock, day 2
+    expect(bar.startClock).toBe('9:30 AM') // venue wall-clock, day 2
   })
 
   it('assigns the three tiers by started > called > estimate', () => {
@@ -326,7 +357,9 @@ describe('buildTimelineBoard', () => {
     const bars = new Map(
       board.tables.flatMap((r) => r.bars).map((b) => [b.fixtureId, b]),
     )
-    expect(bars.get('fx-called')!.pinnedAt).toBe('2026-06-13T09:50:00')
+    expect(bars.get('fx-called')!.pinnedAt).toEqual(
+      buildFixtureTime('2026-06-13T09:50:00'),
+    )
     expect(bars.get('fx-called')!.callNotifiedCount).toBe(2)
     // A never-called estimate has promised nothing and cost nothing.
     expect(bars.get('fx-est')!.pinnedAt).toBeNull()
@@ -426,7 +459,8 @@ describe('buildTimelineBoard', () => {
     expect(bar.startMin).toBe(9 * 60) // unchanged: still anchored to scheduledStart
     expect(bar.durationMin).toBe(80)
     expect(bar.endMin).toBe(9 * 60 + 80)
-    expect(bar.endClock).toBe('10:20')
+    // The decided bar's end reads the server's real completion label, not a projection.
+    expect(bar.endClock).toBe('10:20 AM')
   })
 
   it("draws a completed match's bar SHORTER than the estimate when it finished early", () => {

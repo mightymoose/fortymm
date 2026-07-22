@@ -182,6 +182,7 @@ export const EventEditor = ({
     form.setValue('drawType', next.drawType, opts)
     form.setValue('maxPlayers', next.maxPlayers, opts)
     form.setValue('entryFee', next.entryFee, opts)
+    form.setValue('timezone', next.timezone, opts)
     form.setValue('slot', next.slot, opts)
     form.setValue('match', next.match, opts)
   }
@@ -216,6 +217,7 @@ export const EventEditor = ({
     name: errors.name?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
+    timezone: errors.timezone?.message,
   }
 
   // **What a cut draw freezes** (ADR-0786), derived from the SAVED event and never from

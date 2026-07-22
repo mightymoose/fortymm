@@ -96,11 +96,27 @@ describe('eventSchema', () => {
     )
     expect(parsed.pools[0].name).toBe('Championship')
   })
+
+  /** The timezone anchors the windows and is `NOT NULL` on the server (ADR 20260719),
+   * so the resolver mirrors it: a real zone passes, a cleared one is refused before
+   * the save leaves the room. (Whether it names a *known* zone is the server's to
+   * judge — an unknown one is a 422 — so the client rule is only "non-empty".) */
+  it('requires a non-empty timezone', () => {
+    expect(rejectedFields(formFor({ timezone: 'America/Chicago' }))).toEqual([])
+    expect(rejectedFields(formFor({ timezone: '' }))).toEqual(['timezone'])
+    expect(rejectedFields(formFor({ timezone: '   ' }))).toEqual(['timezone'])
+  })
 })
 
 describe('eventToFormValues', () => {
   it('carries a null cap through as null — never as a number', () => {
     expect(eventToFormValues(buildEvent({ maxPlayers: null })).maxPlayers).toBeNull()
+  })
+
+  it("projects the event's timezone onto the form", () => {
+    expect(eventToFormValues(buildEvent({ timezone: 'Europe/Paris' })).timezone).toBe(
+      'Europe/Paris',
+    )
   })
 
   /** A brand-new event (no `event` at all) starts **uncapped**, not at an invented
@@ -121,6 +137,12 @@ describe('firstInvalidSection', () => {
 
   it('sends a broken player limit to Basics', () => {
     expect(firstInvalidSection({ maxPlayers: { type: 'custom', message: 'x' } })).toBe(
+      'basics',
+    )
+  })
+
+  it('sends a broken timezone to Basics', () => {
+    expect(firstInvalidSection({ timezone: { type: 'custom', message: 'x' } })).toBe(
       'basics',
     )
   })

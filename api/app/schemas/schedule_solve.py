@@ -18,6 +18,7 @@ are read (the ledger's persisted JSONB, and :class:`ScheduleSolveRead`).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
@@ -71,6 +72,21 @@ class NoSingleCauseRead(BaseModel):
     available_min: int
 
 
+class PastWindowReasonRead(BaseModel):
+    """A pool whose **entire** planned window is already in the past — the day
+    was dated behind ``now`` (most easily via the silent "today" default on an
+    event now a day old), so it cannot run until it is moved to a future day
+    (ADR "a past day is named, not disguised"). The most specific pre-live cause,
+    fixed by "move the date", not "add tables/time". Resolved: the offending
+    ``date`` — the venue-local calendar day the director gave a window for, in
+    the event's own timezone frame — so the client says which day to move with
+    no timezone math of its own. The DB-aware mirror of
+    :class:`app.scheduling.PastWindow`."""
+
+    kind: Literal["past_window"] = "past_window"
+    date: date
+
+
 #: The closed set of *resolved* reasons an infeasible solve carries — the
 #: DB-aware mirror of :data:`app.scheduling.InfeasibilityReason`, humanized once
 #: at apply and parsed back here at every read. Discriminated on ``kind`` so a
@@ -79,7 +95,8 @@ ResolvedReason = Annotated[
     PoolHasNoTablesRead
     | WindowTooShortForMatchRead
     | PoolOverCapacityRead
-    | NoSingleCauseRead,
+    | NoSingleCauseRead
+    | PastWindowReasonRead,
     Field(discriminator="kind"),
 ]
 

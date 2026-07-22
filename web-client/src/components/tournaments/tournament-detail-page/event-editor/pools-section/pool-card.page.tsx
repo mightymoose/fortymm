@@ -47,6 +47,12 @@ const scoped = (container: Container) => ({
   getReservedTables() {
     return container.getByTestId('pool-tables')
   },
+  /** The timezone caption beside this pool's window (`pool-timezone-label`) — the
+   * frame its wall-clock times are in (ADR 20260719), shown to editor and reader
+   * alike. Not interactive, so it never touches the read-only guard sweep. */
+  getTimezoneLabel() {
+    return container.getByTestId('pool-timezone-label')
+  },
   /** Every interactive control in the card, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */
   getInteractiveControls() {

@@ -3,12 +3,14 @@ import {
   CalendarClock,
   CircleCheck,
   CircleX,
+  Clock,
   Loader2,
   Play,
   TriangleAlert,
 } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { fmtDateRel } from '@/lib/dates'
@@ -51,13 +53,13 @@ const Line = ({
 }: {
   icon: React.ReactNode
   tint: string
-  title: string
+  title: React.ReactNode
   children?: React.ReactNode
 }) => (
   <div className="flex min-w-0 items-start gap-3">
     <span className={`mt-0.5 shrink-0 ${tint}`}>{icon}</span>
     <div className="min-w-0">
-      <div className="text-[14px] font-semibold text-[color:var(--fg-1)]">
+      <div className="flex flex-wrap items-center gap-2 text-[14px] font-semibold text-[color:var(--fg-1)]">
         {title}
       </div>
       {children && (
@@ -102,42 +104,80 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
       )
     case 'succeeded': {
       const wall = fmtWallTime(state.wallTimeMs)
+      const solvedTitle = state.finishedAt
+        ? `Schedule solved ${fmtDateRel(state.finishedAt)}`
+        : 'Schedule solved'
       return (
         <div data-testid="solve-strip-succeeded">
           <Line
+            // A calm signal, not an error: overrunning stays on the success
+            // tint and only earns the badge — the plan solved, it just runs
+            // past the planned window (ADR "the solver stops wedging").
             icon={<CircleCheck size={18} />}
             tint="text-[color:var(--serve-500)]"
             title={
-              state.finishedAt
-                ? `Schedule solved ${fmtDateRel(state.finishedAt)}`
-                : 'Schedule solved'
+              <>
+                <span>{solvedTitle}</span>
+                {state.overrunning && (
+                  <Badge
+                    data-testid="solve-strip-overrunning"
+                    className="border-[color:var(--warn)]/30 bg-[color:var(--warn)]/12 text-[color:var(--warn)]"
+                  >
+                    <Clock size={12} />
+                    Overrunning
+                  </Badge>
+                )}
+              </>
             }
           >
             {VERDICT_LABEL[state.verdict]}
             {wall ? ` — solved in ${wall}` : ''} · {TRIGGER_LABEL[state.trigger]}.
+            {state.overrunning && (
+              // INSTEAD of a "doesn't fit" error: the live day ran past its
+              // planned window, but the soft window keeps the day schedulable —
+              // matches are still being placed into the overrun.
+              <span className="mt-0.5 block text-[color:var(--warn)]">
+                The day is running past its planned window, but matches are still
+                being scheduled into the overrun.
+              </span>
+            )}
           </Line>
         </div>
       )
     }
-    case 'infeasible':
+    case 'infeasible': {
       // A DESIGNED outcome, not an error banner: the solver *proved* the plan
       // impossible, which is exactly what a pre-live run is for. The API resolves
       // the causes to names/numbers, so the strip names each specifically —
       // falling back to the generic sentence only if the (guaranteed ≥1) list is
-      // somehow empty, so the strip never renders bodyless.
+      // somehow empty, so the strip never renders bodyless. A `past_window` cause
+      // (a wholly-past day) is one arm of that list, given the dated headline
+      // when it is the whole story (ADR "a past day is named, not disguised").
+      const onlyPastWindow =
+        state.reasons.length > 0 &&
+        state.reasons.every((reason) => reason.kind === 'past_window')
       return (
         <div data-testid="solve-strip-infeasible">
           <Line
             icon={<TriangleAlert size={18} />}
             tint="text-[color:var(--warn)]"
-            title="The day doesn't fit"
+            title={
+              onlyPastWindow ? 'This day has already passed' : "The day doesn't fit"
+            }
           >
             {state.reasons.length > 0 ? (
               <ul className="space-y-1.5">
                 {state.reasons.map((reason, i) => {
                   const copy = infeasibilityReasonCopy(reason)
                   return (
-                    <li key={infeasibilityReasonKey(reason, i)}>
+                    <li
+                      key={infeasibilityReasonKey(reason, i)}
+                      data-testid={
+                        reason.kind === 'past_window'
+                          ? 'solve-strip-past-window'
+                          : undefined
+                      }
+                    >
                       <span className="text-[color:var(--fg-2)]">
                         {copy.sentence}
                       </span>{' '}
@@ -156,6 +196,7 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
           </Line>
         </div>
       )
+    }
     case 'failed':
       return (
         <div data-testid="solve-strip-failed">

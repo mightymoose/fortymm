@@ -1,6 +1,8 @@
 import hashlib
 import uuid
+from datetime import datetime
 from typing import Literal, assert_never
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pyrate_limiter import Duration, Rate
@@ -856,6 +858,7 @@ async def create_event(
         draw_type=payload.draw_type,
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
+        timezone=payload.timezone,
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],
@@ -1067,20 +1070,25 @@ async def _enforce_draw_type_frozen(
 
 def _event_scheduling_facts(
     event: TournamentEvent,
-) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int]:
+) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int, str]:
     """The slice of an event the schedule solver actually reads (ADR "the
     schedule is solved; the call is pinned"), in a comparable shape — what the
     event PATCH compares before/after its write to decide whether a re-solve
     is owed.
 
-    Exactly two facts feed ``_load_solver_inputs``: each pool's identity,
+    Exactly three facts feed ``_load_solver_inputs``: each pool's identity,
     window and tables (its *name* is display and deliberately absent — a pool
-    rename must not spend a solve), and ``match_settings.length_games`` (the
-    duration input; ``rated`` is a results rule the solver never sees). Parsed
-    through the same models the write boundary validated the JSONB with
-    (parse, don't validate), and read off the ROW rather than the payload, so
-    "changed" means the row changed — a PATCH that re-sends the values the
-    event already holds compares equal and triggers nothing.
+    rename must not spend a solve), ``match_settings.length_games`` (the
+    duration input; ``rated`` is a results rule the solver never sees), and the
+    event ``timezone`` — the anchor that turns each Slot's wall-clock
+    ``{date,start,end}`` into the real instant the solver compares against
+    ``now`` (ADR "tournament times are timezone-aware instants"). Without the
+    timezone here a tz-only correction re-anchors every placement but compares
+    equal, so a stale ``infeasible``/``past_window`` verdict would never be
+    re-solved away. Parsed through the same models the write boundary validated
+    the JSONB with (parse, don't validate), and read off the ROW rather than
+    the payload, so "changed" means the row changed — a PATCH that re-sends the
+    values the event already holds compares equal and triggers nothing.
     """
     settings = MatchSettings.model_validate(event.match_settings)
     return (
@@ -1088,7 +1096,70 @@ def _event_scheduling_facts(
             (pool.id, pool.slot, tuple(pool.table_ids)) for pool in event_pools(event)
         ),
         settings.length_games,
+        event.timezone,
     )
+
+
+async def _reanchor_placements_for_timezone_change(
+    db: AsyncSession,
+    event_id: uuid.UUID,
+    *,
+    old_timezone: str,
+    new_timezone: str,
+) -> None:
+    """Preserve the **wall-clock** of an event's manual placements across a
+    timezone edit (ADR "tournament times are timezone-aware instants" —
+    "Wall-clock is preserved across a timezone edit").
+
+    A director who placed a fixture at 18:00 in ``America/Chicago`` and then
+    corrects the event to ``America/Denver`` means "the match is at 6 PM local; I
+    just fixed which local" — so the fixture must still read **18:00**, its stored
+    instant moving by the offset delta while its local reading stays put. The pool
+    ``Slot`` windows get this for free (they are wall-clock ``{date,start,end}``
+    components, untouched by the edit); ``scheduled_start`` is a ``timestamptz``
+    **instant** (B1/B2), so it is recomposed here or it would silently shift.
+
+    Only ``scheduled_start`` is recomposed — never ``pinned_at``. The distinction
+    is what the two columns *mean*: ``scheduled_start`` is a wall-clock *intent*
+    ("the match is at 6 PM local"), so correcting which local means recomposing it
+    to keep the intended reading; ``pinned_at`` is the real instant the call/
+    notification actually fired (``_wall_now()``), an **event-log timestamp** —
+    not an intent. Re-anchoring it would falsely claim the call went out at a
+    different instant. Its stored instant is therefore left fixed; the detail
+    BFF's ``venue_local`` re-renders that same instant in the new zone, so the
+    displayed "Called …" label correctly shifts while naming the identical moment.
+
+    Recovery is: read ``scheduled_start``'s wall-clock **in the OLD zone** (the one
+    the director saw when placing it), then re-anchor those same components in the
+    NEW zone — the same ``.replace(tzinfo=...)`` composition B2 uses for window
+    instants, so a wall-clock that lands in a DST gap/fold resolves one consistent
+    way rather than crashing. Only rows that actually carry a ``scheduled_start``
+    are read. The caller invokes this **only when the zone truly changed**, on its
+    open transaction under the tournament row lock, so the recompose commits
+    atomically with the ``timezone`` write it accompanies.
+    """
+    old_tz = ZoneInfo(old_timezone)
+    new_tz = ZoneInfo(new_timezone)
+
+    def _reanchor(instant: datetime) -> datetime:
+        wall_clock = instant.astimezone(old_tz).replace(tzinfo=None)
+        return wall_clock.replace(tzinfo=new_tz)
+
+    placed = (
+        (
+            await db.execute(
+                select(TournamentFixture).where(
+                    TournamentFixture.event_id == event_id,
+                    TournamentFixture.scheduled_start.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fixture in placed:
+        if fixture.scheduled_start is not None:
+            fixture.scheduled_start = _reanchor(fixture.scheduled_start)
 
 
 @router.patch(
@@ -1160,8 +1231,20 @@ async def update_event(
     # see ``_event_scheduling_facts``. A name/fee/predicates-only PATCH, or a
     # pool rename, compares equal and triggers nothing.
     facts_before = _event_scheduling_facts(event)
+    # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
+    # wall-clock of already-placed fixtures (ADR "Wall-clock is preserved across a
+    # timezone edit"), which needs the zone they were placed IN to recover it.
+    old_timezone = event.timezone
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(event, key, value)
+    if event.timezone != old_timezone:
+        # The zone truly moved (a PATCH re-sending the same zone falls through as a
+        # no-op): recompose every placement so its local reading is unchanged and
+        # only its stored instant shifts by the offset delta. The Slot windows are
+        # left alone — their wall-clock components are unchanged by definition.
+        await _reanchor_placements_for_timezone_change(
+            db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
+        )
     if facts_before != _event_scheduling_facts(event) and await event_has_draw(
         db, event.id
     ):
@@ -2043,9 +2126,12 @@ async def uncut_event_draw(
 
 async def _get_fixture_or_404(
     db: AsyncSession, tournament_id: uuid.UUID, fixture_id: uuid.UUID
-) -> tuple[TournamentFixture, MatchStatus | None]:
-    """The fixture named in the URL, scoped to the tournament, plus its linked match's
-    live status (``None`` when the fixture has not materialized).
+) -> tuple[TournamentFixture, MatchStatus | None, str]:
+    """The fixture named in the URL, scoped to the tournament, its linked match's
+    live status (``None`` when the fixture has not materialized), and the venue
+    ``timezone`` of its event (the IANA zone that anchors a placement's wall-clock
+    ``scheduled_start`` to a real instant — ADR "tournament times are timezone-aware
+    instants").
 
     Scoped by BOTH ids — fixture → event → tournament — so a fixture that exists but
     hangs off a *different* tournament is a 404, not a cross-tournament placement,
@@ -2061,7 +2147,7 @@ async def _get_fixture_or_404(
     """
     row = (
         await db.execute(
-            select(TournamentFixture, Match.status)
+            select(TournamentFixture, Match.status, TournamentEvent.timezone)
             .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(
@@ -2072,8 +2158,8 @@ async def _get_fixture_or_404(
     ).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Fixture not found.")
-    fixture, match_status = row
-    return fixture, match_status
+    fixture, match_status, event_timezone = row
+    return fixture, match_status, event_timezone
 
 
 def _enforce_fixture_placeable(match_status: MatchStatus | None) -> None:
@@ -2190,7 +2276,9 @@ async def place_fixture(
     _require_owner(tournament, current_user)
     # The fixture, scoped to this tournament (a mismatched pair is a 404), and its
     # match's live status — the single fact the freeze judges.
-    fixture, match_status = await _get_fixture_or_404(db, tournament_id, fixture_id)
+    fixture, match_status, event_timezone = await _get_fixture_or_404(
+        db, tournament_id, fixture_id
+    )
     # The one hard rule, before anything is written: a played-out fixture keeps its
     # placement. Everything else — an odd time, a dangling table ref — saves.
     _enforce_fixture_placeable(match_status)
@@ -2206,6 +2294,7 @@ async def place_fixture(
         fixture,
         table_id=payload.table_id,
         scheduled_start=payload.scheduled_start,
+        event_timezone=event_timezone,
     )
     # Scheduling-input trigger: the director just changed the solver's inputs — a new
     # pin to plan around, or a freed slot — so the board re-plans (ADR). Same

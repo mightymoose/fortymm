@@ -58,7 +58,7 @@ describe('PlayerTimelineBoard', () => {
     page.barsIn('u-1').focusBar('fx-a-1')
     const tip = await page.findTooltip()
     expect(tip).toHaveTextContent('player.1 vs player.4')
-    expect(tip).toHaveTextContent('T1 · Jun 13 · 09:00–09:35')
+    expect(tip).toHaveTextContent('T1 · Jun 13 · 9:00 AM–9:35 AM CDT')
   })
 
   it('offers no mutating control — every interactive element is a bar or the scroll region', () => {

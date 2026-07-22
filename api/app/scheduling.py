@@ -339,6 +339,16 @@ class ScheduleSnapshot:
     not be scheduled before it. ``rest_shadows`` carries the rest obligation
     of humans who just finished a match — orthogonal to ``fixtures``, whose
     completed entries stay dropped and unplaced.
+
+    ``is_live`` is the one policy fact the pure module needs about the
+    tournament's lifecycle: while the day is **live** a pool window's END is
+    treated as *advisory* — the effective end extends into the overrun so the
+    unplayed remainder keeps being placed instead of the solve wedging
+    infeasible the instant real time passes the window (ADR "the solver stops
+    wedging"). Pre-live (``False``, the default) the window stays a hard
+    constraint, so a provisional plan still flags "won't fit the planned
+    window". The fact is threaded in from the snapshot builder — this module
+    never looks up a tournament's status itself.
     """
 
     table_ids: tuple[TableId, ...]
@@ -349,6 +359,7 @@ class ScheduleSnapshot:
     in_progress: tuple[InProgressMatch, ...] = ()
     previous_plan: tuple[PreviousPlacement, ...] = ()
     rest_shadows: tuple[RestShadow, ...] = ()
+    is_live: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,16 +449,48 @@ class NoSingleCause:
     kind: Literal["no_single_cause"] = "no_single_cause"
 
 
+@dataclass(frozen=True, slots=True)
+class PastWindow:
+    """A pool whose **entire** planned playable window lies at or before ``now``
+    — the day was dated in the past (most easily via the silent "today" default
+    on an event that is now a day old, #1101), so no grid start ``≥ now`` can
+    ever land inside ``[start_min, end_min)``. Distinct from a *capacity*
+    shortfall (:class:`PoolOverCapacity`) or a too-tight current window
+    (:class:`WindowTooShortForMatch`): a past window is unschedulable because of
+    *when* it is, not how much has to fit, and the fix is "move the date", not
+    "add tables/time" — so it is reported as the more specific cause and
+    suppresses the tight-window/over-capacity arms for the same pool.
+
+    Named only **pre-live** — once the day is live the window end goes soft and
+    the remainder overruns instead of wedging (:attr:`SolveResult.overrunning`),
+    so a past window is a pre-live/hard-window fact and can never coexist with
+    ``overrunning`` (that rides on a *solved* live day).
+
+    Id-only, like every value this pure module emits: it carries just the
+    ``pool_id``, and resolving that to the offending venue-local calendar *date*
+    (via the pool's ``Slot``) is the DB-aware caller's job.
+    """
+
+    pool_id: PoolId
+    kind: Literal["past_window"] = "past_window"
+
+
 #: The closed set of reasons an infeasible solve can carry. A discriminated
 #: union over ``kind``: the first three arms are *certain* structural causes a
 #: guard proves without the solver (and are collected exhaustively — every one
-#: that holds, not just the first), the last is the best-effort residual when
+#: that holds, not just the first), ``PastWindow`` is the equally-certain
+#: pre-live "the day is dated in the past" cause (ADR "a past day is named, not
+#: disguised", #1101), and ``NoSingleCause`` is the best-effort residual when
 #: CP-SAT refuses but no structure does. Frozen dataclasses + a ``kind``
 #: discriminator so a downstream humanizer can ``match`` exhaustively with no
 #: catch-all. Ids + minute-ints only: turning these into names and wall-clock
 #: is a later, DB-aware layer's job, not this pure module's.
 InfeasibilityReason = (
-    PoolHasNoTables | WindowTooShortForMatch | PoolOverCapacity | NoSingleCause
+    PoolHasNoTables
+    | WindowTooShortForMatch
+    | PoolOverCapacity
+    | NoSingleCause
+    | PastWindow
 )
 
 
@@ -501,7 +544,8 @@ class SolveResult:
     :attr:`Verdict.infeasible` and empty (``()``) for every other verdict
     (optimal / feasible / unknown, including the trivial no-active-fixtures
     optimal). It carries the structured, id-and-minute-only explanation of
-    *why* the day does not fit — see :data:`InfeasibilityReason`.
+    *why* the day does not fit — see :data:`InfeasibilityReason` (including the
+    pre-live :class:`PastWindow` "the day is dated in the past" cause).
 
     ``conflicts`` is **orthogonal to the verdict**: it reports the in-progress-
     vs-in-progress overlaps found in the snapshot (two matches recorded on one
@@ -511,13 +555,25 @@ class SolveResult:
     (#1144) — so a fully-placed ``optimal`` / ``feasible`` result can still carry
     conflicts. It never adjudicates which match is real and never moves a live
     match; the report is the director-actionable "you double-booked" signal.
-    See :data:`PlacementConflict`."""
+    See :data:`PlacementConflict`.
+
+    ``overrunning`` is also orthogonal to the verdict — a *success qualifier*,
+    never a failure: it is ``True`` only on a solved (``optimal``/``feasible``)
+    **live** day whose plan actually runs an unpinned placed fixture past its
+    pool's **planned** window end — the soft window (ADR "the solver stops
+    wedging") let the remainder spill into the overrun rather than the day
+    wedging infeasible. It is always ``False`` pre-live (the window is hard),
+    and on an ``infeasible``/``unknown`` outcome (which placed nothing). A
+    schedule surface reads it to say "overrunning" rather than "doesn't fit".
+    Because it rides on a *solved live* day and :class:`PastWindow` is a
+    *pre-live* infeasibility, the two never coexist."""
 
     verdict: Verdict
     placements: tuple[PlacedFixture, ...]
     stats: SolveStats
     reasons: tuple[InfeasibilityReason, ...] = ()
     conflicts: tuple[PlacementConflict, ...] = ()
+    overrunning: bool = False
 
 
 def _no_plan(
@@ -637,7 +693,11 @@ class _SolverModel:
     table, ``durations`` its ``end_min``. A called fixture's start is *also* a
     variable now (it can slide later on its fixed table), so its solved start is
     read back from ``pin_starts``; ``pin_tables`` holds its immovable table and
-    ``pin_durations`` its length."""
+    ``pin_durations`` its length. ``planned_ends`` is each unpinned fixture's
+    pool's **planned** (pre-overrun) window end, and ``is_live`` whether the
+    window was softened — together they let :func:`solve` decide whether the
+    applied plan actually ran an unpinned fixture past its planned window (the
+    ``overrunning`` qualifier)."""
 
     model: cp_model.CpModel
     unpinned: tuple[ScheduleFixture, ...]
@@ -652,6 +712,11 @@ class _SolverModel:
     #: to the solve outcome), carried so :func:`solve` attaches them to whatever
     #: verdict CP-SAT reaches — a placed board can still report conflicts.
     conflicts: tuple[PlacementConflict, ...]
+    #: Each unpinned fixture's pool's **planned** (pre-overrun) window end, and
+    #: whether the day is live (its windows softened), so :func:`solve` can tell
+    #: whether the applied plan overran a planned window.
+    planned_ends: dict[FixtureId, int]
+    is_live: bool
 
 
 def _merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -730,6 +795,26 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for f in in_progress
     }
 
+    # Soft window once live (ADR "the solver stops wedging"). While the day is
+    # live a pool window's END is advisory: the effective end extends to
+    # ``max(window_end, now + overrun_span)`` so the unplayed remainder keeps
+    # being placed into the overrun rather than the solve going instantly
+    # infeasible the moment real time passes the window. ``overrun_span`` is
+    # enough room to serialize every unplaced fixture back-to-back on one table
+    # (its rest padding included) — a deliberately conservative bound so the
+    # window can never *itself* cause infeasibility while live; the objective
+    # still packs everything as early as possible, so a looser end only widens
+    # the search domain, never the answer. Pre-live the window stays hard (a
+    # provisional plan should still flag "won't fit the planned window"). Pins
+    # are unaffected either way: they carry no window constraint at all.
+    is_live = snapshot.is_live
+    overrun_span = sum(duration_of(f) + REST_MIN for f in unpinned) if is_live else 0
+
+    def effective_end(pool: SchedulePool) -> int:
+        if is_live:
+            return max(pool.window.end_min, now + overrun_span)
+        return pool.window.end_min
+
     # The *fixed* occupancy spans each in-progress match projects onto its table
     # and its two humans (the human span is rest-padded, so a shared-human
     # overlap is judged on the same padded interval per-player NoOverlap uses).
@@ -782,7 +867,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # pin forced past a *later* obstruction — an artificial INFEASIBLE.
     horizon = now + BUCKET_MIN
     for pool in snapshot.pools:
-        horizon = max(horizon, pool.window.end_min)
+        horizon = max(horizon, effective_end(pool))
     latest_obstruction = now
     for end in occupancy_ends.values():
         latest_obstruction = max(latest_obstruction, end)
@@ -793,16 +878,24 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
 
     # Structural feasibility first — but gathered *exhaustively*, not first-fail.
     # A day that cannot possibly be placed should explain every certain cause at
-    # once (the director fixes them together), not just the first one hit. Three
+    # once (the director fixes them together), not just the first one hit. Four
     # certain, per-structure causes need no solver to prove:
+    #   * PastWindow — a pool whose ENTIRE planned window is already past (pre-
+    #     live only): unschedulable because of *when* it is, not how much fits,
+    #     fixed by "move the date" (ADR "a past day is named, not disguised",
+    #     #1101). The most specific pre-live cause, so it dominates the tight-
+    #     window / over-capacity arms for the same pool.
     #   * PoolHasNoTables — a pool with unpinned fixtures but no tables to use,
     #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
     #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables.
-    # We dedupe to the *most specific* cause per pool: a no-tables or window-too-
-    # short pool is already unplaceable, so we don't also pile on over-capacity
-    # for it. Bucket bounds for the pools that *do* fit are recorded on the way,
-    # so the window is walked once; they are only consumed when no reason fires
-    # (the clean case populates every unpinned fixture).
+    # We dedupe to the *most specific* cause per pool: a past-window, no-tables,
+    # or window-too-short pool is already unplaceable, so we don't also pile on
+    # over-capacity for it. Bucket bounds for the pools that *do* fit are recorded
+    # on the way, so the window is walked once; they are only consumed when no
+    # reason fires (the clean case populates every unpinned fixture). The window
+    # bounds use the *effective* end — softened while live — so a live day never
+    # wedges here; ``planned_ends`` keeps the *planned* end so :func:`solve` can
+    # tell whether the plan actually overran it.
     #
     # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
     # are deliberately not constrained to their pool's tables or window (ADR-0790:
@@ -817,18 +910,31 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
 
     reasons: list[InfeasibilityReason] = []
     bucket_bounds: dict[FixtureId, tuple[int, int]] = {}
+    planned_ends: dict[FixtureId, int] = {}
     pools_short_window: set[PoolId] = set()
+
+    # Pre-live: name every pool whose whole planned window is already in the past
+    # (checked in snapshot pool order for a deterministic report). While live the
+    # window end is soft, so this never fires. These pools are dominated causes —
+    # skipped by the tight-window and over-capacity arms below.
+    pools_past_window: set[PoolId] = set()
+    if not is_live:
+        for pool in snapshot.pools:
+            if pool.id in unpinned_by_pool and pool.window.end_min <= now:
+                reasons.append(PastWindow(pool_id=pool.id))
+                pools_past_window.add(pool.id)
 
     # Per-fixture: does this unpinned fixture's window hold even one match
     # contiguously? (Pinned fixtures outrank windows, so they never apply here.)
-    # A no-tables pool is covered by PoolHasNoTables below, so skip its fixtures.
+    # A no-tables pool is covered by PoolHasNoTables below, and a past-window pool
+    # is already named above, so skip both here.
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
-        if not pool.table_ids:
+        if not pool.table_ids or pool.id in pools_past_window:
             continue
         needed = duration_of(fixture)
         earliest = max(now, pool.window.start_min)
-        latest = pool.window.end_min - needed
+        latest = effective_end(pool) - needed
         lo = -(-earliest // BUCKET_MIN)  # ceil: first grid start not in the past
         hi = latest // BUCKET_MIN  # floor: last grid start that still fits
         if lo > hi:
@@ -843,12 +949,15 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             pools_short_window.add(pool.id)
             continue
         bucket_bounds[fixture.id] = (lo, hi)
+        planned_ends[fixture.id] = pool.window.end_min
 
     # Per-pool (in snapshot order for determinism), most-specific cause wins.
     for pool in snapshot.pools:
         pool_unpinned = unpinned_by_pool.get(pool.id)
         if not pool_unpinned:
             continue  # no unpinned demand: no arm can prove a cause here
+        if pool.id in pools_past_window:
+            continue  # past-window (wrong day) dominates every capacity claim
         if not pool.table_ids:
             # A no-tables pool with ≥1 unpinned fixture: that fixture has nowhere
             # to go. A no-tables pool whose only fixtures are pinned/in-progress
@@ -871,7 +980,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         # CP-SAT proves it, surfacing as the honest NoSingleCause residual.
         required_min = sum(duration_of(f) for f in pool_unpinned)
         table_count = len(pool.table_ids)
-        capacity_min = (pool.window.end_min - pool.window.start_min) * table_count
+        # Effective end: pre-live this is the planned window; live it is softened
+        # so an overrunning live day is never falsely flagged over-capacity.
+        capacity_min = (effective_end(pool) - pool.window.start_min) * table_count
         if required_min > capacity_min:
             reasons.append(
                 PoolOverCapacity(
@@ -1102,6 +1213,8 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         pin_tables=pin_tables,
         pin_durations=pin_durations,
         conflicts=conflicts,
+        planned_ends=planned_ends,
+        is_live=is_live,
     )
 
 
@@ -1161,6 +1274,11 @@ def solve(
         return _no_plan(Verdict.unknown, wall_time_ms, conflicts=built.conflicts)
 
     placements: list[PlacedFixture] = []
+    # Overrunning: a live day whose soft window let an unpinned placed fixture
+    # actually run past its pool's *planned* end (see :class:`SolveResult`). Only
+    # unpinned placements are considered — pins outrank windows and may sit past
+    # their window by design (that is not the overrun the flag names).
+    overrunning = False
     # Called matches: table is the pin's fixed table; start is read back from
     # the solver (it slid later if forced, else sits at the promised floor).
     for fixture in built.pinned:
@@ -1177,12 +1295,15 @@ def solve(
     for fixture in built.unpinned:
         start_value = int(solver.Value(built.starts[fixture.id]))
         table = _chosen_table(solver, built.presences[fixture.id], fixture.id)
+        end_min = start_value + built.durations[fixture.id]
+        if built.is_live and end_min > built.planned_ends[fixture.id]:
+            overrunning = True
         placements.append(
             PlacedFixture(
                 fixture_id=fixture.id,
                 table_id=table,
                 start_min=start_value,
-                end_min=start_value + built.durations[fixture.id],
+                end_min=end_min,
             )
         )
     placements.sort(key=lambda p: (p.start_min, p.table_id, p.fixture_id))
@@ -1195,6 +1316,7 @@ def solve(
             objective=int(solver.ObjectiveValue()),
         ),
         conflicts=built.conflicts,
+        overrunning=overrunning,
     )
 
 

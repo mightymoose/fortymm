@@ -22,7 +22,7 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 
-import { conjoinWithAnd } from './helpers'
+import { conjoinWithAnd, fmtDate } from './helpers'
 import type { TournamentStatus } from './types'
 
 type ScheduleSolveWire = components['schemas']['ScheduleSolveRead']
@@ -91,6 +91,8 @@ type PoolOverCapacityWire =
   components['schemas']['PoolOverCapacityRead']
 type NoSingleCauseWire =
   components['schemas']['NoSingleCauseRead']
+type PastWindowReasonWire =
+  components['schemas']['PastWindowReasonRead']
 
 /**
  * One resolved reason an `infeasible` solve carries, in the domain's camelCase
@@ -107,6 +109,11 @@ type NoSingleCauseWire =
  *   window × tables can hold (a *certain* pre-check, not a CP-SAT guess).
  * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–3 all passed: a
  *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
+ * - **`past_window`** — a pool's ENTIRE planned window is already a day behind
+ *   now (ADR "a past day is named, not disguised"), fixed by moving the date, not
+ *   by adding tables/time. Carries the offending venue-local `date` (`YYYY-MM-DD`,
+ *   resolved server-side in the event's own timezone frame, so the client does no
+ *   tz math of its own).
  */
 export type InfeasibilityReason =
   | { kind: 'pool_has_no_tables'; poolName: string }
@@ -129,6 +136,7 @@ export type InfeasibilityReason =
       tableCount: number
     }
   | { kind: 'no_single_cause'; requiredMin: number; availableMin: number }
+  | { kind: 'past_window'; date: string }
 
 /** The wire arms, as they really arrive: snake_case, `kind` a literal so the
  * union below can discriminate on it. `satisfies` each against the generated
@@ -165,7 +173,12 @@ const noSingleCauseWireSchema = z.object({
   available_min: z.number().int(),
 }) satisfies z.ZodType<NoSingleCauseWire>
 
-/** The four arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
+const pastWindowReasonWireSchema = z.object({
+  kind: z.literal('past_window'),
+  date: z.string(),
+}) satisfies z.ZodType<PastWindowReasonWire>
+
+/** The five arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
  * has no arm and throws, which is exactly the boundary rule: a reason this
  * client cannot render must fail the parse, not blank the row. */
 export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
@@ -173,6 +186,7 @@ export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
   windowTooShortForMatchWireSchema,
   poolOverCapacityWireSchema,
   noSingleCauseWireSchema,
+  pastWindowReasonWireSchema,
 ])
 
 /** One wire arm → one domain `InfeasibilityReason`. Annotated `: InfeasibilityReason`
@@ -211,6 +225,10 @@ export function infeasibilityReasonFromWire(
         requiredMin: r.required_min,
         availableMin: r.available_min,
       }
+    case 'past_window':
+      // Domain shape equals the wire shape (single-word `date`), carries straight
+      // through — no snake→camel mapping needed.
+      return { kind: r.kind, date: r.date }
     default: {
       const exhaustive: never = r
       return exhaustive
@@ -341,6 +359,13 @@ export const placementConflictSchema =
  * failed before reaching it); `startedAt`/`finishedAt` are null while the run is
  * still queued/running; `wallTimeMs` and the two apply counts are null until it
  * finishes; `error` is set only on a `failed` run.
+ *
+ * `overrunning` is a *success qualifier*, not a stage: `true` only on a
+ * `succeeded` run whose plan ran a fixture past its pool's **planned** window
+ * end while the tournament is **live** (the window went soft so the day keeps
+ * being scheduled into the overrun instead of wedging "doesn't fit", ADR
+ * "the solver stops wedging"). Always `false` pre-live and on any run that
+ * placed nothing (`infeasible` / `failed`) — never `null`.
  */
 export interface ScheduleSolve {
   id: string
@@ -353,6 +378,7 @@ export interface ScheduleSolve {
   wallTimeMs: number | null
   fixturesPlaced: number | null
   fixturesPinned: number | null
+  overrunning: boolean
   error: string | null
   /** Why the day doesn't fit — **always a list**, never null (`[]` off the
    * infeasible path; one or more resolved causes on an `infeasible` row). Not a
@@ -382,6 +408,7 @@ export const scheduleSolveWireSchema = z.object({
   wall_time_ms: z.number().nullable(),
   fixtures_placed: z.number().int().nullable(),
   fixtures_pinned: z.number().int().nullable(),
+  overrunning: z.boolean(),
   error: z.string().nullable(),
   // Always present (a non-nullable list); each element is parsed through the
   // discriminated union, so an unknown arm `kind` fails the whole row.
@@ -411,6 +438,7 @@ export function scheduleSolveFromWire(
     wallTimeMs: s.wall_time_ms,
     fixturesPlaced: s.fixtures_placed,
     fixturesPinned: s.fixtures_pinned,
+    overrunning: s.overrunning,
     error: s.error,
     // Already snake→camel-mapped by `infeasibilityReasonSchema`'s transform.
     infeasibilityReasons: s.infeasibility_reasons,
@@ -457,6 +485,12 @@ export type SolveStripState =
        * `succeeded` row whose verdict is missing degrades to `feasible` — the
        * modest claim — rather than inventing optimality or refusing to render. */
       verdict: 'optimal' | 'feasible'
+      /** The plan ran a fixture past its pool's planned window while the
+       * tournament is live — the soft-window overrun (ADR "the solver stops
+       * wedging"). The strip surfaces this as a calm "overrunning" badge, NOT a
+       * "doesn't fit" error: the day is still being scheduled, just past plan.
+       * Only ever `true` on this `succeeded` arm. */
+      overrunning: boolean
       wallTimeMs: number | null
       finishedAt: string | null
       trigger: ScheduleSolveTrigger
@@ -467,7 +501,8 @@ export type SolveStripState =
       trigger: ScheduleSolveTrigger
       /** The resolved causes the day doesn't fit — the same list the ledger row
        * carries (`≥1` on an infeasible row; the strip renders each via
-       * `infeasibilityReasonCopy`, falling back to its generic sentence if empty). */
+       * `infeasibilityReasonCopy`, falling back to its generic sentence if empty).
+       * Includes the `past_window` arm — a day dated in the past. */
       reasons: InfeasibilityReason[]
     }
   | {
@@ -502,6 +537,7 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
       return {
         kind: 'succeeded',
         verdict: succeededVerdict(solve.verdict),
+        overrunning: solve.overrunning,
         wallTimeMs: solve.wallTimeMs,
         finishedAt: solve.finishedAt,
         trigger: solve.trigger,
@@ -623,6 +659,14 @@ export function infeasibilityReasonCopy(
       return {
         sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
         remedy: `Trim a field, widen a window, or split the event across days — adding tables won't help here.`,
+      }
+    case 'past_window':
+      // The venue-local `date` is formatted through the tournament's own date
+      // formatter (`fmtDate`, tz-safe local-midnight — no hand-slicing, no drift),
+      // so the director sees which day to move (ADR "a past day is named").
+      return {
+        sentence: `This event is dated in the past (${fmtDate(reason.date)}), so it can't be scheduled.`,
+        remedy: `Move the event to a future date, then run the scheduler again.`,
       }
     default: {
       const exhaustive: never = reason

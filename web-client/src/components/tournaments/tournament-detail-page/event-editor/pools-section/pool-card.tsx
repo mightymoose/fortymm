@@ -33,6 +33,10 @@ export interface PoolCardProps {
   pool: Pool
   /** The tables available to this tournament. */
   tables: TournamentTable[]
+  /** The event's IANA timezone (ADR 20260719) — the frame this pool's wall-clock
+   * window is in, rendered as a caption beside it. A pool carries no zone of its
+   * own; the event owns it, so the section hands it down. */
+  timezone: string
   /** When false (a non-creator), the card renders the pool as text — its name,
    * its window, and the tables it reserves — instead of a name box, three
    * date/time fields and a wall of table toggles (ADR 0015). */
@@ -68,7 +72,21 @@ const HEADER_BORDER = 'border-b border-[color:var(--border-subtle)]'
 const HEADER_ROW = cn(HEADER_ROW_INNER, HEADER_BORDER)
 const OVERLINE =
   'mb-1.5 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase'
-const WINDOW_ROW = 'grid grid-cols-3 gap-3 p-3.5'
+const WINDOW_WRAP = 'flex flex-col gap-2 p-3.5'
+const WINDOW_GRID = 'grid grid-cols-3 gap-3'
+
+/** The frame this pool's window is in (ADR 20260719): the event's timezone, shown
+ * beside every pool window so the wall-clock times below are never read in a vacuum.
+ * The event owns the zone — a pool does not carry its own — so it is handed down. A
+ * plain caption, not a control: a reader sees it as readily as an editor. */
+const PoolWindowTimezone = ({ timezone }: { timezone: string }) => (
+  <span
+    data-testid="pool-timezone-label"
+    className="font-mono text-[10px] tracking-wide text-[color:var(--fg-3)]"
+  >
+    {timezone}
+  </span>
+)
 
 /** How many tables the pool holds — a fact about the pool, so a viewer reads it
  * too. */
@@ -98,6 +116,7 @@ const reservedTableLabels = (pool: Pool, tables: TournamentTable[]): string =>
 export const PoolCard = ({
   pool,
   tables,
+  timezone,
   canEdit,
   removal,
   nameError,
@@ -137,20 +156,23 @@ export const PoolCard = ({
             hint or asterisk today, but a `Field` that grows one must not leak it
             here (ADR 0015). The date reads in words — the wire format is the
             editor's `<input type="date">` value, not a reader's. */}
-        <div className={WINDOW_ROW}>
-          <Field label="Date" readOnly value={fmtDate(pool.slot.date)} />
-          <Field
-            label="Start"
-            readOnly
-            value={pool.slot.start}
-            valueClassName="font-mono"
-          />
-          <Field
-            label="End"
-            readOnly
-            value={pool.slot.end}
-            valueClassName="font-mono"
-          />
+        <div className={WINDOW_WRAP}>
+          <PoolWindowTimezone timezone={timezone} />
+          <div className={WINDOW_GRID}>
+            <Field label="Date" readOnly value={fmtDate(pool.slot.date)} />
+            <Field
+              label="Start"
+              readOnly
+              value={pool.slot.start}
+              valueClassName="font-mono"
+            />
+            <Field
+              label="End"
+              readOnly
+              value={pool.slot.end}
+              valueClassName="font-mono"
+            />
+          </div>
         </div>
 
         <div className="px-3.5 pb-3.5">
@@ -223,39 +245,42 @@ export const PoolCard = ({
         )}
       </div>
 
-      <div className={WINDOW_ROW}>
-        <Field label="Date">
-          {(id) => (
-            <Input
-              id={id}
-              type="date"
-              value={pool.slot.date}
-              onChange={(e) => setSlot({ date: e.target.value })}
-            />
-          )}
-        </Field>
-        <Field label="Start">
-          {(id) => (
-            <Input
-              id={id}
-              type="time"
-              className="font-mono"
-              value={pool.slot.start}
-              onChange={(e) => setSlot({ start: e.target.value })}
-            />
-          )}
-        </Field>
-        <Field label="End">
-          {(id) => (
-            <Input
-              id={id}
-              type="time"
-              className="font-mono"
-              value={pool.slot.end}
-              onChange={(e) => setSlot({ end: e.target.value })}
-            />
-          )}
-        </Field>
+      <div className={WINDOW_WRAP}>
+        <PoolWindowTimezone timezone={timezone} />
+        <div className={WINDOW_GRID}>
+          <Field label="Date">
+            {(id) => (
+              <Input
+                id={id}
+                type="date"
+                value={pool.slot.date}
+                onChange={(e) => setSlot({ date: e.target.value })}
+              />
+            )}
+          </Field>
+          <Field label="Start">
+            {(id) => (
+              <Input
+                id={id}
+                type="time"
+                className="font-mono"
+                value={pool.slot.start}
+                onChange={(e) => setSlot({ start: e.target.value })}
+              />
+            )}
+          </Field>
+          <Field label="End">
+            {(id) => (
+              <Input
+                id={id}
+                type="time"
+                className="font-mono"
+                value={pool.slot.end}
+                onChange={(e) => setSlot({ end: e.target.value })}
+              />
+            )}
+          </Field>
+        </div>
       </div>
 
       <div className="px-3.5 pb-3.5">

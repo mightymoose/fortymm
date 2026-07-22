@@ -41,6 +41,7 @@ describe('parseLatestScheduleSolve', () => {
         verdict: 'feasible',
         wall_time_ms: 1200,
         fixtures_placed: 7,
+        overrunning: true,
       }),
     )
     expect(parsed).toMatchObject({
@@ -48,6 +49,7 @@ describe('parseLatestScheduleSolve', () => {
       verdict: 'feasible',
       wallTimeMs: 1200,
       fixturesPlaced: 7,
+      overrunning: true,
       requestedAt: '2026-06-13T09:00:00Z',
     })
   })
@@ -145,6 +147,12 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
     expect(() =>
       infeasibilityReasonSchema.parse({ kind: 'sunspots', pool_name: 'Pool B' }),
     ).toThrow()
+  })
+
+  it('parses past_window, carrying the offending venue-local date straight through', () => {
+    expect(
+      infeasibilityReasonSchema.parse({ kind: 'past_window', date: '2026-07-18' }),
+    ).toEqual({ kind: 'past_window', date: '2026-07-18' })
   })
 
   it('fails the whole solve row when one reason arm is unknown — the boundary rejects, the query fails', () => {
@@ -373,6 +381,23 @@ describe('infeasibilityReasonCopy', () => {
     expect(copy.remedy).toContain("adding tables won't help here")
   })
 
+  it('words past_window as a dated "in the past" sentence, remedy "move the date"', () => {
+    expect(
+      infeasibilityReasonCopy({ kind: 'past_window', date: '2026-07-18' }),
+    ).toEqual({
+      sentence: 'This event is dated in the past (Jul 18, 2026), so it can\'t be scheduled.',
+      remedy: 'Move the event to a future date, then run the scheduler again.',
+    })
+  })
+
+  it('formats the venue-local date without a timezone shift — the day named is the day sent', () => {
+    // A plain `YYYY-MM-DD` must render as that calendar day whatever the runner's
+    // timezone (fmtDate parses to local midnight, never a UTC instant).
+    expect(
+      infeasibilityReasonCopy({ kind: 'past_window', date: '2026-01-01' }).sentence,
+    ).toContain('Jan 1, 2026')
+  })
+
   it('gives each arm a distinct sentence and remedy', () => {
     const arms: InfeasibilityReason[] = [
       { kind: 'pool_has_no_tables', poolName: 'Pool B' },
@@ -395,6 +420,7 @@ describe('infeasibilityReasonCopy', () => {
         tableCount: 5,
       },
       { kind: 'no_single_cause', requiredMin: 360, availableMin: 480 },
+      { kind: 'past_window', date: '2026-07-18' },
     ]
     const sentences = arms.map((a) => infeasibilityReasonCopy(a).sentence)
     expect(new Set(sentences).size).toBe(arms.length)
@@ -460,10 +486,18 @@ describe('solveStripState', () => {
     ).toEqual({
       kind: 'succeeded',
       verdict: 'optimal',
+      overrunning: false,
       wallTimeMs: 850,
       finishedAt: '2026-06-13T09:00:02Z',
       trigger: 'go_live',
     })
+  })
+
+  it('carries the overrunning qualifier onto the succeeded arm — the soft-window overrun, not a failure', () => {
+    const state = solveStripState(
+      buildScheduleSolve({ status: 'succeeded', overrunning: true }),
+    )
+    expect(state).toMatchObject({ kind: 'succeeded', overrunning: true })
   })
 
   it('degrades a succeeded row with no verdict to the modest claim (feasible), never a blank', () => {
@@ -477,6 +511,27 @@ describe('solveStripState', () => {
         buildScheduleSolve({ status: 'infeasible', verdict: 'infeasible' }),
       ),
     ).toMatchObject({ kind: 'infeasible' })
+  })
+
+  it('threads the resolved reasons — including a past_window arm — onto the infeasible arm', () => {
+    const state = solveStripState(
+      buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        infeasibilityReasons: [{ kind: 'past_window', date: '2026-07-18' }],
+      }),
+    )
+    expect(state).toMatchObject({
+      kind: 'infeasible',
+      reasons: [{ kind: 'past_window', date: '2026-07-18' }],
+    })
+  })
+
+  it('carries an empty reasons list for an infeasibility with no resolved cause', () => {
+    const state = solveStripState(
+      buildScheduleSolve({ status: 'infeasible', verdict: 'infeasible' }),
+    )
+    expect(state).toMatchObject({ kind: 'infeasible', reasons: [] })
   })
 
   it('maps failed to its arm, carrying the server error for the detail line', () => {

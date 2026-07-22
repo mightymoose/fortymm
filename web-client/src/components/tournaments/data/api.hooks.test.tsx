@@ -1198,10 +1198,17 @@ describe('usePlaceFixture', () => {
     expect(seen!.url).toContain('/v1/tournaments/t-1/fixtures/fx-1/placement')
     expect(seen!.body).toEqual({ table_id: 't2', scheduled_start: '2026-06-13T10:30:00' })
     // Parsed into the domain's camelCase, like every other fixture the layer returns.
+    // The predicted start comes back as a `FixtureTime` object (ADR "tournament times
+    // are timezone-aware instants") — a UTC instant for geometry + the venue-local label
+    // — not the naive wall-clock the WRITE body still sends (the server anchors that).
     expect(fixture).toMatchObject({
       id: 'fx-1',
       tableId: 't2',
-      scheduledStart: '2026-06-13T10:30:00',
+      scheduledStart: {
+        instant: '2026-06-13T10:30:00Z',
+        localLabel: '10:30 AM',
+        tzAbbrev: 'CDT',
+      },
     })
   })
 

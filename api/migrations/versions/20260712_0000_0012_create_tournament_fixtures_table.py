@@ -88,12 +88,13 @@ def upgrade() -> None:
         # ``table_catalogue`` JSONB (a ``TournamentTable.id``), the same pattern as
         # ``pool_id`` — NOT a foreign key, there is no tables table. NULL = unassigned.
         sa.Column("table_id", sa.Text(), nullable=True),
-        # ``scheduled_start`` is a placement's predicted start — a NAIVE wall-clock
-        # timestamp (TIMESTAMP WITHOUT TIME ZONE), a DELIBERATE exemption from the
-        # "datetimes are always timezone-aware" rule (ADR-0790): it is checked against a
-        # pool's Slot window, which is itself stored as naive wall-clock, and matching
-        # that frame is the point. Do NOT "fix" this to timezone=True. NULL = unassigned.
-        sa.Column("scheduled_start", sa.DateTime(timezone=False), nullable=True),
+        # ``scheduled_start`` is a placement's predicted start — a ``timestamptz``
+        # instant (TIMESTAMP WITH TIME ZONE), composed server-side from the event's
+        # Slot wall-clock components anchored by the event timezone. The 2026-07-19 ADR
+        # "tournament times are timezone-aware instants" supersedes ADR-0790's
+        # naive-wall-clock exemption on the representation question and moves this onto
+        # timezone-aware instants. NULL = unassigned.
+        sa.Column("scheduled_start", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

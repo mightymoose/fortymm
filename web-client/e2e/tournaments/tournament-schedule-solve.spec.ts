@@ -63,6 +63,52 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expectAxeClean(page, 'schedule tab — succeeded solve on the strip')
   })
 
+  test('an overrunning succeeded solve shows a calm "overrunning" badge on the strip — the live day ran past its planned window, still scheduled, never a "doesn’t fit" error', async ({
+    page,
+  }) => {
+    // The `overrunning` boolean crosses the real wire on the schedule-solve read;
+    // the client Zod-parses it in the queryFn and the strip surfaces it here.
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      status: 'live',
+      latestSolve: buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'feasible',
+        trigger: 'match_completed',
+        overrunning: true,
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('succeeded')
+    await expect(state).toBeVisible()
+    await expect(pom.overrunningBadge).toBeVisible()
+    await expect(state).toContainText('Overrunning')
+    await expect(state).toContainText('running past its planned window')
+    // A calm success qualifier, NOT the infeasible "doesn't fit" arm.
+    await expect(pom.solveStripState('infeasible')).toHaveCount(0)
+    await expect(state).not.toContainText("doesn't fit")
+
+    await expectAxeClean(page, 'schedule tab — overrunning solve on the strip')
+  })
+
+  test('a normal in-window succeeded solve shows NO overrunning badge — the discriminating case', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'succeeded',
+        verdict: 'optimal',
+        overrunning: false,
+      }),
+    })
+    await pom.openScheduleTab()
+
+    await expect(pom.solveStripState('succeeded')).toBeVisible()
+    await expect(pom.overrunningBadge).toHaveCount(0)
+  })
+
   test('Run scheduler POSTs, and the strip walks solving → succeeded on the polling loop — placements landing with it', async ({
     page,
   }) => {
@@ -148,10 +194,53 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(pom.runSchedulerNotice).not.toBeVisible()
     await expect(pom.toasts).toHaveCount(0)
     await expect(state).not.toContainText('infeasible')
+    // A GENERIC capacity infeasibility (`infeasibility_reasons: []`): the generic
+    // copy, and NO specific dated past-window reason — the discriminating case.
+    await expect(pom.pastWindowMessage).toHaveCount(0)
     // The director can act on it immediately: the button is live again.
     await expect(pom.runScheduler).toBeEnabled()
 
     await expectAxeClean(page, 'schedule tab — infeasible solve on the strip')
+  })
+
+  test('names a wholly-past window as its own dated reason arm — the `past_window` fact crosses the real wire', async ({
+    page,
+  }) => {
+    // A `past_window` arm of `infeasibility_reasons` crosses the real wire on the
+    // schedule-solve read; the client Zod-parses it in the queryFn and the strip
+    // renders the SPECIFIC dated reason instead of the generic "doesn't fit" (ADR
+    // "a past day is named, not disguised").
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        trigger: 'manual',
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        infeasibility_reasons: [{ kind: 'past_window', date: '2026-07-18' }],
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('infeasible')
+    await expect(state).toBeVisible()
+    // The specific, dated, actionable reason names the offending venue-local day…
+    await expect(pom.pastWindowMessage).toBeVisible()
+    await expect(state).toContainText('This day has already passed')
+    await expect(state).toContainText('Jul 18, 2026')
+    await expect(state).toContainText('dated in the past')
+    await expect(state).toContainText('Move the event to a future date')
+    // …INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
+    await expect(state).not.toContainText('Add tables, widen a pool window')
+    // Still a designed state, not an error: nothing red rings, and the raw wire
+    // code never reaches the UI.
+    await expect(pom.runSchedulerNotice).not.toBeVisible()
+    await expect(pom.toasts).toHaveCount(0)
+    await expect(state).not.toContainText('past_window')
+    await expect(pom.runScheduler).toBeEnabled()
+
+    await expectAxeClean(page, 'schedule tab — past-window infeasible solve on the strip')
   })
 
   test('answers the coded 422 with the designed "cut a draw first" message, inline on the strip', async ({

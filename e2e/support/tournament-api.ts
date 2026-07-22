@@ -123,6 +123,12 @@ export async function seedTournament(
       headers: { [CSRF_HEADER]: director.csrf },
       data: {
         name: 'Open Singles',
+        // The compose stack's clock is UTC, and the solver-schedule spec builds
+        // its pool window around the stack's real NOW; anchoring the event to
+        // UTC keeps a naive wall-clock window resolving to the same instant it
+        // did before events carried a venue timezone (ADR "tournament times are
+        // timezone-aware instants"), so the window still brackets NOW.
+        timezone: 'UTC',
         format: 'singles',
         draw_type: 'round-robin',
         entry_fee: 0,
@@ -230,6 +236,15 @@ export async function cutDraw(
 /** One fixture of the tournament detail, scoped to the scheduling facts a spec
  * reads: who plays (entry refs), the materialized match, the ADR-0790
  * placement columns, and the ADR "the call is pinned" pin facts. */
+/** A displayed fixture time (`FixtureTimeRead` on the wire): a UTC `instant` for
+ * geometry plus the server-composed venue-local label + tz abbreviation for
+ * display (ADR "tournament times are timezone-aware instants"). */
+export interface FixtureTime {
+  readonly instant: string
+  readonly local_label: string
+  readonly tz_abbrev: string
+}
+
 export interface FixtureDetail {
   readonly id: string
   readonly entry_a_id: string | null
@@ -237,10 +252,10 @@ export interface FixtureDetail {
   readonly match_id: string | null
   readonly match_status: string | null
   readonly table_id: string | null
-  /** Naive wall-clock `YYYY-MM-DDTHH:MM:SS` in the venue's frame, or null. */
-  readonly scheduled_start: string | null
+  /** The placement's predicted start (venue-local label + UTC instant), or null. */
+  readonly scheduled_start: FixtureTime | null
   /** Null = the placement is an estimate; set = the fixture was CALLED. */
-  readonly pinned_at: string | null
+  readonly pinned_at: FixtureTime | null
   readonly call_notified_count: number
 }
 

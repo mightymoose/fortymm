@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildTournamentFixtureRead } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildFixtureTimeRead,
+  buildTournamentFixtureRead,
+} from '@/mocks/factories/tournaments/tournament.factory'
 import { parseFixtures } from './fixtures'
 
 /** The wire fixture as an untyped blob — which is what it really is when it comes off
@@ -83,33 +86,42 @@ describe('parseFixtures — the happy path', () => {
     expect(fixture.matchStatus).toBe('completed')
   })
 
-  // A placed fixture (ADR-0790): assigned a table and a predicted start. Both are
-  // carried through as-is — the naive wall-clock start stays the string it arrives as,
-  // never coerced to a `Date` at this boundary.
-  it('carries a placed fixture through — table id and predicted start', () => {
+  // A placed fixture (ADR-0790): assigned a table and a predicted start. The start
+  // now arrives as a `FixtureTimeRead` object (ADR "tournament times are timezone-aware
+  // instants") — a UTC `instant` for geometry plus the server-rendered venue-local
+  // label + tz abbrev — and is parsed into the camelCase `FixtureTime`, not sliced.
+  it('carries a placed fixture through — table id and the predicted start’s instant + venue label', () => {
     const [fixture] = parseFixtures([
       wire({
         table_id: 'table-3',
-        scheduled_start: '2026-06-09T14:30:00',
+        scheduled_start: buildFixtureTimeRead('2026-06-09T14:30:00'),
       }),
     ])
 
     expect(fixture.tableId).toBe('table-3')
-    expect(fixture.scheduledStart).toBe('2026-06-09T14:30:00')
+    expect(fixture.scheduledStart).toEqual({
+      instant: '2026-06-09T14:30:00Z',
+      localLabel: '2:30 PM',
+      tzAbbrev: 'CDT',
+    })
   })
 
   // A decided fixture's actual completion time (as opposed to `scheduled_start`'s
-  // merely predicted one) — carried through as-is, naive wall-clock like the other
-  // two placement stamps.
-  it('carries a decided fixture’s actual completion time through', () => {
+  // merely predicted one) — the same `FixtureTimeRead` object shape as the other two
+  // placement stamps.
+  it('carries a decided fixture’s actual completion time through — as an instant + venue label', () => {
     const [fixture] = parseFixtures([
       wire({
         match_status: 'completed',
-        completed_at: '2026-06-09T15:12:00',
+        completed_at: buildFixtureTimeRead('2026-06-09T15:12:00'),
       }),
     ])
 
-    expect(fixture.completedAt).toBe('2026-06-09T15:12:00')
+    expect(fixture.completedAt).toEqual({
+      instant: '2026-06-09T15:12:00Z',
+      localLabel: '3:12 PM',
+      tzAbbrev: 'CDT',
+    })
   })
 })
 
@@ -143,6 +155,12 @@ describe('parseFixtures — the boundary', () => {
     { what: 'a table_id of the wrong type', payload: [wire({ table_id: 7 })] },
     { what: 'an absent scheduled_start', payload: [{ ...(wire() as object), scheduled_start: undefined }] },
     { what: 'a scheduled_start of the wrong type', payload: [wire({ scheduled_start: 7 })] },
+    // The pre-ADR naive wall-clock STRING is now a shape this client cannot read: the
+    // server ships a `FixtureTimeRead` object, and a bare string would leak inward with
+    // no instant to place a bar on and no tz to label (ADR "timezone-aware instants").
+    { what: 'a scheduled_start that is a bare naive string (the pre-ADR shape)', payload: [wire({ scheduled_start: '2026-06-09T14:30:00' })] },
+    // A FixtureTimeRead missing its tz_abbrev can't label the timezone the ADR requires.
+    { what: 'a scheduled_start object missing tz_abbrev', payload: [wire({ scheduled_start: { instant: '2026-06-09T14:30:00Z', local_label: '2:30 PM' } })] },
     { what: 'an absent completed_at', payload: [{ ...(wire() as object), completed_at: undefined }] },
     { what: 'a completed_at of the wrong type', payload: [wire({ completed_at: 7 })] },
     // A draw is a LIST. `null` is not an empty draw: an event with no draw sends `[]`,

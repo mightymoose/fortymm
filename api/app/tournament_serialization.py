@@ -321,6 +321,10 @@ def serialize_event(
             "draw_type": e.draw_type,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
+            # The event's venue timezone anchors its wall-clock ``Slot`` windows to
+            # real instants (ADR "tournament times are timezone-aware instants"); it
+            # rides on the read so the client knows the frame the Slot is stated in.
+            "timezone": e.timezone,
             "slot": e.slot,
             "match_settings": e.match_settings,
             "predicates": e.predicates,

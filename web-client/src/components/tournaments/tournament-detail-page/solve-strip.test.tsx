@@ -94,6 +94,32 @@ describe('SolveStrip', () => {
     )
   })
 
+  it('renders an overrunning succeeded run as a calm badge on the success line — never a "doesn\'t fit" error', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', overrunning: true }),
+    })
+    // Still the success state, not the infeasible/failed arms.
+    expect(solveStripPage.queryState('succeeded')).not.toBeNull()
+    expect(solveStripPage.queryState('infeasible')).toBeNull()
+    expect(solveStripPage.queryState('failed')).toBeNull()
+    // The explicit overrunning surface: badge + calm explanatory line.
+    expect(solveStripPage.queryOverrunning()).not.toBeNull()
+    const text = solveStripPage.getStateText('succeeded')
+    expect(text).toContain('Overrunning')
+    expect(text).toContain('running past its planned window')
+    // Calm, not error framing.
+    expect(text).not.toContain("doesn't fit")
+  })
+
+  it('shows NO overrunning surface on a normal (in-window) succeeded solve — the discriminating case', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded', overrunning: false }),
+    })
+    expect(solveStripPage.queryState('succeeded')).not.toBeNull()
+    expect(solveStripPage.queryOverrunning()).toBeNull()
+    expect(solveStripPage.getStateText('succeeded')).not.toContain('Overrunning')
+  })
+
   it('renders infeasible as a DESIGNED state in the director\'s terms — the day does not fit — not an error banner, naming EACH resolved cause', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
@@ -129,6 +155,38 @@ describe('SolveStrip', () => {
     expect(text).not.toContain('infeasible')
     // And it is a state, not a refusal: no notice rings.
     expect(solveStripPage.queryNotice()).toBeNull()
+    // No named cause here (generic capacity infeasibility): NO specific dated
+    // message, only the generic copy — the discriminating case.
+    expect(solveStripPage.queryPastWindow()).toBeNull()
+  })
+
+  it('names a wholly-past window as its own dated reason arm — "dated in the past, move the date", NOT the generic "doesn\'t fit" body', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibilityReasons: [{ kind: 'past_window', date: '2026-07-18' }],
+      }),
+    })
+    // Still the designed infeasible state, not an error banner.
+    expect(solveStripPage.queryState('infeasible')).not.toBeNull()
+    expect(solveStripPage.queryState('failed')).toBeNull()
+    expect(solveStripPage.queryNotice()).toBeNull()
+    // The past_window arm renders its own discoverable, dated reason row.
+    expect(solveStripPage.queryPastWindow()).not.toBeNull()
+    const text = solveStripPage.getStateText('infeasible')
+    // A dated-past headline, since a past window is the whole story here.
+    expect(text).toContain('This day has already passed')
+    // The specific, dated, actionable reason names the offending venue-local day.
+    expect(text).toContain('Jul 18, 2026')
+    expect(text).toContain('dated in the past')
+    expect(text).toContain('Move the event to a future date')
+    // INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
+    expect(text).not.toContain('Add tables, widen a pool window')
+    // The raw wire code never reaches the UI.
+    expect(text).not.toContain('past_window')
   })
 
   it('falls back to the generic sentence if an infeasible row carries no reasons — the strip never renders bodyless', () => {
