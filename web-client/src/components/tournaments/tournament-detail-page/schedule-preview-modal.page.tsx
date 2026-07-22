@@ -61,6 +61,14 @@ const scoped = (container: Container) => ({
   findOverrideInput(eventName: string) {
     return container.findByLabelText(`Field size for ${eventName}`)
   },
+  /** The inline red validation message beneath one override input, by event id —
+   * present only while that override is invalid (empty / NaN / `< 2`). */
+  queryOverrideError(eventId: string) {
+    return container.queryByTestId(`preview-override-error-${eventId}`)
+  },
+  findOverrideError(eventId: string) {
+    return container.findByTestId(`preview-override-error-${eventId}`)
+  },
   getRerunButton() {
     return container.getByRole('button', { name: /Re-run/ })
   },

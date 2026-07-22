@@ -212,6 +212,44 @@ describe('SchedulePreviewModal', () => {
     )
   })
 
+  // The code-review fix: an invalid override must not leave the director staring at
+  // a silently-dead Re-run button (`web-client/CLAUDE.md`, `## Forms`). Emptying a
+  // field size (or typing a sub-2 count) has to SAY which field is wrong and why —
+  // an inline red message + `aria-invalid` on that input — not just grey the button.
+  it('shows an inline error and flags the input when an override is invalid', async () => {
+    schedulePreviewModalPage.render()
+
+    await schedulePreviewModalPage.findVerdict()
+
+    // No error at rest — an untouched field falls back to the drawn size.
+    expect(schedulePreviewModalPage.queryOverrideError('ev-1')).toBeNull()
+
+    // Empty the field size: below-minimum, so it can't drive an honest re-run.
+    const input = await schedulePreviewModalPage.findOverrideInput('Open Singles')
+    await userEvent.clear(input)
+
+    // The user SEES which field is wrong and why — the load-bearing assertion.
+    const error = await schedulePreviewModalPage.findOverrideError('ev-1')
+    expect(error).toHaveTextContent('Enter a number of at least 2')
+    // …and the input is flagged and points at that message.
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAttribute(
+      'aria-describedby',
+      'preview-override-error-ev-1',
+    )
+    // Re-run stays disabled while invalid (belt-and-suspenders — the error text is
+    // what makes the disabled state legible).
+    expect(schedulePreviewModalPage.getRerunButton()).toBeDisabled()
+
+    // Typing a valid count clears both the message and the flag.
+    await userEvent.type(input, '6')
+    await waitFor(() =>
+      expect(schedulePreviewModalPage.queryOverrideError('ev-1')).toBeNull(),
+    )
+    expect(input).toHaveAttribute('aria-invalid', 'false')
+    expect(schedulePreviewModalPage.getRerunButton()).not.toBeDisabled()
+  })
+
   it('labels the wait state as "Waiting…" while the job is queued', async () => {
     mockSchedulePreviewPollEndpoint(server, () =>
       HttpResponse.json(buildPreviewJobState({ status: 'queued' })),

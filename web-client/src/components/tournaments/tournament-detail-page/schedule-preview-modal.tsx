@@ -213,18 +213,26 @@ function useElapsedSeconds(running: boolean): number {
   return sec
 }
 
-/** True when a per-event override the director typed cannot drive an honest re-run:
- * an emptied field (`NaN`) or a sub-2 count (a round-robin needs two players). The
- * displayed value falls back to the drawn field size (`overrides[id] ?? fieldSize`),
- * so an untouched field is never "invalid" — only a value they actually typed is. */
+/** True when a single per-event override the director typed cannot drive an honest
+ * re-run: an emptied field (`NaN`) or a sub-2 count (a round-robin needs two
+ * players). The displayed value falls back to the drawn field size
+ * (`overrides[id] ?? fieldSize`), so an *untouched* field is never "invalid" — only
+ * a value they actually typed is (`undefined` means untouched). */
+function isInvalidOverride(typed: number | undefined): boolean {
+  return typed !== undefined && (!Number.isFinite(typed) || typed < 2)
+}
+
+/** The inline message shown in red beneath an override input that can't drive a
+ * re-run — so the guard is legible ("which field, and why") instead of a silently
+ * dead Re-run button (`web-client/CLAUDE.md`, `## Forms`). */
+const OVERRIDE_ERROR = 'Enter a number of at least 2'
+
+/** True when *any* per-event override is invalid — gates the Re-run button. */
 function hasInvalidOverride(
   fieldSummaries: PreviewEnqueued['fieldSummaries'],
   overrides: Record<string, number>,
 ): boolean {
-  return fieldSummaries.some((s) => {
-    const typed = overrides[s.eventId]
-    return typed !== undefined && (!Number.isFinite(typed) || typed < 2)
-  })
+  return fieldSummaries.some((s) => isInvalidOverride(overrides[s.eventId]))
 }
 
 interface PreviewBodyProps {
@@ -411,6 +419,8 @@ const PreviewBody = ({
           // Fall back to the drawn field size until the director types; render an
           // emptied field as blank (not the string "NaN").
           const shown = typed ?? s.fieldSize
+          const invalid = isInvalidOverride(typed)
+          const errorId = `preview-override-error-${s.eventId}`
           return (
             <label
               key={s.eventId}
@@ -421,6 +431,12 @@ const PreviewBody = ({
                 type="number"
                 min={2}
                 aria-label={`Field size for ${eventName(s.eventId)}`}
+                // The guard is spoken, not silent: an invalid value flags the input
+                // (`aria-invalid`) and points at its own red message below
+                // (`aria-describedby`), the same way the event editor's numeric
+                // fields surface a bad value (`event-editor/basics-section.tsx`).
+                aria-invalid={invalid}
+                aria-describedby={invalid ? errorId : undefined}
                 className="w-24"
                 value={Number.isFinite(shown) ? String(shown) : ''}
                 onChange={(e) =>
@@ -433,6 +449,15 @@ const PreviewBody = ({
                   }))
                 }
               />
+              {invalid && (
+                <p
+                  id={errorId}
+                  data-testid={errorId}
+                  className="text-[11px] text-[color:var(--loss)]"
+                >
+                  {OVERRIDE_ERROR}
+                </p>
+              )}
             </label>
           )
         })}
