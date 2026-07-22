@@ -87,7 +87,7 @@ from app.match_serialization import (
     serialize_details,
     view_extras,
 )
-from app.models import Match, Tournament, TournamentEvent, User
+from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
 from app.player_matches import paginated_player_matches
@@ -103,7 +103,15 @@ from app.schedule_preview_solve import (
     request_schedule_preview as request_schedule_preview_core,
 )
 from app.schedule_preview_solve import wait_for_preview
+from app.schedule_solve_queries import (
+    LIST_DEFAULT_PAGE_SIZE,
+    LIST_MAX_PAGE_SIZE,
+)
+from app.schedule_solve_queries import (
+    list_schedule_solves as list_schedule_solves_core,
+)
 from app.schedule_solves import latest_solve
+from app.schemas.admin import AdminScheduleSolveRead
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.schemas.player import PlayerMatchListResponse, PlayerRead
 from app.schemas.schedule_preview import (
@@ -112,7 +120,13 @@ from app.schemas.schedule_preview import (
 )
 from app.schemas.tournament import (
     ScheduleSolveRead,
+    TournamentCreate,
     TournamentDetailRead,
+    TournamentEntrantRead,
+    TournamentEventCreate,
+    TournamentEventRead,
+    TournamentEventUpdate,
+    TournamentFixturePlacementUpdate,
     TournamentFixtureRead,
     TournamentRead,
     TournamentUpdate,
@@ -121,23 +135,53 @@ from app.services.match_service import MatchService
 from app.tournament_draw_service import cut_event_draw as cut_event_draw_core
 from app.tournament_draw_service import uncut_event_draw as uncut_event_draw_core
 from app.tournament_edit import edit_tournament as edit_tournament_core
+from app.tournament_entries import enter_event as enter_event_core
+from app.tournament_entries import withdraw_from_event as withdraw_from_event_core
 from app.tournament_errors import (
+    DrawTypeFrozenError,
     DrawUnderWayError,
+    EntryNotFoundError,
+    EntryRefusedError,
     EventNotFoundError,
+    FixtureNotFoundError,
+    FixturePlacementFrozenError,
+    IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    NoDefaultLeagueError,
     NoDrawnEventsError,
+    NonSinglesEntryError,
+    NotAllowedToEnterError,
+    NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlayerNotFoundError,
+    PoolSetFrozenError,
     ScheduleQueueUnavailableError,
+    TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
+    TournamentNotReadyToGoLiveError,
+    WithdrawalRegistrationClosedError,
+)
+from app.tournament_events import create_event as create_event_core
+from app.tournament_events import delete_event as delete_event_core
+from app.tournament_events import update_event as update_event_core
+from app.tournament_lifecycle import create_tournament as create_tournament_core
+from app.tournament_lifecycle import delete_tournament as delete_tournament_core
+from app.tournament_lifecycle import (
+    transition_tournament as transition_tournament_core,
 )
 from app.tournament_list import list_tournament_details, tournament_detail
+from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import (
     fixtures_by_event,
     visible_to,
 )
-from app.tournament_serialization import serialize
+from app.tournament_serialization import (
+    serialize,
+    shape_created_event_read,
+    shape_event_read,
+)
 from app.tournament_solve_service import (
     request_schedule_solve as request_schedule_solve_core,
 )
@@ -169,6 +213,32 @@ MY_MATCHES_DEFAULT_PAGE_SIZE = 25
 # the MCP adapter stays router-free; ``get_tournament`` asks it through the one shared
 # ``user_has_permission`` (``app.rbac``), so the two surfaces gate on the same grant.
 TOURNAMENT_VIEW_PERMISSION = "tournament.view"
+
+# The permission tournament creation gates on — the same seeded RBAC name the HTTP
+# router's ``require_create`` dependency enforces
+# (``app.tournaments.TOURNAMENT_CREATE``,
+# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
+# the MCP adapter stays router-free; ``create_tournament`` asks it through the one
+# shared ``user_has_permission`` (``app.rbac``), so a mounted tool grants an agent
+# nothing its user lacks over HTTP — the adapter enforces the SAME auth as HTTP.
+TOURNAMENT_CREATE_PERMISSION = "tournament.create"
+
+# The ADMIN permission the solve-ledger read gates on — the same seeded RBAC name the
+# HTTP router's ``require_permission(...)`` dependency enforces
+# (``app.admin_schedule_solves.SCHEDULING_VIEW_PERMISSION``, ``scripts/seed_rbac.py``).
+# Held as a literal rather than imported from the router so the MCP adapter stays
+# router-free; ``list_schedule_solves`` asks it through the one shared
+# ``user_has_permission`` (``app.rbac``), so the operator-only ledger is gated on the
+# SAME grant over MCP as over HTTP — a mounted tool grants an agent nothing its user
+# lacks.
+SCHEDULING_VIEW_PERMISSION = "scheduling.view"
+
+# The MCP ``list_schedule_solves`` argument bounds, mirroring the HTTP query-param caps
+# (``schedule_solve_queries``: default 25 to a page, capped at 100) so the two surfaces
+# can't drift on what a valid page/size is. An out-of-range value is a schema-level
+# validation error at the transport, not a tool-body ``ToolError``.
+ScheduleSolvePage = Annotated[int, Field(ge=1)]
+ScheduleSolvePageSize = Annotated[int, Field(ge=1, le=LIST_MAX_PAGE_SIZE)]
 
 
 @asynccontextmanager
@@ -344,6 +414,36 @@ async def _require_tournament_view(db: AsyncSession, user_id: uuid.UUID) -> None
     HTTP route keeps: ``require_view`` (403) runs before the handler."""
     if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
         raise ToolError("You don't have permission to view tournaments.")
+
+
+async def _require_tournament_create(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The tournament-create gate: refuse unless the caller holds ``tournament.create``.
+
+    The transport-neutral twin of the HTTP ``require_create`` dependency, asked through
+    the one shared ``user_has_permission`` — so the MCP and HTTP surfaces gate creation
+    on the same grant and a mounted tool grants an agent nothing its user lacks over
+    HTTP (ADR: the MCP adapter must enforce the SAME auth as HTTP). Held at the ADAPTER,
+    not in the shared verb, exactly as ``_require_tournament_view`` keeps the read gate
+    at the adapter. Checked first, before the verb runs, the order ``require_create``
+    (403) keeps ahead of the HTTP handler."""
+    if not await user_has_permission(db, user_id, TOURNAMENT_CREATE_PERMISSION):
+        raise ToolError("You do not have permission to create tournaments.")
+
+
+async def _require_schedule_solve_admin(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The admin solve-ledger gate: refuse unless the caller holds ``scheduling.view``.
+
+    The transport-neutral twin of the HTTP admin router's
+    ``require_permission("scheduling.view")`` dependency, asked through the one shared
+    ``user_has_permission`` — so the MCP and HTTP surfaces gate the operator-only ledger
+    on the same grant, and a mounted tool grants an agent nothing its user lacks over
+    HTTP (ADR: the MCP adapter must enforce the SAME auth as HTTP). This is the
+    security crux of the read: an unauthorized caller is refused HERE, before any
+    row is loaded, so a ``ToolError`` is all it ever sees — never the ledger.
+    Checked first, the order the HTTP route keeps (the ``require_permission`` (403)
+    dependency runs before the handler)."""
+    if not await user_has_permission(db, user_id, SCHEDULING_VIEW_PERMISSION):
+        raise ToolError("You don't have permission to view the schedule-solve ledger.")
 
 
 async def _load_visible_tournament(
@@ -545,6 +645,47 @@ async def enter_game_score(
 
 
 @mcp.tool
+async def list_schedule_solves(
+    tournament_id: uuid.UUID | None = None,
+    page: ScheduleSolvePage = 1,
+    page_size: ScheduleSolvePageSize = LIST_DEFAULT_PAGE_SIZE,
+) -> list[AdminScheduleSolveRead]:
+    """Read the Administration area's cross-tournament SOLVE LEDGER as the
+    authenticated API-token caller — one page, newest request first.
+
+    Mirrors the admin ``GET /v1/admin/schedule-solves``: it composes the exact same
+    shared reader the HTTP route composes (``schedule_solve_queries``), so the two
+    surfaces can never drift on what a ledger row is. Each row is one run of the
+    placement solver exactly as ``schedule_solves`` recorded it (ADR "the schedule is
+    solved; the call is pinned"), plus the operator-only facts the tournament-facing
+    read omits: the drift guard's ``input_fingerprint``, the coalescer's
+    ``rerun_requested``, and the owning tournament's id and name. ``tournament_id``
+    narrows the ledger to one tournament's runs; ``page`` / ``page_size`` paginate (25
+    to a page by default, capped at 100). Returns the page as a list of
+    ``AdminScheduleSolveRead`` — an empty ledger (or a page past the end) is ``[]``.
+
+    This is an OPERATOR read, gated on the same ``scheduling.view`` permission the HTTP
+    admin route requires — not tournament ownership: it spans every tournament's runs.
+    An agent whose user lacks that grant is refused before any row is read.
+
+    Raises a ``ToolError`` when you lack ``scheduling.view``.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, through the same shared gate the HTTP admin router's
+        # ``require_permission("scheduling.view")`` dependency asks — before any ledger
+        # row is read, so an unauthorized caller only ever sees a ``ToolError`` (the
+        # order the HTTP route keeps: the 403 dependency runs before the handler).
+        await _require_schedule_solve_admin(db, user_id)
+        return await list_schedule_solves_core(
+            db,
+            tournament_id=tournament_id,
+            page=page,
+            page_size=page_size,
+        )
+
+
+@mcp.tool
 async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
     """Read a single tournament as the authenticated API-token caller.
 
@@ -741,6 +882,54 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
         )
 
 
+# The shared tournament-write refusals the owner-gated tournament tools raise
+# identically — an absent tournament, an absent event, a non-owner — mapped once by
+# ``_map_tournament_write_tool_error`` so a further tool cannot grow a divergent
+# not-found message or owner-denial. Mirrors ``_DRAW_WRITE_ERRORS`` +
+# ``_map_draw_write_tool_error`` here, and the HTTP side's ``_TOURNAMENT_WRITE_ERRORS``
+# + ``_map_tournament_write_error``. The genuinely verb-specific arms — the strict
+# league 404, the two draw freezes, the entry refusal, the placement freeze — stay
+# inline in their tool, because each is one tool's alone.
+_TOURNAMENT_WRITE_TOOL_ERRORS = (
+    TournamentNotFoundError,
+    EventNotFoundError,
+    NotTournamentOwnerError,
+)
+
+
+def _map_tournament_write_tool_error(
+    exc: Exception,
+    *,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID | None = None,
+    owner_denial: str | None = None,
+) -> ToolError:
+    """Adapt a shared tournament-write refusal to the exact ``ToolError`` each
+    owner-gated tool produced inline.
+
+    The not-found arms are fully shared — ``TournamentNotFoundError`` names the
+    ``tournament_id`` and ``EventNotFoundError`` names the ``event_id`` — mirroring
+    ``_map_draw_write_tool_error`` but keyed by the id a tournament-addressed tool
+    holds, rather than collapsing both into one event not-found (a draw tool is
+    addressed by event id alone; these are not). The owner arm is the single per-verb
+    difference: ``owner_denial`` is that verb's phrase ("edit", "add events to", …), so
+    the message stays ``"You can only <phrase> tournaments you created."`` verbatim.
+
+    ``event_id`` and ``owner_denial`` are optional in the same way and for the same
+    reason: only the tools that can raise the arm needing them pass them. A
+    tournament-only tool (``delete_tournament``, ``place_fixture``) has no ``event_id``;
+    ``withdraw_from_event`` has no owner arm at all — its owner-ish refusal is the
+    separate ``NotAllowedToWithdrawError``, mapped in the tool — so it passes neither,
+    routing only its two not-found arms through here."""
+    if isinstance(exc, TournamentNotFoundError):
+        return ToolError(f"No tournament found with id {tournament_id}.")
+    if isinstance(exc, EventNotFoundError):
+        return ToolError(f"No event found with id {event_id}.")
+    if isinstance(exc, NotTournamentOwnerError) and owner_denial is not None:
+        return ToolError(f"You can only {owner_denial} tournaments you created.")
+    return ToolError(str(exc))
+
+
 @mcp.tool
 async def edit_tournament(
     tournament_id: uuid.UUID,
@@ -784,10 +973,10 @@ async def edit_tournament(
                 actor=actor,
                 updates=updates,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError("You can only edit tournaments you created.") from exc
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="edit"
+            ) from exc
         except LeagueNotEditableError as exc:
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
@@ -799,6 +988,546 @@ async def edit_tournament(
             tournament,
             created_by_username=actor.username,
             current_user_id=actor.id,
+        )
+
+
+@mcp.tool
+async def create_tournament(payload: TournamentCreate) -> TournamentRead:
+    """Create a tournament as the authenticated API-token caller, and return it.
+
+    Mirrors ``POST /v1/tournaments``: it reuses the shared ``create_tournament`` verb
+    and the same ``TournamentCreate`` schema the HTTP route validates, so the MCP and
+    HTTP surfaces can never drift on what a valid new tournament is. The caller becomes
+    the tournament's creator (and therefore its owner — the one user who may later
+    edit, transition, or delete it).
+
+    The tournament is born a ``draft`` (its ``status`` is not settable here — it moves
+    only across the guarded lifecycle transitions). ``league_id`` is OPTIONAL: omit it
+    to bind the DEFAULT league (the ladder eligibility is judged on), or name one to
+    run on that ladder — but a named id that matches no league is refused rather than
+    silently falling back to the default (ADR-0783). ``table_catalogue`` defaults to
+    empty. Returns the created ``TournamentRead`` from the creator's perspective
+    (``can_edit`` is always true).
+
+    Gated on the same ``tournament.create`` permission the HTTP ``POST /v1/tournaments``
+    requires.
+
+    Raises a ``ToolError`` when you lack ``tournament.create``, when ``league_id`` names
+    no league, or (a broken deployment) when no ``league_id`` is given and there is no
+    default league.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, through the same shared gate the HTTP ``require_create``
+        # dependency asks — before the caller is loaded or anything is written, the
+        # order the HTTP route keeps (``require_create`` (403) before the handler).
+        await _require_tournament_create(db, user_id)
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await create_tournament_core(db, actor=actor, payload=payload)
+        except LeagueNotFoundError as exc:
+            raise ToolError("No league found with that id.") from exc
+        except NoDefaultLeagueError as exc:
+            raise ToolError(
+                "This deployment has no default league configured, so a tournament "
+                "created without a league_id can't be placed on a ladder. Name a "
+                "league_id explicitly."
+            ) from exc
+        # The caller is the creator, so the owner's perspective the HTTP POST
+        # serializes from (``created_by_username`` known, ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
+        )
+
+
+class TournamentDeletionConfirmation(BaseModel):
+    """The result of deleting a tournament — a small, agent-shaped confirmation rather
+    than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was deleted
+    (the ``tournament_id`` that no longer resolves). Deleting a tournament cascades to
+    its events, entries and draws, so a subsequent read of this id is a not-found.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring ``DrawUncutConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+
+
+@mcp.tool
+async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfirmation:
+    """Delete a tournament you OWN as the authenticated API-token caller. Returns a
+    confirmation carrying the deleted tournament's id.
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}`` (which answers a bodiless
+    ``204``): it reuses the shared ``delete_tournament`` verb (the ``FOR UPDATE``
+    tournament row lock, then the owner gate) so the MCP and HTTP surfaces can never
+    drift. Deleting is owner-gated — only the tournament's creator may — and it is
+    DESTRUCTIVE: the tournament and everything under it (its events, entries and
+    draws) go with it. There is no undo.
+
+    Raises a ``ToolError`` when no tournament with that id exists, or when you are not
+    the tournament's owner (only the creator may delete it).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await delete_tournament_core(db, tournament_id=tournament_id, actor=actor)
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="delete"
+            ) from exc
+        return TournamentDeletionConfirmation(tournament_id=tournament_id)
+
+
+@mcp.tool
+async def transition_tournament(
+    tournament_id: uuid.UUID,
+    to: TournamentStatus,
+) -> TournamentRead:
+    """Move a tournament you OWN along its lifecycle as the authenticated API-token
+    caller, and return the moved tournament.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/transitions``: it reuses the shared
+    ``transition_tournament`` verb (the ``FOR UPDATE`` tournament row lock, the owner
+    gate, the forward-only edge table, the go-live precondition, and the go-live side
+    effects) so the MCP and HTTP surfaces can never drift. One generic tool covers the
+    whole lifecycle, the ``to`` target self-documenting in the tool schema — not three
+    semantic tools.
+
+    The lifecycle runs FORWARD ONLY, and exactly three moves exist: ``draft`` →
+    ``published`` (publish), ``published`` → ``live`` (go live), and ``live`` →
+    ``archived`` (archive). Anything else is refused — walking backwards, skipping a
+    stage, moving out of the terminal ``archived``, and re-asserting the status the
+    tournament already holds (a stale request, not a no-op).
+
+    **Going live has a precondition** (ADR-0786): the tournament must have at least one
+    event, and every event must have a **draw** whose fixtures seat exactly its current
+    entrants. A tournament with no events, an event with no draw, or an event whose
+    draw is **stale** (cut before somebody entered or withdrew) is refused with a
+    message naming the events at fault — ``build_cut`` (or re-cut) their draws, then go
+    live. Registration is open right up to that moment, which is why a draw can go stale
+    under it. Going live also MATERIALIZES every ready fixture into a real match and
+    queues the day's first schedule solve.
+
+    Owner-gated: only the tournament's creator may transition it. Returns the moved
+    ``TournamentRead`` from the owner's perspective (``can_edit`` is always true).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when the requested move is not a legal lifecycle edge (including
+    re-asserting the current status), or when going live is refused because an event has
+    no current draw.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await transition_tournament_core(
+                db, tournament_id=tournament_id, actor=actor, to=to
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="transition"
+            ) from exc
+        except (
+            TournamentAlreadyInStatusError,
+            IllegalTournamentTransitionError,
+            TournamentNotReadyToGoLiveError,
+        ) as exc:
+            # Each carries its exact, domain-authored sentence — the self-transition's
+            # single-ended wording, the illegal edge's two-ended wording, and the
+            # go-live precondition's event-naming body — surfaced verbatim to the agent.
+            raise ToolError(str(exc)) from exc
+        # The verb's owner gate just confirmed the caller is the creator, so the owner's
+        # perspective the HTTP route serializes from (``created_by_username`` known,
+        # ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
+        )
+
+
+@mcp.tool
+async def create_event(
+    tournament_id: uuid.UUID,
+    payload: TournamentEventCreate,
+) -> TournamentEventRead:
+    """Add an event to a tournament you OWN as the authenticated API-token caller, and
+    return the created event.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events``: it reuses the shared
+    ``create_event`` verb (the ``FOR UPDATE`` owner-load, then the write) and the same
+    ``TournamentEventCreate`` schema the HTTP route validates, so the MCP and HTTP
+    surfaces can never drift on what a valid new event is.
+
+    Creating an event is OWNER-GATED — only the tournament's creator may (there is no
+    ``tournament.create``-style permission on this route; managing a tournament you
+    created is a property of ownership). The event's wall-clock ``slot`` windows are
+    anchored by its ``timezone`` (a real IANA zone). A brand-new event has no entrants
+    and no draw yet — ``build_cut`` deals its fixtures later. Returns the created
+    ``TournamentEventRead`` from the caller's perspective (its ``entry_state`` is the
+    caller's own, judged on the tournament's ladder).
+
+    Raises a ``ToolError`` when no tournament with that id exists, or when you are not
+    the tournament's owner.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            event, league_id = await create_event_core(
+                db, tournament_id=tournament_id, actor=actor, payload=payload
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="add events to"
+            ) from exc
+        # The verb returns the tournament's ``league_id`` (the ladder the caller's
+        # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
+        # so the shared shaping helper needs no re-query — the same helper the HTTP
+        # ``create_event`` handler uses, so the two surfaces can't drift on how a new
+        # event reads back. A one-statement-old event has empty entrants/fixtures/
+        # results without a query.
+        return await shape_created_event_read(
+            db, event=event, league_id=league_id, viewer_id=actor.id
+        )
+
+
+@mcp.tool
+async def update_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    updates: TournamentEventUpdate,
+) -> TournamentEventRead:
+    """Edit an event of a tournament you OWN as the authenticated API-token caller, and
+    return the updated event.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}/events/{event_id}``: it reuses the
+    shared ``update_event`` verb (the ``FOR UPDATE`` owner-load, the event load, the two
+    draw freezes, the partial apply, the timezone reanchor, and the scheduling-facts →
+    re-solve trigger) and the same ``TournamentEventUpdate`` schema the HTTP route
+    validates, so the MCP and HTTP surfaces can never drift on what a valid edit is.
+
+    ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; ``predicates``
+    and ``pools`` replace wholesale when sent. Editing an event is OWNER-GATED — only
+    the tournament's creator may (there is no permission on this route). **Once the
+    event's draw is cut, two things freeze** (ADR-0786): a ``pools`` payload that
+    changes *which pools* the event has is refused, and so is a ``draw_type`` change —
+    remove the draw, edit, and cut again. Everything else (name, fee, rules,
+    ``max_players``, a
+    pool's ``table_ids`` / ``slot`` / ``name``) stays editable with a draw standing. A
+    ``timezone`` edit preserves the wall-clock of already-placed fixtures. Returns the
+    updated ``TournamentEventRead`` from the caller's perspective (its entrants, draw
+    and results survive the edit; its ``entry_state`` is the caller's own, recomputed
+    from the event as it now stands).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when no event with that id exists under the tournament, or when
+    the edit would change the frozen pool set or draw type of a cut-draw event.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            event, league_id = await update_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                actor=actor,
+                updates=updates,
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="edit events of",
+            ) from exc
+        except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
+            # Both freezes carry the exact, domain-authored 409 sentence — surfaced as
+            # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
+            # (remove the draw, edit, cut again).
+            raise ToolError(str(exc)) from exc
+        # The verb returns the tournament's ``league_id`` (the ladder the caller's
+        # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
+        # so the shared shaping helper needs no re-query — the same helper the HTTP
+        # ``update_event`` handler uses, so the two surfaces can't drift. A PATCH is not
+        # a re-cut (ADR-0786): the edited event keeps its entrants, draw and results,
+        # which the helper reloads and reprojects.
+        return await shape_event_read(
+            db, event=event, league_id=league_id, viewer_id=actor.id
+        )
+
+
+class EventDeletionConfirmation(BaseModel):
+    """The result of deleting an event — a small, agent-shaped confirmation rather than
+    the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was deleted
+    (the ``tournament_id`` it hung off and the ``event_id`` that no longer resolves).
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring
+    ``TournamentDeletionConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+
+
+@mcp.tool
+async def delete_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+) -> EventDeletionConfirmation:
+    """Delete an event from a tournament you OWN as the authenticated API-token caller.
+    Returns a confirmation carrying the deleted event's id.
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}`` (which answers
+    a bodiless ``204``): it reuses the shared ``delete_event`` verb (the ``FOR UPDATE``
+    owner-load, then the event load, then the delete) so the MCP and HTTP surfaces can
+    never drift. Deleting is owner-gated — only the tournament's creator may — and it is
+    DESTRUCTIVE: the event and everything under it go with it. There is no undo.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, or when no event with that id exists under the tournament.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await delete_event_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="delete events from",
+            ) from exc
+        return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
+
+
+# ----- enter_event tool ----------------------------------------------------
+
+
+def _map_entry_refused_tool_error(exc: EntryRefusedError) -> ToolError:
+    """Adapt a coded entry refusal (ADR-0968) to a ``ToolError`` that NAMES which of the
+    four refusals fired, then hands the agent the domain-authored fallback sentence.
+
+    The HTTP surface answers these with a machine-readable ``code`` a client switches
+    on;
+    an agent reads prose, so the code rides in the prose (``[event_full]`` …) and the
+    verb's own message — a full event, a shut window, a rating cap, an existing entry —
+    follows, so the agent is told both *which* rule refused and *why* in its own
+    words."""
+    return ToolError(f"Entry refused [{exc.refusal.value}]: {exc}")
+
+
+@mcp.tool
+async def enter_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
+) -> TournamentEntrantRead:
+    """Enter a player in a singles event as the authenticated API-token caller —
+    yourself,
+    or (as the tournament's owner) somebody else — and return the created entrant.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events/{event_id}/entries``: it
+    reuses
+    the shared ``enter_event`` verb (the dual-actor fork, the self-path permission gate,
+    the ``FOR UPDATE`` capacity lock, the ordered refusals and the INSERT) so the MCP
+    and
+    HTTP surfaces can never drift.
+
+    ``user_id`` chooses the actor (ADR-0784): **omit it** (or pass your OWN id) to enter
+    *yourself* — self-registration, gated on the ``tournament.enter`` permission,
+    recording
+    no adder. Pass a **different** ``user_id`` to enter that player as the **director**
+    —
+    which only the tournament's OWNER may do, and which records you as the adder. A
+    director's entry is judged by exactly the same rules as a player's — the same
+    eligibility evaluator, the same capacity lock, the same four refusal codes — there
+    is
+    no ``force``, so ownership is never an eligibility bypass.
+
+    Registration is open only while the tournament is ``published`` (its status *is* its
+    window, ADR-0017), for the director too. An event's eligibility rules are judged
+    against the entrant's rating on the tournament's ladder (a player with NO rating
+    passes every rule, ADR-0783 §3). Doubles/teams events cannot be entered directly
+    (one
+    row per player, nowhere to seat a partner). Returns the created
+    ``TournamentEntrantRead``
+    — the ENTRANT (the player, on a director entry, not you), carrying their rating on
+    the
+    tournament's ladder (``null`` for an unrated player).
+
+    Raises a ``ToolError`` when you lack ``tournament.enter`` on a self-registration,
+    when
+    you name another player's id but do not own the tournament, when no tournament or
+    event
+    with those ids exists, when a named ``user_id`` matches no live player, when the
+    event
+    is not singles, and — naming which refusal fired — when registration is closed, the
+    player fails the event's rating rules, the event is full, or the player is already
+    entered.
+    """
+    caller_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, caller_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            return await enter_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                actor=actor,
+                user_id=user_id,
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            # The shared not-found arms, plus the director path's owner gate: naming
+            # another player's id is owner-gated ("enter other players into").
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="enter other players into",
+            ) from exc
+        except NotAllowedToEnterError as exc:
+            # The self-registration permission gate (``tournament.enter``) — asked only
+            # on the self path, the same grant the HTTP route requires there.
+            raise ToolError(
+                "You do not have permission to enter tournament events."
+            ) from exc
+        except PlayerNotFoundError as exc:
+            raise ToolError(f"No live player found with id {user_id}.") from exc
+        except NonSinglesEntryError as exc:
+            # Carries its own sentence naming the event's (non-singles) format.
+            raise ToolError(str(exc)) from exc
+        except EntryRefusedError as exc:
+            raise _map_entry_refused_tool_error(exc) from exc
+
+
+class EntryWithdrawalConfirmation(BaseModel):
+    """The result of withdrawing an entry — a small, agent-shaped confirmation rather
+    than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was
+    withdrawn (the ``entry_id`` that is now ``withdrawn``) and asserts the outcome. The
+    withdrawal is a SOFT delete (ADR-0784): the row survives with its status flipped, so
+    a later read still finds the entry — as ``withdrawn``, not gone — and, because the
+    uniqueness guard is a *partial* index over active entries, the player is free to
+    enter the same event again. Withdrawing an already-withdrawn entry is an idempotent
+    success too, confirming the same terminal state.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring
+    ``TournamentDeletionConfirmation`` / ``EventDeletionConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+    entry_id: uuid.UUID
+
+
+@mcp.tool
+async def withdraw_from_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    entry_id: uuid.UUID,
+) -> EntryWithdrawalConfirmation:
+    """Withdraw an entry from a singles event as the authenticated API-token caller —
+    your own, or (as the tournament's owner) any entry in it. Returns a confirmation
+    carrying the withdrawn entry's id.
+
+    Mirrors ``DELETE
+    /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`` (which
+    answers a bodiless ``204``): it reuses the shared ``withdraw_from_event`` verb (the
+    ``FOR UPDATE`` tournament row lock, the tournament/event/entry loads, the
+    owner-or-self fork, the registration-window gate on the state change, and the seated
+    re-solve trigger) so the MCP and HTTP surfaces can never drift.
+
+    The withdrawal is a SOFT delete (ADR-0784): the entry's status flips to
+    ``withdrawn`` and the row survives, so the event keeps its withdrawal history — and,
+    because the uniqueness guard is a *partial* index over active entries, the player is
+    free to enter the same event again afterwards.
+
+    **Who may withdraw** mirrors who may enter: the entry's own player (with the
+    ``tournament.enter`` permission) or the tournament's OWNER, for any entry in it —
+    anybody else is refused. Withdrawal, like entry, is open only while the tournament
+    is ``published`` (its status *is* its registration window, ADR-0017), for the owner
+    too: withdrawing an ACTIVE entry from a ``draft``, ``live`` or ``archived``
+    tournament is refused. But withdrawing an entry that is ALREADY withdrawn is an
+    idempotent success in every status — a no-op, not an error.
+
+    Raises a ``ToolError`` when no tournament or event with those ids exists, when no
+    entry with that id exists under the event, when the entry is neither yours nor in a
+    tournament you own, when you lack ``tournament.enter`` withdrawing your own entry,
+    and when an active entry cannot be withdrawn because registration is closed.
+    """
+    caller_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, caller_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await withdraw_from_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                entry_id=entry_id,
+                actor=actor,
+            )
+        except (TournamentNotFoundError, EventNotFoundError) as exc:
+            # withdraw has no owner arm — its owner-ish refusal is the separate
+            # ``NotAllowedToWithdrawError`` below — so only its two not-found arms route
+            # through the shared mapper (``owner_denial`` omitted).
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, event_id=event_id
+            ) from exc
+        except EntryNotFoundError as exc:
+            raise ToolError(f"No entry found with id {entry_id}.") from exc
+        except NotAllowedToEnterError as exc:
+            # The self path lacking ``tournament.enter`` — the same grant the enter tool
+            # requires on self-registration.
+            raise ToolError(
+                "You do not have permission to withdraw from tournament events."
+            ) from exc
+        except NotAllowedToWithdrawError as exc:
+            # Neither the entry's own player nor the tournament's owner.
+            raise ToolError(
+                "You can only withdraw your own entry, or any entry from a "
+                "tournament you created."
+            ) from exc
+        except WithdrawalRegistrationClosedError as exc:
+            # An active entry, outside the registration window — the domain-authored
+            # sentence names which closed status refused it.
+            raise ToolError(str(exc)) from exc
+        return EntryWithdrawalConfirmation(
+            tournament_id=tournament_id, event_id=event_id, entry_id=entry_id
         )
 
 
@@ -999,6 +1728,75 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             event_id=event_id,
             fixtures_remaining=0,
         )
+
+
+@mcp.tool
+async def place_fixture(
+    tournament_id: uuid.UUID,
+    fixture_id: uuid.UUID,
+    placement: TournamentFixturePlacementUpdate,
+) -> TournamentFixtureRead:
+    """Set (or clear) a fixture's PLACEMENT — its table and predicted start — for a
+    fixture of a tournament you OWN as the authenticated API-token caller, and return
+    the updated fixture.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement``:
+    it reuses the shared ``place_fixture`` verb (the ``FOR UPDATE`` tournament row lock,
+    the owner gate, the fixture load, the played-out freeze, the pin/notify transition,
+    the ``settings_changed`` re-solve trigger, the commit and the post-commit fan-out)
+    and the same ``TournamentFixturePlacementUpdate`` schema the HTTP route validates,
+    so the MCP and HTTP surfaces can never drift. You address the fixture by its
+    ``tournament_id`` + ``fixture_id`` (the fixture must belong to that tournament).
+
+    ``placement`` is the placement in full: ``table_id`` (a string ref into the
+    tournament's ``table_catalogue``) and ``scheduled_start`` (a **naive** wall-clock
+    time in the venue's local frame). ``null`` on either clears that half;
+    ``(null, null)`` unassigns the fixture entirely.
+
+    **A manual placement is a PIN.** A full placement (both halves set, both entrants
+    known) sets ``pinned_at`` — a commitment every later schedule solve plans around —
+    and, while the tournament is **live**, placing a fixture IS calling it: a first
+    placement notifies both entrants, and re-placing a fixture whose players were
+    already told sends them a "your match moved" correction. Pre-live placements are
+    silent pins (free rearranging while planning, nobody paged); a fixture with a TBD
+    side stores the placement but does not pin. Anything less than a full placement
+    UNPINS (and, if the players had been called, cancels the call). Every successful
+    write also queues a re-solve.
+
+    **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
+    prediction, and the constraints (table-in-pool, time-in-window, no double-booking)
+    are flags derived on read, NOT invariants — so an out-of-window time, or a
+    ``table_id`` that names no table in the catalogue, is STORED, not rejected. The one
+    hard rule: a fixture whose linked match is ``completed`` or ``voided`` is history,
+    so its placement can no longer be changed. Owner-gated: only the tournament's
+    creator may place its fixtures.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when no fixture with that id belongs to the tournament, or when
+    the fixture's match is already completed/voided (its placement is frozen)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            return await place_fixture_core(
+                db,
+                tournament_id=tournament_id,
+                fixture_id=fixture_id,
+                actor=actor,
+                placement=placement,
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="place fixtures for"
+            ) from exc
+        except FixtureNotFoundError as exc:
+            raise ToolError(f"No fixture found with id {fixture_id}.") from exc
+        except FixturePlacementFrozenError as exc:
+            # Carries the exact, domain-authored 409 sentence — the played-out fixture's
+            # freeze — surfaced as the ``ToolError`` prose verbatim.
+            raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
