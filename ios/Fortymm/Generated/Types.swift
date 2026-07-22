@@ -872,7 +872,8 @@ internal protocol APIProtocol: Sendable {
     /// `published` (registration open, nothing drawn) tournament. An absent tournament
     /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
     /// (there is a real field and a real solve to look at, or it is over). Rate
-    /// limited per owner: too many previews in quick succession is a `429`.
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
@@ -887,9 +888,11 @@ internal protocol APIProtocol: Sendable {
     /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
     /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
     /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
-    /// itself scoped to a tournament in Redis — is read. A missing/expired token is
-    /// not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
-    /// it again" rather than a transport error.
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
     ///
     /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.
@@ -2286,7 +2289,8 @@ extension APIProtocol {
     /// `published` (registration open, nothing drawn) tournament. An absent tournament
     /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
     /// (there is a real field and a real solve to look at, or it is over). Rate
-    /// limited per owner: too many previews in quick succession is a `429`.
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
@@ -2311,9 +2315,11 @@ extension APIProtocol {
     /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
     /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
     /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
-    /// itself scoped to a tournament in Redis — is read. A missing/expired token is
-    /// not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
-    /// it again" rather than a transport error.
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
     ///
     /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.
@@ -7074,6 +7080,11 @@ internal enum Components {
         /// synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
         /// sides are always known (the pool stage of a round-robin draw).
         ///
+        /// ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
+        /// keys a pool by (unique across events); ``pool_name`` is the human label from the
+        /// event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
+        /// a director recognizes rather than the raw composite.
+        ///
         /// - Remark: Generated from `#/components/schemas/PreviewFixture`.
         internal struct PreviewFixture: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/fixture_id`.
@@ -7082,6 +7093,8 @@ internal enum Components {
             internal var eventId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_id`.
             internal var poolId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_name`.
+            internal var poolName: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_a_id`.
             internal var playerAId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_b_id`.
@@ -7092,18 +7105,21 @@ internal enum Components {
             ///   - fixtureId:
             ///   - eventId:
             ///   - poolId:
+            ///   - poolName:
             ///   - playerAId:
             ///   - playerBId:
             internal init(
                 fixtureId: Swift.String,
                 eventId: Swift.String,
                 poolId: Swift.String,
+                poolName: Swift.String,
                 playerAId: Swift.String,
                 playerBId: Swift.String
             ) {
                 self.fixtureId = fixtureId
                 self.eventId = eventId
                 self.poolId = poolId
+                self.poolName = poolName
                 self.playerAId = playerAId
                 self.playerBId = playerBId
             }
@@ -7111,6 +7127,7 @@ internal enum Components {
                 case fixtureId = "fixture_id"
                 case eventId = "event_id"
                 case poolId = "pool_id"
+                case poolName = "pool_name"
                 case playerAId = "player_a_id"
                 case playerBId = "player_b_id"
             }
@@ -7277,6 +7294,8 @@ internal enum Components {
             internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/NoSingleCauseRead`.
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PastWindowReasonRead`.
+                case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -7295,6 +7314,8 @@ internal enum Components {
                     switch discriminator {
                     case "no_single_cause":
                         self = .noSingleCause(try .init(from: decoder))
+                    case "past_window":
+                        self = .pastWindow(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -7312,6 +7333,8 @@ internal enum Components {
                 internal func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
                     case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .pastWindow(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
@@ -23225,7 +23248,8 @@ internal enum Operations {
     /// `published` (registration open, nothing drawn) tournament. An absent tournament
     /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
     /// (there is a real field and a real solve to look at, or it is over). Rate
-    /// limited per owner: too many previews in quick succession is a `429`.
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
@@ -23441,9 +23465,11 @@ internal enum Operations {
     /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
     /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
     /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
-    /// itself scoped to a tournament in Redis — is read. A missing/expired token is
-    /// not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
-    /// it again" rather than a transport error.
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
     ///
     /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.

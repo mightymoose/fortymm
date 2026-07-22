@@ -1451,7 +1451,8 @@ export interface paths {
          *     `published` (registration open, nothing drawn) tournament. An absent tournament
          *     is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
          *     (there is a real field and a real solve to look at, or it is over). Rate
-         *     limited per owner: too many previews in quick succession is a `429`.
+         *     limited per session with a per-IP ceiling: too many previews in quick
+         *     succession is a `429`.
          */
         post: operations["request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post"];
         delete?: never;
@@ -1477,9 +1478,11 @@ export interface paths {
          *     Owner-gated the same way the enqueue is: the tournament is re-loaded and the
          *     caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
          *     `live`/`archived` tournament a `409`) before the ephemeral job — which is not
-         *     itself scoped to a tournament in Redis — is read. A missing/expired token is
-         *     not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
-         *     it again" rather than a transport error.
+         *     itself scoped to a tournament in Redis — is read, and the token is then bound to
+         *     this tournament: a real job enqueued for a *different* tournament is a `404`, so
+         *     an owner can't pair their own tournament id with another director's token. A
+         *     missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+         *     the client renders "run it again" rather than a transport error.
          */
         get: operations["read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get"];
         put?: never;
@@ -3382,6 +3385,11 @@ export interface components {
          *     solve returns) so a caller can render the grid skeleton immediately. The
          *     synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
          *     sides are always known (the pool stage of a round-robin draw).
+         *
+         *     ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
+         *     keys a pool by (unique across events); ``pool_name`` is the human label from the
+         *     event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
+         *     a director recognizes rather than the raw composite.
          */
         PreviewFixture: {
             /** Fixture Id */
@@ -3390,6 +3398,8 @@ export interface components {
             event_id: string;
             /** Pool Id */
             pool_id: string;
+            /** Pool Name */
+            pool_name: string;
             /** Player A Id */
             player_a_id: string;
             /** Player B Id */
@@ -3477,7 +3487,7 @@ export interface components {
             /** Events */
             events: components["schemas"]["PreviewEventBreakdown"][];
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Notes */
             notes: string[];
             /**
