@@ -33,12 +33,27 @@ the board, or `gh` lacks the `project` scope, **note it and keep driving**; neve
 a board hiccup stop the work. Do this once at the start of a run (it's idempotent, so
 a resume re-running it is harmless).
 
+**Build the native task list.** Mirror the work order into Claude Code's native task
+list (the `TodoWrite` tool) so the run's progress shows up in the UI, not just as
+checkboxes in the file — a parent task per slice, a child task per chore, per
+[native-tasks.md](../to-chores/native-tasks.md). **Derive each task's status from the
+checkboxes** (ticked → completed, `⚠ BLOCKED` → pending with the marker kept in the
+task text, else pending) so a resume rebuilds the same picture rather than restarting
+from scratch. The checkboxes stay the source of truth; the task list is a live view of
+them.
+
 ## Drive loop
+
+Keep the native task list in lockstep with the checkboxes as you go (see
+[native-tasks.md](../to-chores/native-tasks.md)): a chore's task goes `in_progress`
+the moment you dispatch it, `completed` only when its box is ticked, and a slice's
+parent task `completed` when the slice closes. This is what makes the run legible in
+the UI — do it as a side effect of each step below, not as a separate bookkeeping pass.
 
 Repeat until every chore is ticked or every remaining chore is blocked:
 
 1. **Find ready chores** — unticked, not blocked, with **all `depends-on` ticked**.
-2. **Dispatch:**
+2. **Dispatch:** mark each chore's native task `in_progress` as you send it out.
    - `[main]` chores — do them **inline** yourself (regen, integration, glue). You
      are the main session; the cross-layer work is yours.
    - Any other tag — hand off via the Agent tool with `subagent_type` = the tag
@@ -67,17 +82,20 @@ Repeat until every chore is ticked or every remaining chore is blocked:
    the code? is there a discriminating assertion?), **runs the `Demo`**, and checks
    the chore stayed inside its `Scope`. It returns `PASS`, `FAIL`, or `INCONCLUSIVE`.
 
-   - **PASS** → tick the box.
-   - **FAIL** → treat exactly like a chore failure (see below). Mark `⚠ BLOCKED`.
+   - **PASS** → tick the box **and** mark the chore's task `completed`.
+   - **FAIL** → treat exactly like a chore failure (see below). Mark `⚠ BLOCKED` on
+     the line and keep the task `pending` with `⚠ BLOCKED` in its text.
    - **INCONCLUSIVE** → *not* a pass. Resolve what it couldn't establish, or block.
+     Leave the task `in_progress` until it resolves.
 
    Never tick a box on a report you did not have independently reproduced. Never
    verify a chore with the agent that implemented it, and never let a `[main]` chore
    grade itself either — dispatch the verifier for those too.
 4. **Close the slice** — when every chore in a slice is ticked, run the slice's
    **demoable outcome** end-to-end as a final check, then **commit the slice** (a
-   working, demoable increment; message names the slice). Do not squash slices into
-   one commit — per-slice commits are the audit trail.
+   working, demoable increment; message names the slice) and mark the slice's parent
+   task `completed`. Do not squash slices into one commit — per-slice commits are the
+   audit trail.
 
 Every chore ends in a demo, and every slice ends in a demoable increment. If a chore
 has no `Demo` — nothing observable, even at a REPL or a job invocation — that is a
@@ -91,7 +109,8 @@ The `## Testing notes` section is **not** this skill's job — it belongs to
 
 If a chore fails or its Verify won't go green:
 
-- Mark it `⚠ BLOCKED: <reason>` in the file and leave the box unticked.
+- Mark it `⚠ BLOCKED: <reason>` in the file and leave the box unticked; keep its
+  native task `pending` with `⚠ BLOCKED` in the text so the block is visible in the UI.
 - **Stop that slice** — do not start its remaining chores, do not retry-thrash, do
   not commit a half-slice.
 - **Other slices whose deps are met may continue.**
