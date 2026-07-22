@@ -82,9 +82,9 @@ async def create_event(
     tournament_id: uuid.UUID,
     actor: User,
     payload: TournamentEventCreate,
-) -> TournamentEvent:
+) -> tuple[TournamentEvent, uuid.UUID]:
     """Create an event under the tournament ``actor`` owns, and return the refreshed
-    :class:`TournamentEvent`.
+    :class:`TournamentEvent` together with the tournament's ``league_id``.
 
     Loads the parent through the shared :func:`_load_owned_tournament_for_update` (the
     tournament row lock, then the owner gate) so the refusals are judged **404 → 403**,
@@ -101,6 +101,10 @@ async def create_event(
     raises ``HTTPException`` — the caller adapts each domain exception to its
     transport and shapes the read (a just-created event has no entrants, draw or
     results, so those are all empty without a query).
+
+    The tournament's ``league_id`` — already in hand from the owner-load — is returned
+    beside the event so the adapter can shape the caller's ``entry_state`` (the ladder
+    it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = TournamentEvent(
@@ -119,7 +123,7 @@ async def create_event(
     db.add(event)
     await db.commit()
     await db.refresh(event)
-    return event
+    return event, tournament.league_id
 
 
 async def delete_event(
@@ -383,9 +387,10 @@ async def update_event(
     event_id: uuid.UUID,
     actor: User,
     updates: TournamentEventUpdate,
-) -> TournamentEvent:
+) -> tuple[TournamentEvent, uuid.UUID]:
     """Apply the partial ``updates`` to an event under the tournament ``actor`` owns,
-    and return the refreshed :class:`TournamentEvent`.
+    and return the refreshed :class:`TournamentEvent` together with the tournament's
+    ``league_id``.
 
     Loads the parent through :func:`_load_owned_tournament_for_update` (the tournament
     row lock, then the owner gate) and then the event through :func:`_load_event`, so
@@ -421,13 +426,16 @@ async def update_event(
     Commits and refreshes before returning. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport and shapes the read (an edited event
     keeps its entrants, draw and results, which the adapter reloads).
+
+    The tournament's ``league_id`` — already in hand from the owner-load — is returned
+    beside the event so the adapter can shape the caller's ``entry_state`` (the ladder
+    it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     # The owner-load locks the tournament row and gates on ownership (404 → 403); the
-    # row is not otherwise needed here (the read the HTTP adapter shapes fetches the
-    # league_id itself), so its return is discarded but the LOCK it takes is held for
-    # the rest of this transaction — the freezes and the re-solve trigger below run
-    # under it.
-    await _load_owned_tournament_for_update(db, tournament_id, actor)
+    # LOCK it takes is held for the rest of this transaction — the freezes and the
+    # re-solve trigger below run under it — and its ``league_id`` is returned to the
+    # adapter so the read it shapes need not re-query that column.
+    tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
@@ -458,4 +466,4 @@ async def update_event(
         await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     await db.refresh(event)
-    return event
+    return event, tournament.league_id

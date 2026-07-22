@@ -157,14 +157,14 @@ from app.tournament_lifecycle import (
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import (
-    active_entrants_by_event,
-    completed_match_ids,
-    entrant_rating,
     fixtures_by_event,
-    game_counts_by_match,
     visible_to,
 )
-from app.tournament_serialization import serialize, serialize_event
+from app.tournament_serialization import (
+    serialize,
+    shape_created_event_read,
+    shape_event_read,
+)
 from app.tournament_solve_service import (
     request_schedule_solve as request_schedule_solve_core,
 )
@@ -780,6 +780,54 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
         )
 
 
+# The shared tournament-write refusals the owner-gated tournament tools raise
+# identically — an absent tournament, an absent event, a non-owner — mapped once by
+# ``_map_tournament_write_tool_error`` so a further tool cannot grow a divergent
+# not-found message or owner-denial. Mirrors ``_DRAW_WRITE_ERRORS`` +
+# ``_map_draw_write_tool_error`` here, and the HTTP side's ``_TOURNAMENT_WRITE_ERRORS``
+# + ``_map_tournament_write_error``. The genuinely verb-specific arms — the strict
+# league 404, the two draw freezes, the entry refusal, the placement freeze — stay
+# inline in their tool, because each is one tool's alone.
+_TOURNAMENT_WRITE_TOOL_ERRORS = (
+    TournamentNotFoundError,
+    EventNotFoundError,
+    NotTournamentOwnerError,
+)
+
+
+def _map_tournament_write_tool_error(
+    exc: Exception,
+    *,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID | None = None,
+    owner_denial: str | None = None,
+) -> ToolError:
+    """Adapt a shared tournament-write refusal to the exact ``ToolError`` each
+    owner-gated tool produced inline.
+
+    The not-found arms are fully shared — ``TournamentNotFoundError`` names the
+    ``tournament_id`` and ``EventNotFoundError`` names the ``event_id`` — mirroring
+    ``_map_draw_write_tool_error`` but keyed by the id a tournament-addressed tool
+    holds, rather than collapsing both into one event not-found (a draw tool is
+    addressed by event id alone; these are not). The owner arm is the single per-verb
+    difference: ``owner_denial`` is that verb's phrase ("edit", "add events to", …), so
+    the message stays ``"You can only <phrase> tournaments you created."`` verbatim.
+
+    ``event_id`` and ``owner_denial`` are optional in the same way and for the same
+    reason: only the tools that can raise the arm needing them pass them. A
+    tournament-only tool (``delete_tournament``, ``place_fixture``) has no ``event_id``;
+    ``withdraw_from_event`` has no owner arm at all — its owner-ish refusal is the
+    separate ``NotAllowedToWithdrawError``, mapped in the tool — so it passes neither,
+    routing only its two not-found arms through here."""
+    if isinstance(exc, TournamentNotFoundError):
+        return ToolError(f"No tournament found with id {tournament_id}.")
+    if isinstance(exc, EventNotFoundError):
+        return ToolError(f"No event found with id {event_id}.")
+    if isinstance(exc, NotTournamentOwnerError) and owner_denial is not None:
+        return ToolError(f"You can only {owner_denial} tournaments you created.")
+    return ToolError(str(exc))
+
+
 @mcp.tool
 async def edit_tournament(
     tournament_id: uuid.UUID,
@@ -823,10 +871,10 @@ async def edit_tournament(
                 actor=actor,
                 updates=updates,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError("You can only edit tournaments you created.") from exc
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="edit"
+            ) from exc
         except LeagueNotEditableError as exc:
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
@@ -932,10 +980,10 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
             raise ToolError("Not authenticated.")
         try:
             await delete_tournament_core(db, tournament_id=tournament_id, actor=actor)
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError("You can only delete tournaments you created.") from exc
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="delete"
+            ) from exc
         return TournamentDeletionConfirmation(tournament_id=tournament_id)
 
 
@@ -986,10 +1034,10 @@ async def transition_tournament(
             tournament = await transition_tournament_core(
                 db, tournament_id=tournament_id, actor=actor, to=to
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError("You can only transition tournaments you created.") from exc
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="transition"
+            ) from exc
         except (
             TournamentAlreadyInStatusError,
             IllegalTournamentTransitionError,
@@ -1039,28 +1087,21 @@ async def create_event(
         if actor is None:
             raise ToolError("Not authenticated.")
         try:
-            event = await create_event_core(
+            event, league_id = await create_event_core(
                 db, tournament_id=tournament_id, actor=actor, payload=payload
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError(
-                "You can only add events to tournaments you created."
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="add events to"
             ) from exc
-        # The event's league is the tournament's — the ladder the caller's
-        # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed
-        # the tournament exists and is the caller's, so this scalar read cannot miss.
-        league_id = (
-            await db.execute(
-                select(Tournament.league_id).where(Tournament.id == tournament_id)
-            )
-        ).scalar_one()
-        rating = await entrant_rating(db, league_id, actor.id)
-        # A one-statement-old event has no entrants, no fixtures and no results — all
-        # empty without a query, exactly as the HTTP handler shapes it.
-        return serialize_event(
-            event, entrants=[], fixtures=[], rating=rating, game_counts={}
+        # The verb returns the tournament's ``league_id`` (the ladder the caller's
+        # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
+        # so the shared shaping helper needs no re-query — the same helper the HTTP
+        # ``create_event`` handler uses, so the two surfaces can't drift on how a new
+        # event reads back. A one-statement-old event has empty entrants/fixtures/
+        # results without a query.
+        return await shape_created_event_read(
+            db, event=event, league_id=league_id, viewer_id=actor.id
         )
 
 
@@ -1102,51 +1143,33 @@ async def update_event(
         if actor is None:
             raise ToolError("Not authenticated.")
         try:
-            event = await update_event_core(
+            event, league_id = await update_event_core(
                 db,
                 tournament_id=tournament_id,
                 event_id=event_id,
                 actor=actor,
                 updates=updates,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError(
-                "You can only edit events of tournaments you created."
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="edit events of",
             ) from exc
-        except EventNotFoundError as exc:
-            raise ToolError(f"No event found with id {event_id}.") from exc
         except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
             # Both freezes carry the exact, domain-authored 409 sentence — surfaced as
             # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
             # (remove the draw, edit, cut again).
             raise ToolError(str(exc)) from exc
-        # The event's league is the tournament's — the ladder the caller's
-        # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed
-        # the tournament exists and is the caller's, so this scalar read cannot miss.
-        league_id = (
-            await db.execute(
-                select(Tournament.league_id).where(Tournament.id == tournament_id)
-            )
-        ).scalar_one()
-        # An edited event keeps its entrants, draw and results (a PATCH is not a re-cut,
-        # ADR-0786), so they are reloaded and reprojected exactly as the HTTP handler
-        # shapes them — answering ``[]`` would tell the director their draw was thrown
-        # away.
-        entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
-        event_fixtures = await fixtures_by_event(db, [event.id])
-        fixtures = event_fixtures[event.id]
-        game_counts = await game_counts_by_match(
-            db, completed_match_ids(event_fixtures)
-        )
-        rating = await entrant_rating(db, league_id, actor.id)
-        return serialize_event(
-            event,
-            entrants=entrants,
-            fixtures=fixtures,
-            rating=rating,
-            game_counts=game_counts,
+        # The verb returns the tournament's ``league_id`` (the ladder the caller's
+        # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
+        # so the shared shaping helper needs no re-query — the same helper the HTTP
+        # ``update_event`` handler uses, so the two surfaces can't drift. A PATCH is not
+        # a re-cut (ADR-0786): the edited event keeps its entrants, draw and results,
+        # which the helper reloads and reprojects.
+        return await shape_event_read(
+            db, event=event, league_id=league_id, viewer_id=actor.id
         )
 
 
@@ -1193,14 +1216,13 @@ async def delete_event(
             await delete_event_core(
                 db, tournament_id=tournament_id, event_id=event_id, actor=actor
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError(
-                "You can only delete events from tournaments you created."
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="delete events from",
             ) from exc
-        except EventNotFoundError as exc:
-            raise ToolError(f"No event found with id {event_id}.") from exc
         return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
 
 
@@ -1282,21 +1304,20 @@ async def enter_event(
                 actor=actor,
                 user_id=user_id,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except EventNotFoundError as exc:
-            raise ToolError(f"No event found with id {event_id}.") from exc
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            # The shared not-found arms, plus the director path's owner gate: naming
+            # another player's id is owner-gated ("enter other players into").
+            raise _map_tournament_write_tool_error(
+                exc,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                owner_denial="enter other players into",
+            ) from exc
         except NotAllowedToEnterError as exc:
             # The self-registration permission gate (``tournament.enter``) — asked only
-            # on
-            # the self path, the same grant the HTTP route requires there.
+            # on the self path, the same grant the HTTP route requires there.
             raise ToolError(
                 "You do not have permission to enter tournament events."
-            ) from exc
-        except NotTournamentOwnerError as exc:
-            # The director path: naming another player's id is owner-gated.
-            raise ToolError(
-                "You can only enter other players into tournaments you created."
             ) from exc
         except PlayerNotFoundError as exc:
             raise ToolError(f"No live player found with id {user_id}.") from exc
@@ -1378,10 +1399,13 @@ async def withdraw_from_event(
                 entry_id=entry_id,
                 actor=actor,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except EventNotFoundError as exc:
-            raise ToolError(f"No event found with id {event_id}.") from exc
+        except (TournamentNotFoundError, EventNotFoundError) as exc:
+            # withdraw has no owner arm — its owner-ish refusal is the separate
+            # ``NotAllowedToWithdrawError`` below — so only its two not-found arms route
+            # through the shared mapper (``owner_denial`` omitted).
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, event_id=event_id
+            ) from exc
         except EntryNotFoundError as exc:
             raise ToolError(f"No entry found with id {entry_id}.") from exc
         except NotAllowedToEnterError as exc:
@@ -1661,11 +1685,9 @@ async def place_fixture(
                 actor=actor,
                 placement=placement,
             )
-        except TournamentNotFoundError as exc:
-            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
-        except NotTournamentOwnerError as exc:
-            raise ToolError(
-                "You can only place fixtures for tournaments you created."
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="place fixtures for"
             ) from exc
         except FixtureNotFoundError as exc:
             raise ToolError(f"No fixture found with id {fixture_id}.") from exc

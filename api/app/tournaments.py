@@ -15,7 +15,6 @@ from app.draws import (
 )
 from app.models import (
     Tournament,
-    TournamentEvent,
     User,
 )
 from app.rate_limiting import RedisRateLimiter
@@ -89,17 +88,11 @@ from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import transition_tournament
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_placement import place_fixture as place_fixture_core
-from app.tournament_queries import (
-    active_entrants_by_event,
-    entrant_rating,
-    fixtures_by_event,
-    game_counts_by_match,
-)
-from app.tournament_queries import completed_match_ids as _completed_match_ids
 from app.tournament_queries import visible_to as _visible_to
 from app.tournament_serialization import (
     serialize,
-    serialize_event,
+    shape_created_event_read,
+    shape_event_read,
 )
 from app.tournament_solve_service import (
     request_schedule_solve as _request_schedule_solve,
@@ -109,13 +102,13 @@ from app.tournament_solve_service import (
 # entering an event as a player on ``tournament.enter`` (all three granted to the
 # Beta-tester role in ``scripts/seed_rbac.py``). The owner-facing mutating routes
 # — PATCH, DELETE, and every event mutation — carry NO permission gate: they're
-# owner-only, available solely to the user who created the tournament
-# (``_require_owner``). There is deliberately no
+# owner-only, available solely to the user who created the tournament (the owner gate
+# the transport-neutral write verbs enforce). There is deliberately no
 # ``tournament.edit``/``tournament.delete``/``tournament.publish`` permission;
 # managing a tournament you created is a property of ownership, not a role grant.
 # Player self-registration is the exception that needs its own permission: a
-# player entering *themselves* is not the tournament's owner, so it cannot go
-# through ``_require_owner``.
+# player entering *themselves* is not the tournament's owner, so it cannot be an
+# ownership check.
 #
 # The two ENTRY routes hold BOTH of those authorizations at once, because a single
 # endpoint serves both actors (ADR-0784): a player entering themselves is gated on
@@ -124,7 +117,7 @@ from app.tournament_solve_service import (
 # by the request, so neither can be a router dependency (a dependency runs before the
 # handler has seen the body, and would refuse an owner for lacking a grant that has
 # nothing to do with what they are doing). Both routes therefore take
-# ``get_current_user`` and ask ``_require_enter_permission`` / ``_require_owner`` in
+# ``get_current_user`` and the entry verbs ask the enter-permission / ownership gate in
 # the arm of the fork that owns them. The authorizations are disjoint — a stranger
 # self-registering is not the owner; an owner adding somebody else is not
 # self-registering — so this is a fork, not a tangle.
@@ -148,120 +141,14 @@ router = APIRouter(prefix="/v1")
 # ----- helpers -------------------------------------------------------------
 
 
-async def _get_owned_tournament_or_404(
-    db: AsyncSession, tournament_id: uuid.UUID, current_user: User
-) -> Tournament:
-    """Load a tournament the caller OWNS, or refuse: 404 if absent, 403 if not theirs.
-
-    Load first, THEN check ownership — the ordering is intentional, and preserved
-    from the call sites this replaces: a permitted non-creator learns the
-    tournament exists.
-
-    The loading and the owner check are welded together on purpose. Every loader in
-    this module now NAMES THE SCOPE IT LOADS UNDER — owner-scoped (this one, for the
-    owner-only writes), for-update (the concurrency-sensitive writes), visibility-
-    scoped (``_visible_to``, in the read routes' WHERE) — and there is deliberately
-    no bare "just fetch the row" loader left. A bare one is a trap: it 404s, it
-    reads correctly, and it is right there, so the next read route added to this
-    module would reach for it and silently serve other people's drafts. The guard
-    against that has to be structural — a leaky loader that doesn't exist cannot be
-    picked by accident — not a reviewer remembering to ask.
-    """
-    tournament = (
-        await db.execute(select(Tournament).where(Tournament.id == tournament_id))
-    ).scalar_one_or_none()
-    if tournament is None:
-        raise HTTPException(status_code=404, detail="Tournament not found.")
-    _require_owner(tournament, current_user)
-    return tournament
-
-
-async def _get_tournament_for_update_or_404(
-    db: AsyncSession, tournament_id: uuid.UUID
-) -> Tournament:
-    """The same 404, with the row locked for the rest of the transaction.
-
-    Every route that *judges a tournament's status and then writes* loads it
-    through here — the transition, entering an event, withdrawing an active entry,
-    and the PATCH (whose league guard reads the status, ADR-0783) — because without
-    the lock the judgment and the write happen in two different
-    instants. Postgres runs READ COMMITTED, so an unlocked ``SELECT`` answers from
-    the snapshot of that statement alone: a player's entry can pass the
-    ``published`` check, the owner's go-live can commit, and the ``INSERT`` can
-    then land *behind* it. Both requests succeed and the field is no longer the
-    one the tournament went live with — precisely the invariant going live exists
-    to establish, and the one the draw (#785) is cut from. The mirror of it lets a
-    player withdraw out from under a tournament that has just gone live; it lets a
-    league change pass the ``draft`` check and then land behind a publish, moving
-    the ladder under a field that has already started filling; and it lets two
-    concurrent identical transitions both read ``published``, both find a legal
-    edge, and both answer 201 — turning the 409 ADR-0017 promises for a
-    re-asserted status into a silent no-op.
-
-    ``FOR UPDATE`` closes the window: the status read here cannot change under the
-    caller until its transaction ends, and a second writer blocks and then re-reads
-    the *committed* status rather than the one it saw first. All four mutating
-    routes take this lock, on the TOURNAMENT row, before any other — one lock, one
-    order, so they queue behind each other and no pair of them can deadlock. (The
-    PATCH takes it unconditionally, though it only *judges* the status when the
-    payload carries a ``league_id``: one loader per route is simpler than a
-    branch, and a name-only edit that queues behind a publish is harmless.)
-
-    The read routes deliberately take no lock: they select through ``_visible_to``
-    and never come through here, because a reader has nothing to serialize against
-    and no business making writers queue behind it.
-
-    Unscoped by ownership, and legitimately so — entering and withdrawing are
-    *player* actions on somebody else's tournament, so there is no owner to check.
-    The owner-only writes that do NOT judge a status load through
-    ``_get_owned_tournament_or_404`` instead, which welds the 403 to the load but
-    takes no lock. The two routes that need *both* — the transition and the PATCH —
-    take this lock and then call ``_require_owner`` themselves, because a loader
-    that locked and owner-checked would be a third loader saying what these two
-    lines already say.
-    """
-    tournament = (
-        await db.execute(
-            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
-        )
-    ).scalar_one_or_none()
-    if tournament is None:
-        raise HTTPException(status_code=404, detail="Tournament not found.")
-    return tournament
-
-
-async def _get_event_or_404(
-    db: AsyncSession, tournament_id: uuid.UUID, event_id: uuid.UUID
-) -> TournamentEvent:
-    # The event must belong to the named tournament — scope the lookup by both
-    # ids so a mismatched pair is a 404, not a cross-tournament edit.
-    event = (
-        await db.execute(
-            select(TournamentEvent).where(
-                TournamentEvent.id == event_id,
-                TournamentEvent.tournament_id == tournament_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if event is None:
-        raise HTTPException(status_code=404, detail="Event not found.")
-    return event
-
-
-def _require_owner(t: Tournament, current_user: User) -> None:
-    if t.created_by_user_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You can only modify tournaments you created.",
-        )
-
-
-# The `tournament.enter` self-registration gate and the entry-by-event 404 that the
-# entry routes used to ask through router helpers now live in the transport-neutral
-# entry verbs (``app.tournament_entries``): ``enter_event`` asks the permission through
-# the shared ``user_has_permission`` on its self arm, and both verbs load the entry with
-# their own FastAPI-free loaders. The router keeps only ``_require_owner`` here, for the
-# owner-only writes that are not entry routes.
+# The tournament loaders and the owner gate that used to live here are gone: every
+# owner-only write now loads its tournament through the transport-neutral verbs' shared
+# ``_load_owned_tournament_for_update`` (``app.tournament_edit``) — the row lock, then
+# the 404 → 403 owner gate — so the router keeps no bare/owner/for-update loader of its
+# own. The `tournament.enter` self-registration gate and the entry-by-event 404 that the
+# entry routes used to ask through router helpers likewise moved to the entry verbs
+# (``app.tournament_entries``): ``enter_event`` asks the permission through the shared
+# ``user_has_permission`` on its self arm, and both verbs load the entry themselves.
 
 
 # The league-editable-only-while-draft rule (ADR-0783) now lives on the
@@ -599,36 +486,18 @@ async def create_event(
     #   TournamentNotFoundError  -> 404 "Tournament not found."
     #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
     try:
-        event = await create_event_core(
+        event, league_id = await create_event_core(
             db, tournament_id=tournament_id, actor=current_user, payload=payload
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
-    # The event's league is the tournament's — the number the caller's ``entry_state``
-    # is judged against. The verb's owner gate just confirmed the tournament exists and
-    # is the caller's, so this scalar read cannot miss.
-    league_id = (
-        await db.execute(
-            select(Tournament.league_id).where(Tournament.id == tournament_id)
-        )
-    ).scalar_one()
-    # A just-created event has no entries, so its entrants are empty and its
-    # derived ``entered`` count is 0 — no query needed to learn that. Its draw is
-    # empty for the same reason and with the same certainty: fixtures are only ever
-    # written by the cut (ADR-0786), which is an explicit act on an event that already
-    # exists, so an event one statement old cannot have any. ``[]``, not a query.
-    #
-    # Its ``entry_state`` is still the CALLER's, computed exactly as it is on the
-    # read paths (the director who just created the event is a player too, and the
-    # rules they wrote judge them like anyone else). One rating query, on the
-    # tournament's league: answering with a state the endpoint had guessed rather
-    # than computed is how the read and the guard come apart.
-    rating = await entrant_rating(db, league_id, current_user.id)
-    # No fixtures on a one-statement-old event, so no results either —
-    # ``_event_results`` answers ``None`` for an uncut draw whatever the game counts, so
-    # an empty map is all this needs.
-    return serialize_event(
-        event, entrants=[], fixtures=[], rating=rating, game_counts={}
+    # The verb returns the tournament's ``league_id`` — the ladder the caller's
+    # ``entry_state`` is judged against — already loaded under the owner lock, so the
+    # shared shaping helper needs no re-query for it. A just-created event has no
+    # entrants, draw or results (all empty without a query, ADR-0786), so the helper's
+    # only read is the caller's one ladder rating.
+    return await shape_created_event_read(
+        db, event=event, league_id=league_id, viewer_id=current_user.id
     )
 
 
@@ -682,7 +551,7 @@ async def update_event(
     #   PoolSetFrozenError       -> 409 (its carried, domain-authored sentence)
     #   DrawTypeFrozenError      -> 409 (its carried, domain-authored sentence)
     try:
-        event = await update_event_core(
+        event, league_id = await update_event_core(
             db,
             tournament_id=tournament_id,
             event_id=event_id,
@@ -695,37 +564,14 @@ async def update_event(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
-    # The event's league is the tournament's — the ladder the caller's refreshed
-    # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed the
-    # tournament exists and is the caller's, so this scalar read cannot miss.
-    league_id = (
-        await db.execute(
-            select(Tournament.league_id).where(Tournament.id == tournament_id)
-        )
-    ).scalar_one()
-    # An edited event keeps whatever entrants it already had — reload them rather
-    # than answering with an empty list (and a ``entered`` of 0) that would be a
-    # lie for any event people have entered. Its DRAW survives the edit too (a PATCH
-    # is not a re-cut, ADR-0786), so its fixtures are reloaded for the same reason:
-    # answering ``[]`` here would tell the director their draw had just been thrown
-    # away, and the page would render it that way.
-    entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
-    event_fixtures = await fixtures_by_event(db, [event.id])
-    fixtures = event_fixtures[event.id]
-    # Its RESULTS survive the edit too (a PATCH is not a re-cut), so they are
-    # reprojected from the same completed-match games as the read paths — one game load,
-    # so an edit to a played event still answers its live standings, not drops them.
-    game_counts = await game_counts_by_match(db, _completed_match_ids(event_fixtures))
-    # And its ``entry_state`` is recomputed from the event as it now stands: an owner
-    # who has just tightened a rule or lowered ``max_players`` is answered with what
-    # the event says NOW, not with what it said before their edit.
-    rating = await entrant_rating(db, league_id, current_user.id)
-    return serialize_event(
-        event,
-        entrants=entrants,
-        fixtures=fixtures,
-        rating=rating,
-        game_counts=game_counts,
+    # The verb returns the tournament's ``league_id`` — the ladder the caller's
+    # refreshed ``entry_state`` is judged on (ADR-0783) — already loaded under the owner
+    # lock, so the shared shaping helper needs no re-query for it. A PATCH is not a
+    # re-cut (ADR-0786): the edited event keeps its entrants, draw and results, which
+    # the helper reloads and reprojects (answering ``[]`` would tell the director their
+    # draw was thrown away).
+    return await shape_event_read(
+        db, event=event, league_id=league_id, viewer_id=current_user.id
     )
 
 

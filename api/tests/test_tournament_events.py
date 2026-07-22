@@ -132,13 +132,16 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    event = await create_event(
+    event, league_id = await create_event(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
         payload=_event_payload(),
     )
 
+    # The verb returns the tournament's league_id (the ladder its events are judged on)
+    # beside the event, so the adapter need not re-query the column it just loaded.
+    assert league_id == default_league.id
     assert event.tournament_id == tournament_id
     assert event.name == "Open Singles"
     # The nested value-objects persisted as plain JSONB.
@@ -382,7 +385,7 @@ async def test_update_event_persists_a_normal_field_edit(
     event = await _add_event(db_session, tournament)
     event_id = event.id
 
-    updated = await update_event(
+    updated, league_id = await update_event(
         db_session,
         tournament_id=tournament.id,
         event_id=event_id,
@@ -390,6 +393,8 @@ async def test_update_event_persists_a_normal_field_edit(
         updates=TournamentEventUpdate.model_validate({"name": "Renamed Open"}),
     )
 
+    # The verb returns the tournament's league_id beside the event (see create test).
+    assert league_id == default_league.id
     assert updated.name == "Renamed Open"
 
     # Persisted, not merely returned.
@@ -539,7 +544,7 @@ async def test_update_event_re_sending_the_same_draw_type_is_not_frozen(
     event = await _add_cut_event(db_session, tournament, draw_type=DrawType.round_robin)
     event_id = event.id
 
-    updated = await update_event(
+    updated, league_id = await update_event(
         db_session,
         tournament_id=tournament.id,
         event_id=event_id,
@@ -549,6 +554,7 @@ async def test_update_event_re_sending_the_same_draw_type_is_not_frozen(
         ),
     )
 
+    assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
     assert updated.draw_type is DrawType.round_robin
 

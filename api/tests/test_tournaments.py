@@ -69,8 +69,6 @@ from app.tournament_materialization import materialize_live_draw
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
-    _get_owned_tournament_or_404,
-    _get_tournament_for_update_or_404,
     create_tournament_transition,
     cut_event_draw,
     get_tournament,
@@ -2274,38 +2272,10 @@ async def test_transition_with_an_invalid_body_returns_422(
 # A tournament's status is read by one statement and overwritten by another, and
 # Postgres runs READ COMMITTED — so without a lock the two sit in different
 # instants and every "the status decides this" rule has a window under it. The
-# tests below pin the lock two ways: that it is *asked for* (and only on the
-# writing paths), and that it *works* (two real sessions, one genuinely blocking
-# on the other).
-
-
-async def test_only_the_mutating_loader_takes_the_row_lock(
-    db_session: AsyncSession,
-    engine: AsyncEngine,
-    authed_client: tuple[AsyncClient, User],
-):
-    """Of the module's two loaders, only one locks:
-    ``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``, and
-    ``_get_owned_tournament_or_404`` — the loader behind the owner-only writes —
-    does not.
-
-    Both halves are load-bearing. A locking loader that quietly stopped locking
-    would reopen the entry-after-go-live race in silence; and a lock spreading to
-    the *other* loader would make PATCH/DELETE (and, were a read route ever to
-    reach for it, every page view) queue behind writers they have nothing to
-    serialize against.
-    """
-    client, owner = authed_client
-    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
-    tournament_id = uuid.UUID(created["id"])
-
-    async with counted_statements(engine) as (session, statements):
-        await _get_tournament_for_update_or_404(session, tournament_id)
-    assert any("FOR UPDATE" in s for s in statements), statements
-
-    async with counted_statements(engine) as (session, statements):
-        await _get_owned_tournament_or_404(session, tournament_id, owner)
-    assert not any("FOR UPDATE" in s for s in statements), statements
+# test below pins the lock by behavior: that it *works* (two real sessions, one
+# genuinely blocking on the other). The row lock now lives on the transport-neutral
+# ``_load_owned_tournament_for_update`` verb-loader (``app.tournament_edit``), covered
+# by its own tests; the router keeps no loader of its own to assert ``FOR UPDATE`` on.
 
 
 async def test_two_identical_transitions_racing_leave_exactly_one_winner(
