@@ -43,7 +43,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import assert_never
 
 from pydantic import TypeAdapter
@@ -65,6 +65,7 @@ from app.scheduling import (
     InfeasibilityReason,
     MatchLength,
     NoSingleCause,
+    PastWindow,
     PlacedFixture,
     PoolHasNoTables,
     PoolOverCapacity,
@@ -85,6 +86,7 @@ from app.schemas.schedule_preview import (
 )
 from app.schemas.schedule_solve import (
     NoSingleCauseRead,
+    PastWindowReasonRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     ResolvedReason,
@@ -128,15 +130,18 @@ _solve = scheduling.solve
 @dataclass(frozen=True, slots=True)
 class _PreviewPoolResolution:
     """The DB-side facts an infeasibility reason needs to name a pool a human can
-    act on: its display ``name`` and the ``HH:MM`` clock bounds of its window
-    (already strings on the pool's ``Slot``). Built in the enqueue verb, where the
-    tournament's pools are loaded, and carried to the (DB-blind) job — the pure
-    snapshot speaks only namespaced ids and minute offsets, so the names cannot be
-    re-derived worker-side. Mirrors ``app.schedule_solves._PoolResolution``."""
+    act on: its display ``name``, the ``HH:MM`` clock bounds of its window (already
+    strings on the pool's ``Slot``), and the venue-local calendar ``date`` a
+    ``past_window`` reason names ("which day to move"). Built in the enqueue verb,
+    where the tournament's pools are loaded, and carried to the (DB-blind) job — the
+    pure snapshot speaks only namespaced ids and minute offsets, so the names cannot
+    be re-derived worker-side. Mirrors ``app.schedule_solves._PoolResolution`` (plus
+    ``pool_dates``)."""
 
     name: str
     window_start: str
     window_end: str
+    date: date
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +159,18 @@ class _PreviewEventMeta:
 @dataclass(frozen=True, slots=True)
 class PreviewJobInputs:
     """Everything the ephemeral preview job needs, as one frozen, picklable value:
-    the pure :class:`~app.scheduling.ScheduleSnapshot` to solve, the wall-clock
-    ``base`` its minute frame is offset from (``None`` when the tournament has no
-    real windows — no wall-clock finish can be projected then), the per-pool
-    resolutions the job humanizes an infeasible verdict through, and the per-event
-    meta the breakdown + honest-notes are built from.
+    the pure :class:`~app.scheduling.ScheduleSnapshot` to solve, the ``base`` (an
+    aware instant its minute frame is offset from, ``None`` when the tournament has
+    no real windows — no wall-clock finish can be projected then), the
+    ``tournament_id`` the preview was enqueued **for**, the per-pool resolutions the
+    job humanizes an infeasible verdict through, and the per-event meta the breakdown
+    + honest-notes are built from.
+
+    ``tournament_id`` is the bind that scopes an otherwise tournament-blind Redis job
+    to its owner's tournament: the poll/cancel paths (:func:`preview_job_state`,
+    :func:`cancel_preview`) verify it against the id in their path before touching the
+    job, so one pre-live owner cannot poll or cancel another director's preview by
+    pairing their own tournament id with the victim's token.
 
     Holds only pure value objects (no ORM row, no session) so it pickles cleanly
     as an RQ job argument — the preview's non-persistent equivalent of the real
@@ -166,6 +178,7 @@ class PreviewJobInputs:
 
     snapshot: ScheduleSnapshot
     base: datetime | None
+    tournament_id: uuid.UUID
     pool_resolutions: dict[str, _PreviewPoolResolution]
     events: tuple[_PreviewEventMeta, ...] = ()
 
@@ -249,6 +262,9 @@ def _pool_resolutions(tournament: Tournament) -> dict[str, _PreviewPoolResolutio
                 name=pool.name,
                 window_start=pool.slot.start,
                 window_end=pool.slot.end,
+                # The venue-local calendar day the director dated this window for —
+                # the actionable "which day to move" fact a past_window reason names.
+                date=date.fromisoformat(pool.slot.date),
             )
     return resolutions
 
@@ -288,10 +304,14 @@ async def request_schedule_preview(
     # events, so a miss would be a builder bug — fall back to the raw id, since a
     # preview is advisory).
     event_names = {str(event.id): event.name for event in tournament.events}
+    # namespaced pool id → its resolution (name + HH:MM), built once and reused for
+    # both the job's infeasibility humanization and each drawn fixture's pool_name.
+    resolutions = _pool_resolutions(tournament)
     inputs = PreviewJobInputs(
         snapshot=preview.snapshot,
         base=preview.base,
-        pool_resolutions=_pool_resolutions(tournament),
+        tournament_id=tournament_id,
+        pool_resolutions=resolutions,
         events=tuple(
             _PreviewEventMeta(
                 event_id=summary.event_id,
@@ -326,6 +346,11 @@ async def request_schedule_preview(
                 fixture_id=fixture.id,
                 event_id=fixture.event_id,
                 pool_id=fixture.pool_id,
+                # The human pool label, off the same resolution map the job humanizes
+                # infeasibility through. Every drawn fixture's pool is one the builder
+                # drew over, so a direct lookup is total (a miss would be a builder
+                # bug, not stale input).
+                pool_name=resolutions[fixture.pool_id].name,
                 player_a_id=fixture.player_a_id,
                 player_b_id=fixture.player_b_id,
             )
@@ -564,6 +589,12 @@ def _resolve_reason(
                 required_min=reason.required_min,
                 available_min=reason.available_min,
             )
+        case PastWindow():
+            # A pre-live preview can be dated in the past (the silent "today"
+            # default on an event now a day old, #1101): resolve the offending
+            # pool to its venue-local calendar day — the same ``past_window`` read
+            # a real infeasible solve records, so the client says which day to move.
+            return PastWindowReasonRead(date=pool_resolutions[reason.pool_id].date)
         case _:
             assert_never(reason)
 
@@ -590,10 +621,30 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
 _RESULT_ADAPTER: TypeAdapter[PreviewResult] = TypeAdapter(PreviewResult)
 
 
-def preview_job_state(token: str) -> PreviewJobState:
+def _job_tournament_id(job: Job) -> uuid.UUID | None:
+    """The tournament id a preview job was enqueued **for**, read off its pickled
+    :class:`PreviewJobInputs` argument — ``None`` when the args aren't the expected
+    shape (a foreign job on the queue). This is the fact the token-to-tournament bind
+    is checked against: a job whose inputs name a different tournament than the path
+    is not this caller's to see."""
+    args = job.args
+    if args and isinstance(args[0], PreviewJobInputs):
+        return args[0].tournament_id
+    return None
+
+
+def preview_job_state(token: str, tournament_id: uuid.UUID) -> PreviewJobState:
     """Read the ephemeral preview job addressed by ``token`` off Redis and project
     its :class:`PreviewJobState` — the reusable helper the poll endpoint (one shot)
     and :func:`wait_for_preview` (looped) both sit on.
+
+    ``tournament_id`` binds the (otherwise tournament-blind) Redis job to its owner's
+    tournament: a job that exists but was enqueued for a *different* tournament raises
+    :class:`TournamentNotFoundError` (→ 404), so a pre-live owner cannot poll another
+    director's preview by pairing their own tournament id with the victim's token. A
+    token Redis no longer knows is *not* this error — it stays the ``failed`` job
+    state below (the result expired, or the token was never valid), so the client
+    renders "run it again" rather than a leak-revealing 404 distinction.
 
     Maps RQ's job lifecycle onto the four preview states: still waiting for a
     worker (queued/deferred/scheduled) → ``queued``; executing → ``running``;
@@ -610,6 +661,10 @@ def preview_job_state(token: str) -> PreviewJobState:
             status=PreviewJobStatus.failed,
             error="This preview is no longer available; run it again.",
         )
+    if _job_tournament_id(job) != tournament_id:
+        # The token addresses a real job, but one enqueued for a different
+        # tournament than the path names — not this caller's to read (404).
+        raise TournamentNotFoundError()
 
     status = job.get_status()
     if status == JobStatus.FINISHED:
@@ -627,10 +682,17 @@ def preview_job_state(token: str) -> PreviewJobState:
     )
 
 
-def cancel_preview(token: str) -> None:
+def cancel_preview(token: str, tournament_id: uuid.UUID) -> None:
     """Best-effort cancel of the ephemeral preview job addressed by ``token`` — the
     helper the ``DELETE`` adapter sits on so a caller who has navigated away stops
     an in-flight preview from holding a worker slot.
+
+    ``tournament_id`` binds the tournament-blind Redis job to its owner's tournament
+    exactly as :func:`preview_job_state` does: a job enqueued for a *different*
+    tournament than the path raises :class:`TournamentNotFoundError` (→ 404) before it
+    is touched, so one pre-live owner cannot cancel another director's preview by
+    pairing their own tournament id with the victim's token. A token Redis never knew
+    stays a no-op success (an absent job already satisfies "not consuming a worker").
 
     Advisory and idempotent by design: a queued job is pulled off with
     :meth:`Job.cancel`, a running one is asked to stop with
@@ -648,6 +710,10 @@ def cancel_preview(token: str) -> None:
         job = Job.fetch(token, connection=connection)
     except NoSuchJobError:
         return
+    if _job_tournament_id(job) != tournament_id:
+        # The token addresses a real job enqueued for a different tournament than
+        # the path names — not this caller's to cancel (404).
+        raise TournamentNotFoundError()
     try:
         status = job.get_status()
         if status in (JobStatus.QUEUED, JobStatus.DEFERRED, JobStatus.SCHEDULED):
@@ -670,17 +736,21 @@ def cancel_preview(token: str) -> None:
 _WAIT_POLL_INTERVAL_S = 0.1
 
 
-def wait_for_preview(token: str, *, timeout_s: float) -> PreviewJobState:
+def wait_for_preview(
+    token: str, tournament_id: uuid.UUID, *, timeout_s: float
+) -> PreviewJobState:
     """Block until the preview job ``token`` reaches a terminal state
     (``done``/``failed``) or ``timeout_s`` elapses, then return its
-    :class:`PreviewJobState` — the bounded-wait variant the MCP tool (later chore)
-    uses to return a result in one call. On timeout it returns the last non-terminal
+    :class:`PreviewJobState` — the bounded-wait variant the ``preview_schedule`` MCP
+    tool uses to return a result in one call. ``tournament_id`` is the same
+    token-to-tournament bind :func:`preview_job_state` enforces (the MCP tool passes
+    the tournament it just enqueued for). On timeout it returns the last non-terminal
     state (``queued``/``running``): the job is still in flight, not failed. Polls at
     :data:`_WAIT_POLL_INTERVAL_S`; a caller wanting non-blocking polling uses
     :func:`preview_job_state` directly."""
     deadline = time.monotonic() + timeout_s
     while True:
-        state = preview_job_state(token)
+        state = preview_job_state(token, tournament_id)
         if state.status in (PreviewJobStatus.done, PreviewJobStatus.failed):
             return state
         if time.monotonic() >= deadline:

@@ -1103,13 +1103,28 @@ async def preview_schedule(
             # (nothing was written or queued).
             raise _map_preview_draw_error(error) from error
 
+    # No per-caller rate limit here (unlike the HTTP enqueue's ``preview_request_
+    # rate_limit``): the MCP surface is operator-only — every tool call is an
+    # authenticated API-token holder (``_authenticated_user_id`` above), not an
+    # anonymous browser session that could be rotated to multiply a budget — and a
+    # preview is already self-throttling (one CFS-limited ``preview`` worker slot, a
+    # few-second cap, and this call blocks on it), so a token holder cannot outrun the
+    # single slot regardless. The HTTP limiter exists to cap unauthenticated-ish
+    # session churn, which has no analogue on an API-token tool.
+    #
     # Wait for the ephemeral job to finish and return the result in this one call
     # (ADR "MCP waits internally with a bounded timeout"). The wait is a blocking
     # poll loop, so it runs off the event loop in a worker thread — a synchronous
     # MCP call is fine here (no browser-facing nginx hop), but it must not stall the
-    # async server.
+    # async server. The tournament id binds the token to the tournament just enqueued
+    # for, the same guard the HTTP poll enforces.
     state = await to_thread.run_sync(
-        partial(wait_for_preview, enqueued.token, timeout_s=_PREVIEW_WAIT_TIMEOUT_S)
+        partial(
+            wait_for_preview,
+            enqueued.token,
+            tournament_id,
+            timeout_s=_PREVIEW_WAIT_TIMEOUT_S,
+        )
     )
     if state.status is PreviewJobStatus.done and state.result is not None:
         return state.result

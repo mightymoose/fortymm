@@ -2432,12 +2432,11 @@ async def request_schedule_solve(
 
 
 async def _preview_rate_limit_key(request: Request) -> str:
-    """Key the schedule-preview limiter by the caller's hashed session cookie so
-    the budget is per **owner** (a preview is owner-gated), independent of other
-    directors. The raw cookie is a bearer credential, so it is sha256-hashed
-    before it becomes a Redis key (matching the email limiters). A cookie-less
-    request falls back to client IP — it will 401 downstream anyway, but the
-    limiter still counts the attempt."""
+    """Key the tight schedule-preview limiter by the caller's hashed session cookie
+    so the budget is per **session**, independent of other directors. The raw cookie
+    is a bearer credential, so it is sha256-hashed before it becomes a Redis key
+    (matching the email limiters). A cookie-less request falls back to client IP — it
+    will 401 downstream anyway, but the limiter still counts the attempt."""
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie:
         return f"session:{hashlib.sha256(cookie.encode('utf-8')).hexdigest()}"
@@ -2445,15 +2444,34 @@ async def _preview_rate_limit_key(request: Request) -> str:
     return f"ip:{client.host if client else 'unknown'}"
 
 
+async def _preview_ip_rate_limit_key(request: Request) -> str:
+    """Per-IP key for the looser ceiling that catches a caller cycling fresh
+    `/v1/session` cookies to bypass the per-session limit (each `GET /v1/session`
+    mints a new one for free), so the per-session budget can't simply be multiplied
+    by rotating sessions from one host."""
+    client = request.client
+    return f"schedule-preview-ip:{client.host if client else 'unknown'}"
+
+
 # A preview runs the full CP-SAT engine, so it is the expensive click on this
-# router — rate-limited per owner, a few a minute, comfortably above a director
-# tweaking a knob and re-previewing but well below anything that would keep the
-# preview worker saturated. The poll (GET) and cancel (DELETE) are cheap and
-# unlimited.
+# router. Two-tier, matching the email limiters' precedent (a per-session limit is
+# not per-*owner* — a director can mint unlimited guest sessions — so a per-IP
+# ceiling caps the aggregate a single host can drive):
+#   - tight per-session cap (six a minute), comfortably above a director tweaking a
+#     knob and re-previewing but well below anything that would saturate the single
+#     preview worker slot;
+#   - looser per-IP ceiling so rotating sessions from one host can't multiply that
+#     budget.
+# The poll (GET) and cancel (DELETE) are cheap and unlimited.
 preview_request_rate_limit = RedisRateLimiter(
     rates=[Rate(6, Duration.MINUTE)],
     bucket_key="schedule-preview",
     identifier=_preview_rate_limit_key,
+)
+preview_request_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(20, Duration.MINUTE)],
+    bucket_key="schedule-preview-ip",
+    identifier=_preview_ip_rate_limit_key,
 )
 
 
@@ -2461,7 +2479,10 @@ preview_request_rate_limit = RedisRateLimiter(
     "/tournaments/{tournament_id}/schedule/preview",
     response_model=PreviewEnqueued,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(preview_request_rate_limit)],
+    dependencies=[
+        Depends(preview_request_ip_rate_limit),
+        Depends(preview_request_rate_limit),
+    ],
 )
 async def request_schedule_preview(
     tournament_id: uuid.UUID,
@@ -2487,7 +2508,8 @@ async def request_schedule_preview(
     `published` (registration open, nothing drawn) tournament. An absent tournament
     is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
     (there is a real field and a real solve to look at, or it is over). Rate
-    limited per owner: too many previews in quick succession is a `429`.
+    limited per session with a per-IP ceiling: too many previews in quick
+    succession is a `429`.
     """
     # Thin adapter over the transport-neutral ``request_schedule_preview`` verb: it
     # owns the owner gate (404 → 403), the pre-live gate, the synchronous snapshot
@@ -2549,19 +2571,24 @@ async def read_schedule_preview(
     Owner-gated the same way the enqueue is: the tournament is re-loaded and the
     caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
     `live`/`archived` tournament a `409`) before the ephemeral job — which is not
-    itself scoped to a tournament in Redis — is read. A missing/expired token is
-    not a `404`: it is a `done`-or-`failed` job state, so the client renders "run
-    it again" rather than a transport error.
+    itself scoped to a tournament in Redis — is read, and the token is then bound to
+    this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    an owner can't pair their own tournament id with another director's token. A
+    missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    the client renders "run it again" rather than a transport error.
     """
     # Re-apply the owner + pre-live gate before reading the (tournament-blind)
-    # Redis job, so a token cannot be polled by anyone but the tournament's owner.
+    # Redis job, so a token cannot be polled by anyone but the tournament's owner —
+    # then bind the token to this tournament (``preview_job_state`` raises the
+    # not-found error, → 404, if the job was enqueued for a different one), so an
+    # owner can't pair their own tournament id with another director's token.
     try:
         await ensure_preview_access(db, tournament_id, current_user)
+        return preview_job_state(token, tournament_id)
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     except TournamentNotPreLiveError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return preview_job_state(token)
 
 
 @router.delete(
@@ -2588,9 +2615,12 @@ async def cancel_schedule_preview(
     """
     try:
         await ensure_preview_access(db, tournament_id, current_user)
+        # Bind the token to this tournament (``cancel_preview`` raises the not-found
+        # error, → 404, on a job enqueued for a different one) before the advisory
+        # cancel, so a token can't be cancelled by anyone but the tournament's owner.
+        cancel_preview(token, tournament_id)
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     except TournamentNotPreLiveError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    cancel_preview(token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

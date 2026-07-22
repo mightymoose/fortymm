@@ -42,8 +42,8 @@ source of truth production's own ``cut_draw`` uses — with no special-casing:
   for free, with no change here.)
 
 The per-event :class:`EventFieldSummary` (the count used) is returned alongside
-the snapshot so a later chore can compose the preview's honest-notes strip
-without re-deriving it.
+the snapshot so :mod:`app.schedule_preview_solve` composes the preview's
+honest-notes strip and per-event breakdown from it without re-deriving it.
 """
 
 from __future__ import annotations
@@ -74,6 +74,7 @@ from app.scheduling import (
 )
 from app.schemas.tournament import MatchSettings, Pool, TournamentTable
 from app.tournament_draws import draw_config, event_pools
+from app.venue_time import anchor_wallclock
 
 #: The synthetic field size for an *uncapped* event (``max_players IS NULL``,
 #: ADR-0935). An uncapped event has no natural number to auto-fill to, so a
@@ -111,12 +112,14 @@ class PreviewSnapshot:
     :func:`app.scheduling.solve`, plus one :class:`EventFieldSummary` per event
     it synthesized a field for (in the tournament's own event order).
 
-    ``base`` is the wall-clock origin of the snapshot's minute frame — the earliest
-    pool window start across every event, the anchor ``now_min = 0`` is offset from
-    — or ``None`` when no event has a pool (no window to anchor on), in which case a
-    caller reports a duration in minutes but no wall-clock finish. The builder
-    already computes it to set the frame, so it is handed back rather than
-    re-derived downstream."""
+    ``base`` is the **timezone-aware instant** origin of the snapshot's minute frame
+    — the earliest pool window start across every event (each anchored to its event's
+    venue ``timezone``), the anchor ``now_min = 0`` is offset from — or ``None`` when
+    no event has a pool (no window to anchor on), in which case a caller reports a
+    duration in minutes but no wall-clock finish. It is aware (not naive) so the
+    downstream ``estimated_finish`` it seeds is aware too (api/CLAUDE.md — a response
+    schema must not emit a naïve datetime). The builder already computes it to set the
+    frame, so it is handed back rather than re-derived downstream."""
 
     snapshot: ScheduleSnapshot
     field_summaries: tuple[EventFieldSummary, ...]
@@ -134,13 +137,25 @@ def _field_size(event: TournamentEvent, override: int | None) -> int:
     return DEFAULT_UNCAPPED_FIELD
 
 
-def _slot_bounds(date: str, start: str, end: str) -> tuple[datetime, datetime]:
-    """A pool ``Slot``'s window as naive wall-clock datetimes — the venue's own
-    frame (mirrors ``schedule_solves._slot_bounds`` without importing that
-    RQ/Redis-heavy module into this pure builder)."""
+def _slot_bounds(
+    date: str, start: str, end: str, timezone: str
+) -> tuple[datetime, datetime]:
+    """A pool ``Slot``'s window as timezone-aware **instants**, its ``{date, start,
+    end}`` wall-clock components anchored by the event's venue ``timezone`` (ADR
+    "tournament times are timezone-aware instants"). Anchoring is what puts every
+    event's window on **one real-instant axis** — the same one the real solve's
+    ``schedule_solves._slot_bounds`` uses — so a multi-timezone tournament's
+    preview verdict/duration/finish agree with production instead of mis-comparing
+    two venues' naive wall-clocks. Reuses the #1152 ``venue_time`` primitive rather
+    than re-deriving the anchor, and does not import the RQ/Redis-heavy
+    ``schedule_solves`` module into this pure builder."""
     return (
-        datetime.strptime(f"{date} {start}", "%Y-%m-%d %H:%M"),
-        datetime.strptime(f"{date} {end}", "%Y-%m-%d %H:%M"),
+        anchor_wallclock(
+            datetime.strptime(f"{date} {start}", "%Y-%m-%d %H:%M"), timezone
+        ),
+        anchor_wallclock(
+            datetime.strptime(f"{date} {end}", "%Y-%m-%d %H:%M"), timezone
+        ),
     )
 
 
@@ -236,7 +251,12 @@ def build_preview_snapshot(
     for plan in plans:
         for pool in plan.pools:
             key = preview_pool_key(plan.event.id, pool.id)
-            windows[key] = _slot_bounds(pool.slot.date, pool.slot.start, pool.slot.end)
+            # The event's own venue ``timezone`` anchors its pools' wall-clock
+            # windows to instants, so two events in different zones land on one
+            # axis — exactly as ``_load_solver_inputs`` anchors the real solve.
+            windows[key] = _slot_bounds(
+                pool.slot.date, pool.slot.start, pool.slot.end, plan.event.timezone
+            )
     # ``base`` is ``None`` when no event has a pool (nothing to anchor on); the
     # minute frame then falls back to ``datetime.min`` (no window uses it anyway).
     base = min((start for start, _ in windows.values()), default=None)

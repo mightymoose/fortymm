@@ -4,7 +4,7 @@ solve over a synthetic field").
 
 A preview never touches Postgres: its answer lives only in the RQ/Redis job
 result. This module is the typed shape that answer takes — the value the preview
-job returns and the HTTP poll / MCP tool adapters (later chores) hand back. It is
+job returns and the HTTP poll / MCP tool adapters hand back. It is
 the DB-blind projection's *output* contract, mirroring
 ``app.schemas.schedule_solve`` (the persisted solve's read boundary) but with a
 verdict-first summary rather than a ledger row: verdict + estimated duration up
@@ -19,9 +19,12 @@ exact same structured, discriminated-on-``kind`` reasons a real infeasible solve
 does — humanized once (pool id → name + ``HH:MM``, fixture id → ``best_of``) and
 never re-derived downstream.
 
-Nothing here is referenced by any route yet (the HTTP + MCP adapters are later
-chores), so none of these models reach ``openapi.json``. When the poll endpoint
-lands, :class:`PreviewResult` becomes its response body.
+These models **do** reach ``openapi.json``: :class:`PreviewEnqueued` is the enqueue
+route's response body, :class:`PreviewJobState` (carrying :class:`PreviewResult`) the
+poll route's, and :class:`PreviewRequest` the enqueue body — so a change here drifts
+the generated clients (``mise run regen-api-types`` / ``regen-ios-api-types``). The
+``preview_schedule`` MCP tool returns :class:`PreviewResult` too, but MCP is never in
+``schema.d.ts``.
 """
 
 from __future__ import annotations
@@ -143,11 +146,17 @@ class PreviewFixture(BaseModel):
     """One drawn synthetic pairing, known the instant the draw runs (before the
     solve returns) so a caller can render the grid skeleton immediately. The
     synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
-    sides are always known (the pool stage of a round-robin draw)."""
+    sides are always known (the pool stage of a round-robin draw).
+
+    ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
+    keys a pool by (unique across events); ``pool_name`` is the human label from the
+    event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
+    a director recognizes rather than the raw composite."""
 
     fixture_id: str
     event_id: str
     pool_id: str
+    pool_name: str
     player_a_id: str
     player_b_id: str
 

@@ -16,7 +16,7 @@ status codes:
   token (dropping the job so it can no longer be polled) and ``204`` for a token
   Redis never knew (a no-op success, never a ``500``);
 * a non-owner is ``403``, a ``live``/``archived`` tournament ``409``, and
-  exceeding the per-owner rate limit ``429``.
+  exceeding the per-session rate limit ``429``.
 
 Under the async (record-only) ``preview_queue`` fixture the enqueued job is
 inspected and then run through a real in-process worker (the DB-blind preview job
@@ -128,6 +128,7 @@ async def _make_tournament(
             entry_fee=Decimal("0.00"),
             slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
             match_settings={"rated": False, "length_games": 3},
+            timezone="America/Los_Angeles",
             pools=[
                 {
                     "id": "pool-a",
@@ -177,6 +178,9 @@ async def test_owner_enqueues_a_preview_and_gets_a_token_and_structure(
     assert body["token"]
     assert [s["field_size"] for s in body["field_summaries"]] == [4]
     assert len(body["fixtures"]) == 6
+    # Each drawn fixture carries the human pool label (not just the namespaced
+    # composite) so the grid can head its column "Pool A".
+    assert {f["pool_name"] for f in body["fixtures"]} == {"Pool A"}
 
     (job,) = preview_queue.jobs
     assert job.func_name == RUN_SCHEDULE_PREVIEW_JOB
@@ -341,6 +345,43 @@ async def test_cancelling_is_owner_only(
     assert (await client.get(_token_url(tournament_id, token))).json()[
         "status"
     ] == "queued"
+
+
+async def test_a_token_is_bound_to_its_tournament_against_a_cross_tournament_idor(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    preview_queue: Queue,
+) -> None:
+    """The cross-tournament IDOR guard: an owner who pairs their OWN valid pre-live
+    tournament id with another director's preview token gets a 404 on both poll and
+    cancel — not a leak of the victim's preview state, and not a cancel of it. Owning
+    *a* pre-live tournament is not enough; the token is bound to the tournament it was
+    enqueued FOR."""
+    attacker_client, attacker = authed_client
+    attacker_tournament = await _make_tournament(db_session, attacker)
+
+    async with make_client() as victim_client:
+        victim = await start_session(victim_client, db_session)
+        victim_tournament = await _make_tournament(db_session, victim)
+        victim_token = (
+            await victim_client.post(_preview_url(victim_tournament))
+        ).json()["token"]
+
+        # The attacker owns a valid pre-live tournament and supplies its id + the
+        # victim's token: the ownership + pre-live gate on the attacker's tournament
+        # passes, but the token was enqueued for the victim's → 404, not a leak.
+        poll = await attacker_client.get(_token_url(attacker_tournament, victim_token))
+        assert poll.status_code == 404, poll.text
+        cancel = await attacker_client.delete(
+            _token_url(attacker_tournament, victim_token)
+        )
+        assert cancel.status_code == 404, cancel.text
+
+        # The victim's preview survived the attack — still pollable by its own owner.
+        survived = (
+            await victim_client.get(_token_url(victim_tournament, victim_token))
+        ).json()
+        assert survived["status"] == "queued"
 
 
 # ----- the gates: 404 / 403 / 409 / 429 --------------------------------------

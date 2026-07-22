@@ -2051,6 +2051,7 @@ async def _seed_previewable_tournament(
         slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
+        timezone="America/Los_Angeles",
         pools=[
             {
                 "id": "pool-a",

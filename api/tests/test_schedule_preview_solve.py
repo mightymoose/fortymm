@@ -23,6 +23,7 @@ These tests prove the whole preview core end to end:
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import fakeredis
 import pytest
@@ -46,6 +47,7 @@ from app.schedule_preview_solve import (
     PREVIEW_JOB_TIMEOUT_MARGIN_S,
     RUN_SCHEDULE_PREVIEW_JOB,
     PreviewJobInputs,
+    cancel_preview,
     preview_job_state,
     request_schedule_preview,
     run_schedule_preview,
@@ -59,6 +61,7 @@ from app.schemas.schedule_preview import (
 from app.schemas.schedule_solve import WindowTooShortForMatchRead
 from app.tournament_errors import (
     NotTournamentOwnerError,
+    TournamentNotFoundError,
     TournamentNotPreLiveError,
 )
 from tests._helpers import make_user
@@ -127,6 +130,7 @@ async def _add_event(
     pools: list[dict[str, object]] | None = None,
     length_games: int = 5,
     name: str = "Open Singles",
+    timezone: str = "America/Los_Angeles",
 ) -> TournamentEvent:
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -139,6 +143,7 @@ async def _add_event(
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
         pools=[_pool(["t1", "t2"])] if pools is None else pools,
+        timezone=timezone,
     )
     db.add(event)
     await db.commit()
@@ -210,6 +215,8 @@ async def test_preview_solve_enqueues_on_the_preview_queue_and_yields_a_result(
     assert enqueued.token
     assert [s.field_size for s in enqueued.field_summaries] == [4]
     assert len(enqueued.fixtures) == 6
+    # Each drawn fixture carries its human pool label off the event's pool config.
+    assert {f.pool_name for f in enqueued.fixtures} == {"Pool A"}
 
     # The job landed on the PREVIEW queue with the right timeout, and running it
     # yields the full PreviewResult.
@@ -219,7 +226,7 @@ async def test_preview_solve_enqueues_on_the_preview_queue_and_yields_a_result(
 
     _run_recorded_preview_job(preview_queue)
 
-    state = preview_job_state(enqueued.token)
+    state = preview_job_state(enqueued.token, tournament.id)
     assert state.status is PreviewJobStatus.done
     result = state.result
     assert result is not None
@@ -271,8 +278,11 @@ async def test_preview_solve_finish_anchors_on_the_earliest_window_start(
     (job,) = preview_queue.jobs
     (inputs,) = job.args
     assert isinstance(inputs, PreviewJobInputs)
-    # The base handed to the job is the earliest window start, not the later pool's.
-    assert inputs.base == datetime(2026, 6, 13, 8, 30)
+    # The base handed to the job is the earliest window start, not the later pool's —
+    # an aware instant in the event's venue zone.
+    assert inputs.base == datetime(
+        2026, 6, 13, 8, 30, tzinfo=ZoneInfo("America/Los_Angeles")
+    )
 
     result = PreviewResult.model_validate(run_schedule_preview(inputs))
     assert result.estimated_duration_min is not None
@@ -356,7 +366,7 @@ async def test_preview_solve_persists_nothing(
         db_session, tournament_id=tournament_id, actor=owner
     )
     _run_recorded_preview_job(preview_queue)
-    state = preview_job_state(enqueued.token)
+    state = preview_job_state(enqueued.token, tournament_id)
     assert state.status is PreviewJobStatus.done
 
     # After the whole preview ran: still no entry, no fixture placement, no solve
@@ -433,7 +443,7 @@ async def test_wait_for_preview_returns_the_finished_result(
     )
     _run_recorded_preview_job(preview_queue)
 
-    state = wait_for_preview(enqueued.token, timeout_s=5.0)
+    state = wait_for_preview(enqueued.token, tournament.id, timeout_s=5.0)
     assert state.status is PreviewJobStatus.done
     assert state.result is not None
     assert state.result.total_matches == 6
@@ -442,10 +452,38 @@ async def test_wait_for_preview_returns_the_finished_result(
 async def test_preview_job_state_reports_a_missing_job_as_failed(
     preview_queue: Queue,
 ) -> None:
-    state = preview_job_state(str(uuid.uuid4()))
+    # A token Redis never knew is a ``failed`` state, not a 404 — the
+    # tournament-bind check is skipped when there is no job to read it off.
+    state = preview_job_state(str(uuid.uuid4()), uuid.uuid4())
     assert state.status is PreviewJobStatus.failed
     assert state.error is not None
     assert state.result is None
+
+
+async def test_preview_job_state_rejects_a_token_from_another_tournament(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """The token is bound to the tournament it was enqueued FOR: reading a real
+    job's token against a *different* tournament id raises the not-found error (→
+    404), so one owner cannot poll another director's preview by pairing their own
+    tournament id with the victim's token. Same bind ``cancel_preview`` enforces."""
+    owner = await make_user(db_session, "prev-bind")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(db_session, tournament, max_players=4)
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+
+    with pytest.raises(TournamentNotFoundError):
+        preview_job_state(enqueued.token, uuid.uuid4())
+    with pytest.raises(TournamentNotFoundError):
+        cancel_preview(enqueued.token, uuid.uuid4())
+    # The rightful tournament id still reads it.
+    assert (
+        preview_job_state(enqueued.token, tournament.id).status
+        is PreviewJobStatus.queued
+    )
 
 
 async def test_preview_solve_loads_events_without_relying_on_lazy_load(

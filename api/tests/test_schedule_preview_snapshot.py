@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from itertools import combinations
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
@@ -92,6 +93,7 @@ async def _add_event(
     pools: list[dict[str, object]] | None = None,
     length_games: int = 5,
     name: str = "Open Singles",
+    timezone: str = "America/Los_Angeles",
 ) -> TournamentEvent:
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -104,6 +106,7 @@ async def _add_event(
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
         pools=[_one_pool(["t1"])] if pools is None else pools,
+        timezone=timezone,
     )
     db.add(event)
     await db.commit()
@@ -176,13 +179,14 @@ async def test_preview_snapshot_base_is_the_earliest_window_start(
     the earliest pool window start across every event — so the enqueue verb reads it
     off the snapshot instead of re-walking the pools. Two pools with different starts
     pin that it is the *earliest*, and an event's own pool slots (not the event slot)
-    anchor it."""
+    anchor it — as a **timezone-aware instant** in the event's venue zone."""
     owner = await make_user(db_session, "prev-base")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(
         db_session,
         tournament,
         max_players=4,
+        timezone="America/Los_Angeles",
         pools=[
             {
                 "id": "p-a",
@@ -202,7 +206,54 @@ async def test_preview_snapshot_base_is_the_earliest_window_start(
 
     preview = build_preview_snapshot(loaded)
 
-    assert preview.base == datetime(2026, 6, 13, 8, 15)
+    # Aware: the earliest window start (08:15) anchored to the event's venue zone,
+    # not a naive wall-clock — so the frame lives on the same instant axis as the
+    # real solve and ``estimated_finish`` downstream is aware.
+    assert preview.base == datetime(
+        2026, 6, 13, 8, 15, tzinfo=ZoneInfo("America/Los_Angeles")
+    )
+    assert preview.base is not None
+    assert preview.base.tzinfo is not None
+
+
+async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """Two events in **different venue timezones**, both nominally opening at 09:00
+    local, must land on ONE instant axis (the gap #1152 closes). New York 09:00
+    (13:00Z) precedes Los Angeles 09:00 (16:00Z) by 180 minutes, so ``base`` is the
+    NY instant and the LA pool's window opens 180 minutes into the minute frame. A
+    naive builder that ignored the zones would open both windows at offset 0 — this
+    assertion is red against it."""
+    owner = await make_user(db_session, "prev-multitz")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=4,
+        name="East",
+        timezone="America/New_York",
+        pools=[_one_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=4,
+        name="West",
+        timezone="America/Los_Angeles",
+        pools=[_one_pool(["t2"])],
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    # ``base`` is the earliest instant — New York's 09:00, not Los Angeles's.
+    assert preview.base == datetime(
+        2026, 6, 13, 9, 0, tzinfo=ZoneInfo("America/New_York")
+    )
+    # The two pools' window starts on the shared frame: NY at offset 0, LA at +180.
+    starts = sorted(pool.window.start_min for pool in preview.snapshot.pools)
+    assert starts == [0, 180]
 
 
 async def test_preview_snapshot_base_is_none_without_any_pool_window(
