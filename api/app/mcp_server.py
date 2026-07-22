@@ -70,7 +70,7 @@ from app.match_serialization import (
     serialize_details,
     view_extras,
 )
-from app.models import Match, Tournament, TournamentEvent, User
+from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
 from app.player_matches import paginated_player_matches
@@ -95,6 +95,7 @@ from app.schemas.schedule_preview import (
 )
 from app.schemas.tournament import (
     ScheduleSolveRead,
+    TournamentCreate,
     TournamentDetailRead,
     TournamentFixtureRead,
     TournamentRead,
@@ -107,13 +108,22 @@ from app.tournament_edit import edit_tournament as edit_tournament_core
 from app.tournament_errors import (
     DrawUnderWayError,
     EventNotFoundError,
+    IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    NoDefaultLeagueError,
     NoDrawnEventsError,
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
+    TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
+    TournamentNotReadyToGoLiveError,
+)
+from app.tournament_lifecycle import create_tournament as create_tournament_core
+from app.tournament_lifecycle import delete_tournament as delete_tournament_core
+from app.tournament_lifecycle import (
+    transition_tournament as transition_tournament_core,
 )
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_queries import (
@@ -152,6 +162,15 @@ MY_MATCHES_DEFAULT_PAGE_SIZE = 25
 # the MCP adapter stays router-free; ``get_tournament`` asks it through the one shared
 # ``user_has_permission`` (``app.rbac``), so the two surfaces gate on the same grant.
 TOURNAMENT_VIEW_PERMISSION = "tournament.view"
+
+# The permission tournament creation gates on — the same seeded RBAC name the HTTP
+# router's ``require_create`` dependency enforces
+# (``app.tournaments.TOURNAMENT_CREATE``,
+# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
+# the MCP adapter stays router-free; ``create_tournament`` asks it through the one
+# shared ``user_has_permission`` (``app.rbac``), so a mounted tool grants an agent
+# nothing its user lacks over HTTP — the adapter enforces the SAME auth as HTTP.
+TOURNAMENT_CREATE_PERMISSION = "tournament.create"
 
 
 @asynccontextmanager
@@ -242,6 +261,20 @@ async def _require_tournament_view(db: AsyncSession, user_id: uuid.UUID) -> None
     HTTP route keeps: ``require_view`` (403) runs before the handler."""
     if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
         raise ToolError("You don't have permission to view tournaments.")
+
+
+async def _require_tournament_create(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The tournament-create gate: refuse unless the caller holds ``tournament.create``.
+
+    The transport-neutral twin of the HTTP ``require_create`` dependency, asked through
+    the one shared ``user_has_permission`` — so the MCP and HTTP surfaces gate creation
+    on the same grant and a mounted tool grants an agent nothing its user lacks over
+    HTTP (ADR: the MCP adapter must enforce the SAME auth as HTTP). Held at the ADAPTER,
+    not in the shared verb, exactly as ``_require_tournament_view`` keeps the read gate
+    at the adapter. Checked first, before the verb runs, the order ``require_create``
+    (403) keeps ahead of the HTTP handler."""
+    if not await user_has_permission(db, user_id, TOURNAMENT_CREATE_PERMISSION):
+        raise ToolError("You do not have permission to create tournaments.")
 
 
 async def _load_visible_tournament(
@@ -693,6 +726,174 @@ async def edit_tournament(
         # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
         # so here the actor is the creator — the owner's perspective the HTTP PATCH
         # serializes from (``created_by_username`` known, ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
+        )
+
+
+@mcp.tool
+async def create_tournament(payload: TournamentCreate) -> TournamentRead:
+    """Create a tournament as the authenticated API-token caller, and return it.
+
+    Mirrors ``POST /v1/tournaments``: it reuses the shared ``create_tournament`` verb
+    and the same ``TournamentCreate`` schema the HTTP route validates, so the MCP and
+    HTTP surfaces can never drift on what a valid new tournament is. The caller becomes
+    the tournament's creator (and therefore its owner — the one user who may later
+    edit, transition, or delete it).
+
+    The tournament is born a ``draft`` (its ``status`` is not settable here — it moves
+    only across the guarded lifecycle transitions). ``league_id`` is OPTIONAL: omit it
+    to bind the DEFAULT league (the ladder eligibility is judged on), or name one to
+    run on that ladder — but a named id that matches no league is refused rather than
+    silently falling back to the default (ADR-0783). ``table_catalogue`` defaults to
+    empty. Returns the created ``TournamentRead`` from the creator's perspective
+    (``can_edit`` is always true).
+
+    Gated on the same ``tournament.create`` permission the HTTP ``POST /v1/tournaments``
+    requires.
+
+    Raises a ``ToolError`` when you lack ``tournament.create``, when ``league_id`` names
+    no league, or (a broken deployment) when no ``league_id`` is given and there is no
+    default league.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, through the same shared gate the HTTP ``require_create``
+        # dependency asks — before the caller is loaded or anything is written, the
+        # order the HTTP route keeps (``require_create`` (403) before the handler).
+        await _require_tournament_create(db, user_id)
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await create_tournament_core(db, actor=actor, payload=payload)
+        except LeagueNotFoundError as exc:
+            raise ToolError("No league found with that id.") from exc
+        except NoDefaultLeagueError as exc:
+            raise ToolError(
+                "This deployment has no default league configured, so a tournament "
+                "created without a league_id can't be placed on a ladder. Name a "
+                "league_id explicitly."
+            ) from exc
+        # The caller is the creator, so the owner's perspective the HTTP POST
+        # serializes from (``created_by_username`` known, ``can_edit`` true).
+        return serialize(
+            tournament,
+            created_by_username=actor.username,
+            current_user_id=actor.id,
+        )
+
+
+class TournamentDeletionConfirmation(BaseModel):
+    """The result of deleting a tournament — a small, agent-shaped confirmation rather
+    than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was deleted
+    (the ``tournament_id`` that no longer resolves). Deleting a tournament cascades to
+    its events, entries and draws, so a subsequent read of this id is a not-found.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring ``DrawUncutConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+
+
+@mcp.tool
+async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfirmation:
+    """Delete a tournament you OWN as the authenticated API-token caller. Returns a
+    confirmation carrying the deleted tournament's id.
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}`` (which answers a bodiless
+    ``204``): it reuses the shared ``delete_tournament`` verb (the ``FOR UPDATE``
+    tournament row lock, then the owner gate) so the MCP and HTTP surfaces can never
+    drift. Deleting is owner-gated — only the tournament's creator may — and it is
+    DESTRUCTIVE: the tournament and everything under it (its events, entries and
+    draws) go with it. There is no undo.
+
+    Raises a ``ToolError`` when no tournament with that id exists, or when you are not
+    the tournament's owner (only the creator may delete it).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await delete_tournament_core(db, tournament_id=tournament_id, actor=actor)
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError("You can only delete tournaments you created.") from exc
+        return TournamentDeletionConfirmation(tournament_id=tournament_id)
+
+
+@mcp.tool
+async def transition_tournament(
+    tournament_id: uuid.UUID,
+    to: TournamentStatus,
+) -> TournamentRead:
+    """Move a tournament you OWN along its lifecycle as the authenticated API-token
+    caller, and return the moved tournament.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/transitions``: it reuses the shared
+    ``transition_tournament`` verb (the ``FOR UPDATE`` tournament row lock, the owner
+    gate, the forward-only edge table, the go-live precondition, and the go-live side
+    effects) so the MCP and HTTP surfaces can never drift. One generic tool covers the
+    whole lifecycle, the ``to`` target self-documenting in the tool schema — not three
+    semantic tools.
+
+    The lifecycle runs FORWARD ONLY, and exactly three moves exist: ``draft`` →
+    ``published`` (publish), ``published`` → ``live`` (go live), and ``live`` →
+    ``archived`` (archive). Anything else is refused — walking backwards, skipping a
+    stage, moving out of the terminal ``archived``, and re-asserting the status the
+    tournament already holds (a stale request, not a no-op).
+
+    **Going live has a precondition** (ADR-0786): the tournament must have at least one
+    event, and every event must have a **draw** whose fixtures seat exactly its current
+    entrants. A tournament with no events, an event with no draw, or an event whose
+    draw is **stale** (cut before somebody entered or withdrew) is refused with a
+    message naming the events at fault — ``build_cut`` (or re-cut) their draws, then go
+    live. Registration is open right up to that moment, which is why a draw can go stale
+    under it. Going live also MATERIALIZES every ready fixture into a real match and
+    queues the day's first schedule solve.
+
+    Owner-gated: only the tournament's creator may transition it. Returns the moved
+    ``TournamentRead`` from the owner's perspective (``can_edit`` is always true).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when the requested move is not a legal lifecycle edge (including
+    re-asserting the current status), or when going live is refused because an event has
+    no current draw.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await transition_tournament_core(
+                db, tournament_id=tournament_id, actor=actor, to=to
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError("You can only transition tournaments you created.") from exc
+        except (
+            TournamentAlreadyInStatusError,
+            IllegalTournamentTransitionError,
+            TournamentNotReadyToGoLiveError,
+        ) as exc:
+            # Each carries its exact, domain-authored sentence — the self-transition's
+            # single-ended wording, the illegal edge's two-ended wording, and the
+            # go-live precondition's event-naming body — surfaced verbatim to the agent.
+            raise ToolError(str(exc)) from exc
+        # The verb's owner gate just confirmed the caller is the creator, so the owner's
+        # perspective the HTTP route serializes from (``created_by_username`` known,
+        # ``can_edit`` true).
         return serialize(
             tournament,
             created_by_username=actor.username,

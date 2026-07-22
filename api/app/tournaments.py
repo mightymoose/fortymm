@@ -18,7 +18,6 @@ from app.draws import (
     PoolId,
     UnsupportedDrawType,
 )
-from app.leagues import resolve_league
 from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
     DrawType,
@@ -72,8 +71,6 @@ from app.sessions import SESSION_COOKIE_NAME, get_current_user
 from app.tournament_draw_service import cut_event_draw as _cut_event_draw
 from app.tournament_draw_service import uncut_event_draw as _uncut_event_draw
 from app.tournament_draws import (
-    DrawCurrency,
-    draw_currency_by_event,
     event_has_draw,
     event_pools,
 )
@@ -88,16 +85,22 @@ from app.tournament_entry_refusals import EntryRefusal, entry_refused
 from app.tournament_errors import (
     DrawUnderWayError,
     EventNotFoundError,
+    IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    NoDefaultLeagueError,
     NoDrawnEventsError,
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
+    TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
+    TournamentNotReadyToGoLiveError,
 )
+from app.tournament_lifecycle import create_tournament as create_tournament_core
+from app.tournament_lifecycle import delete_tournament as delete_tournament_core
+from app.tournament_lifecycle import transition_tournament
 from app.tournament_list import list_tournament_details, tournament_detail
-from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import (
     active_entrants_by_event,
     active_entry_count,
@@ -145,32 +148,12 @@ TOURNAMENT_ENTER = "tournament.enter"
 require_view = require_permission(TOURNAMENT_VIEW)
 require_create = require_permission(TOURNAMENT_CREATE)
 
-# The tournament lifecycle, in full (ADR-0017):
-#
-#     draft ──publish──▶ published ──go live──▶ live ──archive──▶ archived
-#
-# Legality is a property of the EDGE, not of the target — "may I be published?"
-# has no answer without knowing where you are now — so the rule is a set of
-# ordered (from, to) pairs, and this set is the whole rule. Every pair absent
-# from it is a 409: backwards (published → draft), skipping a stage (draft →
-# live), out of the terminal ``archived``, and re-asserting the status a
-# tournament already holds (published → published is a *conflict*, not an
-# idempotent no-op: the only caller that sends it is a stale one, and answering
-# 200 would tell it that it did something when somebody else did).
-#
-# One table, at one dispatch point, is also where the go-live precondition hangs
-# (``_enforce_ready_to_go_live``, ADR-0786): a tournament may only *start* with at
-# least one event, each with a draw that seats exactly its current entrants. That is
-# a rule about the TARGET rather than the edge — it says nothing about who may publish
-# or archive — and it lives beside this table, in the one handler that consults it,
-# rather than in a route of its own that somebody would have to remember to call.
-LEGAL_TRANSITIONS: frozenset[tuple[TournamentStatus, TournamentStatus]] = frozenset(
-    {
-        (TournamentStatus.draft, TournamentStatus.published),
-        (TournamentStatus.published, TournamentStatus.live),
-        (TournamentStatus.live, TournamentStatus.archived),
-    }
-)
+# The tournament lifecycle (ADR-0017) — ``draft → published → live → archived`` — now
+# lives with the verb: the forward-only edge table (``LEGAL_TRANSITIONS``) and the
+# go-live precondition (``_enforce_ready_to_go_live``, ADR-0786) moved onto the
+# transport-neutral ``transition_tournament`` in ``app.tournament_lifecycle``, so the
+# HTTP route and the MCP tool judge the same edges and run the same go-live side
+# effects. The route below is a thin adapter over that verb.
 
 router = APIRouter(prefix="/v1")
 
@@ -447,41 +430,27 @@ async def create_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
-    # Persist the value-objects as plain JSONB; the dicts produced by
-    # ``model_dump`` don't propagate beyond this write boundary.
+    # Thin adapter over the transport-neutral ``create_tournament`` verb: it owns
+    # the STRICT (FastAPI-free) league resolution and the write, and signals each
+    # league refusal with a domain exception. This handler maps each back to the
+    # exact status + body it produced before, so the wire contract is unchanged:
     #
-    # No ``status``: it isn't on the create schema (ADR-0017), so it isn't set
-    # here either. A tournament is born ``draft`` from the column's server
-    # default — one source for the starting status, rather than a schema default
-    # that a request could override — and the ``refresh`` below reads it back.
-    #
-    # The league is the one field the caller may leave out and still get: the
-    # column is NOT NULL (a tournament must name the ladder its eligibility is
-    # judged on, ADR-0783), and an omitted ``league_id`` resolves to the default
-    # league — the league a surface falls back to when the caller names none.
-    #
-    # The STRICT resolver, the same one the PATCH uses (and matches.py before it):
-    # an omitted league is the default, but an id that names NO league is a 404.
-    # NOT the degrading ``resolve_league_or_default`` — a tournament's league is a
-    # persisted fact that decides who may enter, not a view-preference lens on a
-    # resource that exists anyway (see the note in app/leagues.py). Degrading here
-    # would answer 201 to a director who mistyped an id, hand them a tournament
-    # quietly running on the DEFAULT ladder, and judge their entrants on a ladder
-    # nobody chose — exactly the silent lie ADR-0783 exists to remove.
-    league = await resolve_league(db, payload.league_id)
-    tournament = Tournament(
-        name=payload.name,
-        description=payload.description,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
-        address=payload.address.model_dump(),
-        table_catalogue=[t.model_dump() for t in payload.table_catalogue],
-        league_id=league.id,
-        created_by_user_id=current_user.id,
-    )
-    db.add(tournament)
-    await db.commit()
-    await db.refresh(tournament)
+    #   LeagueNotFoundError   -> 404 "League not found."
+    #   NoDefaultLeagueError  -> 500 "No default league configured."
+    try:
+        tournament = await create_tournament_core(
+            db, actor=current_user, payload=payload
+        )
+    except LeagueNotFoundError as exc:
+        # The STRICT resolution: a ``league_id`` that names no league is a 404,
+        # never a silent fall back to the default (ADR-0783).
+        raise HTTPException(status_code=404, detail="League not found.") from exc
+    except NoDefaultLeagueError as exc:
+        # An omitted league binds the default, so a deployment with no default is a
+        # broken configuration — the 500 ``resolve_league`` raised inline before.
+        raise HTTPException(
+            status_code=500, detail="No default league configured."
+        ) from exc
     return serialize(
         tournament,
         created_by_username=current_user.username,
@@ -575,145 +544,34 @@ async def delete_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
-    await db.delete(tournament)
-    await db.commit()
+    # Thin adapter over the transport-neutral ``delete_tournament`` verb: it owns
+    # the load-lock, the owner gate and the delete, and signals each refusal with a
+    # domain exception. This handler maps each back to the exact status + body it
+    # produced before, so the wire contract (a bodiless 204) is unchanged:
+    #
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    try:
+        await delete_tournament_core(
+            db, tournament_id=tournament_id, actor=current_user
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # The shared arms: the 404 (absent) and the 403 (not the owner) map
+        # identically across the owner-only writes.
+        raise _map_tournament_write_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ----- lifecycle routes ----------------------------------------------------
-
-
-# The one thing a tournament with no events can never do. Publishing one stays legal
-# — announcing a tournament before its events are written up is ordinary — but
-# *starting* it is not: there is nothing to run, no draw to have, and (without this)
-# nothing for the per-event checks below to fail on, so an empty tournament would sail
-# through a precondition that is vacuously true of it and land in ``live`` (ADR-0786;
-# the hole the #782 hand-off flagged).
-_NOTHING_TO_START = (
-    "This tournament has no events, so there is nothing to start. Add an event and cut "
-    "its draw, then start the tournament."
-)
-
-
-def _go_live_refusal(*, uncut: list[str], stale: list[str]) -> HTTPException:
-    """The 409 for a tournament whose draws are not ready to be played (ADR-0786).
-
-    409, not 403, for the reason ADR-0017 fixed for this whole module: the caller is
-    the owner and going live is theirs to do — it is the *tournament* that is in the
-    wrong state for it. The same request succeeds the moment the draws are cut, which
-    is what a conflict means and what a 403 would deny.
-
-    **It names the events**, because a refusal a director cannot act on is barely
-    better than a 500: "some event has no draw" leaves them clicking through a
-    ten-event tournament looking for it. Names, not ids (``named_list``) — the ids
-    are what this guard compared, but they are not what the director is looking at.
-
-    The two failures are kept apart in the sentence, because they are two different
-    jobs. An **uncut** event needs a first cut. A **stale** one has a draw the
-    director may well have reviewed and approved — it is simply older than the field,
-    because somebody entered or withdrew after it was cut — and needs re-cutting,
-    which will move players around inside it. Collapsing the two into "cut the draws"
-    would tell the director of a stale event that nothing they did was kept.
-    """
-    clauses = []
-    if uncut:
-        clauses.append(
-            f"{named_list(uncut)} {'has' if len(uncut) == 1 else 'have'} no draw yet"
-        )
-    if stale:
-        clauses.append(
-            f"{named_list(stale)} "
-            + (
-                "has a draw that no longer matches its entrants"
-                if len(stale) == 1
-                else "have draws that no longer match their entrants"
-            )
-        )
-    return HTTPException(
-        status_code=409,
-        detail=(
-            "This tournament cannot start yet: "
-            + "; and ".join(clauses)
-            + ". A draw is cut from the field as it stands at the time, and "
-            "registration stays open right up to the moment a tournament goes live — "
-            "so cut the draw for each event named (again, if somebody entered or "
-            "withdrew since it was last cut), then start the tournament."
-        ),
-    )
-
-
-async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) -> None:
-    """Raise the 409 unless every event of this tournament has a draw, and every one of
-    those draws still describes the field it will be played by (ADR-0786).
-
-    **The** ``published → live`` **precondition** — the per-target rule ADR-0017 left
-    room for at its single dispatch point, and the reason that room was left. Going
-    live is what seals the field (registration closes with it) and, from #788, what
-    turns every ready fixture into a real match. Both are irreversible in practice and
-    both are computed from the draw — so the draw has to be *right* at the instant the
-    tournament starts, not merely to have existed at some point before it.
-
-    Three ways it is not, and each of the three is refused:
-
-    * **No events at all.** ``_NOTHING_TO_START``. It has to be checked, and checked
-      first, because the per-event rules below say nothing about a tournament with no
-      events: "every event has a current draw" is *true* of a tournament with none.
-    * **An event with no draw** (``uncut``) — nothing to play.
-    * **An event whose draw is stale** — its fixtures no longer seat exactly its
-      active entrants. Registration stays open all the way to go-live, so a draw cut
-      on Tuesday is a plan for Tuesday's field: a player who entered on Wednesday is
-      in no fixture (they would sit out the tournament they paid for), and a player
-      who withdrew is still seated in one (their opponents get a match nobody plays).
-
-    **Read under the tournament's row lock, which the transition route has already
-    taken** — this function does not take a second one, and must not. That lock is the
-    whole mechanism: every writer of the entrant field (the entry route, the withdraw
-    route) queues on that same row first, so an entry cannot land between this check
-    and the ``UPDATE`` that follows it. Postgres runs READ COMMITTED, so unlocked, the
-    currency this reads would be the currency of *its own statement's snapshot* — and
-    a tournament could go live, on a draw this function had just certified as current,
-    into a field with one more player in it than the draw seats. The check would have
-    been true when it was made and false by the time it mattered, which is the only
-    kind of guard worse than none.
-
-    A ``match`` with ``assert_never``, not an ``if``: a fourth thing that can be true
-    of a draw (a fixture pointing at a pool the event no longer has, say) is a type
-    error here until somebody decides whether it may go live, rather than falling
-    through to ``current`` — a precondition must never fail in the permissive
-    direction.
-    """
-    events = (
-        await db.execute(
-            select(TournamentEvent.id, TournamentEvent.name)
-            .where(TournamentEvent.tournament_id == tournament.id)
-            # The page's order, so the refusal names the events in the order the
-            # director is looking at them.
-            .order_by(TournamentEvent.created_at)
-        )
-    ).all()
-    if not events:
-        raise HTTPException(status_code=409, detail=_NOTHING_TO_START)
-    # ONE batched read for the whole tournament (two statements, whatever the number
-    # of events): this runs with the row lock held, and a per-event query would hold
-    # it for a time that grows with the tournament.
-    currency = await draw_currency_by_event(db, [event_id for event_id, _ in events])
-    uncut: list[str] = []
-    stale: list[str] = []
-    for event_id, name in events:
-        state = currency[event_id]
-        match state:
-            case DrawCurrency.current:
-                continue
-            case DrawCurrency.uncut:
-                uncut.append(name)
-            case DrawCurrency.stale:
-                stale.append(name)
-            case _:
-                assert_never(state)
-    if not uncut and not stale:
-        return
-    raise _go_live_refusal(uncut=uncut, stale=stale)
+#
+# The go-live precondition (``_enforce_ready_to_go_live``), the forward-only edge
+# table (``LEGAL_TRANSITIONS``), and the go-live side effects now live on the
+# transport-neutral ``transition_tournament`` verb (``app.tournament_lifecycle``), so
+# the HTTP route below and the MCP ``transition_tournament`` tool judge the same edges
+# and run the same materialization + solve. The verb's three lifecycle 409s
+# (``TournamentAlreadyInStatusError`` / ``IllegalTournamentTransitionError`` /
+# ``TournamentNotReadyToGoLiveError``) each carry the exact sentence this route used to
+# compose inline, so the adapter rebuilds the body verbatim with ``str(exc)``.
 
 
 @router.post(
@@ -749,85 +607,38 @@ async def create_tournament_transition(
 
     Owner-only, like every other tournament mutation.
     """
-    # Load first (404), then ownership (403), and only then judge the edge (409)
-    # — the ordering the owner-only routes above already keep. It is the ordering
-    # that makes each code mean one thing: a stranger poking at someone else's
-    # tournament gets the same 403 whichever edge they ask for, so the response
-    # never leaks what status a tournament they cannot touch is in.
+    # Thin adapter over the transport-neutral ``transition_tournament`` verb: it owns
+    # the ``FOR UPDATE`` load-lock (so two racing identical requests can't both find a
+    # legal edge and both answer 201), the owner gate, the forward-only edge table, the
+    # go-live precondition, and the go-live side effects (materialize + queue the
+    # ``go_live`` solve), and signals each refusal with a domain exception. This handler
+    # maps each back to the exact status + body it produced before, so the wire contract
+    # is unchanged:
     #
-    # Locked, because the status this handler reads is the status it is about to
-    # overwrite: two identical requests racing here would otherwise both read the
-    # same ``from``, both find the edge legal, and both answer 201 — and "the
-    # status you already hold is a conflict, not a no-op" would hold only when
-    # nobody was in a hurry. The loser now blocks, re-reads the status the winner
-    # committed, and gets the 409 it is owed. Same lock the entry routes take, so
-    # an entry cannot slip in behind a go-live either.
-    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
-
-    if (tournament.status, payload.to) not in LEGAL_TRANSITIONS:
-        # The pair, not the target: the same ``to`` that is legal from one status
-        # is a conflict from another. Both details name the tournament rather than
-        # the schema, because a player reads them in a toast.
-        #
-        # The self-transition gets its own sentence. It is the common refusal in
-        # practice — a stale tab clicking "Start tournament" on a tournament that
-        # is already live is exactly the ``live → live`` the edge table refuses —
-        # and the two-ended phrasing degenerates into tautology there ("this
-        # tournament is live; it cannot be moved to live"), which tells the player
-        # nothing. What they actually need is the fact that somebody already did
-        # it. Every other illegal edge keeps the two-ended shape: a caller asking
-        # for a genuinely illegal jump needs both ends named, since the target
-        # alone doesn't say why it was refused.
-        detail = (
-            f"This tournament is already {tournament.status.value}."
-            if tournament.status == payload.to
-            else (
-                f"This tournament is {tournament.status.value}; "
-                f"it cannot be moved to {payload.to.value}."
-            )
+    #   TournamentNotFoundError            -> 404 "Tournament not found."
+    #   NotTournamentOwnerError            -> 403 "You can only modify tournaments …"
+    #   TournamentAlreadyInStatusError     -> 409 "This tournament is already {status}."
+    #   IllegalTournamentTransitionError   -> 409 "This tournament is {status}; it …"
+    #   TournamentNotReadyToGoLiveError    -> 409 the go-live sentence naming the events
+    try:
+        tournament = await transition_tournament(
+            db, tournament_id=tournament_id, actor=current_user, to=payload.to
         )
-        raise HTTPException(status_code=409, detail=detail)
-
-    # THE per-target precondition, at the one dispatch point ADR-0017 reserved for it —
-    # the edge table above says *where* you may go, and this says whether the tournament
-    # is in a fit state to get there. Only ``live`` has one (ADR-0786): a tournament may
-    # be published with no events and no draws (announcing early is fine), and archiving
-    # asks nothing of the draws it is putting away.
-    #
-    # Inside the row lock this handler already holds, and it must stay inside it: the
-    # currency it checks is a fact about the entrant field, and every writer of that
-    # field queues on this same row — so an entry cannot land between the check and the
-    # ``UPDATE`` below. A second lock is neither taken nor needed.
-    if payload.to is TournamentStatus.live:
-        await _enforce_ready_to_go_live(db, tournament)
-
-    tournament.status = payload.to
-    # Materialization (#788), as the transition's final act: once the status is
-    # ``live``, the first ``advance()`` turns every ready fixture into a real
-    # ``in_progress`` match — for round-robin, the whole pool — in the SAME transaction
-    # as the status write, so a tournament is never seen ``live`` without the matches
-    # its go-live created. Run only on the ``published → live`` edge (nothing else
-    # materializes), and only after the precondition above, which is what guarantees a
-    # complete, current draw to work from. It is idempotent on ``fixture.match_id``, so
-    # it can never double-create.
-    if payload.to is TournamentStatus.live:
-        await materialize_live_draw(db, tournament)
-        # Go-live is a solve trigger (ADR "the schedule is solved; the call is
-        # pinned"): the moment the matches exist, the day's first full plan is
-        # queued — same transaction as the status write, under the tournament
-        # row lock this handler already holds, which is exactly the lock order
-        # ``request_solve`` requires of its callers (tournament →
-        # schedule_solves). A ``None`` return means Redis was down: the enqueue
-        # failed, ``request_solve`` logged it and took its row back out, and
-        # going live proceeds anyway — DELIBERATELY. The transition is the
-        # thing the director asked for; the missing solve is recovered by the
-        # 1-minute pin tick and the owner's Run-scheduler button, so failing
-        # the go-live would trade a self-healing gap for a hard error.
-        await request_solve(db, tournament.id, ScheduleSolveTrigger.go_live)
-    await db.commit()
-    await db.refresh(tournament)
-    # The owner is the current user (``_require_owner`` just said so), so the
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        # The shared arms: the 404 (absent) and the 403 (not the owner), judged in that
+        # order by the locked owner-loader — so a stranger never learns a tournament's
+        # status.
+        raise _map_tournament_write_error(exc) from exc
+    except (
+        TournamentAlreadyInStatusError,
+        IllegalTournamentTransitionError,
+        TournamentNotReadyToGoLiveError,
+    ) as exc:
+        # The three lifecycle 409s each carry their exact, domain-authored sentence
+        # (``str(exc)``): the self-transition's single-ended wording, the illegal
+        # edge's two-ended wording, and the go-live precondition's event-naming body.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # The owner is the current user (the verb's owner gate just said so), so the
     # creator's username and can_edit are both known without another query.
     return serialize(
         tournament,

@@ -80,6 +80,83 @@ class LeagueNotFoundError(Exception):
     404 ``"League not found."``. Never an ``HTTPException``."""
 
 
+class NoDefaultLeagueError(Exception):
+    """Raised by the create verb when the caller names no ``league_id`` and the
+    deployment has no default league configured — the transport-neutral equivalent
+    of ``resolve_league``'s 500 (``_default_league_or_500``, ``app.leagues``), which
+    raises an ``HTTPException`` the FastAPI-free verb must not. A tournament's
+    ``league_id`` column is NOT NULL and an omitted league resolves to the default
+    (ADR-0783), so with no default there is nothing to bind the row to — a broken
+    deployment, not a client error. The HTTP adapter maps this to the existing 500
+    ``"No default league configured."``. Never an ``HTTPException``."""
+
+
+class TournamentAlreadyInStatusError(Exception):
+    """Raised by the transition verb when the caller asks to move a tournament to
+    the status it **already holds** (a ``live → live``, say). ADR-0017 makes a
+    re-asserted status a **conflict, not an idempotent no-op**: a stale tab clicking
+    "Start tournament" on a tournament somebody already started is the common case,
+    and it deserves the fact it is missing — that it is already done — rather than a
+    silent 201.
+
+    It carries the current status so the HTTP adapter can rebuild the exact 409 body
+    (``"This tournament is already {status}."``) and the MCP tool its equivalent
+    ``ToolError`` prose. It is deliberately a **separate type** from
+    :class:`IllegalTournamentTransitionError`: the self-transition gets its own
+    single-ended sentence (the two-ended one degenerates into tautology — "this
+    tournament is live; it cannot be moved to live" tells the player nothing), so the
+    distinction has to survive to the adapter. Never an ``HTTPException``."""
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"This tournament is already {status}.")
+        self.status = status
+
+
+class IllegalTournamentTransitionError(Exception):
+    """Raised by the transition verb for a genuinely illegal lifecycle edge — walking
+    backwards, skipping a stage, or moving out of the terminal ``archived`` — i.e. any
+    ``(from, to)`` pair not in the forward-only legal table AND whose ends differ (the
+    equal-ends case is :class:`TournamentAlreadyInStatusError`).
+
+    It carries **both** ends of the edge, because the same ``to`` that is legal from
+    one status is a conflict from another, so the target alone does not say why it was
+    refused. The HTTP adapter rebuilds the exact 409 body (``"This tournament is
+    {status}; it cannot be moved to {to}."``) from ``str(exc)`` and the MCP tool its
+    equivalent ``ToolError`` prose. It is a 409, not a 403 (ADR-0017): the caller is
+    the owner and the move is theirs to make — it is the *tournament* that is in the
+    wrong state for it. Never an ``HTTPException``."""
+
+    def __init__(self, status: str, to: str) -> None:
+        super().__init__(f"This tournament is {status}; it cannot be moved to {to}.")
+        self.status = status
+        self.to = to
+
+
+class TournamentNotReadyToGoLiveError(Exception):
+    """Raised by the transition verb when the ``published → live`` precondition fails
+    (ADR-0786): the tournament has **no events**, or an event with **no draw**, or an
+    event whose **draw is stale** (cut before somebody entered or withdrew, so its
+    fixtures no longer seat exactly its active entrants).
+
+    Going live seals the field and turns every ready fixture into a real match, both
+    computed from the draw — so the draw must be right at the instant the tournament
+    starts. It carries the composed, director-facing sentence (naming the at-fault
+    events **by name**, never by id) so the HTTP adapter rebuilds the exact 409 body
+    with ``str(exc)`` and the MCP tool its equivalent ``ToolError`` prose, plus the
+    structured lists (``uncut`` / ``stale`` names, ``no_events``) for any adapter that
+    wants to reshape rather than echo. It is a 409, not a 403: the same request
+    succeeds the moment the draws are cut, which is what a conflict means. Never an
+    ``HTTPException``."""
+
+    def __init__(
+        self, message: str, *, uncut: list[str], stale: list[str], no_events: bool
+    ) -> None:
+        super().__init__(message)
+        self.uncut = uncut
+        self.stale = stale
+        self.no_events = no_events
+
+
 class NoDrawnEventsError(Exception):
     """Raised by the request-schedule-solve verb when no event of the addressed
     tournament has a **cut draw** — nothing the solver can place, so a run would

@@ -54,6 +54,7 @@ from app.models import (
 )
 from app.models.tournament import DrawType, EventFormat
 from app.token_hashing import hash_token
+from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
@@ -2229,3 +2230,386 @@ async def test_preview_mcp_unknown_tournament_raises_tool_error(
     async with _mcp_client(raw) as client, client:
         with pytest.raises(ToolError, match=unknown):
             await client.call_tool("preview_schedule", {"tournament_id": unknown})
+
+
+# ----- create_tournament tool ----------------------------------------------
+
+
+async def test_create_tournament_is_registered(db_session: AsyncSession) -> None:
+    """The create verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-create-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "create_tournament" in {tool.name for tool in tools}
+
+
+async def test_create_tournament_makes_the_caller_the_creator(
+    db_session: AsyncSession,
+) -> None:
+    """A bearer-authed caller creates a tournament via the tool: the returned view
+    names the caller as creator (and owner — ``can_edit`` true), it is born a
+    ``draft``, and the row is committed and readable back."""
+    me = await make_user(db_session, "mcp-create-owner")
+    me_id = me.id
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "create_tournament", {"payload": _tournament_payload()}
+        )
+        assert result.isError is False
+        body = result.structuredContent
+        assert body is not None
+        assert body["created_by_user_id"] == str(me_id)
+        assert body["can_edit"] is True
+        assert body["name"] == _tournament_payload()["name"]
+        assert body["status"] == "draft"
+        tournament_id = body["id"]
+
+    # Durable in the database, owned by the caller.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    assert persisted.created_by_user_id == me_id
+
+
+async def test_create_tournament_unknown_league_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A ``league_id`` that names no league is refused (the STRICT resolution),
+    surfacing as a ``ToolError`` rather than a silent fall back to the default."""
+    me = await make_user(db_session, "mcp-create-bad-league")
+    me_id = me.id
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+    payload = {**_tournament_payload(), "league_id": str(uuid.uuid4())}
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="No league found"):
+            await client.call_tool("create_tournament", {"payload": payload})
+
+    # Nothing was created.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.created_by_user_id == me_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_create_tournament_without_permission_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A caller who does not hold ``tournament.create`` is refused before anything is
+    written — the same gate the HTTP ``require_create`` dependency enforces, so a
+    mounted tool grants an agent nothing its user lacks over HTTP."""
+    me = await make_user(db_session, "mcp-create-noperm")
+    me_id = me.id
+    raw = await _mint(db_session, me)
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="permission to create tournaments"):
+            await client.call_tool(
+                "create_tournament", {"payload": _tournament_payload()}
+            )
+
+    # Nothing was created.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.created_by_user_id == me_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+# ----- delete_tournament tool ----------------------------------------------
+
+
+async def test_delete_tournament_is_registered(db_session: AsyncSession) -> None:
+    """The destructive delete verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-delete-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "delete_tournament" in {tool.name for tool in tools}
+
+
+async def test_delete_tournament_owner_removes_it_and_confirms(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed OWNER deletes a tournament via the tool: it confirms the
+    deleted id, and the row is gone from the database."""
+    owner = await make_user(db_session, "mcp-delete-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Deletable Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "delete_tournament", {"tournament_id": str(tournament_id)}
+        )
+        assert result.isError is False
+        assert result.structuredContent is not None
+        assert result.structuredContent["tournament_id"] == str(tournament_id)
+
+    # The row is gone.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_delete_tournament_non_owner_raises_tool_error_and_deletes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who is not the tournament's creator gets a ``ToolError`` (owner-gated
+    in the shared verb), and the tournament is left untouched."""
+    owner = await make_user(db_session, "mcp-delete-guard-owner")
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Not Yours Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    outsider = await make_user(db_session, "mcp-delete-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="only delete tournaments you created"):
+            await client.call_tool(
+                "delete_tournament", {"tournament_id": str(tournament_id)}
+            )
+
+    # Nothing was deleted.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def test_delete_tournament_unknown_id_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """An id that matches no tournament surfaces as a not-found ``ToolError`` — the
+    404 judged before the 403, so a non-owner never learns whether an id existed."""
+    me = await make_user(db_session, "mcp-delete-unknown")
+    raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("delete_tournament", {"tournament_id": unknown})
+
+
+# ----- transition_tournament tool ------------------------------------------
+
+
+async def test_transition_tournament_is_registered(db_session: AsyncSession) -> None:
+    """The one generic lifecycle verb is exposed as a tool to an authenticated
+    caller — not three semantic publish/go_live/archive tools."""
+    user = await make_user(db_session, "mcp-tx-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "transition_tournament" in {tool.name for tool in tools}
+
+
+async def test_transition_tournament_owner_walks_the_whole_lifecycle(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """An owner drives a tournament with a cut draw all the way through the lifecycle
+    via the one generic tool: draft → published → live → archived. Going live
+    materializes every fixture into a real match and queues the ``go_live`` solve."""
+    owner = await make_user(db_session, "mcp-tx-owner")
+    raw = await _mint(db_session, owner)
+    tournament, event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
+    tournament_id, event_id = tournament.id, event.id
+    # Cut the draw while still a draft (drawing is not status-tied) — DB writes done
+    # OUTSIDE the MCP client block (an interleaved write trips the ASGI greenlet
+    # context). No entrant arrives after, so the draw stays current for go-live.
+    await cut_draw(db_session, event)
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client, client:
+        published = await client.call_tool_mcp(
+            "transition_tournament",
+            {"tournament_id": str(tournament_id), "to": "published"},
+        )
+        assert published.isError is False
+        assert published.structuredContent is not None
+        assert published.structuredContent["status"] == "published"
+        assert published.structuredContent["can_edit"] is True
+
+        live = await client.call_tool_mcp(
+            "transition_tournament",
+            {"tournament_id": str(tournament_id), "to": "live"},
+        )
+        assert live.isError is False
+        assert live.structuredContent is not None
+        assert live.structuredContent["status"] == "live"
+
+        archived = await client.call_tool_mcp(
+            "transition_tournament",
+            {"tournament_id": str(tournament_id), "to": "archived"},
+        )
+        assert archived.isError is False
+        assert archived.structuredContent is not None
+        assert archived.structuredContent["status"] == "archived"
+
+    # Going live materialized every fixture into a real match…
+    db_session.expire_all()
+    fixtures = list(
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert fixtures
+    assert all(f.match_id is not None for f in fixtures)
+    # …and queued exactly one solve, with the go_live trigger.
+    solves = list(
+        (
+            await db_session.execute(
+                select(ScheduleSolve).where(
+                    ScheduleSolve.tournament_id == tournament_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(solves) == 1
+    assert solves[0].trigger is ScheduleSolveTrigger.go_live
+    assert solves[0].status is ScheduleSolveStatus.queued
+
+
+async def test_transition_tournament_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Transitioning is owner-gated by construction in the shared verb: a caller who is
+    not the creator gets a ``ToolError`` and the status is left unchanged."""
+    owner = await make_user(db_session, "mcp-tx-real-owner")
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Not Yours Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    outsider = await make_user(db_session, "mcp-tx-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="transition tournaments you created"):
+            await client.call_tool(
+                "transition_tournament",
+                {"tournament_id": str(tournament_id), "to": "published"},
+            )
+
+    # Untouched.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentStatus.draft
+
+
+async def test_transition_tournament_illegal_edge_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A draft → live jump skips the ``published`` stage — an illegal edge, surfaced as
+    a ``ToolError`` naming both ends, and the tournament stays a draft."""
+    owner = await make_user(db_session, "mcp-tx-illegal-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Skip Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="cannot be moved to live"):
+            await client.call_tool(
+                "transition_tournament",
+                {"tournament_id": str(tournament_id), "to": "live"},
+            )
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentStatus.draft
+
+
+async def test_transition_tournament_go_live_without_a_draw_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Going live with an event that has no cut draw is refused with a ``ToolError``
+    naming the event (the go-live precondition), and the tournament stays published."""
+    owner = await make_user(db_session, "mcp-tx-nodraw-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
+    tournament_id = tournament.id
+    # Move it to published directly (no draw cut), so only the go-live precondition is
+    # left to trip.
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="no draw yet"):
+            await client.call_tool(
+                "transition_tournament",
+                {"tournament_id": str(tournament_id), "to": "live"},
+            )
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentStatus.published
+
+
+async def test_transition_tournament_unknown_id_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """An id that matches no tournament surfaces as a not-found ``ToolError`` — the 404
+    judged before the 403, so a non-owner never learns whether an id existed."""
+    me = await make_user(db_session, "mcp-tx-unknown")
+    raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool(
+                "transition_tournament",
+                {"tournament_id": unknown, "to": "published"},
+            )
