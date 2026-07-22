@@ -39,6 +39,9 @@ from app.main import app as fastapi_app
 from app.main import mcp_app
 from app.models import (
     League,
+    Match,
+    MatchSettings,
+    MatchStatus,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -3323,3 +3326,214 @@ async def test_withdraw_from_event_third_party_raises_tool_error(
         )
     ).scalar_one()
     assert row.status is TournamentEntryStatus.entered
+
+
+# ----- place_fixture tool --------------------------------------------------
+
+
+async def _seed_placeable_fixture(
+    db: AsyncSession,
+    owner: User,
+    league: League,
+) -> tuple[Tournament, TournamentEvent, TournamentFixture]:
+    """A ``draft`` tournament owned by ``owner`` with one singles event and one fixture
+    seating two active entrants — the target the place-fixture tool needs, written
+    straight to the database. The ``table_catalogue`` carries ``t1``/``t2`` so a
+    placement can name a real table, and the event's pool ``p-os-1`` anchors the
+    fixture."""
+    tournament = Tournament(
+        name="MCP Placement Cup",
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        table_catalogue=[
+            {"id": "t1", "label": "Table 1", "court": "A"},
+            {"id": "t2", "label": "Table 2", "court": "A"},
+        ],
+        league_id=league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+    )
+    db.add(tournament)
+    await db.commit()
+    await db.refresh(tournament)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_type=DrawType.round_robin,
+        max_players=64,
+        entry_fee=Decimal("45"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": True, "length_games": 5},
+        predicates=[],
+        pools=[
+            {
+                "id": "p-os-1",
+                "name": "Pool A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            }
+        ],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    entry_a = TournamentEntry(
+        event_id=event.id,
+        user_id=(await make_user(db, "mcp-place-a-" + uuid.uuid4().hex)).id,
+        status=TournamentEntryStatus.entered,
+    )
+    entry_b = TournamentEntry(
+        event_id=event.id,
+        user_id=(await make_user(db, "mcp-place-b-" + uuid.uuid4().hex)).id,
+        status=TournamentEntryStatus.entered,
+    )
+    db.add_all([entry_a, entry_b])
+    await db.commit()
+    fixture = TournamentFixture(
+        event_id=event.id,
+        pool_id="p-os-1",
+        round=1,
+        position=1,
+        entry_a_id=entry_a.id,
+        entry_b_id=entry_b.id,
+    )
+    db.add(fixture)
+    await db.commit()
+    await db.refresh(fixture)
+    return tournament, event, fixture
+
+
+async def test_place_fixture_owner_round_trip(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed OWNER places a fixture via the tool: the returned fixture carries
+    the table + predicted start, and the columns are committed (a full placement of a
+    known-entrant fixture also pins it)."""
+    owner = await make_user(db_session, "mcp-place-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _event, fixture = await _seed_placeable_fixture(
+        db_session, owner, default_league
+    )
+    tournament_id, fixture_id = tournament.id, fixture.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "place_fixture",
+            {
+                "tournament_id": str(tournament_id),
+                "fixture_id": str(fixture_id),
+                "placement": {
+                    "table_id": "t1",
+                    "scheduled_start": "2026-06-13T10:00:00",
+                },
+            },
+        )
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["id"] == str(fixture_id)
+    assert result.structuredContent["table_id"] == "t1"
+    assert result.structuredContent["scheduled_start"] is not None
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == fixture_id)
+        )
+    ).scalar_one()
+    assert row.table_id == "t1"
+    assert row.scheduled_start is not None
+    assert row.pinned_at is not None
+
+
+async def test_place_fixture_non_owner_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who does not own the tournament gets a ``ToolError`` (owner-gated by
+    construction in the shared verb), and the fixture is left unplaced."""
+    owner = await make_user(db_session, "mcp-place-guard-owner")
+    stranger = await make_user(db_session, "mcp-place-stranger")
+    stranger_token = await _mint(db_session, stranger)
+    tournament, _event, fixture = await _seed_placeable_fixture(
+        db_session, owner, default_league
+    )
+    tournament_id, fixture_id = tournament.id, fixture.id
+
+    async with _mcp_client(stranger_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool(
+                "place_fixture",
+                {
+                    "tournament_id": str(tournament_id),
+                    "fixture_id": str(fixture_id),
+                    "placement": {
+                        "table_id": "t1",
+                        "scheduled_start": "2026-06-13T10:00:00",
+                    },
+                },
+            )
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == fixture_id)
+        )
+    ).scalar_one()
+    assert row.table_id is None
+    assert row.pinned_at is None
+
+
+async def test_place_fixture_played_out_fixture_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A refusal (the played-out freeze, ADR-0790) surfaces as a ``ToolError`` whose
+    prose names the frozen state, and nothing is written."""
+    owner = await make_user(db_session, "mcp-place-frozen-owner")
+    raw = await _mint(db_session, owner)
+    tournament, _event, fixture = await _seed_placeable_fixture(
+        db_session, owner, default_league
+    )
+    tournament_id, fixture_id = tournament.id, fixture.id
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+    )
+    match.status = MatchStatus.completed
+    db_session.add(match)
+    await db_session.commit()
+    fixture.match_id = match.id
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="can no longer be changed"):
+            await client.call_tool(
+                "place_fixture",
+                {
+                    "tournament_id": str(tournament_id),
+                    "fixture_id": str(fixture_id),
+                    "placement": {
+                        "table_id": "t2",
+                        "scheduled_start": "2026-06-13T14:00:00",
+                    },
+                },
+            )
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == fixture_id)
+        )
+    ).scalar_one()
+    assert row.table_id is None
+    assert row.pinned_at is None

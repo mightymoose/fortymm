@@ -101,6 +101,7 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
+    TournamentFixturePlacementUpdate,
     TournamentFixtureRead,
     TournamentRead,
     TournamentUpdate,
@@ -117,6 +118,8 @@ from app.tournament_errors import (
     EntryNotFoundError,
     EntryRefusedError,
     EventNotFoundError,
+    FixtureNotFoundError,
+    FixturePlacementFrozenError,
     IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
@@ -144,6 +147,7 @@ from app.tournament_lifecycle import (
     transition_tournament as transition_tournament_core,
 )
 from app.tournament_list import list_tournament_details, tournament_detail
+from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -1516,6 +1520,77 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             event_id=event_id,
             fixtures_remaining=0,
         )
+
+
+@mcp.tool
+async def place_fixture(
+    tournament_id: uuid.UUID,
+    fixture_id: uuid.UUID,
+    placement: TournamentFixturePlacementUpdate,
+) -> TournamentFixtureRead:
+    """Set (or clear) a fixture's PLACEMENT — its table and predicted start — for a
+    fixture of a tournament you OWN as the authenticated API-token caller, and return
+    the updated fixture.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement``:
+    it reuses the shared ``place_fixture`` verb (the ``FOR UPDATE`` tournament row lock,
+    the owner gate, the fixture load, the played-out freeze, the pin/notify transition,
+    the ``settings_changed`` re-solve trigger, the commit and the post-commit fan-out)
+    and the same ``TournamentFixturePlacementUpdate`` schema the HTTP route validates,
+    so the MCP and HTTP surfaces can never drift. You address the fixture by its
+    ``tournament_id`` + ``fixture_id`` (the fixture must belong to that tournament).
+
+    ``placement`` is the placement in full: ``table_id`` (a string ref into the
+    tournament's ``table_catalogue``) and ``scheduled_start`` (a **naive** wall-clock
+    time in the venue's local frame). ``null`` on either clears that half;
+    ``(null, null)`` unassigns the fixture entirely.
+
+    **A manual placement is a PIN.** A full placement (both halves set, both entrants
+    known) sets ``pinned_at`` — a commitment every later schedule solve plans around —
+    and, while the tournament is **live**, placing a fixture IS calling it: a first
+    placement notifies both entrants, and re-placing a fixture whose players were
+    already told sends them a "your match moved" correction. Pre-live placements are
+    silent pins (free rearranging while planning, nobody paged); a fixture with a TBD
+    side stores the placement but does not pin. Anything less than a full placement
+    UNPINS (and, if the players had been called, cancels the call). Every successful
+    write also queues a re-solve.
+
+    **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
+    prediction, and the constraints (table-in-pool, time-in-window, no double-booking)
+    are flags derived on read, NOT invariants — so an out-of-window time, or a
+    ``table_id`` that names no table in the catalogue, is STORED, not rejected. The one
+    hard rule: a fixture whose linked match is ``completed`` or ``voided`` is history,
+    so its placement can no longer be changed. Owner-gated: only the tournament's
+    creator may place its fixtures.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when no fixture with that id belongs to the tournament, or when
+    the fixture's match is already completed/voided (its placement is frozen)."""
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            return await place_fixture_core(
+                db,
+                tournament_id=tournament_id,
+                fixture_id=fixture_id,
+                actor=actor,
+                placement=placement,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only place fixtures for tournaments you created."
+            ) from exc
+        except FixtureNotFoundError as exc:
+            raise ToolError(f"No fixture found with id {fixture_id}.") from exc
+        except FixturePlacementFrozenError as exc:
+            # Carries the exact, domain-authored 409 sentence — the played-out fixture's
+            # freeze — surfaced as the ``ToolError`` prose verbatim.
+            raise ToolError(str(exc)) from exc
 
 
 @mcp.tool

@@ -367,6 +367,37 @@ class TournamentNotReadyToGoLiveError(Exception):
         self.no_events = no_events
 
 
+class FixtureNotFoundError(Exception):
+    """Raised by the place-fixture verb when the ``fixture_id`` resolves to no row
+    **under the named tournament** — a well-formed pair that names no addressable
+    fixture (a right fixture id under the wrong tournament id included, so a
+    cross-tournament placement is a miss, not an edit). Judged after the tournament
+    404/owner 403, so a stranger's refusal never leaks whether the fixture exists.
+    The HTTP adapter maps this to the existing 404 ``"Fixture not found."``. Never an
+    ``HTTPException`` — the caller adapts it to its transport."""
+
+
+class FixturePlacementFrozenError(Exception):
+    """Raised by the place-fixture verb when a fixture whose linked match is
+    ``completed`` or ``voided`` would be (re)placed — the ONE hard rule of an
+    otherwise-soft endpoint (ADR-0790). A played-out fixture's placement records
+    where and when the match actually happened, so the move is refused.
+
+    It is a 409, not a 403 (ADR-0017): the caller is the owner and the request is
+    well-formed — it is the *fixture* that is past the point where a placement means
+    anything. Carries the match's ``status`` so the HTTP adapter rebuilds the exact
+    409 body (``"This fixture's match is already {status}, so its placement can no
+    longer be changed."``, via ``str(exc)``) and the MCP tool its equivalent
+    ``ToolError`` prose. Never an ``HTTPException``."""
+
+    def __init__(self, match_status: str) -> None:
+        super().__init__(
+            f"This fixture's match is already {match_status}, so its placement can "
+            "no longer be changed."
+        )
+        self.match_status = match_status
+
+
 class NoDrawnEventsError(Exception):
     """Raised by the request-schedule-solve verb when no event of the addressed
     tournament has a **cut draw** — nothing the solver can place, so a run would
