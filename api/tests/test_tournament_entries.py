@@ -50,6 +50,21 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.tournament_entries import enter_event as enter_event_verb
+from app.tournament_entries import withdraw_from_event as withdraw_from_event_verb
+from app.tournament_errors import (
+    EntryNotFoundError,
+    EntryRefusal,
+    EntryRefusedError,
+    EventNotFoundError,
+    NonSinglesEntryError,
+    NotAllowedToEnterError,
+    NotAllowedToWithdrawError,
+    NotTournamentOwnerError,
+    PlayerNotFoundError,
+    TournamentNotFoundError,
+    WithdrawalRegistrationClosedError,
+)
 from app.tournaments import (
     TOURNAMENT_ENTER,
     TOURNAMENT_VIEW,
@@ -1130,7 +1145,13 @@ async def test_a_closed_window_refuses_even_when_the_status_is_published(
     to_withdraw = await _make_event(db_session, status=TournamentStatus.published)
     entry_id = await _seed_entry(db_session, to_withdraw, user)
     to_enter_id = to_enter.id
-    monkeypatch.setattr("app.tournaments._registration_open", lambda t: False)
+    # The single registration-window decision now lives in
+    # ``app.tournament_registration``
+    # (both the entry verb and the withdraw route call it module-qualified), so stubbing
+    # that one attribute closes the window for BOTH legs below.
+    monkeypatch.setattr(
+        "app.tournament_registration.registration_open", lambda t: False
+    )
 
     entering = await client.post(_entries_url(to_enter))
     withdrawing = await client.delete(_entry_url(to_withdraw, entry_id))
@@ -2263,3 +2284,636 @@ async def test_an_unknown_field_in_the_entry_body_is_a_422(
 
     assert response.status_code == 422, response.text
     assert await _all_entries(db_session, event_id) == []
+
+
+# ===== the transport-neutral enter_event verb =================================
+#
+# These drive ``app.tournament_entries.enter_event`` directly with a raw
+# ``db_session`` and no FastAPI — the branch matrix behind the HTTP endpoint tests
+# above (which pin the wire contract and stay green untouched). They prove each arm of
+# the dual-actor fork (ADR-0784), the ordered refusals and the four machine-readable
+# codes (ADR-0968) are signalled as **domain exceptions** from ``app.tournament_errors``
+# — never an ``HTTPException`` — which is what lets the MCP tool reuse the same verb.
+
+
+async def _grant_enter(db_session: AsyncSession, user: User) -> None:
+    """Give ``user`` a real ``tournament.enter`` grant through RBAC rows, so the verb's
+    self-path permission gate (the one query ``_require_enter_permission`` runs) is
+    exercised, not stubbed."""
+    await grant_permissions(db_session, user, (TOURNAMENT_ENTER,))
+
+
+async def test_verb_self_registration_succeeds_and_records_no_adder(
+    db_session: AsyncSession,
+) -> None:
+    """The self path: an actor holding ``tournament.enter`` enters themselves, the verb
+    returns the entrant, and the row records NULL as the adder (ADR-0784)."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+
+    entrant = await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=actor,
+        user_id=None,
+    )
+
+    assert entrant.user_id == actor.id
+    assert entrant.username == actor.username
+    (row,) = await _active_entries(db_session, event.id)
+    assert row.user_id == actor.id
+    assert row.added_by_user_id is None
+
+
+async def test_verb_naming_your_own_id_is_self_registration(
+    db_session: AsyncSession,
+) -> None:
+    """Naming your OWN ``user_id`` is self-registration, not a director entry: same
+    permission gate, and ``added_by_user_id`` stays NULL — the one encoding of "the
+    player entered themselves"."""
+    actor = await make_user(db_session, f"selfid-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+
+    await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=actor,
+        user_id=actor.id,
+    )
+
+    (row,) = await _active_entries(db_session, event.id)
+    assert (row.user_id, row.added_by_user_id) == (actor.id, None)
+
+
+async def test_verb_self_registration_without_the_permission_is_refused(
+    db_session: AsyncSession,
+) -> None:
+    """The self path is gated on ``tournament.enter``: an actor without it raises
+    :class:`NotAllowedToEnterError`, before the tournament is even loaded, and nothing
+    is
+    written."""
+    actor = await make_user(db_session, f"noperm-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session)
+    event_id = event.id
+
+    with pytest.raises(NotAllowedToEnterError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_owner_enters_another_player_recording_the_adder(
+    db_session: AsyncSession,
+) -> None:
+    """The director path: the owner names another player's id and enters them —
+    ownership is the authorization (no ``tournament.enter`` grant), and the row records
+    the owner as the adder (ADR-0784)."""
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    player = await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session, owner=owner)
+
+    entrant = await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=owner,
+        user_id=player.id,
+    )
+
+    # The created row describes the PLAYER, not the director who wrote it.
+    assert entrant.user_id == player.id
+    assert entrant.username == player.username
+    (row,) = await _active_entries(db_session, event.id)
+    assert (row.user_id, row.added_by_user_id) == (player.id, owner.id)
+
+
+async def test_verb_non_owner_naming_another_player_is_not_owner_error(
+    db_session: AsyncSession,
+) -> None:
+    """A non-owner naming somebody else's id is the director arm, gated on ownership:
+    :class:`NotTournamentOwnerError`, even holding ``tournament.enter`` (that permission
+    is the self-registration gate, and this is not a self-registration). Nothing
+    written."""
+    stranger = await make_user(db_session, f"stranger-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, stranger)  # the self gate must not admit this arm
+    other = await make_user(db_session, f"other-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session)  # owned by a throwaway director, not stranger
+    event_id = event.id
+
+    with pytest.raises(NotTournamentOwnerError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=stranger,
+            user_id=other.id,
+        )
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_director_naming_an_unknown_user_is_player_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """The owner names a ``user_id`` that resolves to no enterable player:
+    :class:`PlayerNotFoundError` (a not-found, judged after the ownership gate). Nothing
+    written."""
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session, owner=owner)
+    event_id = event.id
+
+    with pytest.raises(PlayerNotFoundError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=owner,
+            user_id=uuid.uuid4(),
+        )
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_missing_tournament_is_tournament_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """An absent tournament id raises :class:`TournamentNotFoundError` (the self gate
+    has
+    already passed; the load is what refuses)."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+
+    with pytest.raises(TournamentNotFoundError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=uuid.uuid4(),
+            event_id=uuid.uuid4(),
+            actor=actor,
+            user_id=None,
+        )
+
+
+async def test_verb_missing_event_under_a_real_tournament_is_event_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """A real tournament but an event id that names nothing under it raises
+    :class:`EventNotFoundError`."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+
+    with pytest.raises(EventNotFoundError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=uuid.uuid4(),
+            actor=actor,
+            user_id=None,
+        )
+
+
+async def test_verb_a_doubles_event_is_non_singles_entry(
+    db_session: AsyncSession,
+) -> None:
+    """A doubles event cannot be entered directly (ADR-0016):
+    :class:`NonSinglesEntryError`,
+    carrying the format for the 400 body, judged after the self gate and the load.
+    Nothing
+    written."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session, format=EventFormat.doubles)
+    event_id = event.id
+
+    with pytest.raises(NonSinglesEntryError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert exc_info.value.event_format == EventFormat.doubles.value
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_registration_closed_fires_with_its_code(
+    db_session: AsyncSession,
+) -> None:
+    """Entering an event of a non-``published`` tournament raises
+    :class:`EntryRefusedError` carrying the ``registration_closed`` code (ADR-0968)."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session, status=TournamentStatus.draft)
+    event_id = event.id
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert exc_info.value.refusal is EntryRefusal.registration_closed
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_rating_ineligible_fires_with_its_code(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A player over the event's rating cap raises :class:`EntryRefusedError` carrying
+    the
+    ``rating_ineligible`` code, and the rating it was judged on comes back in the
+    message
+    (ADR-0783 / ADR-0968). Nothing written."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    await rate_player(db_session, actor, default_league, 1650.0)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+    event_id = event.id
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert exc_info.value.refusal is EntryRefusal.rating_ineligible
+    assert str(exc_info.value), "the refusal carries a fallback message"
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_verb_event_full_fires_with_its_code(
+    db_session: AsyncSession,
+) -> None:
+    """An event already at ``max_players`` active entrants raises
+    :class:`EntryRefusedError` carrying the ``event_full`` code — counted under the
+    tournament row lock. The seeded entrant survives; nothing new is written."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    other = await make_user(db_session, f"other-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session, max_players=1)
+    db_session.add(TournamentEntry(event_id=event.id, user_id=other.id))
+    await db_session.commit()
+    event_id = event.id
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert exc_info.value.refusal is EntryRefusal.event_full
+    assert [e.user_id for e in await _active_entries(db_session, event_id)] == [
+        other.id
+    ]
+
+
+async def test_verb_already_entered_fires_with_its_code(
+    db_session: AsyncSession,
+) -> None:
+    """A second active entry for the same player raises :class:`EntryRefusedError`
+    carrying the ``already_entered`` code — the partial unique index's
+    ``IntegrityError``,
+    caught at commit. The one existing active entry remains."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+    db_session.add(TournamentEntry(event_id=event.id, user_id=actor.id))
+    await db_session.commit()
+    event_id = event.id
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=None,
+        )
+    assert exc_info.value.refusal is EntryRefusal.already_entered
+    assert len(await _active_entries(db_session, event_id)) == 1
+
+
+async def test_verb_a_director_adding_an_over_rated_player_is_rating_ineligible(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """**The safety model, in one test (ADR-0784).** A director's entry is judged by the
+    SAME eligibility as a player's: the owner (holding no ``tournament.enter`` grant,
+    and
+    themselves unrated) adds a 1650-rated player to an "Under 1500" event, and it is
+    refused ``rating_ineligible`` — the PLAYER's rating is judged, not the director's,
+    so
+    ownership is never an eligibility bypass. Nothing written."""
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    player = await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
+    await rate_player(db_session, player, default_league, 1650.0)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500, owner=owner)
+    event_id = event.id
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event_id,
+            actor=owner,
+            user_id=player.id,
+        )
+    assert exc_info.value.refusal is EntryRefusal.rating_ineligible
+    assert await _all_entries(db_session, event_id) == []
+
+
+# ----- the withdraw_from_event VERB (chore 3b) -------------------------------
+#
+# The transport-neutral withdraw verb, driven directly with a raw session — no HTTP,
+# no MCP — so the owner-or-self fork (ADR-0784), the soft-delete, the load/refusal
+# ordering and the re-enterability the partial unique index buys are asserted where
+# they live, once, for both adapters. The HTTP endpoint tests above stay untouched.
+
+
+async def test_withdraw_verb_entrant_withdraws_their_own_entry(
+    db_session: AsyncSession,
+) -> None:
+    """The self path: an entrant holding ``tournament.enter`` withdraws their OWN entry.
+    The status flips to ``withdrawn`` and the ROW SURVIVES (a soft delete, ADR-0784), so
+    the event keeps its withdrawal history and no active entry remains."""
+    entrant = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, entrant)
+    event = await _make_event(db_session)
+    entry_id = await _seed_entry(db_session, event, entrant)
+    event_id = event.id
+
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event_id,
+        entry_id=entry_id,
+        actor=entrant,
+    )
+
+    # The row is still there, flipped — not gone.
+    row = await _reread(db_session, entry_id)
+    assert row.status is TournamentEntryStatus.withdrawn
+    assert await _active_entries(db_session, event_id) == []
+    # And the soft delete is total: exactly one row, the withdrawn one.
+    assert [e.id for e in await _all_entries(db_session, event_id)] == [entry_id]
+
+
+async def test_withdraw_verb_owner_withdraws_another_players_entry(
+    db_session: AsyncSession,
+) -> None:
+    """The owner path: the tournament's creator withdraws SOMEBODY ELSE's entry, holding
+    NO ``tournament.enter`` grant — managing the field of a tournament you created is a
+    property of ownership, not a role grant (ADR-0784). The entry is soft-deleted."""
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    player = await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session, owner=owner)
+    entry_id = await _seed_entry(db_session, event, player)
+    event_id = event.id
+
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event_id,
+        entry_id=entry_id,
+        actor=owner,
+    )
+
+    assert (await _reread(db_session, entry_id)).status is (
+        TournamentEntryStatus.withdrawn
+    )
+    assert await _active_entries(db_session, event_id) == []
+
+
+async def test_withdraw_verb_a_third_party_is_not_allowed_to_withdraw(
+    db_session: AsyncSession,
+) -> None:
+    """A caller who is NEITHER the entry's own player NOR the tournament's owner raises
+    :class:`NotAllowedToWithdrawError`, even holding ``tournament.enter`` (that grant is
+    the SELF gate, and this is not their entry). The entry stays active — nothing
+    changed."""
+    entrant = await make_user(db_session, f"entrant-{uuid.uuid4().hex[:8]}")
+    stranger = await make_user(db_session, f"stranger-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, stranger)  # the self gate must not admit this arm
+    event = await _make_event(db_session)  # owned by a throwaway director, not stranger
+    entry_id = await _seed_entry(db_session, event, entrant)
+
+    with pytest.raises(NotAllowedToWithdrawError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=entry_id,
+            actor=stranger,
+        )
+    assert (await _reread(db_session, entry_id)).status is (
+        TournamentEntryStatus.entered
+    )
+
+
+async def test_withdraw_verb_self_withdrawer_without_the_permission_is_refused(
+    db_session: AsyncSession,
+) -> None:
+    """The self path is gated on ``tournament.enter`` exactly as self-registration is:
+    an entrant WITHOUT it withdrawing their own entry raises
+    :class:`NotAllowedToEnterError` (the one shared self-action gate), and the entry
+    stays active."""
+    entrant = await make_user(db_session, f"noperm-{uuid.uuid4().hex[:8]}")
+    event = await _make_event(db_session)
+    entry_id = await _seed_entry(db_session, event, entrant)
+
+    with pytest.raises(NotAllowedToEnterError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=entry_id,
+            actor=entrant,
+        )
+    assert (await _reread(db_session, entry_id)).status is (
+        TournamentEntryStatus.entered
+    )
+
+
+async def test_withdraw_verb_missing_tournament_is_tournament_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """An absent tournament id raises :class:`TournamentNotFoundError` — the locked load
+    is what refuses, before the fork is reached."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+
+    with pytest.raises(TournamentNotFoundError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=uuid.uuid4(),
+            event_id=uuid.uuid4(),
+            entry_id=uuid.uuid4(),
+            actor=actor,
+        )
+
+
+async def test_withdraw_verb_missing_event_is_event_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """A real tournament but an event id that names nothing under it raises
+    :class:`EventNotFoundError`, before the entry is looked up."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+
+    with pytest.raises(EventNotFoundError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=uuid.uuid4(),
+            entry_id=uuid.uuid4(),
+            actor=actor,
+        )
+
+
+async def test_withdraw_verb_missing_entry_is_entry_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """A real tournament and event but an entry id that names nothing under the event
+    raises :class:`EntryNotFoundError` — the last of the three 404s, judged before any
+    403."""
+    actor = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, actor)
+    event = await _make_event(db_session)
+
+    with pytest.raises(EntryNotFoundError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=uuid.uuid4(),
+            actor=actor,
+        )
+
+
+async def test_withdraw_verb_an_entry_under_a_different_event_is_entry_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """An entry that exists but hangs off a DIFFERENT event is not addressable through
+    this (tournament, event) pair: :class:`EntryNotFoundError`, not a cross-event
+    withdrawal. The entry the caller didn't name stays active."""
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    entrant = await make_user(db_session, f"entrant-{uuid.uuid4().hex[:8]}")
+    named = await _make_event(db_session, owner=owner)
+    other = await _make_event(db_session, owner=owner)
+    other_entry_id = await _seed_entry(db_session, other, entrant)
+
+    with pytest.raises(EntryNotFoundError):
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=named.tournament_id,
+            event_id=named.id,
+            entry_id=other_entry_id,
+            actor=owner,
+        )
+    assert (await _reread(db_session, other_entry_id)).status is (
+        TournamentEntryStatus.entered
+    )
+
+
+async def test_withdraw_verb_an_active_entry_outside_the_window_is_registration_closed(
+    db_session: AsyncSession,
+) -> None:
+    """Withdrawing an ACTIVE entry while registration is shut (a ``draft`` tournament)
+    raises :class:`WithdrawalRegistrationClosedError` carrying the bare-prose sentence —
+    NOT the coded ``EntryRefusedError`` the enter leg raises (ADR-0968 keeps the code to
+    the entry endpoint). The entry stays active."""
+    entrant = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, entrant)
+    event = await _make_event(db_session, status=TournamentStatus.draft)
+    entry_id = await _seed_entry(db_session, event, entrant)
+
+    with pytest.raises(WithdrawalRegistrationClosedError) as exc_info:
+        await withdraw_from_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=entry_id,
+            actor=entrant,
+        )
+    assert str(exc_info.value), "the refusal carries the domain-authored sentence"
+    assert (await _reread(db_session, entry_id)).status is (
+        TournamentEntryStatus.entered
+    )
+
+
+async def test_withdraw_verb_an_already_withdrawn_entry_is_an_idempotent_no_op(
+    db_session: AsyncSession,
+) -> None:
+    """An entry that is ALREADY withdrawn has nothing left to lock, so the verb succeeds
+    in a non-``published`` status (here ``live``) rather than refusing — the idempotent
+    204 ADR-0016 designed. The row stays ``withdrawn``."""
+    entrant = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, entrant)
+    event = await _make_event(db_session, status=TournamentStatus.live)
+    entry_id = await _seed_entry(
+        db_session, event, entrant, status=TournamentEntryStatus.withdrawn
+    )
+
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        entry_id=entry_id,
+        actor=entrant,
+    )
+
+    assert (await _reread(db_session, entry_id)).status is (
+        TournamentEntryStatus.withdrawn
+    )
+
+
+async def test_withdraw_verb_frees_the_player_to_enter_the_same_event_again(
+    db_session: AsyncSession,
+) -> None:
+    """The partial unique index is over ACTIVE entries only, so once the verb has
+    withdrawn a player's entry they may enter the same event again cleanly — the
+    withdrawn row and a fresh active row coexist for the same (event, player)."""
+    entrant = await make_user(db_session, f"self-{uuid.uuid4().hex[:8]}")
+    await _grant_enter(db_session, entrant)
+    event = await _make_event(db_session)
+    entry_id = await _seed_entry(db_session, event, entrant)
+    event_id = event.id
+
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event_id,
+        entry_id=entry_id,
+        actor=entrant,
+    )
+    # Re-entering the same event now that the prior entry is withdrawn.
+    entrant_read = await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event_id,
+        actor=entrant,
+        user_id=None,
+    )
+
+    assert entrant_read.user_id == entrant.id
+    # Exactly one ACTIVE entry (the new one), and the withdrawn row still on file.
+    active = await _active_entries(db_session, event_id)
+    assert [e.user_id for e in active] == [entrant.id]
+    assert active[0].id != entry_id
+    assert len(await _all_entries(db_session, event_id)) == 2

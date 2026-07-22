@@ -15,6 +15,8 @@ import uuid
 from collections import defaultdict
 from typing import Any, assert_never
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.draws import EntryId, PoolId
 from app.models import (
     DrawType,
@@ -45,6 +47,13 @@ from app.tournament_eligibility import (
     evaluate_rating_eligibility,
     event_is_full,
 )
+from app.tournament_queries import (
+    active_entrants_by_event,
+    completed_match_ids,
+    entrant_rating,
+    fixtures_by_event,
+    game_counts_by_match,
+)
 
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
 # and the MCP adapter import. ``_serialize_event`` is public too because the
@@ -56,6 +65,8 @@ __all__ = [
     "serialize",
     "serialize_detail",
     "serialize_event",
+    "shape_created_event_read",
+    "shape_event_read",
 ]
 
 
@@ -399,4 +410,60 @@ def serialize_detail(
                 for e in events
             ],
         }
+    )
+
+
+async def shape_created_event_read(
+    db: AsyncSession,
+    *,
+    event: TournamentEvent,
+    league_id: uuid.UUID,
+    viewer_id: uuid.UUID,
+) -> TournamentEventRead:
+    """Project a JUST-CREATED event into a ``TournamentEventRead`` from ``viewer_id``'s
+    perspective — the shaping the create adapters (HTTP ``POST …/events`` and the MCP
+    ``create_event`` tool) share, so the two surfaces cannot drift on how a new event
+    reads back.
+
+    A one-statement-old event has no entrants, no fixtures and no results, all empty
+    WITHOUT a query (fixtures are only ever written by the cut, ADR-0786), so the only
+    read is the caller's one ladder ``rating`` on ``league_id`` — the tournament's
+    league, passed in by the verb rather than re-queried here. Its ``entry_state`` is
+    still the CALLER's, computed exactly as on the read paths."""
+    rating = await entrant_rating(db, league_id, viewer_id)
+    return serialize_event(
+        event, entrants=[], fixtures=[], rating=rating, game_counts={}
+    )
+
+
+async def shape_event_read(
+    db: AsyncSession,
+    *,
+    event: TournamentEvent,
+    league_id: uuid.UUID,
+    viewer_id: uuid.UUID,
+) -> TournamentEventRead:
+    """Reload an EDITED event's entrants, draw and results and project it into a
+    ``TournamentEventRead`` from ``viewer_id``'s perspective — the shaping the update
+    adapters (HTTP ``PATCH …/events/{id}`` and the MCP ``update_event`` tool) share, so
+    the two surfaces cannot drift on how an edited event reads back.
+
+    A PATCH is not a re-cut (ADR-0786): the event keeps whatever entrants, draw and
+    results it already had, so they are reloaded (answering ``[]`` would tell the
+    director their draw was thrown away) and the standings reprojected from the same
+    completed-match games as the read paths. Its ``entry_state`` is recomputed from the
+    event as it now stands, judged on the caller's one ladder ``rating`` on
+    ``league_id`` — the tournament's league, passed in by the verb rather than
+    re-queried here."""
+    entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+    event_fixtures = await fixtures_by_event(db, [event.id])
+    fixtures = event_fixtures[event.id]
+    game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
+    rating = await entrant_rating(db, league_id, viewer_id)
+    return serialize_event(
+        event,
+        entrants=entrants,
+        fixtures=fixtures,
+        rating=rating,
+        game_counts=game_counts,
     )

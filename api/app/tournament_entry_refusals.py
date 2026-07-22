@@ -24,54 +24,16 @@ transition errors are still prose (#968 stays open against them) — a refusal t
 does not belong to this endpoint does not belong in this enum.
 """
 
-from enum import StrEnum
-
 from fastapi import HTTPException, status
 
+# The refusal vocabulary itself lives in the transport-neutral domain-error leaf
+# (``app.tournament_errors``), so the FastAPI-free ``enter_event`` verb can name the
+# refusal it hit on ``EntryRefusedError`` without importing this FastAPI-importing
+# module. Re-exported here so the existing HTTP call sites keep importing
+# ``EntryRefusal`` from beside the ``entry_refused`` factory unchanged.
+from app.tournament_errors import EntryRefusal
 
-class EntryRefusal(StrEnum):
-    """Why an entry into a tournament event was refused.
-
-    A closed set, not a loose ``str``: a code the client cannot switch on is a code
-    the server should not be able to invent (and every member here is a case the
-    client is expected to have copy for).
-
-    ``StrEnum``, so a member *is* its wire value — it serialises straight into the
-    response body with no mapping step to drift.
-    """
-
-    already_entered = "already_entered"
-    """The player already holds an *active* entry in this event. Withdrawing frees
-    them to enter again, so this is transient, not permanent."""
-
-    registration_closed = "registration_closed"
-    """The tournament's registration window is shut — today, because its status is
-    ``draft``, ``live`` or ``archived`` (its status *is* its window, ADR-0017)."""
-
-    event_full = "event_full"
-    """The event holds ``max_players`` *active* entries already. Transient, like
-    ``already_entered``: somebody withdrawing frees the slot (withdrawn entries are
-    not entrants, ADR-0016), so the caller may be told something different a minute
-    from now — which is exactly why it is a 409 and not a 403.
-
-    Unreachable for an **uncapped** event (``max_players`` is NULL, ADR-0935): with no
-    limit there is nothing for the field to reach, so no number of entrants can produce
-    this refusal."""
-
-    rating_ineligible = "rating_ineligible"
-    """The player's rating on the tournament's ladder fails one of the event's
-    eligibility rules (ADR-0783) — the "Under 1500" event, entered by a 1650 player.
-
-    A 409 like the others, and for the same reason: the request is fine (it has no
-    body at all), it is the *state of the world* that forbids the entry — and this
-    state moves too. A rating is a fact about a player *today*: the same request wins
-    or loses depending on how their last rated match went, so "not now" (409) is the
-    truth, where 403 would claim a permission they have never lacked.
-
-    Note what does **not** land here: a player with **no rating at all** passes every
-    rule and is never refused with this code (ADR-0783 §3). Unrated is not "fails the
-    rule"; it is "there is no fact to judge", and the beginners' event is exactly the
-    one a brand-new player needs to get into."""
+__all__ = ["EntryRefusal", "entry_refused"]
 
 
 def entry_refused(refusal: EntryRefusal, message: str) -> HTTPException:
