@@ -1,21 +1,31 @@
-"""Transport-auth tests for the mounted FastMCP server (chore 1c).
+"""Transport-auth + tool-behavior tests for the mounted FastMCP server.
 
 These drive the **mounted** app over HTTP (httpx ``ASGITransport`` against the
 FastAPI app, wrapped in a FastMCP ``Client`` speaking Streamable HTTP) so the
-``FortymmTokenVerifier`` actually runs at the transport — an in-memory
-``Client(mcp)`` would bypass it. The server exposes **zero tools** for now, so a
-valid token proves only that ``list_tools`` succeeds (empty is fine); the point
-is that missing / invalid / tombstoned-user tokens are rejected **before** any
-tool body, at the transport.
+Auth0 OAuth Resource-Server verifier (``FortymmAuth0TokenVerifier`` behind a
+``RemoteAuthProvider``) actually runs at the transport — an in-memory
+``Client(mcp)`` would bypass it. The point is that only a valid Auth0 JWT for an
+explicitly linked user holding ``mcp.access`` is admitted; every other case
+(missing / bad-signature / wrong-``aud`` / wrong-``iss`` / unlinked-``sub`` /
+un-permitted / tombstoned) is rejected **before** any tool body, at the transport.
+
+**Auth harness.** The module-level ``mcp`` is built with ``AUTH0_*`` empty (its
+fail-closed reject-all verifier), so the autouse ``_mcp_auth0_verifier`` fixture
+swaps in a real ``FortymmAuth0TokenVerifier`` keyed to a locally-generated RS256
+**static public key** with the test issuer/audience — no Auth0 network or JWKS
+mock needed, the signature verifies against the seeded key directly. Test tokens
+are signed with the matching private key (:func:`_sign_token`); a user is made
+admissible by linking a ``sub`` and granting ``mcp.access`` (:func:`_mint`).
 
 The MCP app carries its own lifespan (the Streamable-HTTP session manager);
 ``ASGITransport`` does not fire it, so each test enters ``mcp_app.lifespan``
-explicitly. The verifier resolves tokens against the process-wide engine
-(``DATABASE_URL`` is pointed at the test Postgres by the autouse
-``_solver_job_database`` fixture), so tokens are committed via ``db_session``
+explicitly. The verifier resolves the token's ``sub`` against the process-wide
+engine (``DATABASE_URL`` is pointed at the test Postgres by the autouse
+``_solver_job_database`` fixture), so links/grants are committed via ``db_session``
 first — the verifier's own connection only sees committed rows.
 """
 
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,7 +35,10 @@ from zoneinfo import ZoneInfo
 
 import fakeredis
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
@@ -34,11 +47,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue as queue_module
-from app.api_token_auth import API_TOKEN_CONTEXT
 from app.main import app as fastapi_app
-from app.main import mcp_app
+from app.main import mcp, mcp_app
+from app.mcp_server import MCP_ACCESS_PERMISSION, FortymmAuth0TokenVerifier
 from app.models import (
     League,
+    Permission,
+    Role,
+    RolePermission,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -50,10 +66,9 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
-    UserToken,
+    UserRole,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.token_hashing import hash_token
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
@@ -64,16 +79,120 @@ from tests._helpers import (
 
 MCP_URL = "http://testserver/mcp/"
 
+# The test Auth0 tenant the verifier is pointed at. The issuer carries Auth0's
+# trailing slash (``https://{domain}/``), and the audience is the API identifier
+# the agent's access token must carry — both matched by the autouse verifier.
+DOMAIN = "fortymm-test.us.auth0.com"
+ISSUER = f"https://{DOMAIN}/"
+AUDIENCE = "https://api.fortymm.test/mcp"
+KID = "test-signing-key-1"
+
+
+def _generate_keypair() -> tuple[str, str]:
+    """A private-key PEM to sign access tokens with, and the matching public-key
+    PEM the verifier trusts as a static key (no JWKS endpoint needed)."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    public_pem = (
+        key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("ascii")
+    )
+    return private_pem, public_pem
+
+
+# The tenant's signing keypair (module-level so keygen runs once) and a second,
+# unrelated keypair whose private key signs the "bad signature" forgery.
+_PRIVATE_PEM, _PUBLIC_PEM = _generate_keypair()
+_WRONG_PRIVATE_PEM, _ = _generate_keypair()
+
+
+@pytest.fixture(autouse=True)
+def _mcp_auth0_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the mounted MCP transport's verifier at the test signing key.
+
+    The module-level ``mcp`` is built with ``AUTH0_*`` empty (its fail-closed
+    reject-all verifier), so every test swaps in a real
+    ``FortymmAuth0TokenVerifier`` keyed to the locally-generated RS256 static
+    public key, with the test issuer/audience. Mutating the provider's
+    ``token_verifier`` — the object the auth middleware baked into ``mcp_app``
+    already holds — is what reaches the running mounted app."""
+    verifier = FortymmAuth0TokenVerifier(
+        public_key=_PUBLIC_PEM,
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        algorithm="RS256",
+    )
+    monkeypatch.setattr(mcp.auth, "token_verifier", verifier)
+
+
+def _sign_token(
+    *,
+    sub: str,
+    aud: str = AUDIENCE,
+    iss: str = ISSUER,
+    private_pem: str | None = None,
+    expires_in: int = 300,
+) -> str:
+    """Sign an RS256 access token for ``sub`` — the credential an agent presents
+    to the MCP transport. Defaults to the tenant key + right issuer/audience; the
+    knobs reach the wrong-``aud`` / wrong-``iss`` / bad-signature rejection cases."""
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": sub, "aud": aud, "iss": iss, "iat": now, "exp": now + expires_in},
+        private_pem or _PRIVATE_PEM,
+        algorithm="RS256",
+        headers={"kid": KID},
+    )
+
+
+async def _link(db_session: AsyncSession, user: User, sub: str | None = None) -> str:
+    """Bind an Auth0 ``sub`` to ``user`` (committed), the same one-to-one link the
+    account-link flow writes. Returns the ``sub`` for signing a token for it."""
+    sub = sub or "auth0|" + uuid.uuid4().hex
+    user.auth0_sub = sub
+    await db_session.commit()
+    return sub
+
+
+async def _grant_mcp_access(db_session: AsyncSession, user: User) -> None:
+    """Grant ``user`` the ``mcp.access`` permission through real RBAC rows (its own
+    role, so it never collides with a ``grant_permissions`` role for the same user).
+    The seed grants this via the Beta tester role; tests grant it directly."""
+    permission = (
+        await db_session.execute(
+            select(Permission).where(Permission.name == MCP_ACCESS_PERMISSION)
+        )
+    ).scalar_one_or_none()
+    if permission is None:
+        permission = Permission(
+            name=MCP_ACCESS_PERMISSION, description=MCP_ACCESS_PERMISSION
+        )
+        db_session.add(permission)
+        await db_session.flush()
+    role = Role(name=f"mcp-access-{user.id}", description="Per-user test mcp.access.")
+    db_session.add(role)
+    await db_session.flush()
+    db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.commit()
+
 
 async def _mint(db_session: AsyncSession, user: User) -> str:
-    """Store an ``api``-context token for ``user`` (only the sha256 hash lands in
-    the DB, as production does) and return the raw token."""
-    raw = "api-raw-" + uuid.uuid4().hex
-    db_session.add(
-        UserToken(user_id=user.id, context=API_TOKEN_CONTEXT, token=hash_token(raw))
-    )
-    await db_session.commit()
-    return raw
+    """Make ``user`` admissible to the MCP transport and return a bearer token for
+    it: link an Auth0 ``sub``, grant ``mcp.access``, and sign an RS256 access token
+    for that subject. Replaces the old opaque ``context="api"`` bearer token — every
+    tool-behavior test authenticates as a linked + permitted user through this."""
+    sub = await _link(db_session, user)
+    await _grant_mcp_access(db_session, user)
+    return _sign_token(sub=sub)
 
 
 @asynccontextmanager
@@ -127,14 +246,14 @@ async def _assert_rejected(client: Client) -> None:
     assert exc_info.value.response.status_code == 401
 
 
-async def test_valid_api_token_can_list_tools(db_session: AsyncSession) -> None:
-    """A live ``context="api"`` bearer token authenticates at the transport and
-    can complete the initialize + ``list_tools`` handshake. The curated
-    match-flow verbs are exposed — ``get_match`` is registered."""
-    user = await make_user(db_session, "mcp-token-owner")
-    raw = await _mint(db_session, user)
+async def test_valid_auth0_jwt_can_list_tools(db_session: AsyncSession) -> None:
+    """A valid Auth0 JWT for a linked user holding ``mcp.access`` authenticates at
+    the transport and can complete the initialize + ``list_tools`` handshake. The
+    curated match-flow verbs are exposed — ``get_match`` is registered."""
+    user = await make_user(db_session, "mcp-jwt-owner")
+    token = await _mint(db_session, user)
 
-    async with _mcp_client(raw) as client, client:
+    async with _mcp_client(token) as client, client:
         tools = await client.list_tools()
 
     assert "get_match" in {tool.name for tool in tools}
@@ -147,24 +266,80 @@ async def test_missing_token_is_rejected(db_session: AsyncSession) -> None:
         await _assert_rejected(client)
 
 
-async def test_invalid_token_is_rejected(db_session: AsyncSession) -> None:
-    """A well-formed but never-minted token resolves to no user → 401."""
-    async with _mcp_client("api-raw-" + uuid.uuid4().hex) as client:
+async def test_bad_signature_is_rejected(db_session: AsyncSession) -> None:
+    """A JWT signed by a key other than the tenant's — right ``iss`` / ``aud`` /
+    ``sub``, valid linked+permitted user — fails RS256 signature verification →
+    401, before any tool body."""
+    user = await make_user(db_session, "mcp-badsig-owner")
+    sub = await _link(db_session, user)
+    await _grant_mcp_access(db_session, user)
+    forged = _sign_token(sub=sub, private_pem=_WRONG_PRIVATE_PEM)
+
+    async with _mcp_client(forged) as client:
         await _assert_rejected(client)
 
 
-async def test_tombstoned_users_token_is_rejected(db_session: AsyncSession) -> None:
-    """A valid token whose user was merged away (``merged_into_user_id`` set) is
-    rejected — the folded-in ghost never authenticates through MCP either."""
+async def test_wrong_audience_is_rejected(db_session: AsyncSession) -> None:
+    """A validly-signed token whose ``aud`` is not our API identifier is refused —
+    the token was minted for a different resource server."""
+    user = await make_user(db_session, "mcp-aud-owner")
+    sub = await _link(db_session, user)
+    await _grant_mcp_access(db_session, user)
+    token = _sign_token(sub=sub, aud="https://not-our-api.example.com/")
+
+    async with _mcp_client(token) as client:
+        await _assert_rejected(client)
+
+
+async def test_wrong_issuer_is_rejected(db_session: AsyncSession) -> None:
+    """A validly-signed token from a different issuer is refused — only our Auth0
+    tenant is trusted."""
+    user = await make_user(db_session, "mcp-iss-owner")
+    sub = await _link(db_session, user)
+    await _grant_mcp_access(db_session, user)
+    token = _sign_token(sub=sub, iss="https://evil.example.com/")
+
+    async with _mcp_client(token) as client:
+        await _assert_rejected(client)
+
+
+async def test_unlinked_sub_is_rejected(db_session: AsyncSession) -> None:
+    """A validly-signed token whose ``sub`` is linked to no user is rejected: Auth0
+    authenticated it, but fortymm has no linked account for that subject."""
+    token = _sign_token(sub="auth0|" + uuid.uuid4().hex)
+
+    async with _mcp_client(token) as client:
+        await _assert_rejected(client)
+
+
+async def test_linked_user_without_mcp_access_is_rejected(
+    db_session: AsyncSession,
+) -> None:
+    """A linked user who does NOT hold ``mcp.access`` is rejected at the transport —
+    authentication is Auth0, but authorization is fortymm RBAC, and revoking the
+    grant cuts the agent off even while its token is still valid."""
+    user = await make_user(db_session, "mcp-noaccess-owner")
+    sub = await _link(db_session, user)  # linked, but never granted mcp.access
+    token = _sign_token(sub=sub)
+
+    async with _mcp_client(token) as client:
+        await _assert_rejected(client)
+
+
+async def test_tombstoned_linked_users_token_is_rejected(
+    db_session: AsyncSession,
+) -> None:
+    """A linked + permitted user who was merged away (``merged_into_user_id`` set)
+    no longer resolves — the folded-in ghost never authenticates through MCP."""
     owner = await make_user(db_session, "mcp-merge-owner")
     guest = await make_user(db_session, "mcp-merged-guest")
-    raw = await _mint(db_session, guest)
+    token = await _mint(db_session, guest)
 
     guest.merged_into_user_id = owner.id
     guest.merged_at = datetime.now(UTC)
     await db_session.commit()
 
-    async with _mcp_client(raw) as client:
+    async with _mcp_client(token) as client:
         await _assert_rejected(client)
 
 

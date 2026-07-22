@@ -27,6 +27,7 @@ PERMISSIONS = [
         "api_token.manage",
         "Generate and rotate a personal API token for programmatic bearer auth.",
     ),
+    ("mcp.access", "Connect an agent to the MCP server over Auth0 OAuth."),
 ]
 
 # The default `User` role is *not* listed here: it carries no permissions and
@@ -48,7 +49,7 @@ ROLES = [
         "Beta tester",
         "Early-access testers who can view, create, and enter tournaments. Editing,"
         " publishing, and deleting a tournament is reserved for its creator.",
-        ["tournament.view", "tournament.create", "tournament.enter"],
+        ["tournament.view", "tournament.create", "tournament.enter", "mcp.access"],
     ),
 ]
 
