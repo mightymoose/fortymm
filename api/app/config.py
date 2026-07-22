@@ -32,6 +32,38 @@ class Settings(BaseSettings):
     #: ahead of pending real solves, so a low cap keeps a preview snappy.
     preview_solver_time_cap_s: float = 5.0
 
+    #: Auth0 tenant domain (e.g. ``fortymm.us.auth0.com``) — the issuer the MCP
+    #: JWT verifier trusts and the origin its JWKS is fetched from. Empty means
+    #: Auth0 is unconfigured: the api still boots and MCP still mounts, but every
+    #: MCP request 401s (fail-closed — see the "fails closed when unconfigured"
+    #: consequence in the Auth0 Resource-Server ADR).
+    auth0_domain: str = ""
+
+    #: Auth0 API identifier registered for the MCP Resource Server — the ``aud``
+    #: an agent's access token must carry to be accepted. Empty = fail-closed.
+    auth0_audience: str = ""
+
+    #: Client id of the Auth0 Regular Web Application (confidential client) used
+    #: for the one-time account-link code flow. Empty = link flow unconfigured.
+    auth0_link_client_id: str = ""
+
+    #: Client secret of that Auth0 web application — the only Auth0 secret we
+    #: store (verification needs no secret; JWKS is public). Empty = fail-closed.
+    auth0_link_client_secret: str = ""
+
+    #: Public base URL of the MCP server (e.g. ``https://uat.fortymm.com/api``).
+    #: Passed explicitly rather than derived from the internal ``/mcp/`` mount so
+    #: the protected-resource metadata reflects the public origin behind nginx.
+    mcp_public_base_url: str = ""
+
+    #: Public resource identifier advertised in the RFC 9728 protected-resource
+    #: metadata (the MCP server's public origin). Empty = fail-closed.
+    mcp_public_resource_url: str = ""
+
+    #: Redirect URI registered with the Auth0 web application for the account-link
+    #: callback (``GET /v1/auth0/link/callback``). Empty = link flow unconfigured.
+    auth0_link_redirect_uri: str = ""
+
 
 def get_settings() -> Settings:
     """Read settings from the environment.

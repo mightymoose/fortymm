@@ -46,6 +46,22 @@ config:
   # process for nearly every trigger) reads it to size the RQ job_timeout, so
   # both consume it via this shared ConfigMap.
   SOLVER_TIME_CAP_S: "10"
+  # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
+  # See docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md.
+  # The AUTH0_LINK_CLIENT_SECRET is a secret and lives in the .env-backed
+  # `fortymm-uat-env` Secret — NEVER put it here in the ConfigMap.
+  #
+  # Operator fills these three from the Auth0 tenant (empty = MCP auth
+  # unconfigured; the api still boots but every MCP request 401s):
+  AUTH0_DOMAIN: ""        # e.g. fortymm.us.auth0.com — the JWT issuer
+  AUTH0_AUDIENCE: ""      # Auth0 API identifier for the MCP Resource Server (token `aud`)
+  AUTH0_LINK_CLIENT_ID: ""  # client id of the Auth0 Regular Web App used for the account-link flow
+  # Deployment-derived public URLs (the MCP server is public at
+  # uat.fortymm.com/api/mcp behind nginx that strips /api — metadata must
+  # reflect the public origin, not the internal mount):
+  MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
+  MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
+  AUTH0_LINK_REDIRECT_URI: https://uat.fortymm.com/api/auth0/link/callback
 
 postgres:
   user: postgres
