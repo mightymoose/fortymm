@@ -451,28 +451,24 @@ async def merge_user(
     # simply dropped. The ephemeral is nulled FIRST (freeing the value from the
     # unique index) so the survivor UPDATE can adopt it without the two rows
     # momentarily colliding — the constraint is checked per statement, not deferred.
-    auth0_subs: dict[uuid.UUID, str | None] = dict(
-        (
-            await db.execute(
-                select(User.id, User.auth0_sub).where(
-                    User.id.in_([from_user_id, to_user_id])
-                )
-            )
-        )
-        .tuples()
-        .all()
-    )
-    ephemeral_auth0_sub = auth0_subs.get(from_user_id)
-    if ephemeral_auth0_sub is not None:
+    freed = (
+        await db.execute(select(User.auth0_sub).where(User.id == from_user_id))
+    ).scalar_one_or_none()
+    if freed is not None:
+        # Null the ephemeral FIRST (freeing the value from the unique index) so the
+        # survivor UPDATE can adopt it without the two rows momentarily colliding —
+        # the constraint is checked per statement, not deferred. The survivor's
+        # ``auth0_sub IS NULL`` guard carries the "adopt only where the survivor has
+        # none" rule declaratively: if the survivor already holds a binding, its
+        # own link stands and the ephemeral's is simply dropped.
         await db.execute(
             update(User).where(User.id == from_user_id).values(auth0_sub=None)
         )
-        if auth0_subs.get(to_user_id) is None:
-            await db.execute(
-                update(User)
-                .where(User.id == to_user_id)
-                .values(auth0_sub=ephemeral_auth0_sub)
-            )
+        await db.execute(
+            update(User)
+            .where(User.id == to_user_id, User.auth0_sub.is_(None))
+            .values(auth0_sub=freed)
+        )
 
     # Tombstone: keep the row (and its session tokens) so the guest's cookie
     # still resolves and the auth layer can report the merge.

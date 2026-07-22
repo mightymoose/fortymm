@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Bot, Check } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { toast } from 'sonner'
 
 import {
@@ -108,104 +109,109 @@ export function AgentAccessSection() {
             Couldn't load your agent-access status. Reload to try again.
           </div>
         ) : status.data.linked ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              padding: '14px 16px',
-              background: 'rgba(0,226,154,0.06)',
-              border: '1px solid rgba(0,226,154,0.3)',
-              borderRadius: 'var(--r-md)',
-            }}
-          >
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                background: 'rgba(0,226,154,0.18)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <Check size={16} color="var(--serve-500)" />
-            </div>
-            <div
-              style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}
-            >
-              <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>
-                Agent access is connected.
-              </div>
-              <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
-                An agent signed in with your linked identity can reach the MCP
-                server on your behalf.
-              </div>
-            </div>
-            <button
-              type="button"
-              className="fmm-btn fmm-btn--quiet fmm-btn--sm"
-              onClick={onUnlink}
-              disabled={unlink.isPending}
-            >
-              {unlink.isPending ? (
-                <>
-                  <span className="fmm-spinner" /> Disconnecting…
-                </>
-              ) : (
-                'Unlink'
-              )}
-            </button>
-          </div>
+          <StatusRow
+            wrapperBackground="rgba(0,226,154,0.06)"
+            wrapperBorder="1px solid rgba(0,226,154,0.3)"
+            badgeBackground="rgba(0,226,154,0.18)"
+            icon={<Check size={16} color="var(--serve-500)" />}
+            title="Agent access is connected."
+            body="An agent signed in with your linked identity can reach the MCP server on your behalf."
+            action={
+              <button
+                type="button"
+                className="fmm-btn fmm-btn--quiet fmm-btn--sm"
+                onClick={onUnlink}
+                disabled={unlink.isPending}
+              >
+                {unlink.isPending ? (
+                  <>
+                    <span className="fmm-spinner" /> Disconnecting…
+                  </>
+                ) : (
+                  'Unlink'
+                )}
+              </button>
+            }
+          />
         ) : (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              padding: '14px 16px',
-              background: 'var(--bg-panel)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--r-md)',
-            }}
-          >
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                background: 'var(--bg-elev)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <Bot size={16} color="var(--fg-muted)" />
-            </div>
-            <div
-              style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}
-            >
-              <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>
-                No agent access connected.
-              </div>
-              <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
-                Connect an Auth0 identity to let an agent act for you.
-              </div>
-            </div>
-            {/* A full-page navigation, not a fetch — this begins an OAuth
-                redirect the API answers with a 302 (see `auth0LinkStartUrl`). */}
-            <a
-              className="fmm-btn fmm-btn--primary fmm-btn--sm"
-              href={auth0LinkStartUrl()}
-            >
-              Connect
-            </a>
-          </div>
+          <StatusRow
+            wrapperBackground="var(--bg-panel)"
+            wrapperBorder="1px solid var(--border-subtle)"
+            badgeBackground="var(--bg-elev)"
+            icon={<Bot size={16} color="var(--fg-muted)" />}
+            title="No agent access connected."
+            body="Connect an Auth0 identity to let an agent act for you."
+            action={
+              /* A full-page navigation, not a fetch — this begins an OAuth
+                 redirect the API answers with a 302 (see `auth0LinkStartUrl`). */
+              <a
+                className="fmm-btn fmm-btn--primary fmm-btn--sm"
+                href={auth0LinkStartUrl()}
+              >
+                Connect
+              </a>
+            }
+          />
         )}
       </div>
     </section>
+  )
+}
+
+/**
+ * The connection-status row shared by the linked ("Connected") and
+ * not-connected states: a flex row wrapping a 28px circular icon badge, a
+ * title + body text block, and a trailing action. Only the tone (wrapper /
+ * badge colors), icon, copy, and action differ between the two states.
+ */
+function StatusRow({
+  wrapperBackground,
+  wrapperBorder,
+  badgeBackground,
+  icon,
+  title,
+  body,
+  action,
+}: {
+  wrapperBackground: string
+  wrapperBorder: string
+  badgeBackground: string
+  icon: ReactNode
+  title: string
+  body: string
+  action: ReactNode
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        padding: '14px 16px',
+        background: wrapperBackground,
+        border: wrapperBorder,
+        borderRadius: 'var(--r-md)',
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: '50%',
+          background: badgeBackground,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        {icon}
+      </div>
+      <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+        <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{title}</div>
+        <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>{body}</div>
+      </div>
+      {action}
+    </div>
   )
 }

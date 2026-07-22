@@ -4,7 +4,10 @@ import { render, screen, type Container } from '@/test/utilities'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { SessionProbe } from '@/test/session-probe'
-import { mockAuth0LinkStatusEndpoint } from '@/mocks/endpoints/auth0/auth0-link.endpoint'
+import {
+  mockAuth0LinkStatusEndpoint,
+  mockAuth0UnlinkEndpoint,
+} from '@/mocks/endpoints/auth0/auth0-link.endpoint'
 
 import { AgentAccessSection } from './agent-access-section'
 import { buildLinkStatus } from './agent-access-section.factory'
@@ -75,12 +78,10 @@ export const agentAccessSectionPage = {
    * the calls, so a test can assert the Unlink click hit the endpoint. */
   stubUnlink() {
     unlinkCallCount = 0
-    server.use(
-      http.delete('*/v1/auth0/link', () => {
-        unlinkCallCount += 1
-        return HttpResponse.json(buildLinkStatus({ linked: false }))
-      }),
-    )
+    mockAuth0UnlinkEndpoint(server, () => {
+      unlinkCallCount += 1
+      return HttpResponse.json(buildLinkStatus({ linked: false }))
+    })
   },
 
   unlinkCallCount() {

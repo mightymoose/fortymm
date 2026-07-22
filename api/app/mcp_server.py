@@ -258,23 +258,32 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
 def _build_mcp_auth() -> RemoteAuthProvider:
     """Wire the MCP transport auth from :class:`~app.config.Settings`.
 
-    When Auth0 is configured (``auth0_domain`` + ``auth0_audience`` both set) the
-    provider wraps a :class:`FortymmAuth0TokenVerifier` pointed at the tenant's
-    JWKS, and advertises the tenant as its authorization server. When it is not
-    (the local / qa / e2e / dev-compose default), the provider wraps the
-    reject-all verifier and uses a placeholder origin — so the api boots and MCP
-    mounts, but every request 401s (fail-closed). The public ``base_url`` /
+    Auth0 is treated as configured **all-or-nothing**: only when ALL of
+    ``auth0_domain``, ``auth0_audience``, ``mcp_public_base_url`` and
+    ``mcp_public_resource_url`` are set does the provider wrap a real
+    :class:`FortymmAuth0TokenVerifier` (pointed at the tenant's JWKS/issuer) and
+    advertise the tenant as its authorization server. A PARTIAL config — e.g. a
+    deployment that sets the tenant but forgets the public URLs — falls back to
+    the reject-all verifier just like the empty (local / qa / e2e / dev-compose)
+    default, so the api boots and MCP mounts but every request 401s (fail-closed).
+    This never ships a live verifier advertising the ``.invalid`` placeholder
+    origin (broken RFC 9728 discovery). The public ``base_url`` /
     ``resource_base_url`` come straight from config (never derived from the
-    internal mount) so the RFC 9728 metadata reflects the origin behind nginx."""
+    internal mount) so the metadata reflects the origin behind nginx."""
     settings = get_settings()
-    if settings.auth0_domain and settings.auth0_audience:
+    if (
+        settings.auth0_domain
+        and settings.auth0_audience
+        and settings.mcp_public_base_url
+        and settings.mcp_public_resource_url
+    ):
         token_verifier: TokenVerifier = FortymmAuth0TokenVerifier(
-            jwks_uri=f"https://{settings.auth0_domain}/.well-known/jwks.json",
-            issuer=f"https://{settings.auth0_domain}/",
+            jwks_uri=settings.auth0_jwks_uri,
+            issuer=settings.auth0_issuer,
             audience=settings.auth0_audience,
             algorithm="RS256",
         )
-        authorization_server = f"https://{settings.auth0_domain}/"
+        authorization_server = settings.auth0_issuer
     else:
         token_verifier = _RejectAllTokenVerifier()
         authorization_server = _UNCONFIGURED_ORIGIN

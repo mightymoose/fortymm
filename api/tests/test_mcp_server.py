@@ -49,7 +49,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import queue as queue_module
 from app.main import app as fastapi_app
 from app.main import mcp, mcp_app
-from app.mcp_server import MCP_ACCESS_PERMISSION, FortymmAuth0TokenVerifier
+from app.mcp_server import (
+    MCP_ACCESS_PERMISSION,
+    FortymmAuth0TokenVerifier,
+    _build_mcp_auth,
+    _RejectAllTokenVerifier,
+)
 from app.models import (
     League,
     Permission,
@@ -341,6 +346,45 @@ async def test_tombstoned_linked_users_token_is_rejected(
 
     async with _mcp_client(token) as client:
         await _assert_rejected(client)
+
+
+def test_partial_auth0_config_yields_reject_all_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PARTIAL Auth0 config — tenant ``domain`` + ``audience`` set, but the public
+    ``mcp_public_base_url`` left empty — is treated as unconfigured all-or-nothing:
+    ``_build_mcp_auth`` wraps the fail-closed reject-all verifier, NOT a real
+    ``FortymmAuth0TokenVerifier``. Without this the api would ship a live verifier
+    advertising the ``.invalid`` placeholder resource origin (broken RFC 9728
+    discovery) far from the missing-config line. Construction still succeeds (the
+    api boots), but every MCP request 401s at the reject-all verifier."""
+    monkeypatch.setenv("AUTH0_DOMAIN", DOMAIN)
+    monkeypatch.setenv("AUTH0_AUDIENCE", AUDIENCE)
+    # A resource URL is present; only the base URL is missing — proving that ANY
+    # missing piece flips the whole config to fail-closed.
+    monkeypatch.setenv("MCP_PUBLIC_RESOURCE_URL", "https://uat.fortymm.com/api")
+    monkeypatch.delenv("MCP_PUBLIC_BASE_URL", raising=False)
+
+    provider = _build_mcp_auth()
+
+    assert isinstance(provider.token_verifier, _RejectAllTokenVerifier)
+    assert not isinstance(provider.token_verifier, FortymmAuth0TokenVerifier)
+
+
+def test_full_auth0_config_yields_real_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counterpart proving the partial-config fallback above is not vacuous:
+    with ALL four Auth0/MCP settings present, ``_build_mcp_auth`` wraps the real
+    ``FortymmAuth0TokenVerifier``."""
+    monkeypatch.setenv("AUTH0_DOMAIN", DOMAIN)
+    monkeypatch.setenv("AUTH0_AUDIENCE", AUDIENCE)
+    monkeypatch.setenv("MCP_PUBLIC_BASE_URL", "https://uat.fortymm.com/api")
+    monkeypatch.setenv("MCP_PUBLIC_RESOURCE_URL", "https://uat.fortymm.com/api")
+
+    provider = _build_mcp_auth()
+
+    assert isinstance(provider.token_verifier, FortymmAuth0TokenVerifier)
 
 
 # ----- get_match tool ------------------------------------------------------

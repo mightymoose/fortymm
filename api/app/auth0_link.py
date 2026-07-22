@@ -226,9 +226,13 @@ async def _exchange_code(config: LinkConfig, *, code: str, code_verifier: str) -
 
 
 async def _fetch_jwks(config: LinkConfig) -> dict[str, Any]:
-    """Fetch the tenant's public JWKS. Raises ``httpx.HTTPError`` on failure."""
+    """Fetch the tenant's public JWKS. Raises ``httpx.HTTPError`` on failure.
+
+    The JWKS URL comes from ``settings.auth0_jwks_uri`` (built from the same
+    ``auth0_domain`` this ``config`` was derived from) so the tenant URL topology
+    lives in exactly one place (``app.config``)."""
     async with _http_client() as client:
-        response = await client.get(f"https://{config.domain}/.well-known/jwks.json")
+        response = await client.get(get_settings().auth0_jwks_uri)
         response.raise_for_status()
         data: dict[str, Any] = response.json()
         return data
@@ -252,7 +256,10 @@ def _verify_id_token(config: LinkConfig, id_token: str, jwks: dict[str, Any]) ->
         signing_key,
         algorithms=["RS256"],
         audience=config.client_id,
-        issuer=f"https://{config.domain}/",
+        # ``iss`` from ``settings.auth0_issuer`` — the same single-source tenant URL
+        # construction the MCP verifier uses (``app.config``), built from the
+        # ``auth0_domain`` this ``config`` was derived from.
+        issuer=get_settings().auth0_issuer,
     )
     return Auth0IdClaims.model_validate(claims).sub
 
