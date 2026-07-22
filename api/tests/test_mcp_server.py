@@ -2613,3 +2613,397 @@ async def test_transition_tournament_unknown_id_raises_tool_error(
                 "transition_tournament",
                 {"tournament_id": unknown, "to": "published"},
             )
+
+
+# ----- create_event / delete_event tools -----------------------------------
+
+
+async def _seed_event(db: AsyncSession, tournament: Tournament) -> TournamentEvent:
+    """Insert one event directly under ``tournament`` (committed), so a delete test has
+    a target without going through the create tool first."""
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Existing Singles",
+        format=EventFormat.singles,
+        draw_type=DrawType.round_robin,
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=[],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+async def test_create_event_is_registered(db_session: AsyncSession) -> None:
+    """The event-authoring verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-create-event-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "create_event" in {tool.name for tool in tools}
+
+
+async def test_delete_event_is_registered(db_session: AsyncSession) -> None:
+    """The destructive event-delete verb is exposed as a tool to an authenticated
+    caller."""
+    user = await make_user(db_session, "mcp-delete-event-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "delete_event" in {tool.name for tool in tools}
+
+
+async def test_create_event_owner_adds_it_and_it_persists(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed OWNER adds an event via the tool: the returned view names the
+    event under its tournament, and the row is committed and readable back. Owner-only
+    — no ``tournament.create``-style grant is required (or checked)."""
+    owner = await make_user(db_session, "mcp-create-event-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Eventful Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "create_event",
+            {"tournament_id": str(tournament_id), "payload": _event_payload()},
+        )
+        assert result.isError is False
+        body = result.structuredContent
+        assert body is not None
+        assert body["tournament_id"] == str(tournament_id)
+        assert body["name"] == "Open Singles"
+        event_id = body["id"]
+
+    # Durable in the database, under the tournament.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event_id))
+        )
+    ).scalar_one()
+    assert persisted.tournament_id == tournament_id
+    assert persisted.match_settings == {"rated": True, "length_games": 5}
+
+
+async def test_create_event_non_owner_raises_tool_error_and_writes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Adding an event is owner-gated in the shared verb: a caller who is not the
+    tournament's creator gets a ``ToolError`` and no event is written."""
+    owner = await make_user(db_session, "mcp-create-event-guard-owner")
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Not Yours Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    outsider = await make_user(db_session, "mcp-create-event-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="add events to tournaments you created"):
+            await client.call_tool(
+                "create_event",
+                {"tournament_id": str(tournament_id), "payload": _event_payload()},
+            )
+
+    # Nothing was created.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.tournament_id == tournament_id
+            )
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_create_event_unknown_tournament_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """An id that matches no tournament surfaces as a not-found ``ToolError`` — the 404
+    judged before the 403, so a non-owner never learns whether an id existed."""
+    me = await make_user(db_session, "mcp-create-event-unknown")
+    raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool(
+                "create_event",
+                {"tournament_id": unknown, "payload": _event_payload()},
+            )
+
+
+async def test_delete_event_owner_removes_it_and_confirms(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed OWNER deletes an event via the tool: it confirms the deleted
+    tournament + event ids, and the row is gone from the database."""
+    owner = await make_user(db_session, "mcp-delete-event-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session,
+        owner,
+        default_league,
+        "Deletable Events Cup",
+        TournamentStatus.draft,
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "delete_event",
+            {"tournament_id": str(tournament_id), "event_id": str(event_id)},
+        )
+        assert result.isError is False
+        assert result.structuredContent is not None
+        assert result.structuredContent["tournament_id"] == str(tournament_id)
+        assert result.structuredContent["event_id"] == str(event_id)
+
+    # The row is gone.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_delete_event_non_owner_raises_tool_error_and_deletes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who is not the tournament's creator gets a ``ToolError`` (owner-gated
+    in the shared verb), and the event is left untouched."""
+    owner = await make_user(db_session, "mcp-delete-event-guard-owner")
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Guarded Events Cup", TournamentStatus.draft
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    outsider = await make_user(db_session, "mcp-delete-event-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(
+            ToolError, match="delete events from tournaments you created"
+        ):
+            await client.call_tool(
+                "delete_event",
+                {"tournament_id": str(tournament_id), "event_id": str(event_id)},
+            )
+
+    # Nothing was deleted.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def test_delete_event_unknown_event_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The tournament is owned, but names no such event — a not-found ``ToolError`` on
+    the event, judged after the tournament's 404/403."""
+    owner = await make_user(db_session, "mcp-delete-event-unknown")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Empty Events Cup", TournamentStatus.draft
+    )
+    unknown_event = str(uuid.uuid4())
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=unknown_event):
+            await client.call_tool(
+                "delete_event",
+                {
+                    "tournament_id": str(tournament.id),
+                    "event_id": unknown_event,
+                },
+            )
+
+
+# ----- update_event tool ---------------------------------------------------
+
+
+async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> TournamentEvent:
+    """Seed an event carrying one pool AND a fixture, so ``event_has_draw`` is True and
+    the two freezes are live — the target for the frozen-change ToolError round trip."""
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Cut Singles",
+        format=EventFormat.singles,
+        draw_type=DrawType.round_robin,
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=[
+            {
+                "id": "p-1",
+                "name": "Pool A",
+                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            }
+        ],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    fixture = TournamentFixture(
+        event_id=event.id,
+        pool_id="p-1",
+        round=1,
+        position=1,
+    )
+    db.add(fixture)
+    await db.commit()
+    return event
+
+
+async def test_update_event_is_registered(db_session: AsyncSession) -> None:
+    """The event-update verb is exposed as a tool to an authenticated caller."""
+    user = await make_user(db_session, "mcp-update-event-listed")
+    raw = await _mint(db_session, user)
+
+    async with _mcp_client(raw) as client, client:
+        tools = await client.list_tools()
+    assert "update_event" in {tool.name for tool in tools}
+
+
+async def test_update_event_owner_edits_it_and_it_persists(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed OWNER edits an event via the tool: the returned view carries the
+    new name, and the row is committed and readable back."""
+    owner = await make_user(db_session, "mcp-update-event-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Editable Events Cup", TournamentStatus.draft
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "update_event",
+            {
+                "tournament_id": str(tournament_id),
+                "event_id": str(event_id),
+                "updates": {"name": "Renamed Open"},
+            },
+        )
+        assert result.isError is False
+        body = result.structuredContent
+        assert body is not None
+        assert body["id"] == str(event_id)
+        assert body["name"] == "Renamed Open"
+
+    # Durable in the database.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.name == "Renamed Open"
+
+
+async def test_update_event_frozen_change_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A ``draw_type`` change on an event whose draw is cut surfaces the freeze as a
+    ``ToolError`` carrying the domain-authored sentence, and writes nothing."""
+    owner = await make_user(db_session, "mcp-update-event-frozen-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Frozen Events Cup", TournamentStatus.draft
+    )
+    event = await _seed_cut_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="draw type is frozen"):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {"name": "Should Not Apply", "draw_type": "single-elim"},
+                },
+            )
+
+    # The refusal wrote nothing — the draw type and name are both untouched.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.draw_type is DrawType.round_robin
+    assert persisted.name == "Cut Singles"
+
+
+async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Editing an event is owner-gated in the shared verb: a caller who is not the
+    tournament's creator gets a ``ToolError`` and the event is left untouched."""
+    owner = await make_user(db_session, "mcp-update-event-guard-owner")
+    tournament = await _seed_owned_tournament(
+        db_session,
+        owner,
+        default_league,
+        "Guarded Edit Cup",
+        TournamentStatus.draft,
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    outsider = await make_user(db_session, "mcp-update-event-outsider")
+    outsider_token = await _mint(db_session, outsider)
+
+    async with _mcp_client(outsider_token) as client, client:
+        with pytest.raises(ToolError, match="edit events of tournaments you created"):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {"name": "Hijacked"},
+                },
+            )
+
+    # The name is unchanged.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.name == "Existing Singles"

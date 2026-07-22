@@ -37,6 +37,46 @@ class EventNotFoundError(Exception):
     adapts it to its transport."""
 
 
+class PoolSetFrozenError(Exception):
+    """Raised by the update-event verb when a ``pools`` payload would change *which
+    pools* an event with a **cut draw** has (ADR-0786). A fixture names its pool by a
+    string ref into the event's own ``pools`` JSONB and there is no pools table to
+    foreign-key, so removing (or re-``id``'ing) a pool orphans every fixture drawn into
+    it and adding one arrives with no fixtures — integrity the database cannot enforce,
+    so the freeze does.
+
+    It is a 409, not a 403 (ADR-0017): the caller is the owner and the payload is
+    well-formed — it is the *resource* that is in the wrong state, and the same request
+    becomes legal the moment the draw is removed. Carries the exact, domain-authored
+    sentence the HTTP handler used to compose inline (rebuilt verbatim with
+    ``str(exc)``) plus the structured ``removed`` / ``added`` pool names for any adapter
+    that wants to reshape rather than echo. Never an ``HTTPException`` — the caller
+    adapts it to its transport."""
+
+    def __init__(self, message: str, *, removed: list[str], added: list[str]) -> None:
+        super().__init__(message)
+        self.removed = removed
+        self.added = added
+
+
+class DrawTypeFrozenError(Exception):
+    """Raised by the update-event verb when a ``draw_type`` payload would change the
+    draw type of an event that **has a draw** (ADR-0786). A draw type is the strategy
+    that dealt the event's fixtures, so re-typing it under a standing draw leaves the
+    event claiming a shape its fixtures do not have — a corruption the go-live currency
+    check cannot catch (re-labelling moves neither the entrants nor the fixtures).
+
+    Sibling of :class:`PoolSetFrozenError`, and a 409 for the same reason: the caller is
+    the owner and the payload is well-formed; it is the resource that is in the wrong
+    state, and the same request becomes legal the moment the draw is removed. Carries
+    the exact sentence the HTTP handler composed inline (rebuilt verbatim with
+    ``str(exc)``) plus the current ``draw_type`` value. Never an ``HTTPException``."""
+
+    def __init__(self, message: str, *, draw_type: str) -> None:
+        super().__init__(message)
+        self.draw_type = draw_type
+
+
 class DrawUnderWayError(Exception):
     """Raised by the draw verbs when an event's draw shows **evidence of play** — a
     fixture with a recorded winner or a linked match — the single gate on both

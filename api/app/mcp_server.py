@@ -97,6 +97,9 @@ from app.schemas.tournament import (
     ScheduleSolveRead,
     TournamentCreate,
     TournamentDetailRead,
+    TournamentEventCreate,
+    TournamentEventRead,
+    TournamentEventUpdate,
     TournamentFixtureRead,
     TournamentRead,
     TournamentUpdate,
@@ -106,6 +109,7 @@ from app.tournament_draw_service import cut_event_draw as cut_event_draw_core
 from app.tournament_draw_service import uncut_event_draw as uncut_event_draw_core
 from app.tournament_edit import edit_tournament as edit_tournament_core
 from app.tournament_errors import (
+    DrawTypeFrozenError,
     DrawUnderWayError,
     EventNotFoundError,
     IllegalTournamentTransitionError,
@@ -114,12 +118,16 @@ from app.tournament_errors import (
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NotTournamentOwnerError,
+    PoolSetFrozenError,
     ScheduleQueueUnavailableError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
     TournamentNotReadyToGoLiveError,
 )
+from app.tournament_events import create_event as create_event_core
+from app.tournament_events import delete_event as delete_event_core
+from app.tournament_events import update_event as update_event_core
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import (
@@ -127,10 +135,14 @@ from app.tournament_lifecycle import (
 )
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_queries import (
+    active_entrants_by_event,
+    completed_match_ids,
+    entrant_rating,
     fixtures_by_event,
+    game_counts_by_match,
     visible_to,
 )
-from app.tournament_serialization import serialize
+from app.tournament_serialization import serialize, serialize_event
 from app.tournament_solve_service import (
     request_schedule_solve as request_schedule_solve_core,
 )
@@ -899,6 +911,201 @@ async def transition_tournament(
             created_by_username=actor.username,
             current_user_id=actor.id,
         )
+
+
+@mcp.tool
+async def create_event(
+    tournament_id: uuid.UUID,
+    payload: TournamentEventCreate,
+) -> TournamentEventRead:
+    """Add an event to a tournament you OWN as the authenticated API-token caller, and
+    return the created event.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events``: it reuses the shared
+    ``create_event`` verb (the ``FOR UPDATE`` owner-load, then the write) and the same
+    ``TournamentEventCreate`` schema the HTTP route validates, so the MCP and HTTP
+    surfaces can never drift on what a valid new event is.
+
+    Creating an event is OWNER-GATED — only the tournament's creator may (there is no
+    ``tournament.create``-style permission on this route; managing a tournament you
+    created is a property of ownership). The event's wall-clock ``slot`` windows are
+    anchored by its ``timezone`` (a real IANA zone). A brand-new event has no entrants
+    and no draw yet — ``build_cut`` deals its fixtures later. Returns the created
+    ``TournamentEventRead`` from the caller's perspective (its ``entry_state`` is the
+    caller's own, judged on the tournament's ladder).
+
+    Raises a ``ToolError`` when no tournament with that id exists, or when you are not
+    the tournament's owner.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            event = await create_event_core(
+                db, tournament_id=tournament_id, actor=actor, payload=payload
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only add events to tournaments you created."
+            ) from exc
+        # The event's league is the tournament's — the ladder the caller's
+        # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed
+        # the tournament exists and is the caller's, so this scalar read cannot miss.
+        league_id = (
+            await db.execute(
+                select(Tournament.league_id).where(Tournament.id == tournament_id)
+            )
+        ).scalar_one()
+        rating = await entrant_rating(db, league_id, actor.id)
+        # A one-statement-old event has no entrants, no fixtures and no results — all
+        # empty without a query, exactly as the HTTP handler shapes it.
+        return serialize_event(
+            event, entrants=[], fixtures=[], rating=rating, game_counts={}
+        )
+
+
+@mcp.tool
+async def update_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    updates: TournamentEventUpdate,
+) -> TournamentEventRead:
+    """Edit an event of a tournament you OWN as the authenticated API-token caller, and
+    return the updated event.
+
+    Mirrors ``PATCH /v1/tournaments/{tournament_id}/events/{event_id}``: it reuses the
+    shared ``update_event`` verb (the ``FOR UPDATE`` owner-load, the event load, the two
+    draw freezes, the partial apply, the timezone reanchor, and the scheduling-facts →
+    re-solve trigger) and the same ``TournamentEventUpdate`` schema the HTTP route
+    validates, so the MCP and HTTP surfaces can never drift on what a valid edit is.
+
+    ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; ``predicates``
+    and ``pools`` replace wholesale when sent. Editing an event is OWNER-GATED — only
+    the tournament's creator may (there is no permission on this route). **Once the
+    event's draw is cut, two things freeze** (ADR-0786): a ``pools`` payload that
+    changes *which pools* the event has is refused, and so is a ``draw_type`` change —
+    remove the draw, edit, and cut again. Everything else (name, fee, rules,
+    ``max_players``, a
+    pool's ``table_ids`` / ``slot`` / ``name``) stays editable with a draw standing. A
+    ``timezone`` edit preserves the wall-clock of already-placed fixtures. Returns the
+    updated ``TournamentEventRead`` from the caller's perspective (its entrants, draw
+    and results survive the edit; its ``entry_state`` is the caller's own, recomputed
+    from the event as it now stands).
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, when no event with that id exists under the tournament, or when
+    the edit would change the frozen pool set or draw type of a cut-draw event.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            event = await update_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                actor=actor,
+                updates=updates,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only edit events of tournaments you created."
+            ) from exc
+        except EventNotFoundError as exc:
+            raise ToolError(f"No event found with id {event_id}.") from exc
+        except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
+            # Both freezes carry the exact, domain-authored 409 sentence — surfaced as
+            # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
+            # (remove the draw, edit, cut again).
+            raise ToolError(str(exc)) from exc
+        # The event's league is the tournament's — the ladder the caller's
+        # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed
+        # the tournament exists and is the caller's, so this scalar read cannot miss.
+        league_id = (
+            await db.execute(
+                select(Tournament.league_id).where(Tournament.id == tournament_id)
+            )
+        ).scalar_one()
+        # An edited event keeps its entrants, draw and results (a PATCH is not a re-cut,
+        # ADR-0786), so they are reloaded and reprojected exactly as the HTTP handler
+        # shapes them — answering ``[]`` would tell the director their draw was thrown
+        # away.
+        entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+        event_fixtures = await fixtures_by_event(db, [event.id])
+        fixtures = event_fixtures[event.id]
+        game_counts = await game_counts_by_match(
+            db, completed_match_ids(event_fixtures)
+        )
+        rating = await entrant_rating(db, league_id, actor.id)
+        return serialize_event(
+            event,
+            entrants=entrants,
+            fixtures=fixtures,
+            rating=rating,
+            game_counts=game_counts,
+        )
+
+
+class EventDeletionConfirmation(BaseModel):
+    """The result of deleting an event — a small, agent-shaped confirmation rather than
+    the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was deleted
+    (the ``tournament_id`` it hung off and the ``event_id`` that no longer resolves).
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring
+    ``TournamentDeletionConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+
+
+@mcp.tool
+async def delete_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+) -> EventDeletionConfirmation:
+    """Delete an event from a tournament you OWN as the authenticated API-token caller.
+    Returns a confirmation carrying the deleted event's id.
+
+    Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}`` (which answers
+    a bodiless ``204``): it reuses the shared ``delete_event`` verb (the ``FOR UPDATE``
+    owner-load, then the event load, then the delete) so the MCP and HTTP surfaces can
+    never drift. Deleting is owner-gated — only the tournament's creator may — and it is
+    DESTRUCTIVE: the event and everything under it go with it. There is no undo.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not the
+    tournament's owner, or when no event with that id exists under the tournament.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await delete_event_core(
+                db, tournament_id=tournament_id, event_id=event_id, actor=actor
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only delete events from tournaments you created."
+            ) from exc
+        except EventNotFoundError as exc:
+            raise ToolError(f"No event found with id {event_id}.") from exc
+        return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
 
 
 # The domain-exception family the two draw-write verbs raise for a refusal that is

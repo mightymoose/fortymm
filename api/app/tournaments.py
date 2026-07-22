@@ -1,8 +1,6 @@
 import hashlib
 import uuid
-from datetime import datetime
 from typing import Literal, assert_never
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pyrate_limiter import Duration, Rate
@@ -15,12 +13,10 @@ from app.draws import (
     DegenerateDraw,
     DrawError,
     NonSinglesDraw,
-    PoolId,
     UnsupportedDrawType,
 )
 from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
-    DrawType,
     EventFormat,
     Match,
     MatchStatus,
@@ -50,9 +46,7 @@ from app.schemas.schedule_preview import (
     PreviewRequest,
 )
 from app.schemas.tournament import (
-    MatchSettings,
     ScheduleSolveRead,
-    Slot,
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -65,15 +59,10 @@ from app.schemas.tournament import (
     TournamentRead,
     TournamentTransitionCreate,
     TournamentUpdate,
-    named_list,
 )
 from app.sessions import SESSION_COOKIE_NAME, get_current_user
 from app.tournament_draw_service import cut_event_draw as _cut_event_draw
 from app.tournament_draw_service import uncut_event_draw as _uncut_event_draw
-from app.tournament_draws import (
-    event_has_draw,
-    event_pools,
-)
 from app.tournament_edit import edit_tournament
 from app.tournament_eligibility import (
     Eligible,
@@ -83,6 +72,7 @@ from app.tournament_eligibility import (
 )
 from app.tournament_entry_refusals import EntryRefusal, entry_refused
 from app.tournament_errors import (
+    DrawTypeFrozenError,
     DrawUnderWayError,
     EventNotFoundError,
     IllegalTournamentTransitionError,
@@ -91,12 +81,16 @@ from app.tournament_errors import (
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NotTournamentOwnerError,
+    PoolSetFrozenError,
     ScheduleQueueUnavailableError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
     TournamentNotReadyToGoLiveError,
 )
+from app.tournament_events import create_event as create_event_core
+from app.tournament_events import delete_event as delete_event_core
+from app.tournament_events import update_event as update_event_core
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import transition_tournament
@@ -661,23 +655,28 @@ async def create_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
-    event = TournamentEvent(
-        tournament_id=tournament.id,
-        name=payload.name,
-        format=payload.format,
-        draw_type=payload.draw_type,
-        max_players=payload.max_players,
-        entry_fee=payload.entry_fee,
-        timezone=payload.timezone,
-        slot=payload.slot.model_dump(),
-        match_settings=payload.match_settings.model_dump(),
-        predicates=[p.model_dump() for p in payload.predicates],
-        pools=[p.model_dump() for p in payload.pools],
-    )
-    db.add(event)
-    await db.commit()
-    await db.refresh(event)
+    # Thin adapter over the transport-neutral ``create_event`` verb: it owns the
+    # ``FOR UPDATE`` owner-load (404 tournament → 403 not-owner) and the write, and
+    # signals each refusal with a domain exception. This handler maps each back to the
+    # exact status + body it produced before (via ``_map_tournament_write_error``), so
+    # the wire contract is unchanged:
+    #
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    try:
+        event = await create_event_core(
+            db, tournament_id=tournament_id, actor=current_user, payload=payload
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    # The event's league is the tournament's — the number the caller's ``entry_state``
+    # is judged against. The verb's owner gate just confirmed the tournament exists and
+    # is the caller's, so this scalar read cannot miss.
+    league_id = (
+        await db.execute(
+            select(Tournament.league_id).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
     # A just-created event has no entries, so its entrants are empty and its
     # derived ``entered`` count is 0 — no query needed to learn that. Its draw is
     # empty for the same reason and with the same certainty: fixtures are only ever
@@ -689,288 +688,13 @@ async def create_event(
     # rules they wrote judge them like anyone else). One rating query, on the
     # tournament's league: answering with a state the endpoint had guessed rather
     # than computed is how the read and the guard come apart.
-    rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    rating = await entrant_rating(db, league_id, current_user.id)
     # No fixtures on a one-statement-old event, so no results either —
     # ``_event_results`` answers ``None`` for an uncut draw whatever the game counts, so
     # an empty map is all this needs.
     return serialize_event(
         event, entrants=[], fixtures=[], rating=rating, game_counts={}
     )
-
-
-def _pool_set_refusal(removed: list[str], added: list[str]) -> HTTPException:
-    """The 409 for a pools payload that would change *which pools* a cut event has.
-
-    409, not 403 (ADR-0017's refusal-code doctrine): the caller is the owner and the
-    request is well-formed — it is the *resource* that is in the wrong state for it. The
-    same payload becomes legal the moment the draw is removed, which is precisely what a
-    conflict means and what a 403 would deny.
-
-    Both halves are named, because a re-**id**'d pool is exactly one removal plus one
-    addition and the director has to be told which of their pools went missing:
-
-    * a **removed** pool leaves its fixtures pointing at a pool that no longer exists —
-      the dangling ref no foreign key is there to catch (ADR-0786);
-    * an **added** pool arrives with **no fixtures**, because the draw was dealt across
-      the pools the event had at the cut, and nothing re-deals it.
-
-    The sentence ends with the way out (remove the draw, change the pools, cut again)
-    and with what is still allowed, because a refusal that only says "no" leaves a
-    director who has to move a broken table with nowhere to go — and the answer is that
-    they don't need us: tables, times and names were never frozen.
-    """
-    clauses = []
-    if removed:
-        clauses.append(
-            f"{named_list(removed)} already has fixtures drawn into it, "
-            "which this change would leave pointing at a pool that no longer exists"
-        )
-    if added:
-        clauses.append(
-            f"{named_list(added)} would arrive with no fixtures in it, "
-            "because the draw was cut across the pools this event had at the time"
-        )
-    return HTTPException(
-        status_code=409,
-        detail=(
-            "This event's draw is already cut, so its set of pools is frozen: "
-            + "; and ".join(clauses)
-            + ". A pool's tables, its time and its name can all still be changed. "
-            "To add, remove or re-identify a pool, remove the draw first, then cut it "
-            "again."
-        ),
-    )
-
-
-async def _enforce_pool_set_frozen(
-    db: AsyncSession, event: TournamentEvent, payload: TournamentEventUpdate
-) -> None:
-    """Raise the 409 once a ``pools`` payload would change *which pools* an event with a
-    cut draw has (ADR-0786).
-
-    A fixture names its pool by a **string ref** into this same event's ``pools`` JSONB,
-    and there is no pools table for it to foreign-key. So the database cannot refuse the
-    edit that orphans it, and the integrity of that reference is procedural — it is this
-    function, and nothing else. Remove a pool (or change its ``id``, which is a removal
-    with an addition standing where it was) and every fixture drawn into it refers to
-    nothing; add one and it arrives with no fixtures, because the draw was dealt across
-    the pools that existed at the cut.
-
-    What is frozen is the **id set**, and only the id set. A pool's ``table_ids``, its
-    ``slot`` and its ``name`` stay editable with a draw standing, on purpose — this is
-    the case the freeze exists to *permit*, not to prevent. Venues move under a running
-    tournament (a table breaks and is pulled, one frees up early, a pool slips an hour),
-    and a director who cannot record that has to un-cut a draw that is *correct* —
-    losing the placements — to move a table. A rename is likewise allowed: identity
-    lives in the ``id``, so "Pool A" becoming "Morning Pool" is a display change and
-    every fixture still resolves.
-
-    Asked **before** anything is written (and, like every judge-then-write guard in this
-    module, under the tournament's row lock), so a refusal leaves both the pools and the
-    fixtures exactly as they were. Not merely rolled back — never written: a guard that
-    fired after the ``setattr`` loop would be relying on the transaction to undo it, and
-    the day somebody makes an intermediate ``commit`` for convenience the refusal starts
-    persisting the very thing it refuses.
-
-    With **no draw cut** this is a no-op and ``pools`` replaces wholesale, as it always
-    has. There are no fixtures to orphan, and the pools of an un-drawn event are just
-    configuration; ``DELETE …/draw`` un-freezes the set by construction for the same
-    reason.
-    """
-    # An absent ``pools`` key is the only way this is ``None`` — an explicit ``null`` is
-    # a 422 at the schema (the column is NOT NULL) — so "not sent" is the whole meaning
-    # of it, and an event whose pools are not being replaced has nothing to enforce.
-    if payload.pools is None:
-        return
-    # The freeze turns on the draw EXISTING, not on it having been played: an unplayed
-    # draw is the ordinary state of a tournament that has not started, and it is just as
-    # orphanable as a played one.
-    if not await event_has_draw(db, event.id):
-        return
-    # Parsed ONCE, and kept: the id set decides *whether* to refuse, and the pools
-    # themselves say *which* — a refusal names them (``named_list``), and re-parsing the
-    # JSONB to recover the names would be the same validation run twice per pool.
-    current = event_pools(event)
-    existing = {PoolId(pool.id) for pool in current}
-    incoming = {PoolId(pool.id) for pool in payload.pools}
-    if existing == incoming:
-        return
-    # Named by their names, from whichever side of the change still knows them: a pool
-    # being removed is only described by the row we hold, and one being added only by
-    # the payload.
-    removed = [pool.name for pool in current if PoolId(pool.id) not in incoming]
-    added = [pool.name for pool in payload.pools if pool.id not in existing]
-    raise _pool_set_refusal(removed, added)
-
-
-def _draw_type_refusal(current: DrawType) -> HTTPException:
-    """The 409 for a ``draw_type`` change on an event whose draw is already cut.
-
-    Same doctrine as the pool-set freeze, one field over (ADR-0017): 409, not 403 — the
-    caller is the owner and the payload is well-formed; it is the *resource* that is in
-    the wrong state, and the same request becomes legal the moment the draw is removed.
-
-    And it says how, because the alternative is a director who is **stuck**. The draw
-    type is what chose the strategy that dealt these fixtures, so an event that is
-    ``single-elim`` while holding pooled round-robin fixtures cannot even be re-cut back
-    into agreement with itself: today ``single-elim`` has no strategy, so the re-cut is
-    a 422, and the only way out is to patch the draw type *back* to a value the director
-    never asked for — which they have to guess. The refusal names the way out instead.
-    """
-    return HTTPException(
-        status_code=409,
-        detail=(
-            f"This event's draw is already cut, so its draw type is frozen: its "
-            f"fixtures were dealt as a “{current.value}” draw, and changing the type "
-            "would leave the event claiming a shape its draw does not have. To change "
-            "the draw type, remove the draw first, then cut it again."
-        ),
-    )
-
-
-async def _enforce_draw_type_frozen(
-    db: AsyncSession, event: TournamentEvent, payload: TournamentEventUpdate
-) -> None:
-    """Raise the 409 once a ``draw_type`` payload would change the draw type of an event
-    that **has a draw** (ADR-0786).
-
-    A draw type is not a label on an event — it is the strategy that dealt the event's
-    fixtures, and the fixtures are the shape that strategy prescribes. Patch it under a
-    standing draw and the two facts contradict each other: a ``single-elim`` event
-    holding pooled round-robin fixtures (measured — the PATCH answered **200**), whose
-    bracket no client can render and whose draw no strategy would ever have produced.
-
-    The **go-live currency check cannot catch it**, which is why this guard has to
-    exist rather than being someone else's problem: currency compares the *entrant set*
-    the fixtures seat against the event's active entrants (``draw_currency_by_event``),
-    and re-labelling the draw type moves neither. The corrupted event reads as
-    ``current`` and starts.
-
-    Sibling of ``_enforce_pool_set_frozen``, and the same shape of rule: what a cut draw
-    freezes is *the facts its fixtures were derived from* — the pools they were dealt
-    across, and the strategy that dealt them. Everything else about the event (its name,
-    its fee, its rules, a pool's tables and window) stays editable, because a director
-    must never have to destroy a correct draw to record an ordinary change.
-
-    **Presence is not enough — the change is what is refused.** A ``draw_type`` equal to
-    the one the event already has changes nothing, so it is not a conflict, and a guard
-    that fired on the mere presence of the key would refuse a page that PATCHes the
-    whole event form back (draw type included) to move a pool's tables — the very edit
-    the freeze exists to permit. (This is where it differs from the
-    league-editable rule — ``edit_tournament`` / ``LeagueNotEditableError`` — which
-    *does* refuse the field it already holds: there,
-    the field is settled by a
-    lifecycle status no request of the caller's can move, so the only client that sends
-    it is a stale one. Here, the way out — remove the draw — is on the caller's own
-    keyboard.)
-
-    Asked **before** anything is written, like every judge-then-write guard in this
-    module, and under the tournament's row lock: a refusal leaves the draw type and the
-    fixtures exactly as they were, never written and then rolled back.
-    """
-    if payload.draw_type is None or payload.draw_type is event.draw_type:
-        return
-    # Only now the query — and only for a payload that really moves the draw type. It is
-    # the same ``event_has_draw`` the pool freeze asks, and a payload that changes both
-    # asks it twice: two COUNTs on an indexed column, both under a lock we already hold,
-    # in exchange for two guards that each read as one rule.
-    if not await event_has_draw(db, event.id):
-        return
-    raise _draw_type_refusal(event.draw_type)
-
-
-def _event_scheduling_facts(
-    event: TournamentEvent,
-) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int, str]:
-    """The slice of an event the schedule solver actually reads (ADR "the
-    schedule is solved; the call is pinned"), in a comparable shape — what the
-    event PATCH compares before/after its write to decide whether a re-solve
-    is owed.
-
-    Exactly three facts feed ``_load_solver_inputs``: each pool's identity,
-    window and tables (its *name* is display and deliberately absent — a pool
-    rename must not spend a solve), ``match_settings.length_games`` (the
-    duration input; ``rated`` is a results rule the solver never sees), and the
-    event ``timezone`` — the anchor that turns each Slot's wall-clock
-    ``{date,start,end}`` into the real instant the solver compares against
-    ``now`` (ADR "tournament times are timezone-aware instants"). Without the
-    timezone here a tz-only correction re-anchors every placement but compares
-    equal, so a stale ``infeasible``/``past_window`` verdict would never be
-    re-solved away. Parsed through the same models the write boundary validated
-    the JSONB with (parse, don't validate), and read off the ROW rather than
-    the payload, so "changed" means the row changed — a PATCH that re-sends the
-    values the event already holds compares equal and triggers nothing.
-    """
-    settings = MatchSettings.model_validate(event.match_settings)
-    return (
-        tuple(
-            (pool.id, pool.slot, tuple(pool.table_ids)) for pool in event_pools(event)
-        ),
-        settings.length_games,
-        event.timezone,
-    )
-
-
-async def _reanchor_placements_for_timezone_change(
-    db: AsyncSession,
-    event_id: uuid.UUID,
-    *,
-    old_timezone: str,
-    new_timezone: str,
-) -> None:
-    """Preserve the **wall-clock** of an event's manual placements across a
-    timezone edit (ADR "tournament times are timezone-aware instants" —
-    "Wall-clock is preserved across a timezone edit").
-
-    A director who placed a fixture at 18:00 in ``America/Chicago`` and then
-    corrects the event to ``America/Denver`` means "the match is at 6 PM local; I
-    just fixed which local" — so the fixture must still read **18:00**, its stored
-    instant moving by the offset delta while its local reading stays put. The pool
-    ``Slot`` windows get this for free (they are wall-clock ``{date,start,end}``
-    components, untouched by the edit); ``scheduled_start`` is a ``timestamptz``
-    **instant** (B1/B2), so it is recomposed here or it would silently shift.
-
-    Only ``scheduled_start`` is recomposed — never ``pinned_at``. The distinction
-    is what the two columns *mean*: ``scheduled_start`` is a wall-clock *intent*
-    ("the match is at 6 PM local"), so correcting which local means recomposing it
-    to keep the intended reading; ``pinned_at`` is the real instant the call/
-    notification actually fired (``_wall_now()``), an **event-log timestamp** —
-    not an intent. Re-anchoring it would falsely claim the call went out at a
-    different instant. Its stored instant is therefore left fixed; the detail
-    BFF's ``venue_local`` re-renders that same instant in the new zone, so the
-    displayed "Called …" label correctly shifts while naming the identical moment.
-
-    Recovery is: read ``scheduled_start``'s wall-clock **in the OLD zone** (the one
-    the director saw when placing it), then re-anchor those same components in the
-    NEW zone — the same ``.replace(tzinfo=...)`` composition B2 uses for window
-    instants, so a wall-clock that lands in a DST gap/fold resolves one consistent
-    way rather than crashing. Only rows that actually carry a ``scheduled_start``
-    are read. The caller invokes this **only when the zone truly changed**, on its
-    open transaction under the tournament row lock, so the recompose commits
-    atomically with the ``timezone`` write it accompanies.
-    """
-    old_tz = ZoneInfo(old_timezone)
-    new_tz = ZoneInfo(new_timezone)
-
-    def _reanchor(instant: datetime) -> datetime:
-        wall_clock = instant.astimezone(old_tz).replace(tzinfo=None)
-        return wall_clock.replace(tzinfo=new_tz)
-
-    placed = (
-        (
-            await db.execute(
-                select(TournamentFixture).where(
-                    TournamentFixture.event_id == event_id,
-                    TournamentFixture.scheduled_start.is_not(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for fixture in placed:
-        if fixture.scheduled_start is not None:
-            fixture.scheduled_start = _reanchor(fixture.scheduled_start)
 
 
 @router.patch(
@@ -1010,66 +734,40 @@ async def update_event(
 
     Owner-only.
     """
-    # The row lock first, then the owner check — the same pair, in the same order, that
-    # the transition route and the tournament PATCH take, and that the draw verbs take
-    # (which is what keeps them all free of a deadlock cycle). This route is a
-    # judge-then-write path now: ``_enforce_pool_set_frozen`` reads whether a draw
-    # exists and then writes the pools that draw's fixtures refer to. Postgres runs READ
-    # COMMITTED, so unlocked, a cut committing between those two would be a cut across
-    # pools this request is in the middle of replacing — a draw born orphaned, refused
-    # by nothing.
+    # Thin adapter over the transport-neutral ``update_event`` verb: it owns the
+    # ``FOR UPDATE`` owner-load (404 tournament → 403 not-owner), the event load (404
+    # event), the two draw freezes, the partial apply, the timezone reanchor and the
+    # scheduling-facts → re-solve trigger, and signals each refusal with a domain
+    # exception. This handler maps each back to the exact status + body it produced
+    # before, so the wire contract is unchanged:
     #
-    # The tournament is kept, not discarded: its ``league_id`` is the ladder the event's
-    # refreshed ``entry_state`` is judged on (ADR-0783), and it is already loaded, so
-    # re-fetching it would be a second query for a row we are holding.
-    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
-    event = await _get_event_or_404(db, tournament_id, event_id)
-    # 404 → 403 → 409, the ordering ADR-0017 fixed: the state of this event's draw is
-    # never the reason a stranger's request is refused. And it is asked before the loop
-    # below, so a refusal writes nothing at all.
-    await _enforce_pool_set_frozen(db, event, payload)
-    # The draw's other frozen fact, judged in the same window and for the same reason:
-    # the strategy that dealt the fixtures is not a label to be re-typed under them.
-    await _enforce_draw_type_frozen(db, event, payload)
-    # As in update_tournament: model_dump(exclude_unset=True) serializes the
-    # nested value-objects (slot/match_settings/predicates/pools) to plain
-    # dicts/lists, so one setattr loop covers the JSONB columns and scalars.
-    #
-    # Scheduling-input change detection, the same before/after comparison the
-    # tournament PATCH makes over its catalogue: the solver reads this event's
-    # pools (id, window, tables) and its ``length_games``, and nothing else —
-    # see ``_event_scheduling_facts``. A name/fee/predicates-only PATCH, or a
-    # pool rename, compares equal and triggers nothing.
-    facts_before = _event_scheduling_facts(event)
-    # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
-    # wall-clock of already-placed fixtures (ADR "Wall-clock is preserved across a
-    # timezone edit"), which needs the zone they were placed IN to recover it.
-    old_timezone = event.timezone
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(event, key, value)
-    if event.timezone != old_timezone:
-        # The zone truly moved (a PATCH re-sending the same zone falls through as a
-        # no-op): recompose every placement so its local reading is unchanged and
-        # only its stored instant shifts by the offset delta. The Slot windows are
-        # left alone — their wall-clock components are unchanged by definition.
-        await _reanchor_placements_for_timezone_change(
-            db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   EventNotFoundError       -> 404 "Event not found."
+    #   PoolSetFrozenError       -> 409 (its carried, domain-authored sentence)
+    #   DrawTypeFrozenError      -> 409 (its carried, domain-authored sentence)
+    try:
+        event = await update_event_core(
+            db,
+            tournament_id=tournament_id,
+            event_id=event_id,
+            actor=current_user,
+            updates=payload,
         )
-    if facts_before != _event_scheduling_facts(event) and await event_has_draw(
-        db, event.id
-    ):
-        # Gated on THIS event having a cut draw — stricter than the
-        # tournament-wide gate, because ``_load_solver_inputs`` reads the
-        # pools and settings of *drawn* events only: an undrawn event's pools
-        # are configuration the solver never sees, so editing them owes no
-        # solve even while a sibling event is drawn. Same transaction, same
-        # tournament row lock (the order ``request_solve`` requires); a
-        # ``None`` return (Redis down) deliberately costs the solve, never
-        # the edit — the pin tick and the Run-scheduler button recover it.
-        await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
-    await db.commit()
-    await db.refresh(event)
+    except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
+        # Both freezes carry the exact 409 sentence the handler used to compose inline —
+        # rebuilt verbatim with ``str(exc)``.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    # The event's league is the tournament's — the ladder the caller's refreshed
+    # ``entry_state`` is judged on (ADR-0783). The verb's owner gate just confirmed the
+    # tournament exists and is the caller's, so this scalar read cannot miss.
+    league_id = (
+        await db.execute(
+            select(Tournament.league_id).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
     # An edited event keeps whatever entrants it already had — reload them rather
     # than answering with an empty list (and a ``entered`` of 0) that would be a
     # lie for any event people have entered. Its DRAW survives the edit too (a PATCH
@@ -1086,7 +784,7 @@ async def update_event(
     # And its ``entry_state`` is recomputed from the event as it now stands: an owner
     # who has just tightened a rule or lowered ``max_players`` is answered with what
     # the event says NOW, not with what it said before their edit.
-    rating = await entrant_rating(db, tournament.league_id, current_user.id)
+    rating = await entrant_rating(db, league_id, current_user.id)
     return serialize_event(
         event,
         entrants=entrants,
@@ -1106,12 +804,22 @@ async def delete_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    # As in update_event: the owner-scoped load is the guard (404 then 403); the
-    # row this route deletes is the event.
-    await _get_owned_tournament_or_404(db, tournament_id, current_user)
-    event = await _get_event_or_404(db, tournament_id, event_id)
-    await db.delete(event)
-    await db.commit()
+    # Thin adapter over the transport-neutral ``delete_event`` verb: it owns the
+    # ``FOR UPDATE`` owner-load (404 tournament → 403 not-owner), the event load (404
+    # event) and the delete, and signals each refusal with a domain exception. This
+    # handler maps each back to the exact status + body it produced before (via
+    # ``_map_tournament_write_error``), so the wire contract (a bodiless 204) is
+    # unchanged:
+    #
+    #   TournamentNotFoundError  -> 404 "Tournament not found."
+    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   EventNotFoundError       -> 404 "Event not found."
+    try:
+        await delete_event_core(
+            db, tournament_id=tournament_id, event_id=event_id, actor=current_user
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
