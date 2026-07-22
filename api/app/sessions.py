@@ -381,10 +381,12 @@ async def _find_api_token_user(db: AsyncSession, authorization: str) -> User | N
     ``POST /v1/api-tokens`` (issue #1130): the scheme is matched
     case-insensitively (``Bearer``/``bearer``) and split off the raw token, which
     is then resolved by the shared ``api_token_auth.find_api_token_user`` — the
-    single place the ``hash_token`` → live-user lookup lives, so this HTTP bearer
-    path and the MCP ``TokenVerifier`` can't drift. An unresolved token (unknown
-    or tombstoned) returns ``None`` and the caller falls through to the ordinary
-    ``session_ended`` 401.
+    single place the ``hash_token`` → live-user lookup lives. That shared resolver
+    now backs this HTTP ``Authorization: Bearer`` path (the iOS app) only; the MCP
+    surface no longer resolves opaque tokens through it — it authenticates via an
+    Auth0-issued JWT and ``resolve_linked_user`` instead (see the 20260722 Auth0
+    Resource-Server ADR). An unresolved token (unknown or tombstoned) returns
+    ``None`` and the caller falls through to the ordinary ``session_ended`` 401.
     """
     scheme, _, raw_token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not raw_token:

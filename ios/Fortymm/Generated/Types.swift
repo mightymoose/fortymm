@@ -216,6 +216,65 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/api-tokens`.
     /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)`.
     func createApiTokenV1ApiTokensPost(_ input: Operations.CreateApiTokenV1ApiTokensPost.Input) async throws -> Operations.CreateApiTokenV1ApiTokensPost.Output
+    /// Start Link
+    ///
+    /// Begin linking the signed-in user's account to an Auth0 identity.
+    ///
+    /// Generates a PKCE ``code_verifier`` + CSRF ``state``, stashes them in a
+    /// short-lived signed httponly cookie (no server-side store, so the flow is
+    /// stateless across replicas), and 302-redirects the browser to Auth0's
+    /// ``/authorize`` for an authorization-code + PKCE login requesting only the
+    /// ``openid`` scope. The matching callback completes the bind.
+    ///
+    /// Requires an established fortymm session (the link is bound to *you*). Returns
+    /// a clean ``404`` when Auth0 linking is not configured for this deployment,
+    /// never a ``500``.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/start`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)`.
+    func startLinkV1Auth0LinkStartGet(_ input: Operations.StartLinkV1Auth0LinkStartGet.Input) async throws -> Operations.StartLinkV1Auth0LinkStartGet.Output
+    /// Link Callback
+    ///
+    /// Complete the Auth0 account link and redirect back to settings.
+    ///
+    /// Validates the returned ``state`` against the signed PKCE cookie, exchanges the
+    /// ``code`` for an id_token at Auth0, verifies it (RS256 via the tenant JWKS,
+    /// ``aud`` = the link client id, ``iss`` = the tenant), and binds its ``sub`` to
+    /// the **current session user** (one-to-one; a ``sub`` already held by a
+    /// different live user is rejected ``409`` and left in place — see
+    /// ``_bind_auth0_sub``). On success it 302-redirects to ``/settings?linked=1``.
+    ///
+    /// Requires an established fortymm session. Rejects a missing / mismatched /
+    /// expired ``state`` with ``400``, an exchange or id_token-verification failure
+    /// with ``400``, and returns ``404`` when linking is unconfigured.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/callback`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)`.
+    func linkCallbackV1Auth0LinkCallbackGet(_ input: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input) async throws -> Operations.LinkCallbackV1Auth0LinkCallbackGet.Output
+    /// Link Status
+    ///
+    /// Whether the signed-in user has an Auth0 identity bound.
+    ///
+    /// ``linked`` is true once the user has completed the link flow (their
+    /// ``users.auth0_sub`` is set). Requires an established fortymm session; needs no
+    /// Auth0 configuration (it only reads local state).
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/get(link_status_v1_auth0_link_get)`.
+    func linkStatusV1Auth0LinkGet(_ input: Operations.LinkStatusV1Auth0LinkGet.Input) async throws -> Operations.LinkStatusV1Auth0LinkGet.Output
+    /// Unlink
+    ///
+    /// Clear the signed-in user's Auth0 binding.
+    ///
+    /// Drops ``users.auth0_sub`` so the identity can be re-linked (here or to a
+    /// different account) and any agent authenticating as that ``sub`` stops
+    /// resolving to this user. Idempotent — clearing an already-unlinked account is a
+    /// no-op ``linked=false``. Requires an established fortymm session; needs no Auth0
+    /// configuration.
+    ///
+    /// - Remark: HTTP `DELETE /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/delete(unlink_v1_auth0_link_delete)`.
+    func unlinkV1Auth0LinkDelete(_ input: Operations.UnlinkV1Auth0LinkDelete.Input) async throws -> Operations.UnlinkV1Auth0LinkDelete.Output
     /// List Matches
     ///
     /// - Remark: HTTP `GET /v1/matches`.
@@ -1312,6 +1371,79 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//v1/api-tokens/post(create_api_token_v1_api_tokens_post)`.
     internal func createApiTokenV1ApiTokensPost(headers: Operations.CreateApiTokenV1ApiTokensPost.Input.Headers = .init()) async throws -> Operations.CreateApiTokenV1ApiTokensPost.Output {
         try await createApiTokenV1ApiTokensPost(Operations.CreateApiTokenV1ApiTokensPost.Input(headers: headers))
+    }
+    /// Start Link
+    ///
+    /// Begin linking the signed-in user's account to an Auth0 identity.
+    ///
+    /// Generates a PKCE ``code_verifier`` + CSRF ``state``, stashes them in a
+    /// short-lived signed httponly cookie (no server-side store, so the flow is
+    /// stateless across replicas), and 302-redirects the browser to Auth0's
+    /// ``/authorize`` for an authorization-code + PKCE login requesting only the
+    /// ``openid`` scope. The matching callback completes the bind.
+    ///
+    /// Requires an established fortymm session (the link is bound to *you*). Returns
+    /// a clean ``404`` when Auth0 linking is not configured for this deployment,
+    /// never a ``500``.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/start`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)`.
+    internal func startLinkV1Auth0LinkStartGet(headers: Operations.StartLinkV1Auth0LinkStartGet.Input.Headers = .init()) async throws -> Operations.StartLinkV1Auth0LinkStartGet.Output {
+        try await startLinkV1Auth0LinkStartGet(Operations.StartLinkV1Auth0LinkStartGet.Input(headers: headers))
+    }
+    /// Link Callback
+    ///
+    /// Complete the Auth0 account link and redirect back to settings.
+    ///
+    /// Validates the returned ``state`` against the signed PKCE cookie, exchanges the
+    /// ``code`` for an id_token at Auth0, verifies it (RS256 via the tenant JWKS,
+    /// ``aud`` = the link client id, ``iss`` = the tenant), and binds its ``sub`` to
+    /// the **current session user** (one-to-one; a ``sub`` already held by a
+    /// different live user is rejected ``409`` and left in place — see
+    /// ``_bind_auth0_sub``). On success it 302-redirects to ``/settings?linked=1``.
+    ///
+    /// Requires an established fortymm session. Rejects a missing / mismatched /
+    /// expired ``state`` with ``400``, an exchange or id_token-verification failure
+    /// with ``400``, and returns ``404`` when linking is unconfigured.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/callback`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)`.
+    internal func linkCallbackV1Auth0LinkCallbackGet(
+        query: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Query,
+        headers: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Headers = .init()
+    ) async throws -> Operations.LinkCallbackV1Auth0LinkCallbackGet.Output {
+        try await linkCallbackV1Auth0LinkCallbackGet(Operations.LinkCallbackV1Auth0LinkCallbackGet.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Link Status
+    ///
+    /// Whether the signed-in user has an Auth0 identity bound.
+    ///
+    /// ``linked`` is true once the user has completed the link flow (their
+    /// ``users.auth0_sub`` is set). Requires an established fortymm session; needs no
+    /// Auth0 configuration (it only reads local state).
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/get(link_status_v1_auth0_link_get)`.
+    internal func linkStatusV1Auth0LinkGet(headers: Operations.LinkStatusV1Auth0LinkGet.Input.Headers = .init()) async throws -> Operations.LinkStatusV1Auth0LinkGet.Output {
+        try await linkStatusV1Auth0LinkGet(Operations.LinkStatusV1Auth0LinkGet.Input(headers: headers))
+    }
+    /// Unlink
+    ///
+    /// Clear the signed-in user's Auth0 binding.
+    ///
+    /// Drops ``users.auth0_sub`` so the identity can be re-linked (here or to a
+    /// different account) and any agent authenticating as that ``sub`` stops
+    /// resolving to this user. Idempotent — clearing an already-unlinked account is a
+    /// no-op ``linked=false``. Requires an established fortymm session; needs no Auth0
+    /// configuration.
+    ///
+    /// - Remark: HTTP `DELETE /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/delete(unlink_v1_auth0_link_delete)`.
+    internal func unlinkV1Auth0LinkDelete(headers: Operations.UnlinkV1Auth0LinkDelete.Input.Headers = .init()) async throws -> Operations.UnlinkV1Auth0LinkDelete.Output {
+        try await unlinkV1Auth0LinkDelete(Operations.UnlinkV1Auth0LinkDelete.Input(headers: headers))
     }
     /// List Matches
     ///
@@ -3865,6 +3997,25 @@ internal enum Components {
                 case redis
                 case database
                 case solver
+            }
+        }
+        /// Whether the current user has an Auth0 identity bound. The GET status body
+        /// and the DELETE (now-cleared) body both use it, so a client updates the same
+        /// shape either way.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LinkStatus`.
+        internal struct LinkStatus: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LinkStatus/linked`.
+            internal var linked: Swift.Bool
+            /// Creates a new `LinkStatus`.
+            ///
+            /// - Parameters:
+            ///   - linked:
+            internal init(linked: Swift.Bool) {
+                self.linked = linked
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case linked
             }
         }
         /// 202 body for the magic-link request endpoint. Always echoes the
@@ -14864,6 +15015,682 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.CreateApiTokenV1ApiTokensPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Start Link
+    ///
+    /// Begin linking the signed-in user's account to an Auth0 identity.
+    ///
+    /// Generates a PKCE ``code_verifier`` + CSRF ``state``, stashes them in a
+    /// short-lived signed httponly cookie (no server-side store, so the flow is
+    /// stateless across replicas), and 302-redirects the browser to Auth0's
+    /// ``/authorize`` for an authorization-code + PKCE login requesting only the
+    /// ``openid`` scope. The matching callback completes the bind.
+    ///
+    /// Requires an established fortymm session (the link is bound to *you*). Returns
+    /// a clean ``404`` when Auth0 linking is not configured for this deployment,
+    /// never a ``500``.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/start`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)`.
+    internal enum StartLinkV1Auth0LinkStartGet {
+        internal static let id: Swift.String = "start_link_v1_auth0_link_start_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/auth0/link/start/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StartLinkV1Auth0LinkStartGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StartLinkV1Auth0LinkStartGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.StartLinkV1Auth0LinkStartGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.StartLinkV1Auth0LinkStartGet.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct TemporaryRedirect: Sendable, Hashable {
+                /// Creates a new `TemporaryRedirect`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)/responses/307`.
+            ///
+            /// HTTP response code: `307 temporaryRedirect`.
+            case temporaryRedirect(Operations.StartLinkV1Auth0LinkStartGet.Output.TemporaryRedirect)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)/responses/307`.
+            ///
+            /// HTTP response code: `307 temporaryRedirect`.
+            internal static var temporaryRedirect: Self {
+                .temporaryRedirect(.init())
+            }
+            /// The associated value of the enum case if `self` is `.temporaryRedirect`.
+            ///
+            /// - Throws: An error if `self` is not `.temporaryRedirect`.
+            /// - SeeAlso: `.temporaryRedirect`.
+            internal var temporaryRedirect: Operations.StartLinkV1Auth0LinkStartGet.Output.TemporaryRedirect {
+                get throws {
+                    switch self {
+                    case let .temporaryRedirect(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "temporaryRedirect",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/start/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/start/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.StartLinkV1Auth0LinkStartGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.StartLinkV1Auth0LinkStartGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/start/get(start_link_v1_auth0_link_start_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.StartLinkV1Auth0LinkStartGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.StartLinkV1Auth0LinkStartGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Link Callback
+    ///
+    /// Complete the Auth0 account link and redirect back to settings.
+    ///
+    /// Validates the returned ``state`` against the signed PKCE cookie, exchanges the
+    /// ``code`` for an id_token at Auth0, verifies it (RS256 via the tenant JWKS,
+    /// ``aud`` = the link client id, ``iss`` = the tenant), and binds its ``sub`` to
+    /// the **current session user** (one-to-one; a ``sub`` already held by a
+    /// different live user is rejected ``409`` and left in place — see
+    /// ``_bind_auth0_sub``). On success it 302-redirects to ``/settings?linked=1``.
+    ///
+    /// Requires an established fortymm session. Rejects a missing / mismatched /
+    /// expired ``state`` with ``400``, an exchange or id_token-verification failure
+    /// with ``400``, and returns ``404`` when linking is unconfigured.
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link/callback`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)`.
+    internal enum LinkCallbackV1Auth0LinkCallbackGet {
+        internal static let id: Swift.String = "link_callback_v1_auth0_link_callback_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/query/code`.
+                internal var code: Swift.String
+                /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/query/state`.
+                internal var state: Swift.String
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - code:
+                ///   - state:
+                internal init(
+                    code: Swift.String,
+                    state: Swift.String
+                ) {
+                    self.code = code
+                    self.state = state
+                }
+            }
+            internal var query: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.LinkCallbackV1Auth0LinkCallbackGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.LinkCallbackV1Auth0LinkCallbackGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                query: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Query,
+                headers: Operations.LinkCallbackV1Auth0LinkCallbackGet.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct TemporaryRedirect: Sendable, Hashable {
+                /// Creates a new `TemporaryRedirect`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)/responses/307`.
+            ///
+            /// HTTP response code: `307 temporaryRedirect`.
+            case temporaryRedirect(Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.TemporaryRedirect)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)/responses/307`.
+            ///
+            /// HTTP response code: `307 temporaryRedirect`.
+            internal static var temporaryRedirect: Self {
+                .temporaryRedirect(.init())
+            }
+            /// The associated value of the enum case if `self` is `.temporaryRedirect`.
+            ///
+            /// - Throws: An error if `self` is not `.temporaryRedirect`.
+            /// - SeeAlso: `.temporaryRedirect`.
+            internal var temporaryRedirect: Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.TemporaryRedirect {
+                get throws {
+                    switch self {
+                    case let .temporaryRedirect(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "temporaryRedirect",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/callback/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/callback/get(link_callback_v1_auth0_link_callback_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.LinkCallbackV1Auth0LinkCallbackGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Link Status
+    ///
+    /// Whether the signed-in user has an Auth0 identity bound.
+    ///
+    /// ``linked`` is true once the user has completed the link flow (their
+    /// ``users.auth0_sub`` is set). Requires an established fortymm session; needs no
+    /// Auth0 configuration (it only reads local state).
+    ///
+    /// - Remark: HTTP `GET /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/get(link_status_v1_auth0_link_get)`.
+    internal enum LinkStatusV1Auth0LinkGet {
+        internal static let id: Swift.String = "link_status_v1_auth0_link_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/auth0/link/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.LinkStatusV1Auth0LinkGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.LinkStatusV1Auth0LinkGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.LinkStatusV1Auth0LinkGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.LinkStatusV1Auth0LinkGet.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.LinkStatus)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.LinkStatus {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.LinkStatusV1Auth0LinkGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.LinkStatusV1Auth0LinkGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/get(link_status_v1_auth0_link_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.LinkStatusV1Auth0LinkGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.LinkStatusV1Auth0LinkGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.LinkStatusV1Auth0LinkGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.LinkStatusV1Auth0LinkGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/get(link_status_v1_auth0_link_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.LinkStatusV1Auth0LinkGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.LinkStatusV1Auth0LinkGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Unlink
+    ///
+    /// Clear the signed-in user's Auth0 binding.
+    ///
+    /// Drops ``users.auth0_sub`` so the identity can be re-linked (here or to a
+    /// different account) and any agent authenticating as that ``sub`` stops
+    /// resolving to this user. Idempotent — clearing an already-unlinked account is a
+    /// no-op ``linked=false``. Requires an established fortymm session; needs no Auth0
+    /// configuration.
+    ///
+    /// - Remark: HTTP `DELETE /v1/auth0/link`.
+    /// - Remark: Generated from `#/paths//v1/auth0/link/delete(unlink_v1_auth0_link_delete)`.
+    internal enum UnlinkV1Auth0LinkDelete {
+        internal static let id: Swift.String = "unlink_v1_auth0_link_delete"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/auth0/link/DELETE/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UnlinkV1Auth0LinkDelete.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UnlinkV1Auth0LinkDelete.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.UnlinkV1Auth0LinkDelete.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.UnlinkV1Auth0LinkDelete.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/DELETE/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/DELETE/responses/200/content/application\/json`.
+                    case json(Components.Schemas.LinkStatus)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.LinkStatus {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.UnlinkV1Auth0LinkDelete.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.UnlinkV1Auth0LinkDelete.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/delete(unlink_v1_auth0_link_delete)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.UnlinkV1Auth0LinkDelete.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.UnlinkV1Auth0LinkDelete.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/auth0/link/DELETE/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/auth0/link/DELETE/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.UnlinkV1Auth0LinkDelete.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.UnlinkV1Auth0LinkDelete.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/auth0/link/delete(unlink_v1_auth0_link_delete)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.UnlinkV1Auth0LinkDelete.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.UnlinkV1Auth0LinkDelete.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

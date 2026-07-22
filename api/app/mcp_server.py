@@ -1,16 +1,27 @@
 """The FortyMM MCP server: a FastMCP app mounted at ``/mcp`` on the FastAPI app.
 
 Router-free (no FastAPI imports); it owns a configured :data:`mcp` ``FastMCP``
-instance whose transport authentication is a :class:`FortymmTokenVerifier`. The
-curated match-flow verbs are registered here as tools (starting with the
+instance whose transport authentication is an Auth0 OAuth Resource-Server
+verifier (:class:`FortymmAuth0TokenVerifier` behind a ``RemoteAuthProvider``).
+The curated match-flow verbs are registered here as tools (starting with the
 :func:`get_match` read); each reuses the shared match service + serializer so the
 MCP and HTTP surfaces can never drift.
 
-Auth reuses the exact same resolver as the HTTP bearer path
-(:func:`app.api_token_auth.find_api_token_user`), wrapped in a FastMCP
-``TokenVerifier`` so an unauthenticated MCP call fails **at the transport**, not
-inside a tool, and the two surfaces can never drift (see the shared-services
-ADR). Every tool authenticates before it runs.
+Auth is the MCP 2025 OAuth flow with Auth0 as the Authorization Server and this
+server as a stateless Resource Server (see
+``docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md``).
+The verifier does RS256/JWKS/iss/aud/exp checks on the Auth0-issued access token,
+then resolves its ``sub`` to the explicitly **linked**, non-tombstoned ``User``
+(:func:`app.auth0_identity.resolve_linked_user`) and admits it only if that user
+holds the ``mcp.access`` permission — so an unauthenticated or unauthorized MCP
+call fails **at the transport** (401), not inside a tool. The old opaque
+``context="api"`` bearer token is no longer accepted on the MCP surface (it stays
+alive for HTTP/iOS). Every tool authenticates before it runs.
+
+**Fails closed when unconfigured.** With ``AUTH0_*`` empty (local / qa / e2e /
+dev-compose all boot the api without Auth0), the api still imports and MCP still
+mounts, but the verifier rejects every request — construction never touches Auth0
+and a reject-all verifier 401s every call.
 
 Tools run outside a FastAPI request, so they cannot use the request-scoped
 ``get_session`` dependency — they own the session lifecycle themselves via
@@ -28,13 +39,19 @@ from typing import Annotated, Literal
 from anyio import to_thread
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AccessToken, TokenVerifier
+from fastmcp.server.auth import (
+    AccessToken,
+    JWTVerifier,
+    RemoteAuthProvider,
+    TokenVerifier,
+)
 from fastmcp.server.dependencies import get_access_token
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_token_auth import find_api_token_user
+from app.auth0_identity import resolve_linked_user
+from app.config import get_settings
 from app.db import get_sessionmaker
 from app.draws import (
     DegenerateDraw,
@@ -237,46 +254,131 @@ async def mcp_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-class FortymmTokenVerifier(TokenVerifier):
-    """Authenticates every MCP request against a ``context="api"`` bearer token.
+# The fortymm permission an Auth0-linked user must hold for the MCP transport to
+# admit them — the new seeded RBAC grant on the Beta tester role
+# (``scripts/seed_rbac.py``). Auth0 proves *who* the caller is (the token's
+# ``sub``); this grant decides *whether* they may reach the MCP surface at all, so
+# revoking it cuts an agent off immediately even while its Auth0 token is still
+# valid (see the Auth0 Resource-Server ADR).
+MCP_ACCESS_PERMISSION = "mcp.access"
 
-    FastMCP hands us the raw token parsed out of the ``Authorization: Bearer``
-    header; we resolve it through the one shared
-    :func:`~app.api_token_auth.find_api_token_user` lookup (sha256 hash → live,
-    non-tombstoned ``User``). On success we return an ``AccessToken`` carrying
-    the resolved user id as ``subject``/``client_id`` (and under a ``user_id``
-    claim) so tools can identify the caller without re-resolving. On any failure
-    — missing, unknown, or tombstoned-user token — we return ``None``, which
-    FastMCP turns into a 401 at the transport before any tool body runs.
-    """
+# A fail-closed placeholder origin used only when Auth0 is unconfigured (``AUTH0_*``
+# empty). ``RemoteAuthProvider`` validates its URLs as ``AnyHttpUrl``, so an empty
+# ``base_url`` / ``authorization_servers`` entry would raise at import; this
+# stand-in lets construction succeed while the reject-all verifier 401s every
+# request. The ``.invalid`` TLD (RFC 6761) can never resolve, so it can never be
+# mistaken for a live metadata origin.
+_UNCONFIGURED_ORIGIN = "https://mcp-unconfigured.fortymm.invalid"
+
+
+class _RejectAllTokenVerifier(TokenVerifier):
+    """The fail-closed verifier the MCP transport uses when Auth0 is unconfigured.
+
+    With ``AUTH0_*`` empty there is no issuer/audience/JWKS to trust, so every
+    token is rejected outright — the api still boots and MCP still mounts, but
+    every MCP request 401s (ADR "fails closed when unconfigured"). Constructing
+    this touches no Auth0 config, so ``from app.main import app`` succeeds with an
+    empty environment."""
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        async with mcp_session() as db:
-            user = await find_api_token_user(db, token)
-        if user is None:
+        return None
+
+
+class FortymmAuth0TokenVerifier(JWTVerifier):
+    """Authenticates every MCP request against an Auth0-issued RS256 JWT, then
+    authorizes it against fortymm RBAC.
+
+    The :class:`JWTVerifier` base does the authentication (JWKS fetch with a
+    built-in cache, and RS256 / issuer / audience / expiry checks); we override
+    :meth:`verify_token` to add fortymm's authorization on top. On a token that
+    fails verification we return ``None`` (→ 401). On a verified token we read its
+    ``sub`` and resolve it to the explicitly **linked**, non-tombstoned ``User``
+    (:func:`app.auth0_identity.resolve_linked_user`); a ``sub`` linked to no live
+    user, or a linked user lacking ``mcp.access``, is also ``None`` (→ 401).
+
+    On success we return an ``AccessToken`` that preserves the existing tool
+    contract: the resolved user id rides as ``subject`` / ``client_id`` and under
+    a ``user_id`` claim, so :func:`_authenticated_user_id` and every ``@mcp.tool``
+    are untouched by the switch from the opaque token to Auth0."""
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        access = await super().verify_token(token)
+        if access is None:
             return None
-        user_id = str(user.id)
+        sub = access.claims.get("sub")
+        if not isinstance(sub, str) or not sub:
+            return None
+        async with mcp_session() as db:
+            user = await resolve_linked_user(db, sub)
+            if user is None:
+                return None
+            if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):
+                return None
+            user_id = str(user.id)
         return AccessToken(
             token=token,
             client_id=user_id,
             subject=user_id,
-            scopes=[],
-            claims={"user_id": user_id},
+            scopes=access.scopes,
+            expires_at=access.expires_at,
+            claims={**access.claims, "user_id": user_id},
         )
 
 
-# The mounted MCP server. ``auth`` wires the verifier so authentication happens
-# at the transport for every request; each tool below reads the resolved caller
-# from the FastMCP auth context rather than re-parsing the bearer token.
-mcp: FastMCP[None] = FastMCP("FortyMM", auth=FortymmTokenVerifier())
+def _build_mcp_auth() -> RemoteAuthProvider:
+    """Wire the MCP transport auth from :class:`~app.config.Settings`.
+
+    Auth0 is treated as configured **all-or-nothing**: only when ALL of
+    ``auth0_domain``, ``auth0_audience``, ``mcp_public_base_url`` and
+    ``mcp_public_resource_url`` are set does the provider wrap a real
+    :class:`FortymmAuth0TokenVerifier` (pointed at the tenant's JWKS/issuer) and
+    advertise the tenant as its authorization server. A PARTIAL config — e.g. a
+    deployment that sets the tenant but forgets the public URLs — falls back to
+    the reject-all verifier just like the empty (local / qa / e2e / dev-compose)
+    default, so the api boots and MCP mounts but every request 401s (fail-closed).
+    This never ships a live verifier advertising the ``.invalid`` placeholder
+    origin (broken RFC 9728 discovery). The public ``base_url`` /
+    ``resource_base_url`` come straight from config (never derived from the
+    internal mount) so the metadata reflects the origin behind nginx."""
+    settings = get_settings()
+    if (
+        settings.auth0_domain
+        and settings.auth0_audience
+        and settings.mcp_public_base_url
+        and settings.mcp_public_resource_url
+    ):
+        token_verifier: TokenVerifier = FortymmAuth0TokenVerifier(
+            jwks_uri=settings.auth0_jwks_uri,
+            issuer=settings.auth0_issuer,
+            audience=settings.auth0_audience,
+            algorithm="RS256",
+        )
+        authorization_server = settings.auth0_issuer
+    else:
+        token_verifier = _RejectAllTokenVerifier()
+        authorization_server = _UNCONFIGURED_ORIGIN
+    return RemoteAuthProvider(
+        token_verifier=token_verifier,
+        authorization_servers=[AnyHttpUrl(authorization_server)],
+        base_url=settings.mcp_public_base_url or _UNCONFIGURED_ORIGIN,
+        resource_base_url=settings.mcp_public_resource_url or None,
+        resource_name="FortyMM",
+    )
+
+
+# The mounted MCP server. ``auth`` wires the Auth0 Resource-Server provider so
+# authentication happens at the transport for every request; each tool below reads
+# the resolved caller from the FastMCP auth context rather than re-parsing the token.
+mcp: FastMCP[None] = FastMCP("FortyMM", auth=_build_mcp_auth())
 
 
 def _authenticated_user_id() -> uuid.UUID:
     """The resolved caller's ``users.id`` from the FastMCP auth context.
 
-    The transport already authenticated the request (``FortymmTokenVerifier``);
-    that minted an :class:`AccessToken` carrying the resolved user id under a
-    ``user_id`` claim (and as ``subject``). We read it back here rather than
+    The transport already authenticated the request
+    (``FortymmAuth0TokenVerifier``); that minted an :class:`AccessToken` carrying
+    the resolved user id under a ``user_id`` claim (and as ``subject``). We read
+    it back here rather than
     re-resolving the token, so a tool body can identify its caller. A tool only
     runs after the verifier returned a token, so an absent token / claim is an
     internal invariant break, not a client error — surface it loudly as a

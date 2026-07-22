@@ -28,6 +28,7 @@ from tests._helpers import CSRF_EVENT_HOOKS
 BETA_TESTER = "Beta tester"
 ADMINISTRATOR = "Administrator"
 API_TOKEN_MANAGE = "api_token.manage"
+MCP_ACCESS = "mcp.access"
 
 
 @pytest_asyncio.fixture
@@ -812,14 +813,18 @@ async def test_seed_grants_beta_tester_the_tournament_permissions(
 ):
     """A freshly seeded database lets a Beta tester enter a tournament as well
     as view and create one — self-registration is gated on its own permission
-    (#781), since a player entering themselves is not the tournament's owner."""
+    (#781), since a player entering themselves is not the tournament's owner.
+    The bundle also carries `mcp.access` so early-access testers can connect an
+    agent to the MCP server."""
     counts = await seed_rbac.upsert_rbac(db_session)
     await db_session.commit()
     assert counts.permissions == len(seed_rbac.PERMISSIONS)
     assert counts.roles == len(seed_rbac.ROLES)
 
     granted = await _role_permission_names(db_session, BETA_TESTER)
-    assert granted == sorted([TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER])
+    assert granted == sorted(
+        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER, MCP_ACCESS]
+    )
 
 
 async def test_seed_is_idempotent(db_session: AsyncSession):
@@ -855,7 +860,7 @@ async def test_seed_is_idempotent(db_session: AsyncSession):
     )
     assert len(links) == 1
     assert await _role_permission_names(db_session, BETA_TESTER) == sorted(
-        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER]
+        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER, MCP_ACCESS]
     )
 
 

@@ -117,6 +117,25 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # RFC 9728 protected-resource metadata for the MCP OAuth Resource Server.
+    # The server advertises this URL at the PUBLIC ORIGIN ROOT via the 401
+    # `WWW-Authenticate: Bearer resource_metadata="…"` challenge on /mcp/, e.g.
+    # https://uat.fortymm.com/.well-known/oauth-protected-resource/api/mcp/ — the
+    # RFC 9728 path-insertion form. The `/api` there is MID-path (part of the
+    # resource identifier), NOT a strippable prefix, so the /api/ rewrite above
+    # can't reach it. Internally FastMCP serves the metadata UNDER its mount
+    # (/mcp/.well-known/oauth-protected-resource/…), so prepend /mcp to the
+    # origin-root path. Unauthenticated by design — discovery precedes any token.
+    location /.well-known/oauth-protected-resource {
+        rewrite ^(.*)$ /mcp$1 break;
+        proxy_pass http://api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Browser telemetry (Grafana Faro) -> Alloy faro.receiver in the
     # `monitoring` namespace (deploy/observability). resolver + variable
     # upstream so this nginx starts even before the observability release

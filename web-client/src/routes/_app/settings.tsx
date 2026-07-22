@@ -37,6 +37,7 @@ import {
   useUpdateUsername,
   type EmailStatus,
 } from '@/api/session'
+import { AgentAccessSection } from '@/components/settings/agent-access-section'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import {
   Tooltip,
@@ -1105,6 +1106,9 @@ function SettingsPage() {
                 onDirtyChange={setEmailDirty}
               />
               <NotificationsSection />
+              {/* Self-gates on `mcp.access` — renders nothing for a user
+                  without the grant, so it's mounted unconditionally here. */}
+              <AgentAccessSection />
             </div>
 
             <ComingSoon>

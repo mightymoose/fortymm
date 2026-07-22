@@ -30,6 +30,12 @@ export const PERM = {
   // RBAC-management keys. Mirrors the server's `api_token.manage` permission,
   // which fronts `POST /v1/api-tokens`.
   API_TOKEN_MANAGE: 'api_token.manage',
+  // Gates the Settings page's **Agent access** section — the Auth0 identity link
+  // that lets an AI agent reach the MCP server on the user's behalf. Its own
+  // grant, like the other feature-scoped perms above, so an operator can hand out
+  // agent access without the RBAC-management keys. Mirrors the `mcp.access`
+  // permission the server enforces on the `/v1/auth0/link*` endpoints.
+  MCP_ACCESS: 'mcp.access',
 } as const
 
 export type PermissionName = (typeof PERM)[keyof typeof PERM]

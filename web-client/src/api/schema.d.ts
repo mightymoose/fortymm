@@ -372,6 +372,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/auth0/link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start Link
+         * @description Begin linking the signed-in user's account to an Auth0 identity.
+         *
+         *     Generates a PKCE ``code_verifier`` + CSRF ``state``, stashes them in a
+         *     short-lived signed httponly cookie (no server-side store, so the flow is
+         *     stateless across replicas), and 302-redirects the browser to Auth0's
+         *     ``/authorize`` for an authorization-code + PKCE login requesting only the
+         *     ``openid`` scope. The matching callback completes the bind.
+         *
+         *     Requires an established fortymm session (the link is bound to *you*). Returns
+         *     a clean ``404`` when Auth0 linking is not configured for this deployment,
+         *     never a ``500``.
+         */
+        get: operations["start_link_v1_auth0_link_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth0/link/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Link Callback
+         * @description Complete the Auth0 account link and redirect back to settings.
+         *
+         *     Validates the returned ``state`` against the signed PKCE cookie, exchanges the
+         *     ``code`` for an id_token at Auth0, verifies it (RS256 via the tenant JWKS,
+         *     ``aud`` = the link client id, ``iss`` = the tenant), and binds its ``sub`` to
+         *     the **current session user** (one-to-one; a ``sub`` already held by a
+         *     different live user is rejected ``409`` and left in place — see
+         *     ``_bind_auth0_sub``). On success it 302-redirects to ``/settings?linked=1``.
+         *
+         *     Requires an established fortymm session. Rejects a missing / mismatched /
+         *     expired ``state`` with ``400``, an exchange or id_token-verification failure
+         *     with ``400``, and returns ``404`` when linking is unconfigured.
+         */
+        get: operations["link_callback_v1_auth0_link_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth0/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Link Status
+         * @description Whether the signed-in user has an Auth0 identity bound.
+         *
+         *     ``linked`` is true once the user has completed the link flow (their
+         *     ``users.auth0_sub`` is set). Requires an established fortymm session; needs no
+         *     Auth0 configuration (it only reads local state).
+         */
+        get: operations["link_status_v1_auth0_link_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Unlink
+         * @description Clear the signed-in user's Auth0 binding.
+         *
+         *     Drops ``users.auth0_sub`` so the identity can be re-linked (here or to a
+         *     different account) and any agent authenticating as that ``sub`` stops
+         *     resolving to this user. Idempotent — clearing an already-unlinked account is a
+         *     no-op ``linked=false``. Requires an established fortymm session; needs no Auth0
+         *     configuration.
+         */
+        delete: operations["unlink_v1_auth0_link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/matches": {
         parameters: {
             query?: never;
@@ -2128,6 +2223,16 @@ export interface components {
             redis: components["schemas"]["ComponentHealth"];
             database: components["schemas"]["ComponentHealth"];
             solver: components["schemas"]["ComponentHealth"];
+        };
+        /**
+         * LinkStatus
+         * @description Whether the current user has an Auth0 identity bound. The GET status body
+         *     and the DELETE (now-cleared) body both use it, so a client updates the same
+         *     shape either way.
+         */
+        LinkStatus: {
+            /** Linked */
+            linked: boolean;
         };
         /**
          * LoginRequestAccepted
@@ -5528,6 +5633,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiTokenCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_link_v1_auth0_link_start_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_callback_v1_auth0_link_callback_get: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                auth0_link_pkce?: string | null;
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_status_v1_auth0_link_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unlink_v1_auth0_link_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkStatus"];
                 };
             };
             /** @description Validation Error */
