@@ -58,6 +58,7 @@ from sqlalchemy.orm import selectinload
 from app import queue as queue_module
 from app import scheduling
 from app.config import get_settings
+from app.match_calls import _wall_now
 from app.models import Tournament, TournamentStatus, User
 from app.schedule_preview import build_preview_snapshot, preview_pool_key
 from app.schedule_solves import _solve_num_workers
@@ -299,7 +300,14 @@ async def request_schedule_preview(
     from before the solve returns (ADR "instant structure and a streamed solve")."""
     tournament = await _load_owned_pre_live_tournament(db, tournament_id, actor)
 
-    preview = build_preview_snapshot(tournament, count_overrides=count_overrides)
+    # The real wall-clock instant the preview is judged from — the same ``now``
+    # source the live solve uses (:func:`app.match_calls._wall_now`), threaded into
+    # the pure builder so the snapshot's ``now_min`` matches go-live: a past-dated
+    # pool reports the same ``PastWindow`` a pre-live solve would (#1101), not a
+    # falsely-feasible verdict from a hardcoded ``now_min = 0``.
+    preview = build_preview_snapshot(
+        tournament, count_overrides=count_overrides, now=_wall_now()
+    )
     # event id → display name, built once (the summaries are the tournament's own
     # events, so a miss would be a builder bug — fall back to the raw id, since a
     # preview is advisory).
@@ -385,9 +393,9 @@ def project_preview_result(
     inputs it was computed over — the DB-blind projection both the job (to store)
     and a test (to assert) call directly.
 
-    Duration is the day's makespan (last placement end, in minutes from the first
-    window opening at ``now_min = 0``), with a wall-clock finish when ``base`` is
-    known. Match and bye counts are read off the (instant) draw, so they are
+    Duration is the day's makespan (last placement end, in minutes from the frame
+    origin — the earliest window opening, ``base``), with a wall-clock finish when
+    ``base`` is known. Match and bye counts are read off the (instant) draw, so they are
     present on every verdict; peak concurrent tables, utilization and per-event
     durations need a plan, so they are zero / ``None`` on an infeasible or unknown
     result. Infeasibility reasons are humanized through ``inputs.pool_resolutions``
@@ -591,9 +599,12 @@ def _resolve_reason(
             )
         case PastWindow():
             # A pre-live preview can be dated in the past (the silent "today"
-            # default on an event now a day old, #1101): resolve the offending
-            # pool to its venue-local calendar day — the same ``past_window`` read
-            # a real infeasible solve records, so the client says which day to move.
+            # default on an event now a day old, #1101): genuinely reachable because
+            # the builder stamps a real ``now_min`` (``now``'s offset from the frame
+            # origin), so a wholly-past window trips the solver's past-window guard
+            # exactly as a live pre-solve would. Resolve the offending pool to its
+            # venue-local calendar day — the same ``past_window`` read a real
+            # infeasible solve records, so the client says which day to move.
             return PastWindowReasonRead(date=pool_resolutions[reason.pool_id].date)
         case _:
             assert_never(reason)

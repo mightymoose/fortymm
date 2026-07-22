@@ -51,7 +51,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from app.draws import (
     EntryId,
@@ -114,12 +114,12 @@ class PreviewSnapshot:
 
     ``base`` is the **timezone-aware instant** origin of the snapshot's minute frame
     — the earliest pool window start across every event (each anchored to its event's
-    venue ``timezone``), the anchor ``now_min = 0`` is offset from — or ``None`` when
-    no event has a pool (no window to anchor on), in which case a caller reports a
-    duration in minutes but no wall-clock finish. It is aware (not naive) so the
-    downstream ``estimated_finish`` it seeds is aware too (api/CLAUDE.md — a response
-    schema must not emit a naïve datetime). The builder already computes it to set the
-    frame, so it is handed back rather than re-derived downstream."""
+    venue ``timezone``), the anchor the snapshot's ``now_min`` is offset from — or
+    ``None`` when no event has a pool (no window to anchor on), in which case a caller
+    reports a duration in minutes but no wall-clock finish. It is aware (not naive) so
+    the downstream ``estimated_finish`` it seeds is aware too (api/CLAUDE.md — a
+    response schema must not emit a naïve datetime). The builder already computes it to
+    set the frame, so it is handed back rather than re-derived downstream."""
 
     snapshot: ScheduleSnapshot
     field_summaries: tuple[EventFieldSummary, ...]
@@ -177,6 +177,7 @@ def build_preview_snapshot(
     tournament: Tournament,
     *,
     count_overrides: Mapping[uuid.UUID, int] | None = None,
+    now: datetime | None = None,
 ) -> PreviewSnapshot:
     """Synthesize a :class:`PreviewSnapshot` from a *loaded* tournament's config.
 
@@ -192,6 +193,15 @@ def build_preview_snapshot(
     ``schedule_solves._load_solver_inputs`` builds it from DB rows, but from
     synthetic fixtures.
 
+    ``now`` is the real wall-clock instant the preview is judged *from* (an aware
+    ``datetime``; defaults to :func:`datetime.now` in UTC when omitted). It is
+    **injected**, not read deep inside, so a test can pin it — and it is what makes
+    the preview agree with the live solve: the snapshot's ``now_min`` is ``now``'s
+    offset from the frame origin, so a pool dated in the past reports the *same*
+    :class:`~app.scheduling.PastWindow` infeasibility a pre-live solve would (ADR
+    "fits/doesn't fit means exactly what it will at go-live", #1101), instead of the
+    old hardcoded ``now_min = 0`` that could never trip the past-window guard.
+
     Persists nothing: no ``TournamentEntry`` / ``TournamentFixture`` row is
     created. Raises :class:`~app.draws.UnsupportedDrawType` (from
     :func:`app.draws.strategy_for`) if any event's draw type has no strategy, and
@@ -202,6 +212,7 @@ def build_preview_snapshot(
     :class:`~app.draws.DegenerateDraw`, which propagates.
     """
     overrides = count_overrides or {}
+    now = now if now is not None else datetime.now(UTC)
 
     catalogue_tables = [
         TournamentTable.model_validate(table) for table in tournament.table_catalogue
@@ -244,9 +255,7 @@ def build_preview_snapshot(
 
     # The minute frame's origin: the earliest pool window start across every
     # event — the same anchor ``_load_solver_inputs`` uses, so ``now_min`` and
-    # the windows share one frame. ``now`` is that origin (offset 0): a preview
-    # asks "how long is the day starting from its first window", so the synthetic
-    # field is free to schedule from the earliest window onward.
+    # the windows share one frame.
     windows: dict[str, tuple[datetime, datetime]] = {}
     for plan in plans:
         for pool in plan.pools:
@@ -264,6 +273,18 @@ def build_preview_snapshot(
 
     def to_min(moment: datetime) -> int:
         return int((moment - origin).total_seconds() // 60)
+
+    # ``now_min`` is the real current instant's offset from the frame origin —
+    # exactly how ``_load_solver_inputs`` derives the live solve's ``now`` (both
+    # ``to_min(now)`` off the same earliest-window base), so the preview's verdict
+    # agrees with go-live. Clipped at 0 when the earliest window hasn't opened yet
+    # (a future-dated tournament): the day still schedules from its first window,
+    # exactly as the pre-live solve does, and the past-window guard (which fires on
+    # ``window.end_min <= now_min``) stays inert until a window is genuinely behind
+    # us. When ``base`` is ``None`` there are no windows or fixtures to place, so the
+    # frame is empty and ``now_min`` is a harmless 0 (``origin`` is naive there — a
+    # ``to_min(now)`` on the aware ``now`` would be meaningless anyway).
+    now_min = max(0, to_min(now)) if base is not None else 0
 
     # Second pass: convert each planned event into pure snapshot value-objects.
     schedule_pools: list[SchedulePool] = []
@@ -303,7 +324,7 @@ def build_preview_snapshot(
         pools=tuple(schedule_pools),
         events=tuple(event_settings),
         fixtures=tuple(schedule_fixtures),
-        now_min=0,
+        now_min=now_min,
     )
     return PreviewSnapshot(
         snapshot=snapshot, field_summaries=tuple(summaries), base=base

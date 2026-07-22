@@ -21,7 +21,7 @@ These tests prove the whole preview core end to end:
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -58,7 +58,10 @@ from app.schemas.schedule_preview import (
     PreviewResult,
     PreviewVerdict,
 )
-from app.schemas.schedule_solve import WindowTooShortForMatchRead
+from app.schemas.schedule_solve import (
+    PastWindowReasonRead,
+    WindowTooShortForMatchRead,
+)
 from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
@@ -81,6 +84,22 @@ def _pool(
         "slot": {"date": "2026-06-13", "start": start, "end": end},
         "table_ids": table_ids,
     }
+
+
+@pytest.fixture(autouse=True)
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """Pin the preview's wall-clock ``now`` (the enqueue verb's ``_wall_now`` source)
+    to a fixed instant just *before* these tests' 2026-06-13 windows.
+
+    The verb now threads a real ``now`` into the builder so the snapshot carries a
+    real ``now_min`` (a past-dated day trips ``PastWindow``, #1101). Pinning it keeps
+    every existing case deterministic and calendar-proof: with ``now`` before the
+    earliest window, ``now_min`` clips to 0 exactly as a pre-live solve of a
+    still-future day would, so the happy path is unchanged as real time marches past
+    the hardcoded fixture dates. The past-dated test overrides this on purpose."""
+    frozen = datetime(2026, 6, 13, 6, 0, tzinfo=UTC)  # 2026-06-12 23:00 PDT, pre-window
+    monkeypatch.setattr("app.schedule_preview_solve._wall_now", lambda: frozen)
+    return frozen
 
 
 @pytest.fixture
@@ -429,6 +448,47 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
     assert reason.pool_name == "Pool A"
     assert reason.window_start == "09:00"
     assert reason.best_of == 5
+
+
+async def test_preview_solve_past_dated_window_resolves_past_window(
+    db_session: AsyncSession,
+    default_league: League,
+    preview_queue: Queue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pool dated in the **past** relative to the real ``now`` (the stale
+    "today"-default-gone-a-day-old case, #1101) previews **infeasible with a
+    resolved ``past_window`` reason** — the same verdict + venue-local date the live
+    pre-solve reports, proving the preview agrees with go-live. This exercises the
+    previously-dead ``PastWindow`` arm of ``_resolve_reason``: the verb now threads a
+    real ``now`` into the builder, so the snapshot's ``now_min`` sits past the window
+    end and the solver's past-window guard fires (the old hardcoded ``now_min = 0``
+    could never reach it, and this same day would have falsely previewed feasible)."""
+    owner = await make_user(db_session, "prev-pastwindow")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    # Window is 2026-06-13 09:00–18:00 America/Los_Angeles.
+    await _add_event(db_session, tournament, max_players=4, length_games=1)
+
+    # A week after the window closed: the whole day is behind ``now``.
+    monkeypatch.setattr(
+        "app.schedule_preview_solve._wall_now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    assert result.verdict is PreviewVerdict.infeasible
+    assert result.fits is False
+    # Resolved to the offending pool's venue-local calendar day — the "which day to
+    # move" fact, identical to what a real infeasible solve records.
+    assert result.infeasibility_reasons
+    reason = result.infeasibility_reasons[0]
+    assert isinstance(reason, PastWindowReasonRead)
+    assert reason.date == date(2026, 6, 13)
 
 
 async def test_wait_for_preview_returns_the_finished_result(

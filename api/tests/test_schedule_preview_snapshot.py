@@ -17,7 +17,7 @@ non-persistent solve over a synthetic field"). These tests prove:
 
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import combinations
 from zoneinfo import ZoneInfo
@@ -256,6 +256,70 @@ async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
     assert starts == [0, 180]
 
 
+async def test_preview_snapshot_past_dated_window_reports_past_window(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """A pool dated in the **past** relative to the injected ``now`` (the stale
+    "today"-default-gone-a-day-old case, #1101) previews **infeasible with a
+    ``PastWindow`` reason** — exactly what the live pre-solve reports. The builder
+    stamps a real ``now_min`` (``now``'s offset from the frame origin), so a window
+    wholly behind ``now`` trips the solver's past-window guard; the old hardcoded
+    ``now_min = 0`` could never reach that arm and falsely previewed feasible."""
+    owner = await make_user(db_session, "prev-past")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    # Window is 2026-06-13 09:00–18:00 America/Los_Angeles (ends 2026-06-14 01:00Z).
+    await _add_event(
+        db_session, tournament, max_players=4, pools=[_one_pool(["t1", "t2"])]
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    # A week after the window has closed: the whole day is in the past.
+    now = datetime(2026, 6, 20, tzinfo=UTC)
+    preview = build_preview_snapshot(loaded, now=now)
+
+    # ``now_min`` is a real, large positive offset (not the old hardcoded 0), past
+    # every window end — so the guard fires.
+    assert preview.snapshot.now_min > 0
+    window_end = max(pool.window.end_min for pool in preview.snapshot.pools)
+    assert preview.snapshot.now_min > window_end
+
+    result = scheduling.solve(preview.snapshot, time_cap_s=5.0)
+    assert result.verdict is scheduling.Verdict.infeasible
+    assert any(isinstance(r, scheduling.PastWindow) for r in result.reasons)
+
+
+async def test_preview_snapshot_future_dated_window_clips_now_min_and_stays_feasible(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """A future-dated tournament (``now`` **before** the earliest window) clips
+    ``now_min`` to 0 and previews **feasible**, exactly as before this fix — the
+    happy path is untouched. The day still schedules from its first window, so no
+    past-window guard fires and every synthetic fixture is placed."""
+    owner = await make_user(db_session, "prev-future")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=4,
+        pools=[_one_pool(["t1", "t2"])],
+        length_games=1,
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    # Two weeks before the earliest window opens: the frame hasn't started yet.
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    preview = build_preview_snapshot(loaded, now=now)
+
+    # Clipped to 0 (a raw offset would be negative), so the day is free to schedule
+    # from its first window — no regression to the happy path.
+    assert preview.snapshot.now_min == 0
+
+    result = scheduling.solve(preview.snapshot, time_cap_s=5.0)
+    assert result.verdict in (scheduling.Verdict.optimal, scheduling.Verdict.feasible)
+    assert len(result.placements) == 6  # C(4, 2), all placed
+    assert not any(isinstance(r, scheduling.PastWindow) for r in result.reasons)
+
+
 async def test_preview_snapshot_base_is_none_without_any_pool_window(
     db_session: AsyncSession, default_league: League
 ) -> None:
@@ -405,7 +469,11 @@ async def test_preview_snapshot_is_solver_ready(
     )
     loaded = await _load(db_session, tournament.id)
 
-    preview = build_preview_snapshot(loaded)
+    # ``now`` before the 2026-06-13 window opens, so ``now_min`` clips to 0 and the
+    # day is judged as still-upcoming (not a past-dated infeasibility) — pinned so
+    # the feasibility assertion doesn't rot as real time passes the fixture date.
+    now = datetime(2026, 6, 13, 6, tzinfo=UTC)
+    preview = build_preview_snapshot(loaded, now=now)
     result = scheduling.solve(preview.snapshot, time_cap_s=5.0)
 
     # The synthetic snapshot is coherent (no IncoherentSnapshot) and feasible:
