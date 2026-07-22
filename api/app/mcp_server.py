@@ -86,7 +86,15 @@ from app.schedule_preview_solve import (
     request_schedule_preview as request_schedule_preview_core,
 )
 from app.schedule_preview_solve import wait_for_preview
+from app.schedule_solve_queries import (
+    LIST_DEFAULT_PAGE_SIZE,
+    LIST_MAX_PAGE_SIZE,
+)
+from app.schedule_solve_queries import (
+    list_schedule_solves as list_schedule_solves_core,
+)
 from app.schedule_solves import latest_solve
+from app.schemas.admin import AdminScheduleSolveRead
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.schemas.player import PlayerMatchListResponse, PlayerRead
 from app.schemas.schedule_preview import (
@@ -198,6 +206,23 @@ TOURNAMENT_VIEW_PERMISSION = "tournament.view"
 # nothing its user lacks over HTTP — the adapter enforces the SAME auth as HTTP.
 TOURNAMENT_CREATE_PERMISSION = "tournament.create"
 
+# The ADMIN permission the solve-ledger read gates on — the same seeded RBAC name the
+# HTTP router's ``require_permission(...)`` dependency enforces
+# (``app.admin_schedule_solves.SCHEDULING_VIEW_PERMISSION``, ``scripts/seed_rbac.py``).
+# Held as a literal rather than imported from the router so the MCP adapter stays
+# router-free; ``list_schedule_solves`` asks it through the one shared
+# ``user_has_permission`` (``app.rbac``), so the operator-only ledger is gated on the
+# SAME grant over MCP as over HTTP — a mounted tool grants an agent nothing its user
+# lacks.
+SCHEDULING_VIEW_PERMISSION = "scheduling.view"
+
+# The MCP ``list_schedule_solves`` argument bounds, mirroring the HTTP query-param caps
+# (``schedule_solve_queries``: default 25 to a page, capped at 100) so the two surfaces
+# can't drift on what a valid page/size is. An out-of-range value is a schema-level
+# validation error at the transport, not a tool-body ``ToolError``.
+ScheduleSolvePage = Annotated[int, Field(ge=1)]
+ScheduleSolvePageSize = Annotated[int, Field(ge=1, le=LIST_MAX_PAGE_SIZE)]
+
 
 @asynccontextmanager
 async def mcp_session() -> AsyncIterator[AsyncSession]:
@@ -301,6 +326,22 @@ async def _require_tournament_create(db: AsyncSession, user_id: uuid.UUID) -> No
     (403) keeps ahead of the HTTP handler."""
     if not await user_has_permission(db, user_id, TOURNAMENT_CREATE_PERMISSION):
         raise ToolError("You do not have permission to create tournaments.")
+
+
+async def _require_schedule_solve_admin(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """The admin solve-ledger gate: refuse unless the caller holds ``scheduling.view``.
+
+    The transport-neutral twin of the HTTP admin router's
+    ``require_permission("scheduling.view")`` dependency, asked through the one shared
+    ``user_has_permission`` — so the MCP and HTTP surfaces gate the operator-only ledger
+    on the same grant, and a mounted tool grants an agent nothing its user lacks over
+    HTTP (ADR: the MCP adapter must enforce the SAME auth as HTTP). This is the
+    security crux of the read: an unauthorized caller is refused HERE, before any
+    row is loaded, so a ``ToolError`` is all it ever sees — never the ledger.
+    Checked first, the order the HTTP route keeps (the ``require_permission`` (403)
+    dependency runs before the handler)."""
+    if not await user_has_permission(db, user_id, SCHEDULING_VIEW_PERMISSION):
+        raise ToolError("You don't have permission to view the schedule-solve ledger.")
 
 
 async def _load_visible_tournament(
@@ -499,6 +540,47 @@ async def enter_game_score(
         except _SCORE_WRITE_ERRORS as exc:
             raise _map_score_write_tool_error(exc) from exc
         return await _serialize_written_match(db, reloaded, user_id)
+
+
+@mcp.tool
+async def list_schedule_solves(
+    tournament_id: uuid.UUID | None = None,
+    page: ScheduleSolvePage = 1,
+    page_size: ScheduleSolvePageSize = LIST_DEFAULT_PAGE_SIZE,
+) -> list[AdminScheduleSolveRead]:
+    """Read the Administration area's cross-tournament SOLVE LEDGER as the
+    authenticated API-token caller — one page, newest request first.
+
+    Mirrors the admin ``GET /v1/admin/schedule-solves``: it composes the exact same
+    shared reader the HTTP route composes (``schedule_solve_queries``), so the two
+    surfaces can never drift on what a ledger row is. Each row is one run of the
+    placement solver exactly as ``schedule_solves`` recorded it (ADR "the schedule is
+    solved; the call is pinned"), plus the operator-only facts the tournament-facing
+    read omits: the drift guard's ``input_fingerprint``, the coalescer's
+    ``rerun_requested``, and the owning tournament's id and name. ``tournament_id``
+    narrows the ledger to one tournament's runs; ``page`` / ``page_size`` paginate (25
+    to a page by default, capped at 100). Returns the page as a list of
+    ``AdminScheduleSolveRead`` — an empty ledger (or a page past the end) is ``[]``.
+
+    This is an OPERATOR read, gated on the same ``scheduling.view`` permission the HTTP
+    admin route requires — not tournament ownership: it spans every tournament's runs.
+    An agent whose user lacks that grant is refused before any row is read.
+
+    Raises a ``ToolError`` when you lack ``scheduling.view``.
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        # Permission first, through the same shared gate the HTTP admin router's
+        # ``require_permission("scheduling.view")`` dependency asks — before any ledger
+        # row is read, so an unauthorized caller only ever sees a ``ToolError`` (the
+        # order the HTTP route keeps: the 403 dependency runs before the handler).
+        await _require_schedule_solve_admin(db, user_id)
+        return await list_schedule_solves_core(
+            db,
+            tournament_id=tournament_id,
+            page=page,
+            page_size=page_size,
+        )
 
 
 @mcp.tool

@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue as queue_module
+from app.admin_schedule_solves import SCHEDULING_VIEW_PERMISSION
 from app.api_token_auth import API_TOKEN_CONTEXT
 from app.main import app as fastapi_app
 from app.main import mcp_app
@@ -1204,6 +1205,121 @@ async def test_list_my_tournaments_without_view_permission_raises_tool_error(
     async with _mcp_client(raw) as client, client:
         with pytest.raises(ToolError, match="permission"):
             await client.call_tool("list_my_tournaments", {})
+
+
+# ----- list_schedule_solves tool (admin ledger read) -----------------------
+
+
+async def _add_ledger_solve(
+    db_session: AsyncSession,
+    tournament_id: uuid.UUID,
+    *,
+    requested_at: datetime,
+    input_fingerprint: str | None = None,
+) -> ScheduleSolve:
+    """Insert one committed ledger row for ``tournament_id`` directly, so a read
+    test can pin the ordering with explicit ``requested_at`` values."""
+    row = ScheduleSolve(
+        tournament_id=tournament_id,
+        trigger=ScheduleSolveTrigger.manual,
+        status=ScheduleSolveStatus.succeeded,
+        verdict=SolverVerdict.optimal,
+        requested_at=requested_at,
+        input_fingerprint=input_fingerprint,
+    )
+    db_session.add(row)
+    await db_session.commit()
+    await db_session.refresh(row)
+    return row
+
+
+async def test_list_schedule_solves_returns_ledger_for_admin(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller holding ``scheduling.view`` gets the cross-tournament ledger,
+    newest first, each row joined to its tournament name — the same rows the HTTP
+    admin ``GET /v1/admin/schedule-solves`` serves, composed from the same reader."""
+    me = await start_session(api_client, db_session)
+    await grant_permissions(db_session, me, [SCHEDULING_VIEW_PERMISSION])
+    raw = await _mint(db_session, me)
+    spring = await _seed_owned_tournament(
+        db_session, me, default_league, "Spring Open", TournamentStatus.published
+    )
+    autumn = await _seed_owned_tournament(
+        db_session, me, default_league, "Autumn Cup", TournamentStatus.published
+    )
+    older = await _add_ledger_solve(
+        db_session, spring.id, requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC)
+    )
+    newer = await _add_ledger_solve(
+        db_session, autumn.id, requested_at=datetime(2030, 1, 1, 10, 0, tzinfo=UTC)
+    )
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp("list_schedule_solves", {})
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    rows = result.structuredContent["result"]
+    assert [r["id"] for r in rows] == [str(newer.id), str(older.id)]
+    by_id = {r["id"]: r for r in rows}
+    assert by_id[str(newer.id)]["tournament_name"] == "Autumn Cup"
+    assert by_id[str(older.id)]["tournament_name"] == "Spring Open"
+
+    # The tournament_id filter narrows to one tournament's runs.
+    async with _mcp_client(raw) as client, client:
+        filtered = await client.call_tool_mcp(
+            "list_schedule_solves", {"tournament_id": str(spring.id)}
+        )
+    assert filtered.isError is False
+    assert filtered.structuredContent is not None
+    filtered_rows = filtered.structuredContent["result"]
+    assert [r["id"] for r in filtered_rows] == [str(older.id)]
+
+
+async def test_list_schedule_solves_without_permission_is_tool_error_and_leaks_no_data(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The security crux: a caller who does NOT hold ``scheduling.view`` is refused
+    with a ``ToolError`` before any row is read, and the operator-only ledger never
+    leaks — neither a row id nor its ``input_fingerprint`` appears in the error, and
+    no structured data is returned. This is the same gate the HTTP admin route's
+    ``require_permission("scheduling.view")`` dependency enforces (a 403 there)."""
+    # A real, committed ledger row that WOULD surface if the gate leaked.
+    owner = await make_user(db_session, "sched-ledger-owner")
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Ledger Open", TournamentStatus.published
+    )
+    solve = await _add_ledger_solve(
+        db_session,
+        tournament.id,
+        requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
+        input_fingerprint="LEAKY-FINGERPRINT-9f3c",
+    )
+
+    # A caller holding no scheduling permission at all.
+    caller = await make_user(db_session, "sched-ledger-noperm")
+    raw = await _mint(db_session, caller)
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp("list_schedule_solves", {})
+
+    # Refused, with NO structured payload…
+    assert result.isError is True
+    assert result.structuredContent is None
+    # …the error names the permission, and no ledger data leaked through the text.
+    blob = " ".join(getattr(block, "text", "") for block in result.content)
+    assert "permission" in blob.lower()
+    assert str(solve.id) not in blob
+    assert "LEAKY-FINGERPRINT-9f3c" not in blob
+
+    # And the raising form is a ToolError too (the plain call_tool path).
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="permission"):
+            await client.call_tool("list_schedule_solves", {})
 
 
 # ----- get_schedule tool ---------------------------------------------------
