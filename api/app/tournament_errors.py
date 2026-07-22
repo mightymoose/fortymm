@@ -12,6 +12,176 @@ This module imports nothing but the standard library, so it stays a cycle-free
 leaf both the services and their adapters can import.
 """
 
+from enum import StrEnum
+
+
+class EntryRefusal(StrEnum):
+    """Why an entry into a tournament event was refused (ADR-0968).
+
+    A closed set, not a loose ``str``: a code the client cannot switch on is a code
+    the server should not be able to invent (and every member here is a case the
+    client is expected to have copy for). ``StrEnum``, so a member *is* its wire
+    value — it serialises straight into the response body with no mapping step to
+    drift.
+
+    It lives here, in the transport-neutral domain-error leaf, rather than beside the
+    HTTP ``entry_refused`` factory, precisely so the FastAPI-free ``enter_event`` verb
+    can name the refusal it hit (on :class:`EntryRefusedError`) without importing a
+    module that imports FastAPI. ``app.tournament_entry_refusals`` re-exports it for
+    the existing HTTP call sites and its ``entry_refused`` 409 factory.
+    """
+
+    already_entered = "already_entered"
+    """The player already holds an *active* entry in this event. Withdrawing frees
+    them to enter again, so this is transient, not permanent."""
+
+    registration_closed = "registration_closed"
+    """The tournament's registration window is shut — today, because its status is
+    ``draft``, ``live`` or ``archived`` (its status *is* its window, ADR-0017)."""
+
+    event_full = "event_full"
+    """The event holds ``max_players`` *active* entries already. Transient, like
+    ``already_entered``: somebody withdrawing frees the slot (withdrawn entries are
+    not entrants, ADR-0016), so the caller may be told something different a minute
+    from now — which is exactly why it is a 409 and not a 403.
+
+    Unreachable for an **uncapped** event (``max_players`` is NULL, ADR-0935): with no
+    limit there is nothing for the field to reach, so no number of entrants can produce
+    this refusal."""
+
+    rating_ineligible = "rating_ineligible"
+    """The player's rating on the tournament's ladder fails one of the event's
+    eligibility rules (ADR-0783) — the "Under 1500" event, entered by a 1650 player.
+
+    A 409 like the others, and for the same reason: the request is fine (it has no
+    body at all), it is the *state of the world* that forbids the entry — and this
+    state moves too. A rating is a fact about a player *today*: the same request wins
+    or loses depending on how their last rated match went, so "not now" (409) is the
+    truth, where 403 would claim a permission they have never lacked.
+
+    Note what does **not** land here: a player with **no rating at all** passes every
+    rule and is never refused with this code (ADR-0783 §3). Unrated is not "fails the
+    rule"; it is "there is no fact to judge", and the beginners' event is exactly the
+    one a brand-new player needs to get into."""
+
+
+class EntryRefusedError(Exception):
+    """Raised by the ``enter_event`` verb for one of the four machine-readable entry
+    refusals (ADR-0968): ``already_entered``, ``registration_closed``, ``event_full``,
+    ``rating_ineligible``.
+
+    Carries the :class:`EntryRefusal` code (the contract a client switches on) and a
+    fallback message (the prose a client that does not know the code, or a human,
+    reads).
+    The HTTP adapter rebuilds the exact 409 body by handing both straight to
+    ``app.tournament_entry_refusals.entry_refused`` — so the coded ``{"detail": {"code":
+    ..., "message": ...}}`` shape is byte-for-byte what the route sent inline; the MCP
+    adapter turns it into ``ToolError`` prose naming which refusal fired. It is always a
+    409 (every one of the four is a state conflict, not a permission or a not-found), so
+    the code alone carries the *why*. Never an ``HTTPException``."""
+
+    def __init__(self, refusal: EntryRefusal, message: str) -> None:
+        super().__init__(message)
+        self.refusal = refusal
+
+
+class NotAllowedToEnterError(Exception):
+    """Raised by the ``enter_event`` verb on the **self-registration** arm when the
+    caller does not hold the ``tournament.enter`` permission (ADR-0784).
+
+    This is the one authorization the entry verb judges itself, and only on the self
+    path: a player entering *themselves* is not the tournament's owner, so it cannot go
+    through the owner gate — it is a data-authz permission, asked (as the HTTP route
+    asked it inline) once the fork has decided this is a self-registration. A director
+    entering somebody else is gated by ownership instead
+    (:class:`NotTournamentOwnerError`)
+    and is never refused for lacking a permission about entering themselves. The HTTP
+    adapter maps this to the existing 403 ``"Forbidden."``; the MCP tool to
+    ``ToolError``
+    prose. Never an ``HTTPException``."""
+
+
+class PlayerNotFoundError(Exception):
+    """Raised by the ``enter_event`` verb on the **director** arm when the named
+    ``user_id`` resolves to no enterable player — an absent id, or a tombstoned
+    (merged-away) user, which are excluded exactly as ``/v1/players/search`` excludes
+    them (a ghost can neither sign in, be notified, nor play, ADR-0784).
+
+    A not-found, not a 422: the id is well-formed, it simply names nobody enterable. It
+    is judged only *after* the ownership gate, so a stranger poking at the endpoint
+    learns
+    nothing about which user ids exist. The HTTP adapter maps this to the existing 404
+    ``"Player not found."``; the MCP tool to ``ToolError`` prose. Never an
+    ``HTTPException``."""
+
+
+class NonSinglesEntryError(Exception):
+    """Raised by the ``enter_event`` verb when the addressed event is **not a singles
+    event** (ADR-0016). Not a policy — a modelling limit: an entry is one row per
+    player, with nowhere to record a partner or a team, so a doubles/teams event cannot
+    be entered directly through this verb (in any status, which is why it outranks the
+    registration 409 — it is the fact that will not change).
+
+    Carries the event's ``format`` so the HTTP adapter can rebuild the existing 400
+    ``"Only singles events can be entered directly, not {format}."``; the MCP tool names
+    it in ``ToolError`` prose. Never an ``HTTPException``."""
+
+    def __init__(self, event_format: str) -> None:
+        super().__init__(
+            f"Only singles events can be entered directly, not {event_format}."
+        )
+        self.event_format = event_format
+
+
+class EntryNotFoundError(Exception):
+    """Raised by the ``withdraw_from_event`` verb when the ``entry_id`` resolves to no
+    row **under the named event** — a well-formed triple that names no addressable
+    entry (an entry that exists but hangs off a *different* event included, so a
+    cross-event withdrawal is a miss, not a soft-delete). Judged after the tournament
+    and event 404s, so a stranger's refusal never leaks whether the entry exists before
+    the URL's own path is confirmed. The HTTP adapter maps this to the existing 404
+    ``"Entry not found."``. Never an ``HTTPException`` — the caller adapts it to its
+    transport."""
+
+
+class NotAllowedToWithdrawError(Exception):
+    """Raised by the ``withdraw_from_event`` verb when the caller is **neither the
+    entry's own player nor the tournament's owner** (ADR-0784). Withdrawal mirrors
+    entry: the player themselves (with ``tournament.enter``) may take back their own
+    entry, and the owner may withdraw any entry in their tournament — anybody else is
+    refused.
+
+    This is the director-arm mirror of :class:`NotAllowedToEnterError`: where entering
+    somebody else is owner-gated, withdrawing somebody else's entry is too, and a
+    non-owner reaching for an entry that is not theirs is refused. Judged **after** the
+    tournament/event/entry 404s (the row must be loaded before the fork can be read off
+    it) and **before** the registration-window 409, because "not yours" is the fact
+    that will not change where "not now" invites a pointless retry. The HTTP adapter
+    maps this to the existing 403 ``"You can only withdraw your own entry."``; the MCP
+    tool to ``ToolError`` prose. Never an ``HTTPException``."""
+
+
+class WithdrawalRegistrationClosedError(Exception):
+    """Raised by the ``withdraw_from_event`` verb when an **active** entry would be
+    withdrawn while the tournament's registration window is shut (ADR-0017): a
+    ``draft`` (registration not opened), ``live`` (the field is sealed and the draw is
+    cut from it) or ``archived`` (it is over) tournament.
+
+    Deliberately **separate** from the entry endpoint's coded ``EntryRefusedError``
+    (ADR-0968): the withdraw route's refusal is still bare prose with no
+    machine-readable ``code`` (ADR-0968 scopes the coded refusals to the *entry*
+    endpoint), so this carries only the exact, domain-authored sentence
+    (``tournament_registration.registration_refusal_detail`` — the same words the enter
+    leg uses, only un-coded) which the HTTP adapter rebuilds verbatim into the existing
+    409 with ``str(exc)``. It is a 409, not a 403 (ADR-0017): the caller is permitted
+    and the entry is theirs to take back — it is the tournament that is in the wrong
+    state, and the same request becomes legal the moment it is published again. An entry
+    that is **already withdrawn** never reaches this — it has nothing left to lock, so
+    it is a 204 in every status. Never an ``HTTPException``."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
 
 class TournamentNotFoundError(Exception):
     """Raised by the edit verb when the addressed tournament id does not resolve

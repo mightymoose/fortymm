@@ -97,6 +97,7 @@ from app.schemas.tournament import (
     ScheduleSolveRead,
     TournamentCreate,
     TournamentDetailRead,
+    TournamentEntrantRead,
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
@@ -108,22 +109,31 @@ from app.services.match_service import MatchService
 from app.tournament_draw_service import cut_event_draw as cut_event_draw_core
 from app.tournament_draw_service import uncut_event_draw as uncut_event_draw_core
 from app.tournament_edit import edit_tournament as edit_tournament_core
+from app.tournament_entries import enter_event as enter_event_core
+from app.tournament_entries import withdraw_from_event as withdraw_from_event_core
 from app.tournament_errors import (
     DrawTypeFrozenError,
     DrawUnderWayError,
+    EntryNotFoundError,
+    EntryRefusedError,
     EventNotFoundError,
     IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
     NoDrawnEventsError,
+    NonSinglesEntryError,
+    NotAllowedToEnterError,
+    NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
     TournamentNotReadyToGoLiveError,
+    WithdrawalRegistrationClosedError,
 )
 from app.tournament_events import create_event as create_event_core
 from app.tournament_events import delete_event as delete_event_core
@@ -1106,6 +1116,207 @@ async def delete_event(
         except EventNotFoundError as exc:
             raise ToolError(f"No event found with id {event_id}.") from exc
         return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
+
+
+# ----- enter_event tool ----------------------------------------------------
+
+
+def _map_entry_refused_tool_error(exc: EntryRefusedError) -> ToolError:
+    """Adapt a coded entry refusal (ADR-0968) to a ``ToolError`` that NAMES which of the
+    four refusals fired, then hands the agent the domain-authored fallback sentence.
+
+    The HTTP surface answers these with a machine-readable ``code`` a client switches
+    on;
+    an agent reads prose, so the code rides in the prose (``[event_full]`` …) and the
+    verb's own message — a full event, a shut window, a rating cap, an existing entry —
+    follows, so the agent is told both *which* rule refused and *why* in its own
+    words."""
+    return ToolError(f"Entry refused [{exc.refusal.value}]: {exc}")
+
+
+@mcp.tool
+async def enter_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
+) -> TournamentEntrantRead:
+    """Enter a player in a singles event as the authenticated API-token caller —
+    yourself,
+    or (as the tournament's owner) somebody else — and return the created entrant.
+
+    Mirrors ``POST /v1/tournaments/{tournament_id}/events/{event_id}/entries``: it
+    reuses
+    the shared ``enter_event`` verb (the dual-actor fork, the self-path permission gate,
+    the ``FOR UPDATE`` capacity lock, the ordered refusals and the INSERT) so the MCP
+    and
+    HTTP surfaces can never drift.
+
+    ``user_id`` chooses the actor (ADR-0784): **omit it** (or pass your OWN id) to enter
+    *yourself* — self-registration, gated on the ``tournament.enter`` permission,
+    recording
+    no adder. Pass a **different** ``user_id`` to enter that player as the **director**
+    —
+    which only the tournament's OWNER may do, and which records you as the adder. A
+    director's entry is judged by exactly the same rules as a player's — the same
+    eligibility evaluator, the same capacity lock, the same four refusal codes — there
+    is
+    no ``force``, so ownership is never an eligibility bypass.
+
+    Registration is open only while the tournament is ``published`` (its status *is* its
+    window, ADR-0017), for the director too. An event's eligibility rules are judged
+    against the entrant's rating on the tournament's ladder (a player with NO rating
+    passes every rule, ADR-0783 §3). Doubles/teams events cannot be entered directly
+    (one
+    row per player, nowhere to seat a partner). Returns the created
+    ``TournamentEntrantRead``
+    — the ENTRANT (the player, on a director entry, not you), carrying their rating on
+    the
+    tournament's ladder (``null`` for an unrated player).
+
+    Raises a ``ToolError`` when you lack ``tournament.enter`` on a self-registration,
+    when
+    you name another player's id but do not own the tournament, when no tournament or
+    event
+    with those ids exists, when a named ``user_id`` matches no live player, when the
+    event
+    is not singles, and — naming which refusal fired — when registration is closed, the
+    player fails the event's rating rules, the event is full, or the player is already
+    entered.
+    """
+    caller_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, caller_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            return await enter_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                actor=actor,
+                user_id=user_id,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except EventNotFoundError as exc:
+            raise ToolError(f"No event found with id {event_id}.") from exc
+        except NotAllowedToEnterError as exc:
+            # The self-registration permission gate (``tournament.enter``) — asked only
+            # on
+            # the self path, the same grant the HTTP route requires there.
+            raise ToolError(
+                "You do not have permission to enter tournament events."
+            ) from exc
+        except NotTournamentOwnerError as exc:
+            # The director path: naming another player's id is owner-gated.
+            raise ToolError(
+                "You can only enter other players into tournaments you created."
+            ) from exc
+        except PlayerNotFoundError as exc:
+            raise ToolError(f"No live player found with id {user_id}.") from exc
+        except NonSinglesEntryError as exc:
+            # Carries its own sentence naming the event's (non-singles) format.
+            raise ToolError(str(exc)) from exc
+        except EntryRefusedError as exc:
+            raise _map_entry_refused_tool_error(exc) from exc
+
+
+class EntryWithdrawalConfirmation(BaseModel):
+    """The result of withdrawing an entry — a small, agent-shaped confirmation rather
+    than the HTTP route's bodiless ``204``.
+
+    An MCP tool should answer with a meaningful value, so this names *what* was
+    withdrawn (the ``entry_id`` that is now ``withdrawn``) and asserts the outcome. The
+    withdrawal is a SOFT delete (ADR-0784): the row survives with its status flipped, so
+    a later read still finds the entry — as ``withdrawn``, not gone — and, because the
+    uniqueness guard is a *partial* index over active entries, the player is free to
+    enter the same event again. Withdrawing an already-withdrawn entry is an idempotent
+    success too, confirming the same terminal state.
+
+    This schema is **MCP-only** and is attached to no FastAPI route, so it does not
+    reach ``openapi.json`` (a mounted MCP sub-app does not contribute to the parent
+    schema — see the tournament-verbs ADR), mirroring
+    ``TournamentDeletionConfirmation`` / ``EventDeletionConfirmation``.
+    """
+
+    tournament_id: uuid.UUID
+    event_id: uuid.UUID
+    entry_id: uuid.UUID
+
+
+@mcp.tool
+async def withdraw_from_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    entry_id: uuid.UUID,
+) -> EntryWithdrawalConfirmation:
+    """Withdraw an entry from a singles event as the authenticated API-token caller —
+    your own, or (as the tournament's owner) any entry in it. Returns a confirmation
+    carrying the withdrawn entry's id.
+
+    Mirrors ``DELETE
+    /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`` (which
+    answers a bodiless ``204``): it reuses the shared ``withdraw_from_event`` verb (the
+    ``FOR UPDATE`` tournament row lock, the tournament/event/entry loads, the
+    owner-or-self fork, the registration-window gate on the state change, and the seated
+    re-solve trigger) so the MCP and HTTP surfaces can never drift.
+
+    The withdrawal is a SOFT delete (ADR-0784): the entry's status flips to
+    ``withdrawn`` and the row survives, so the event keeps its withdrawal history — and,
+    because the uniqueness guard is a *partial* index over active entries, the player is
+    free to enter the same event again afterwards.
+
+    **Who may withdraw** mirrors who may enter: the entry's own player (with the
+    ``tournament.enter`` permission) or the tournament's OWNER, for any entry in it —
+    anybody else is refused. Withdrawal, like entry, is open only while the tournament
+    is ``published`` (its status *is* its registration window, ADR-0017), for the owner
+    too: withdrawing an ACTIVE entry from a ``draft``, ``live`` or ``archived``
+    tournament is refused. But withdrawing an entry that is ALREADY withdrawn is an
+    idempotent success in every status — a no-op, not an error.
+
+    Raises a ``ToolError`` when no tournament or event with those ids exists, when no
+    entry with that id exists under the event, when the entry is neither yours nor in a
+    tournament you own, when you lack ``tournament.enter`` withdrawing your own entry,
+    and when an active entry cannot be withdrawn because registration is closed.
+    """
+    caller_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, caller_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            await withdraw_from_event_core(
+                db,
+                tournament_id=tournament_id,
+                event_id=event_id,
+                entry_id=entry_id,
+                actor=actor,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except EventNotFoundError as exc:
+            raise ToolError(f"No event found with id {event_id}.") from exc
+        except EntryNotFoundError as exc:
+            raise ToolError(f"No entry found with id {entry_id}.") from exc
+        except NotAllowedToEnterError as exc:
+            # The self path lacking ``tournament.enter`` — the same grant the enter tool
+            # requires on self-registration.
+            raise ToolError(
+                "You do not have permission to withdraw from tournament events."
+            ) from exc
+        except NotAllowedToWithdrawError as exc:
+            # Neither the entry's own player nor the tournament's owner.
+            raise ToolError(
+                "You can only withdraw your own entry, or any entry from a "
+                "tournament you created."
+            ) from exc
+        except WithdrawalRegistrationClosedError as exc:
+            # An active entry, outside the registration window — the domain-authored
+            # sentence names which closed status refused it.
+            raise ToolError(str(exc)) from exc
+        return EntryWithdrawalConfirmation(
+            tournament_id=tournament_id, event_id=event_id, entry_id=entry_id
+        )
 
 
 # The domain-exception family the two draw-write verbs raise for a refusal that is

@@ -55,7 +55,7 @@ from app.models import (
 from app.models.tournament import DrawType, EventFormat
 from app.token_hashing import hash_token
 from app.tournament_draws import cut_draw
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
     grant_permissions,
@@ -3007,3 +3007,319 @@ async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(
         )
     ).scalar_one()
     assert persisted.name == "Existing Singles"
+
+
+# ----- enter_event tool ----------------------------------------------------
+
+
+async def _seed_published_singles_event(
+    db: AsyncSession,
+    owner: User,
+    league: League,
+    *,
+    max_players: int | None = None,
+) -> tuple[Tournament, TournamentEvent]:
+    """A ``published`` tournament (registration open, ADR-0017) owned by ``owner`` with
+    one singles event — the target the entry tool needs. Written directly so the tool is
+    tested against a known state, not through the create routes."""
+    tournament = await _seed_owned_tournament(
+        db, owner, league, "Entry Cup", TournamentStatus.published
+    )
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_type=DrawType.round_robin,
+        max_players=max_players,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=[],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return tournament, event
+
+
+async def test_enter_event_self_registration_round_trip(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed caller holding ``tournament.enter`` enters THEMSELVES via the
+    tool
+    (no ``user_id``): the returned entrant is the caller, the row is committed, and it
+    records no adder (self-registration, ADR-0784)."""
+    owner = await make_user(db_session, "mcp-enter-owner")
+    me = await make_user(db_session, "mcp-enter-self")
+    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    raw = await _mint(db_session, me)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    # Read the ids up front: ``expire_all`` below expires every ORM object, and touching
+    # ``event.id`` after it to build a query would lazy-load in sync code
+    # (MissingGreenlet).
+    tournament_id, event_id, me_id, me_username = (
+        event.tournament_id,
+        event.id,
+        me.id,
+        me.username,
+    )
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "enter_event",
+            {"tournament_id": str(tournament_id), "event_id": str(event_id)},
+        )
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["user_id"] == str(me_id)
+    assert result.structuredContent["username"] == me_username
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.event_id == event_id)
+        )
+    ).scalar_one()
+    assert row.user_id == me_id
+    assert row.added_by_user_id is None
+
+
+async def test_enter_event_owner_enters_another_player_via_user_id(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The owner names another player's id: the tool enters that player (owner-gated, no
+    ``tournament.enter`` grant needed) and the row records the owner as the adder."""
+    owner = await make_user(db_session, "mcp-enter-director")
+    player = await make_user(db_session, "mcp-enter-added-player")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    tournament_id, event_id, owner_id, player_id = (
+        event.tournament_id,
+        event.id,
+        owner.id,
+        player.id,
+    )
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "enter_event",
+            {
+                "tournament_id": str(tournament_id),
+                "event_id": str(event_id),
+                "user_id": str(player_id),
+            },
+        )
+    assert result.isError is False
+    assert result.structuredContent is not None
+    # The created row describes the PLAYER, not the director who wrote it.
+    assert result.structuredContent["user_id"] == str(player_id)
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.event_id == event_id)
+        )
+    ).scalar_one()
+    assert (row.user_id, row.added_by_user_id) == (player_id, owner_id)
+
+
+async def test_enter_event_non_owner_naming_another_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who names another player's id but does not own the tournament gets a
+    ``ToolError`` (the director arm is owner-gated), and nothing is written."""
+    owner = await make_user(db_session, "mcp-enter-guard-owner")
+    stranger = await make_user(db_session, "mcp-enter-stranger")
+    await grant_permissions(db_session, stranger, [TOURNAMENT_ENTER])
+    other = await make_user(db_session, "mcp-enter-other")
+    stranger_token = await _mint(db_session, stranger)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    tournament_id, event_id, other_id = event.tournament_id, event.id, other.id
+
+    async with _mcp_client(stranger_token) as client, client:
+        with pytest.raises(ToolError, match="tournaments you created"):
+            await client.call_tool(
+                "enter_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "user_id": str(other_id),
+                },
+            )
+
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.event_id == event_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_enter_event_full_event_raises_tool_error_naming_the_refusal(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A refusal (``event_full``) surfaces as a ``ToolError`` whose prose NAMES which of
+    the four refusals fired (ADR-0968)."""
+    owner = await make_user(db_session, "mcp-enter-full-owner")
+    first = await make_user(db_session, "mcp-enter-full-first")
+    me = await make_user(db_session, "mcp-enter-full-me")
+    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    raw = await _mint(db_session, me)
+    _, event = await _seed_published_singles_event(
+        db_session, owner, default_league, max_players=1
+    )
+    tournament_id, event_id, first_id = event.tournament_id, event.id, first.id
+    db_session.add(TournamentEntry(event_id=event_id, user_id=first_id))
+    await db_session.commit()
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="event_full"):
+            await client.call_tool(
+                "enter_event",
+                {"tournament_id": str(tournament_id), "event_id": str(event_id)},
+            )
+
+    # The seeded entrant is untouched; no second row was written.
+    db_session.expire_all()
+    rows = (
+        (
+            await db_session.execute(
+                select(TournamentEntry).where(TournamentEntry.event_id == event_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.user_id for r in rows] == [first_id]
+
+
+# ----- withdraw_from_event tool --------------------------------------------
+
+
+async def _seed_active_entry(
+    db: AsyncSession, event: TournamentEvent, user: User
+) -> uuid.UUID:
+    """An active entry for ``user`` in ``event``, written straight to the database — the
+    withdraw tool's precondition. Returns the entry id."""
+    entry = TournamentEntry(
+        event_id=event.id,
+        user_id=user.id,
+        status=TournamentEntryStatus.entered,
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return entry.id
+
+
+async def test_withdraw_from_event_self_round_trip(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A bearer-authed caller holding ``tournament.enter`` withdraws their OWN entry via
+    the tool: the confirmation names the entry, and the row is soft-deleted (status
+    ``withdrawn``, the row survives)."""
+    owner = await make_user(db_session, "mcp-withdraw-owner")
+    me = await make_user(db_session, "mcp-withdraw-self")
+    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    raw = await _mint(db_session, me)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    entry_id = await _seed_active_entry(db_session, event, me)
+    tournament_id, event_id = event.tournament_id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "withdraw_from_event",
+            {
+                "tournament_id": str(tournament_id),
+                "event_id": str(event_id),
+                "entry_id": str(entry_id),
+            },
+        )
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["entry_id"] == str(entry_id)
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentEntryStatus.withdrawn
+
+
+async def test_withdraw_from_event_owner_withdraws_another_players_entry(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The owner withdraws SOMEBODY ELSE's entry via the tool — owner-gated, no
+    ``tournament.enter`` grant needed. The entry is soft-deleted."""
+    owner = await make_user(db_session, "mcp-withdraw-director")
+    player = await make_user(db_session, "mcp-withdraw-player")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    entry_id = await _seed_active_entry(db_session, event, player)
+    tournament_id, event_id = event.tournament_id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "withdraw_from_event",
+            {
+                "tournament_id": str(tournament_id),
+                "event_id": str(event_id),
+                "entry_id": str(entry_id),
+            },
+        )
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["entry_id"] == str(entry_id)
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentEntryStatus.withdrawn
+
+
+async def test_withdraw_from_event_third_party_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A caller who is neither the entry's own player nor the tournament's owner gets a
+    ``ToolError`` (even holding ``tournament.enter``), and the entry stays active."""
+    owner = await make_user(db_session, "mcp-withdraw-guard-owner")
+    entrant = await make_user(db_session, "mcp-withdraw-entrant")
+    stranger = await make_user(db_session, "mcp-withdraw-stranger")
+    await grant_permissions(db_session, stranger, [TOURNAMENT_ENTER])
+    stranger_token = await _mint(db_session, stranger)
+    _, event = await _seed_published_singles_event(db_session, owner, default_league)
+    entry_id = await _seed_active_entry(db_session, event, entrant)
+    tournament_id, event_id = event.tournament_id, event.id
+
+    async with _mcp_client(stranger_token) as client, client:
+        with pytest.raises(ToolError, match="withdraw your own entry"):
+            await client.call_tool(
+                "withdraw_from_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "entry_id": str(entry_id),
+                },
+            )
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEntry).where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    assert row.status is TournamentEntryStatus.entered
