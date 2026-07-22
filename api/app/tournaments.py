@@ -36,6 +36,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.rbac import require_permission, user_has_permission
 from app.schedule_preview_solve import (
     cancel_preview,
+    ensure_preview_access,
     preview_job_state,
 )
 from app.schedule_preview_solve import (
@@ -2466,7 +2467,7 @@ async def read_schedule_preview(
     # Re-apply the owner + pre-live gate before reading the (tournament-blind)
     # Redis job, so a token cannot be polled by anyone but the tournament's owner.
     try:
-        await _ensure_preview_access(db, tournament_id, current_user)
+        await ensure_preview_access(db, tournament_id, current_user)
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     except TournamentNotPreLiveError as exc:
@@ -2497,30 +2498,10 @@ async def cancel_schedule_preview(
     anyone but the tournament's owner.
     """
     try:
-        await _ensure_preview_access(db, tournament_id, current_user)
+        await ensure_preview_access(db, tournament_id, current_user)
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     except TournamentNotPreLiveError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     cancel_preview(token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-async def _ensure_preview_access(
-    db: AsyncSession, tournament_id: uuid.UUID, actor: User
-) -> None:
-    """Owner + pre-live gate for the token-addressed preview reads (poll/cancel),
-    reusing the enqueue verb's exact ordering (404 → 403 → pre-live). The ephemeral
-    job is not scoped to a tournament in Redis, so the gate is re-applied here
-    against the tournament in the path before the token is touched — a preview is
-    the owner's, so its token is too. Raises the same tournament-write / pre-live
-    domain exceptions the enqueue does, which the caller adapts to HTTP."""
-    tournament = (
-        await db.execute(select(Tournament).where(Tournament.id == tournament_id))
-    ).scalar_one_or_none()
-    if tournament is None:
-        raise TournamentNotFoundError()
-    if tournament.created_by_user_id != actor.id:
-        raise NotTournamentOwnerError()
-    if tournament.status not in (TournamentStatus.draft, TournamentStatus.published):
-        raise TournamentNotPreLiveError(tournament.status.value)

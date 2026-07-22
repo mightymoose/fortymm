@@ -59,7 +59,7 @@ from app import queue as queue_module
 from app import scheduling
 from app.config import get_settings
 from app.models import Tournament, TournamentStatus, User
-from app.schedule_preview import build_preview_snapshot
+from app.schedule_preview import build_preview_snapshot, preview_pool_key
 from app.schedule_solves import _solve_num_workers
 from app.scheduling import (
     InfeasibilityReason,
@@ -197,6 +197,20 @@ async def _load_owned_pre_live_tournament(
             .options(selectinload(Tournament.events))
         )
     ).scalar_one_or_none()
+    return _gate_owned_pre_live(tournament, actor)
+
+
+def _gate_owned_pre_live(tournament: Tournament | None, actor: User) -> Tournament:
+    """The single owner + pre-live gate every preview surface shares — applied to an
+    already-loaded row (or ``None``) so the enqueue verb (which loads with events)
+    and the token-addressed poll/cancel reads (which don't need them) run the *same*
+    check off the one :data:`_PRE_LIVE_STATUSES` set:
+
+    * **404** — a ``None`` row raises :class:`TournamentNotFoundError`, so ownership
+      is judged only once the row exists and a stranger probing ids learns nothing;
+    * **403** — a non-creator raises :class:`NotTournamentOwnerError`;
+    * **pre-live** — a ``live``/``archived`` tournament raises
+      :class:`TournamentNotPreLiveError` (carrying the status)."""
     if tournament is None:
         raise TournamentNotFoundError()
     if tournament.created_by_user_id != actor.id:
@@ -204,6 +218,22 @@ async def _load_owned_pre_live_tournament(
     if tournament.status not in _PRE_LIVE_STATUSES:
         raise TournamentNotPreLiveError(tournament.status.value)
     return tournament
+
+
+async def ensure_preview_access(
+    db: AsyncSession, tournament_id: uuid.UUID, actor: User
+) -> None:
+    """Owner + pre-live gate for the token-addressed preview reads (poll/cancel),
+    running the *same* :func:`_gate_owned_pre_live` check the enqueue verb does. The
+    ephemeral job is not scoped to a tournament in Redis, so the gate is re-applied
+    against the tournament in the path before the token is touched — a preview is the
+    owner's, so its token is too. Loads the row alone (the reads need no events) and
+    raises the same tournament-write / pre-live domain exceptions the enqueue does,
+    which the caller adapts to HTTP (404 → 403 → 409)."""
+    tournament = (
+        await db.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    _gate_owned_pre_live(tournament, actor)
 
 
 def _pool_resolutions(tournament: Tournament) -> dict[str, _PreviewPoolResolution]:
@@ -215,29 +245,12 @@ def _pool_resolutions(tournament: Tournament) -> dict[str, _PreviewPoolResolutio
     resolutions: dict[str, _PreviewPoolResolution] = {}
     for event in tournament.events:
         for pool in event_pools(event):
-            resolutions[f"{event.id}:{pool.id}"] = _PreviewPoolResolution(
+            resolutions[preview_pool_key(event.id, pool.id)] = _PreviewPoolResolution(
                 name=pool.name,
                 window_start=pool.slot.start,
                 window_end=pool.slot.end,
             )
     return resolutions
-
-
-def _base_wall(tournament: Tournament) -> datetime | None:
-    """The wall-clock origin of the snapshot's minute frame — the earliest pool
-    window start across every event, the same anchor
-    :func:`app.schedule_preview.build_preview_snapshot` offsets ``now_min = 0``
-    from. ``None`` when no event has a pool (no window to anchor on), in which case
-    the preview reports a duration in minutes but no wall-clock finish."""
-    starts: list[datetime] = []
-    for event in tournament.events:
-        for pool in event_pools(event):
-            starts.append(
-                datetime.strptime(
-                    f"{pool.slot.date} {pool.slot.start}", "%Y-%m-%d %H:%M"
-                )
-            )
-    return min(starts) if starts else None
 
 
 async def request_schedule_preview(
@@ -271,14 +284,18 @@ async def request_schedule_preview(
     tournament = await _load_owned_pre_live_tournament(db, tournament_id, actor)
 
     preview = build_preview_snapshot(tournament, count_overrides=count_overrides)
+    # event id → display name, built once (the summaries are the tournament's own
+    # events, so a miss would be a builder bug — fall back to the raw id, since a
+    # preview is advisory).
+    event_names = {str(event.id): event.name for event in tournament.events}
     inputs = PreviewJobInputs(
         snapshot=preview.snapshot,
-        base=_base_wall(tournament),
+        base=preview.base,
         pool_resolutions=_pool_resolutions(tournament),
         events=tuple(
             _PreviewEventMeta(
                 event_id=summary.event_id,
-                name=_event_name(tournament, summary.event_id),
+                name=event_names.get(summary.event_id, summary.event_id),
                 field_size=summary.field_size,
             )
             for summary in preview.field_summaries
@@ -315,17 +332,6 @@ async def request_schedule_preview(
             for fixture in preview.snapshot.fixtures
         ],
     )
-
-
-def _event_name(tournament: Tournament, event_id: str) -> str:
-    """The display name of the event with this (string) id — for the honest-notes
-    strip and the per-event breakdown. The event is one of the tournament's own
-    (the summary came from its snapshot), so a miss would be a builder bug; fall
-    back to the raw id rather than raising, since a preview is advisory."""
-    for event in tournament.events:
-        if str(event.id) == event_id:
-            return event.name
-    return event_id
 
 
 def run_schedule_preview(inputs: PreviewJobInputs) -> dict[str, object]:

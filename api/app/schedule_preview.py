@@ -82,6 +82,14 @@ from app.tournament_draws import draw_config, event_pools
 DEFAULT_UNCAPPED_FIELD = 16
 
 
+def preview_pool_key(event_id: uuid.UUID, pool_id: str) -> str:
+    """The one namespaced ``event:pool`` spelling every preview site keys a pool by
+    — the ``SchedulePool`` id, a fixture's ``pool_id`` ref, and the enqueue verb's
+    infeasibility-resolution map all pass through here, so the string contract lives
+    in exactly one place and cannot drift between them."""
+    return f"{event_id}:{pool_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class EventFieldSummary:
     """What one event contributed to the synthetic field — the honest-notes
@@ -101,10 +109,18 @@ class PreviewSnapshot:
     """The output of :func:`build_preview_snapshot`: the frozen
     :class:`~app.scheduling.ScheduleSnapshot` ready to hand to
     :func:`app.scheduling.solve`, plus one :class:`EventFieldSummary` per event
-    it synthesized a field for (in the tournament's own event order)."""
+    it synthesized a field for (in the tournament's own event order).
+
+    ``base`` is the wall-clock origin of the snapshot's minute frame — the earliest
+    pool window start across every event, the anchor ``now_min = 0`` is offset from
+    — or ``None`` when no event has a pool (no window to anchor on), in which case a
+    caller reports a duration in minutes but no wall-clock finish. The builder
+    already computes it to set the frame, so it is handed back rather than
+    re-derived downstream."""
 
     snapshot: ScheduleSnapshot
     field_summaries: tuple[EventFieldSummary, ...]
+    base: datetime | None
 
 
 def _field_size(event: TournamentEvent, override: int | None) -> int:
@@ -219,12 +235,15 @@ def build_preview_snapshot(
     windows: dict[str, tuple[datetime, datetime]] = {}
     for plan in plans:
         for pool in plan.pools:
-            key = f"{plan.event.id}:{pool.id}"
+            key = preview_pool_key(plan.event.id, pool.id)
             windows[key] = _slot_bounds(pool.slot.date, pool.slot.start, pool.slot.end)
-    base = min((start for start, _ in windows.values()), default=datetime.min)
+    # ``base`` is ``None`` when no event has a pool (nothing to anchor on); the
+    # minute frame then falls back to ``datetime.min`` (no window uses it anyway).
+    base = min((start for start, _ in windows.values()), default=None)
+    origin = base if base is not None else datetime.min
 
     def to_min(moment: datetime) -> int:
-        return int((moment - base).total_seconds() // 60)
+        return int((moment - origin).total_seconds() // 60)
 
     # Second pass: convert each planned event into pure snapshot value-objects.
     schedule_pools: list[SchedulePool] = []
@@ -237,7 +256,7 @@ def build_preview_snapshot(
             EventSettings(id=event_id, length_games=plan.settings.length_games)
         )
         for pool in plan.pools:
-            key = f"{plan.event.id}:{pool.id}"
+            key = preview_pool_key(plan.event.id, pool.id)
             start, end = windows[key]
             tables = tuple(
                 TableId(table_id)
@@ -266,7 +285,9 @@ def build_preview_snapshot(
         fixtures=tuple(schedule_fixtures),
         now_min=0,
     )
-    return PreviewSnapshot(snapshot=snapshot, field_summaries=tuple(summaries))
+    return PreviewSnapshot(
+        snapshot=snapshot, field_summaries=tuple(summaries), base=base
+    )
 
 
 def _schedule_fixture(
@@ -297,7 +318,7 @@ def _schedule_fixture(
     assert fixture.entry_b_id is not None
     # One namespaced pool ref, used for both the fixture id and its pool_id so
     # the ``event:pool`` spelling cannot drift between them.
-    pool_ref = f"{event_uuid}:{fixture.pool_id}"
+    pool_ref = preview_pool_key(event_uuid, fixture.pool_id)
     return ScheduleFixture(
         id=FixtureId(f"{pool_ref}:{fixture.round}:{fixture.position}"),
         event_id=event_id,

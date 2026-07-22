@@ -21,6 +21,7 @@ These tests prove the whole preview core end to end:
 """
 
 import uuid
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import fakeredis
@@ -238,6 +239,49 @@ async def test_preview_solve_enqueues_on_the_preview_queue_and_yields_a_result(
     # synthetic count.
     assert any("more than one event" in note for note in result.notes)
     assert any("Assumed 4 entrants" in note for note in result.notes)
+
+
+async def test_preview_solve_finish_anchors_on_the_earliest_window_start(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """The wall-clock finish is anchored on the builder's returned ``base`` — the
+    earliest pool window start across the tournament — so ``estimated_finish`` is
+    exactly ``base + estimated_duration``. Pins the value the enqueue verb now reads
+    off ``PreviewSnapshot.base`` (rather than re-walking the pools), so the anchor
+    can't silently drift from the minute frame the snapshot was built on."""
+    owner = await make_user(db_session, "prev-finish")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    # Two pools: the earliest start (08:30) is the frame origin, not the 09:00 one.
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=4,
+        pools=[
+            _pool(["t1"], start="09:00", end="18:00"),
+            {
+                "id": "p-b",
+                "name": "Pool B",
+                "slot": {"date": "2026-06-13", "start": "08:30", "end": "18:00"},
+                "table_ids": ["t2"],
+            },
+        ],
+    )
+
+    await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+    # The base handed to the job is the earliest window start, not the later pool's.
+    assert inputs.base == datetime(2026, 6, 13, 8, 30)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+    assert result.estimated_duration_min is not None
+    assert result.estimated_finish is not None
+    # Identical to base + duration — the wall-clock finish the old ``_base_wall``
+    # re-derivation produced, now sourced from the builder's own ``base``.
+    assert result.estimated_finish == inputs.base + timedelta(
+        minutes=result.estimated_duration_min
+    )
 
 
 async def test_preview_solve_reports_byes_for_an_odd_field(

@@ -17,6 +17,7 @@ non-persistent solve over a synthetic field"). These tests prove:
 
 import re
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from itertools import combinations
 
@@ -166,6 +167,58 @@ async def test_preview_snapshot_round_robin_synthesizes_full_draw(
     summary = preview.field_summaries[0]
     assert summary.field_size == 6
     assert summary.event_id == scheduling.EventId(str(loaded.events[0].id))
+
+
+async def test_preview_snapshot_base_is_the_earliest_window_start(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """The builder returns the wall-clock ``base`` its minute frame is offset from —
+    the earliest pool window start across every event — so the enqueue verb reads it
+    off the snapshot instead of re-walking the pools. Two pools with different starts
+    pin that it is the *earliest*, and an event's own pool slots (not the event slot)
+    anchor it."""
+    owner = await make_user(db_session, "prev-base")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=4,
+        pools=[
+            {
+                "id": "p-a",
+                "name": "Pool A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+                "table_ids": ["t1"],
+            },
+            {
+                "id": "p-b",
+                "name": "Pool B",
+                "slot": {"date": "2026-06-13", "start": "08:15", "end": "18:00"},
+                "table_ids": ["t2"],
+            },
+        ],
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    assert preview.base == datetime(2026, 6, 13, 8, 15)
+
+
+async def test_preview_snapshot_base_is_none_without_any_pool_window(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """With no event (so no pool window to anchor on) the builder reports ``base``
+    as ``None`` — the signal a caller uses to report a duration in minutes but no
+    wall-clock finish."""
+    owner = await make_user(db_session, "prev-nobase")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    assert preview.base is None
+    assert preview.snapshot.fixtures == ()
 
 
 async def test_preview_snapshot_uncapped_event_uses_default_field(
