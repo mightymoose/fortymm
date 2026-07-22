@@ -129,12 +129,16 @@ testing notes. Ask:
 
 Iterate until the user approves. Then write the work order to
 **`.claude/work-order.md`** (gitignored; override with a path argument if given),
-using the template in [work-order-format.md](./work-order-format.md). Finish by
-telling the user the work order is ready and to run `/do-chores`.
+using the template in [work-order-format.md](./work-order-format.md). Then
+**mirror it into the native task list** — a parent task per slice, a child task per
+chore, all `pending` — per [native-tasks.md](./native-tasks.md), so the breakdown
+shows up in the UI as a task tree rather than only as checkboxes in a file. Finish
+by telling the user the work order is ready and to run `/do-chores`.
 
 ## Completion criterion
 
 The work order is written, every chore passes the four-part gate (including a
 falsifiable `Proves` line), every cross-layer seam has a `[main]` chore, every
 `depends-on` references a real chore ID, the `## Testing notes` section is present,
-and the user has approved the breakdown.
+the native task list mirrors the work order (a parent task per slice, a child task
+per chore), and the user has approved the breakdown.
