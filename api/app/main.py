@@ -20,6 +20,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from app import db, queue
 from app.admin_schedule_solves import router as admin_schedule_solves_router
 from app.api_tokens import router as api_tokens_router
+from app.auth0_link import router as auth0_link_router
 from app.dashboard import router as dashboard_router
 from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
@@ -208,6 +209,7 @@ async def csrf_protect(
 app.include_router(sessions_router)
 app.include_router(rbac_router)
 app.include_router(api_tokens_router)
+app.include_router(auth0_link_router)
 app.include_router(matches_router)
 app.include_router(players_router)
 app.include_router(dashboard_router)

@@ -2217,3 +2217,102 @@ async def test_merge_solo_match_survives_with_sentinel_side(
     # sentinel (untouched by any prune or void).
     assert [len(s.players) for s in sides] == [1, 0]
     assert sides[0].players[0].user_id == verified.id
+
+
+# ----- the unique Auth0 binding (users.auth0_sub) -------------------------
+#
+# ``auth0_sub`` is a plain UNIQUE column, not an FK to ``users.id`` — so the merge
+# moves-or-nulls it rather than re-pointing an FK. The invariant the tests below
+# pin: the merge never leaves the tombstoned ghost holding the unique binding (it
+# would occupy the value so the real human could never re-link) and never clobbers
+# a binding the survivor already holds.
+
+
+async def _auth0_subs(
+    db: AsyncSession, *user_ids: uuid.UUID
+) -> dict[uuid.UUID, str | None]:
+    """Read ``auth0_sub`` straight from the rows (``populate_existing`` because the
+    merge writes with bulk statements the identity map never sees, and the test
+    sessionmaker does not expire on commit)."""
+    return dict(
+        (
+            await db.execute(
+                select(User.id, User.auth0_sub)
+                .where(User.id.in_(user_ids))
+                .execution_options(populate_existing=True)
+            )
+        )
+        .tuples()
+        .all()
+    )
+
+
+async def test_merge_moves_auth0_sub_to_a_survivor_that_lacks_one(
+    db_session: AsyncSession,
+):
+    """The rare linked-ephemeral case. The ephemeral holds a unique ``auth0_sub``
+    and the survivor has none — the binding is the same human's, so it FOLLOWS the
+    merge onto the survivor, and the tombstone is left with ``auth0_sub = NULL``.
+    Nothing may strand the unique value on the tombstoned ghost (which would occupy
+    the ``sub`` so the real human could never re-link it)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|guest-linked-sub"
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    subs = await _auth0_subs(db_session, ephemeral.id, verified.id)
+    assert subs[verified.id] == "auth0|guest-linked-sub", (
+        "the binding is the same human's — it must follow the merge onto the survivor"
+    )
+    assert subs[ephemeral.id] is None, (
+        "the tombstoned ghost must not be left holding the unique auth0_sub"
+    )
+
+
+async def test_merge_keeps_the_survivors_auth0_sub_and_nulls_the_ephemerals(
+    db_session: AsyncSession,
+):
+    """Both parties are linked (contrived — a guest virtually never links, and a
+    ``sub`` is one-to-one so the two values differ). The survivor's link stands
+    untouched and the ephemeral's is dropped, so the tombstone ends with
+    ``auth0_sub = NULL`` and the survivor keeps the binding it already held."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|guest-sub"
+    verified.auth0_sub = "auth0|survivor-sub"
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    subs = await _auth0_subs(db_session, ephemeral.id, verified.id)
+    assert subs[verified.id] == "auth0|survivor-sub", (
+        "the survivor's own binding is not the merge's to overwrite"
+    )
+    assert subs[ephemeral.id] is None, (
+        "the ephemeral's binding is dropped so the tombstone strands nothing"
+    )
+
+
+async def test_merge_is_a_no_op_when_the_ephemeral_has_no_auth0_sub(
+    db_session: AsyncSession,
+):
+    """The common case: a guest never links, so the ephemeral's ``auth0_sub`` is
+    NULL. The block is a clean no-op — the survivor's binding (whether it has one
+    or not) is untouched, and the tombstone has NULL either way."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    verified.auth0_sub = "auth0|survivor-sub"
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    subs = await _auth0_subs(db_session, ephemeral.id, verified.id)
+    assert subs[verified.id] == "auth0|survivor-sub", (
+        "the survivor's link is untouched when the ephemeral never linked"
+    )
+    assert subs[ephemeral.id] is None

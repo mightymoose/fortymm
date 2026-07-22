@@ -100,10 +100,16 @@ export const mockSession = sessionResponse({
       PERM.NOTIFICATIONS_BROADCAST,
       PERM.SCHEDULING_VIEW,
       PERM.API_TOKEN_MANAGE,
+      // MCP_ACCESS so the Settings page's "Agent access" section (Auth0 identity
+      // link) renders under `npm run dev`.
+      PERM.MCP_ACCESS,
     ],
   },
 })
 export const mockHealthy = healthCheck()
+
+// Dev-world Auth0 agent-access link state (see the `/v1/auth0/link` handlers).
+let mockAuth0Linked = true
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -1065,6 +1071,21 @@ export const handlers = [
   http.post('*/v1/api-tokens', async () => {
     await delay(300)
     return HttpResponse.json(apiTokenCreated(), { status: 201 })
+  }),
+  // ----- Auth0 agent-access link (Settings → Agent access) ----------------
+  // Whether the dev user's Auth0 identity is bound. Starts linked so the
+  // "Connected" + Unlink state is demoable under `npm run dev`; the DELETE
+  // flips it, so the Unlink interaction actually drives the section back to
+  // "not connected". (The Connect flow is an OAuth *redirect* to the real API,
+  // which MSW can't stand in for — it only works against a live backend.)
+  http.get('*/v1/auth0/link', async () => {
+    await delay(200)
+    return HttpResponse.json({ linked: mockAuth0Linked })
+  }),
+  http.delete('*/v1/auth0/link', async () => {
+    await delay(200)
+    mockAuth0Linked = false
+    return HttpResponse.json({ linked: mockAuth0Linked })
   }),
   // ----- /v1/players list + per-player profile + per-player matches ------
   // BFF endpoints — each returns exactly what its consumer page needs. The

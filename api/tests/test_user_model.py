@@ -44,3 +44,24 @@ async def test_email_defaults_to_null_and_is_unique(db_session: AsyncSession):
     db_session.add(User(username="erin", email="dup@example.com"))
     with pytest.raises(IntegrityError):
         await db_session.commit()
+
+
+async def test_auth0_sub_defaults_to_null_and_round_trips(db_session: AsyncSession):
+    u = User(username="frank")
+    db_session.add(u)
+    await db_session.commit()
+    await db_session.refresh(u)
+    assert u.auth0_sub is None
+
+    u.auth0_sub = "auth0|abc123"
+    await db_session.commit()
+    await db_session.refresh(u)
+    assert u.auth0_sub == "auth0|abc123"
+
+
+async def test_auth0_sub_is_unique(db_session: AsyncSession):
+    db_session.add(User(username="grace", auth0_sub="auth0|dup"))
+    await db_session.commit()
+    db_session.add(User(username="heidi", auth0_sub="auth0|dup"))
+    with pytest.raises(IntegrityError):
+        await db_session.commit()

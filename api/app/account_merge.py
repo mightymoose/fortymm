@@ -432,6 +432,48 @@ async def merge_user(
         )
     )
 
+    # The unique Auth0 binding (``users.auth0_sub``, ADR "the MCP server is an
+    # OAuth Resource Server trusting Auth0"). Unlike every re-point above this is
+    # a plain UNIQUE column, NOT a foreign key to ``users.id`` — so there is no FK
+    # to re-point, it is *move-or-null*. But the same principle the CLAUDE.md rule
+    # states for FKs applies: don't strand data on the tombstone, don't break the
+    # survivor. The value is a live-looking, one-to-one identity binding; a
+    # tombstoned ghost left holding it would occupy the ``sub`` on the unique index
+    # so the real human could never re-link it, and would surface the ghost as that
+    # identity's owner. So the tombstone must end with ``auth0_sub = NULL``.
+    #
+    # A guest never links (linking requires being signed in), so the ephemeral's
+    # ``auth0_sub`` is virtually always NULL and this whole block is a no-op — the
+    # common case, handled cleanly by the ``is not None`` guard. In the rare case
+    # it is set: if the survivor has none, the binding is the same human's and
+    # follows the merge onto the survivor exactly as ownership does; if the
+    # survivor already holds one, the survivor's link stands and the ephemeral's is
+    # simply dropped. The ephemeral is nulled FIRST (freeing the value from the
+    # unique index) so the survivor UPDATE can adopt it without the two rows
+    # momentarily colliding — the constraint is checked per statement, not deferred.
+    auth0_subs: dict[uuid.UUID, str | None] = dict(
+        (
+            await db.execute(
+                select(User.id, User.auth0_sub).where(
+                    User.id.in_([from_user_id, to_user_id])
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    ephemeral_auth0_sub = auth0_subs.get(from_user_id)
+    if ephemeral_auth0_sub is not None:
+        await db.execute(
+            update(User).where(User.id == from_user_id).values(auth0_sub=None)
+        )
+        if auth0_subs.get(to_user_id) is None:
+            await db.execute(
+                update(User)
+                .where(User.id == to_user_id)
+                .values(auth0_sub=ephemeral_auth0_sub)
+            )
+
     # Tombstone: keep the row (and its session tokens) so the guest's cookie
     # still resolves and the auth layer can report the merge.
     await db.execute(

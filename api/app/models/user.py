@@ -22,6 +22,13 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(
         String(320), unique=True, nullable=True, index=True
     )
+    # Auth0 subject (`sub`) bound to this user by the in-session link flow. One
+    # Auth0 identity maps to at most one fortymm user (unique); NULL until the
+    # user explicitly links. See ADR
+    # ``20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0``.
+    auth0_sub: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
