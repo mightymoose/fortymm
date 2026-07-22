@@ -11,7 +11,10 @@ Covered: status reports ``linked=false`` then ``linked=true`` after a successful
 mocked callback; a callback whose ``sub`` already belongs to another user is
 ``409`` and leaves that user's binding untouched; ``DELETE`` clears it; ``start``
 with Auth0 unconfigured fails cleanly (``404``, not ``500``); and an
-invalid/mismatched ``state`` on the callback is rejected.
+invalid/mismatched ``state`` on the callback is rejected. Also: every route is
+gated on the ``mcp.access`` permission (a signed-in user lacking it is ``403``, a
+holder is admitted), and the Auth0-touching routes are two-tier rate limited
+(the per-session cap trips ``429``).
 """
 
 import json
@@ -29,7 +32,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.auth0_link as auth0_link
 from app.main import app as fastapi_app
-from tests._helpers import make_user, start_session
+from tests._helpers import grant_permissions, make_user, start_session
+
+MCP_ACCESS = "mcp.access"
 
 DOMAIN = "fortymm-test.us.auth0.com"
 CLIENT_ID = "link-client-abc"
@@ -123,6 +128,7 @@ async def test_status_false_then_true_after_link(
 ) -> None:
     private_pem, jwk = rsa_keypair
     user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
 
     before = await api_client.get("/v1/auth0/link")
     assert before.status_code == 200, before.text
@@ -154,6 +160,7 @@ async def test_callback_rejects_sub_already_linked_to_another_user(
 ) -> None:
     private_pem, jwk = rsa_keypair
     me = await start_session(api_client, db_session)
+    await grant_permissions(db_session, me, [MCP_ACCESS])
 
     # Another live user already holds the sub the callback will present.
     sub = "auth0|" + uuid.uuid4().hex
@@ -181,6 +188,7 @@ async def test_delete_clears_binding(
     db_session: AsyncSession,
 ) -> None:
     user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
     user.auth0_sub = "auth0|" + uuid.uuid4().hex
     await db_session.commit()
 
@@ -210,7 +218,8 @@ async def test_start_unconfigured_fails_cleanly(
         "AUTH0_LINK_REDIRECT_URI",
     ):
         monkeypatch.delenv(name, raising=False)
-    await start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
 
     response = await api_client.get("/v1/auth0/link/start")
     assert response.status_code == 404, response.text
@@ -225,6 +234,7 @@ async def test_callback_rejects_mismatched_state(
 ) -> None:
     private_pem, jwk = rsa_keypair
     user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
     _install_auth0_mock(
         monkeypatch,
         id_token=_id_token(private_pem, sub="auth0|" + uuid.uuid4().hex),
@@ -249,7 +259,8 @@ async def test_callback_without_pkce_cookie_rejected(
 ) -> None:
     # A callback that never went through ``start`` carries no PKCE cookie — reject
     # before touching Auth0, so no exchange is attempted.
-    await start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
     response = await api_client.get(
         "/v1/auth0/link/callback?code=auth-code&state=whatever"
     )
@@ -270,3 +281,54 @@ async def test_link_routes_require_a_session(
         assert (
             await anon.get("/v1/auth0/link/callback?code=c&state=s")
         ).status_code == 401
+
+
+async def test_link_routes_require_mcp_access(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    configured_auth0: None,
+) -> None:
+    # A signed-in user who does NOT hold ``mcp.access`` is refused at every link
+    # route with a 403 — binding an Auth0 identity is gated on the same permission
+    # the MCP surface enforces, not merely on "is signed in".
+    await start_session(api_client, db_session)
+
+    assert (await api_client.get("/v1/auth0/link")).status_code == 403
+    assert (await api_client.get("/v1/auth0/link/start")).status_code == 403
+    assert (
+        await api_client.get("/v1/auth0/link/callback?code=c&state=s")
+    ).status_code == 403
+
+
+async def test_link_status_admits_user_with_mcp_access(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    configured_auth0: None,
+) -> None:
+    # Granting ``mcp.access`` flips the 403 above to a normal 200 — the gate is the
+    # permission, and a holder passes it.
+    user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
+
+    response = await api_client.get("/v1/auth0/link")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"linked": False}
+
+
+async def test_start_link_rate_limited(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    configured_auth0: None,
+) -> None:
+    # ``start`` shares a per-session bucket of 10/hr with ``callback``; the 11th hit
+    # in the window 429s (the per-IP ceiling is looser, so the session cap trips
+    # first for a single client).
+    user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, [MCP_ACCESS])
+
+    for i in range(10):
+        response = await api_client.get("/v1/auth0/link/start")
+        assert response.status_code == 302, (i, response.text)
+
+    over = await api_client.get("/v1/auth0/link/start")
+    assert over.status_code == 429, over.text

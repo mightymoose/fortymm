@@ -30,14 +30,15 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
 import jwt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
+from pyrate_limiter import Duration, Rate
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,9 +46,31 @@ from app.auth0_identity import resolve_linked_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.models import User
-from app.sessions import get_current_user
+from app.rate_limiting import RedisRateLimiter
+from app.rbac import require_permission
+from app.sessions import (
+    SESSION_COOKIE_NAME,
+    _client_ip,
+    _hash_cookie_for_key,
+    get_current_user,
+)
 
-router = APIRouter(prefix="/v1")
+# The fortymm permission a signed-in user must hold to bind / read / clear an
+# Auth0 identity — deliberately the *same* grant the MCP transport enforces
+# (``app.mcp_server.MCP_ACCESS_PERMISSION``), so the UI gating and the API gating
+# stay consistent: only a user allowed to reach the MCP surface may bind the
+# Auth0 identity that surface authenticates against (see the 20260722 Auth0
+# Resource-Server ADR). Held as a literal here to avoid importing the heavy
+# FastMCP module just for the constant.
+MCP_ACCESS_PERMISSION = "mcp.access"
+
+# Every link route is session-gated *and* permission-gated: ``require_permission``
+# depends on ``get_current_user`` (so a cookieless caller still 401s) and then
+# refuses a signed-in user who lacks ``mcp.access`` with a 403.
+router = APIRouter(
+    prefix="/v1",
+    dependencies=[Depends(require_permission(MCP_ACCESS_PERMISSION))],
+)
 
 # Cookie the PKCE ``code_verifier`` + CSRF ``state`` ride in across the Auth0
 # round-trip. Signed (HS256) with the Auth0 web app's ``client_secret`` and set
@@ -61,6 +84,39 @@ PKCE_TTL_SECONDS = 10 * 60
 # resolves against the public origin the callback was reached on (behind nginx's
 # ``/api`` strip on UAT), landing back on the web client's settings page.
 LINK_SUCCESS_REDIRECT = "/settings?linked=1"
+
+
+async def _link_rate_limit_key(request: Request) -> str:
+    """Key the per-session limiter by hashed session cookie so users behind a
+    shared NAT aren't penalised collectively. Fall back to client IP for a
+    cookie-less request (it 401s downstream anyway, but still counts)."""
+    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie:
+        return f"session:{_hash_cookie_for_key(cookie)}"
+    return f"ip:{_client_ip(request)}"
+
+
+async def _link_ip_rate_limit_key(request: Request) -> str:
+    """Per-IP key for the looser ceiling that catches an attacker cycling fresh
+    ``GET /v1/session`` cookies to reset the per-session bucket for free."""
+    return f"auth0-link-ip:{_client_ip(request)}"
+
+
+# Two-tier limit on the two session-reachable, Auth0-touching link routes
+# (``start`` mints a handshake; ``callback`` exchanges a code + fetches JWKS).
+# ``start`` + ``callback`` share these buckets, so a full link attempt costs two
+# hits: the per-session cap allows a handful of attempts per hour, and the looser
+# per-IP ceiling stops session-cycling from multiplying that budget.
+auth0_link_rate_limit = RedisRateLimiter(
+    rates=[Rate(10, Duration.HOUR)],
+    bucket_key="auth0-link",
+    identifier=_link_rate_limit_key,
+)
+auth0_link_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(40, Duration.HOUR)],
+    bucket_key="auth0-link-ip",
+    identifier=_link_ip_rate_limit_key,
+)
 
 
 class LinkStatus(BaseModel):
@@ -225,8 +281,12 @@ async def _exchange_code(config: LinkConfig, *, code: str, code_verifier: str) -
         return Auth0TokenResponse.model_validate(response.json()).id_token
 
 
-async def _fetch_jwks(config: LinkConfig) -> dict[str, Any]:
-    """Fetch the tenant's public JWKS. Raises ``httpx.HTTPError`` on failure.
+async def _fetch_jwks(config: LinkConfig) -> jwt.PyJWKSet:
+    """Fetch the tenant's public JWKS, parsed at the boundary into a typed
+    ``jwt.PyJWKSet`` so no ``dict[str, Any]`` crosses into the interior. Raises
+    ``httpx.HTTPError`` on a transport / non-2xx failure and ``jwt.PyJWTError``
+    (``PyJWKSetError``) when the body isn't a well-formed key set — both caught by
+    the handler and turned into a clean 400.
 
     The JWKS URL comes from ``settings.auth0_jwks_uri`` (built from the same
     ``auth0_domain`` this ``config`` was derived from) so the tenant URL topology
@@ -234,11 +294,10 @@ async def _fetch_jwks(config: LinkConfig) -> dict[str, Any]:
     async with _http_client() as client:
         response = await client.get(get_settings().auth0_jwks_uri)
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
-        return data
+        return jwt.PyJWKSet.from_dict(response.json())
 
 
-def _verify_id_token(config: LinkConfig, id_token: str, jwks: dict[str, Any]) -> str:
+def _verify_id_token(config: LinkConfig, id_token: str, jwks: jwt.PyJWKSet) -> str:
     """Verify the id_token (RS256 against the tenant JWKS, ``aud`` = the link
     client id, ``iss`` = ``https://{domain}/``) and return its ``sub``.
 
@@ -247,8 +306,7 @@ def _verify_id_token(config: LinkConfig, id_token: str, jwks: dict[str, Any]) ->
     ``ValidationError`` when the verified claims carry no ``sub`` — the handler
     catches both."""
     kid = jwt.get_unverified_header(id_token).get("kid")
-    key_set = jwt.PyJWKSet.from_dict(jwks)
-    signing_key = next((k.key for k in key_set.keys if k.key_id == kid), None)
+    signing_key = next((k.key for k in jwks.keys if k.key_id == kid), None)
     if signing_key is None:
         raise jwt.InvalidKeyError("no JWKS key matches the id_token kid")
     claims = jwt.decode(
@@ -275,7 +333,14 @@ async def _resolve_auth0_sub(
     return _verify_id_token(config, id_token, jwks)
 
 
-@router.get("/auth0/link/start", response_class=RedirectResponse)
+@router.get(
+    "/auth0/link/start",
+    response_class=RedirectResponse,
+    dependencies=[
+        Depends(auth0_link_ip_rate_limit),
+        Depends(auth0_link_rate_limit),
+    ],
+)
 async def start_link(
     settings: Settings = Depends(get_settings),
     _current_user: User = Depends(get_current_user),
@@ -355,7 +420,14 @@ async def _bind_auth0_sub(db: AsyncSession, current_user: User, sub: str) -> Non
         ) from exc
 
 
-@router.get("/auth0/link/callback", response_class=RedirectResponse)
+@router.get(
+    "/auth0/link/callback",
+    response_class=RedirectResponse,
+    dependencies=[
+        Depends(auth0_link_ip_rate_limit),
+        Depends(auth0_link_rate_limit),
+    ],
+)
 async def link_callback(
     code: Annotated[str, Query()],
     state: Annotated[str, Query()],

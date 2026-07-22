@@ -61,7 +61,7 @@ config:
   # reflect the public origin, not the internal mount):
   MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
   MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
-  AUTH0_LINK_REDIRECT_URI: https://uat.fortymm.com/api/auth0/link/callback
+  AUTH0_LINK_REDIRECT_URI: https://uat.fortymm.com/api/v1/auth0/link/callback
 
 postgres:
   user: postgres

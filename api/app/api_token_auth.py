@@ -3,10 +3,15 @@
 The single place that turns a raw ``api``-context bearer token into the live
 ``User`` behind it: ``hash_token(raw)`` → ``User`` joined to its ``UserToken``
 where ``context == API_TOKEN_CONTEXT`` and the user is not tombstoned. Router-free
-(no FastAPI imports) so both the HTTP bearer path (``app.sessions`` — the
-``Authorization: Bearer`` header) and the FastMCP ``TokenVerifier`` (the ``/mcp``
-transport, see the shared-services ADR) resolve tokens through exactly this
-function and can never drift.
+(no FastAPI imports) so the HTTP bearer path (``app.sessions`` — the
+``Authorization: Bearer`` header the iOS app sends) resolves tokens through
+exactly this function.
+
+The MCP surface no longer authenticates through this resolver: as of the 20260722
+Auth0 Resource-Server ADR the FastMCP ``TokenVerifier`` on the ``/mcp`` transport
+verifies an Auth0-issued JWT and maps its ``sub`` to a **linked** user via
+``app.auth0_identity.resolve_linked_user`` — it never sees an opaque ``api``-context
+token. So this shared resolver now backs the HTTP bearer path only.
 
 Lives alongside ``app/token_hashing.py`` (the router-free home for the hasher it
 calls) rather than in either router.
