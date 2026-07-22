@@ -535,6 +535,33 @@ is **not** a hypothetical or Monte-Carlo projection of who will win — it compu
 _Avoid_: simulation, run (a solve computes the real schedule, never a
 what-if), optimization pass, recalculation.
 
+**Schedule preview** (scheduler-era):
+A **solve** run over a **synthetic field** so a director can see whether a
+tournament's config would fit *before anyone has registered*. It is the **same**
+CP-SAT engine as a real solve — same **verdict**, same **infeasibility reasons** —
+but it **persists nothing**: no **entry**, no **fixture** row, no **solve ledger**
+entry; the **synthetic field** is drawn in memory and the `SolveResult` lives only
+in the job's Redis result with a short TTL. **Owner-gated** and allowed only while
+the tournament is **pre-live** (`draft`/`published`), it auto-fills each **event**
+to its player cap (**per-event overridable**), draws a **disjoint** synthetic field
+per event, and is therefore **optimistic** on duration (it ignores the contention a
+multi-**event** player causes — an honest note, not a hidden assumption). Over HTTP
+the web client **polls** an ephemeral result; the `preview_schedule` MCP tool
+**waits** and returns the result in one call. Like any solve it computes *whether
+and when* a field would play, **never** who wins.
+_Avoid_: fake schedule (retired vocabulary — it is a *preview* over a *synthetic
+field*), simulation, dry run (reserve for other domains), what-if (reserve for the
+outcome sense a solve is not).
+
+**Synthetic field** (scheduler-era):
+The `Placeholder 1..N` **entrants** a **schedule preview** invents so it has
+something to draw and solve, since a preview runs before real registration. They
+are never persisted (no `users.id`, no **entry** row — sidestepping the real-user
+FK the entry domain requires) and are **disjoint across events** by construction, so
+no synthetic player is ever entered in two events.
+_Avoid_: fake players, guest entrants (a guest is a real tombstoned **user**;
+a synthetic entrant is not a user at all), placeholder match.
+
 **Infeasible** (scheduler-era):
 A **solve** outcome: the **scheduler** *proved* the day's matches cannot all be placed
 on their tables inside their windows. A **designed outcome, not a failure** — proving a

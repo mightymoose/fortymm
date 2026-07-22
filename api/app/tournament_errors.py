@@ -91,6 +91,24 @@ class NoDrawnEventsError(Exception):
     not here. Never an ``HTTPException``."""
 
 
+class TournamentNotPreLiveError(Exception):
+    """Raised by the request-schedule-preview verb when the addressed tournament
+    is no longer **pre-live** — a preview is a "would this config even fit before
+    anyone registers?" question, so it is allowed only while the tournament is a
+    ``draft`` or ``published`` (registration open, nothing drawn yet) and refused
+    once it is ``live`` (there is a real field and a real solve to look at) or
+    ``archived`` (it is over). Carries the current status so the HTTP adapter can
+    build the machine-readable refusal body. Never an ``HTTPException`` — the
+    caller adapts it to its transport."""
+
+    def __init__(self, status: str) -> None:
+        super().__init__(
+            f"This tournament is {status}; a schedule preview is only available "
+            "while it is a draft or published."
+        )
+        self.status = status
+
+
 class ScheduleQueueUnavailableError(Exception):
     """Raised by the request-schedule-solve verb when the enqueue itself could
     not be placed on the queue (Redis down): :func:`app.schedule_solves.request_solve`

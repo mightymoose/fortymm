@@ -64,6 +64,11 @@ import {
   updateTournament,
   withdrawEntry as withdrawTournamentEntry,
 } from './tournaments-store'
+import {
+  cancelPreview as cancelSchedulePreview,
+  enqueuePreview as enqueueSchedulePreview,
+  readPreview as readSchedulePreview,
+} from './schedule-preview-store'
 import { PERM } from '@/lib/permissions'
 
 // The signed-in mock user's id, shared by the session, the roster's "me" row
@@ -1879,6 +1884,43 @@ export const handlers = [
         )
       }
       return HttpResponse.json(result.solve, { status: 202 })
+    },
+  ),
+  // The **schedule preview** (ADR "a schedule preview is a non-persistent solve
+  // over a synthetic field"). Three ephemeral endpoints, registered before the
+  // bare `:tournamentId` routes like the solve/fixtures routes above. Enqueue
+  // returns a token + the instant structure (202); the poll walks the token
+  // queued → running → done BY THE READS (the mock has no worker), so the modal's
+  // streaming resolves at the polling cadence; cancel drops the job (204,
+  // best-effort/idempotent). A preview persists nothing, so this touches the
+  // preview store alone, never the tournaments store.
+  http.post(
+    '*/v1/tournaments/:tournamentId/schedule/preview',
+    async ({ request }) => {
+      await delay(150)
+      const body = (await readJson(request)) as
+        | components['schemas']['PreviewRequest']
+        | null
+      return HttpResponse.json(enqueueSchedulePreview(body ?? null), {
+        status: 202,
+      })
+    },
+  ),
+  http.get(
+    '*/v1/tournaments/:tournamentId/schedule/preview/:token',
+    async ({ params }) => {
+      await delay(150)
+      return HttpResponse.json(readSchedulePreview(String(params.token)))
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/schedule/preview/:token',
+    async ({ params }) => {
+      await delay(100)
+      cancelSchedulePreview(String(params.token))
+      // 204 whether or not the token was still live — cancel is best-effort and
+      // idempotent, like the real route.
+      return new HttpResponse(null, { status: 204 })
     },
   ),
   http.patch(

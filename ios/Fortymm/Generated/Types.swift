@@ -852,6 +852,68 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/solves`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/solves/post(request_schedule_solve_v1_tournaments__tournament_id__schedule_solves_post)`.
     func requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(_ input: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output
+    /// Request Schedule Preview
+    ///
+    /// Enqueue an ephemeral **schedule preview** for a pre-live tournament and
+    /// answer with a token plus the immediately-known structure.
+    ///
+    /// A preview asks *"given my tables, windows, formats and games-per-match, would
+    /// the schedule even fit — and roughly how long is the day?"* **before anyone has
+    /// registered**. It runs the same CP-SAT engine a live tournament uses over a
+    /// **synthetic field**, but persists nothing: the whole answer lives only in the
+    /// job's Redis result with a short TTL. Poll `GET …/schedule/preview/{token}` for
+    /// it (the `202` is honest — the solve is accepted, not done).
+    ///
+    /// The body is optional per-event field-size overrides (`{"overrides": {"<event
+    /// id>": N}}`) to explore a "what if N show up" scenario; omit it and each event
+    /// fills to its own cap (or the uncapped default).
+    ///
+    /// Owner-only, and only while the tournament is **pre-live** — a `draft` or a
+    /// `published` (registration open, nothing drawn) tournament. An absent tournament
+    /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
+    /// (there is a real field and a real solve to look at, or it is over). Rate
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
+    func requestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost(_ input: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input) async throws -> Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output
+    /// Read Schedule Preview
+    ///
+    /// Poll an ephemeral **schedule preview** by its token and answer with the
+    /// job's state — `queued`, `running`, `done` (carrying the `PreviewResult`), or
+    /// `failed` (carrying an error string, including a result that has already expired
+    /// out of Redis).
+    ///
+    /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
+    /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
+    /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.
+    func readSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet(_ input: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input) async throws -> Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output
+    /// Cancel Schedule Preview
+    ///
+    /// Best-effort cancel an ephemeral **schedule preview** by its token — the
+    /// director navigated away, so stop the in-flight solve from holding a worker
+    /// slot. Answers `204` whether the job was queued, running, already finished, or
+    /// never existed: a cancel is advisory and idempotent, its only invariant "this
+    /// ephemeral job is no longer consuming a worker", which an absent/finished job
+    /// already satisfies. A cancelled preview's result is dropped, so it cannot be
+    /// polled back as a stale success.
+    ///
+    /// Owner-gated exactly as the poll is (`404`/`403`/`409`) before the
+    /// tournament-blind Redis job is touched, so a token cannot be cancelled by
+    /// anyone but the tournament's owner.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)`.
+    func cancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete(_ input: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input) async throws -> Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output
     /// List Schedule Solves
     ///
     /// Paginated cross-tournament solve ledger backing the Administration area's
@@ -2203,6 +2265,94 @@ extension APIProtocol {
         headers: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input.Headers = .init()
     ) async throws -> Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output {
         try await requestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost(Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Request Schedule Preview
+    ///
+    /// Enqueue an ephemeral **schedule preview** for a pre-live tournament and
+    /// answer with a token plus the immediately-known structure.
+    ///
+    /// A preview asks *"given my tables, windows, formats and games-per-match, would
+    /// the schedule even fit — and roughly how long is the day?"* **before anyone has
+    /// registered**. It runs the same CP-SAT engine a live tournament uses over a
+    /// **synthetic field**, but persists nothing: the whole answer lives only in the
+    /// job's Redis result with a short TTL. Poll `GET …/schedule/preview/{token}` for
+    /// it (the `202` is honest — the solve is accepted, not done).
+    ///
+    /// The body is optional per-event field-size overrides (`{"overrides": {"<event
+    /// id>": N}}`) to explore a "what if N show up" scenario; omit it and each event
+    /// fills to its own cap (or the uncapped default).
+    ///
+    /// Owner-only, and only while the tournament is **pre-live** — a `draft` or a
+    /// `published` (registration open, nothing drawn) tournament. An absent tournament
+    /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
+    /// (there is a real field and a real solve to look at, or it is over). Rate
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
+    internal func requestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost(
+        path: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Path,
+        headers: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Headers = .init(),
+        body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Body? = nil
+    ) async throws -> Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output {
+        try await requestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost(Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Read Schedule Preview
+    ///
+    /// Poll an ephemeral **schedule preview** by its token and answer with the
+    /// job's state — `queued`, `running`, `done` (carrying the `PreviewResult`), or
+    /// `failed` (carrying an error string, including a result that has already expired
+    /// out of Redis).
+    ///
+    /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
+    /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
+    /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.
+    internal func readSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet(
+        path: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Path,
+        headers: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Headers = .init()
+    ) async throws -> Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output {
+        try await readSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet(Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Cancel Schedule Preview
+    ///
+    /// Best-effort cancel an ephemeral **schedule preview** by its token — the
+    /// director navigated away, so stop the in-flight solve from holding a worker
+    /// slot. Answers `204` whether the job was queued, running, already finished, or
+    /// never existed: a cancel is advisory and idempotent, its only invariant "this
+    /// ephemeral job is no longer consuming a worker", which an absent/finished job
+    /// already satisfies. A cancelled preview's result is dropped, so it cannot be
+    /// polled back as a stale success.
+    ///
+    /// Owner-gated exactly as the poll is (`404`/`403`/`409`) before the
+    /// tournament-blind Redis job is touched, so a token cannot be cancelled by
+    /// anyone but the tournament's owner.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)`.
+    internal func cancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete(
+        path: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Path,
+        headers: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Headers = .init()
+    ) async throws -> Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output {
+        try await cancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete(Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input(
             path: path,
             headers: headers
         ))
@@ -6806,6 +6956,475 @@ internal enum Components {
                     "value"
                 ])
             }
+        }
+        /// What the enqueue verb hands back the instant a preview is requested: the
+        /// :attr:`token` addressing the ephemeral job (poll / wait on it for the result),
+        /// plus the immediately-known structure — the per-event field sizes and the drawn
+        /// fixtures — so a caller renders the field, the match/bye skeleton and the grid
+        /// outline before the solve has finished (ADR "instant structure and a streamed
+        /// solve").
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewEnqueued`.
+        internal struct PreviewEnqueued: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewEnqueued/token`.
+            internal var token: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewEnqueued/field_summaries`.
+            internal var fieldSummaries: [Components.Schemas.PreviewFieldSummary]
+            /// - Remark: Generated from `#/components/schemas/PreviewEnqueued/fixtures`.
+            internal var fixtures: [Components.Schemas.PreviewFixture]
+            /// Creates a new `PreviewEnqueued`.
+            ///
+            /// - Parameters:
+            ///   - token:
+            ///   - fieldSummaries:
+            ///   - fixtures:
+            internal init(
+                token: Swift.String,
+                fieldSummaries: [Components.Schemas.PreviewFieldSummary],
+                fixtures: [Components.Schemas.PreviewFixture]
+            ) {
+                self.token = token
+                self.fieldSummaries = fieldSummaries
+                self.fixtures = fixtures
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case token
+                case fieldSummaries = "field_summaries"
+                case fixtures
+            }
+        }
+        /// One event's contribution to the preview summary: how many matches its
+        /// synthetic field draws, how many byes that field takes, and how long the event
+        /// itself runs.
+        ///
+        /// ``matches`` is the drawn pairing count (stable regardless of verdict — the draw
+        /// is instant and always completes); ``byes`` is the round-robin sit-outs the
+        /// field incurs (a pool of an odd number of players gives one bye per round —
+        /// every player byes exactly once — so an odd pool of ``P`` contributes ``P``,
+        /// an even pool ``0``). ``duration_min`` is the event's own makespan span (last
+        /// placement end minus first placement start, in minutes) — ``None`` when the
+        /// solve produced no plan (infeasible / unknown), where there is nothing to
+        /// span.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown`.
+        internal struct PreviewEventBreakdown: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown/event_id`.
+            internal var eventId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown/matches`.
+            internal var matches: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown/byes`.
+            internal var byes: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PreviewEventBreakdown/duration_min`.
+            internal var durationMin: Swift.Int?
+            /// Creates a new `PreviewEventBreakdown`.
+            ///
+            /// - Parameters:
+            ///   - eventId:
+            ///   - name:
+            ///   - matches:
+            ///   - byes:
+            ///   - durationMin:
+            internal init(
+                eventId: Swift.String,
+                name: Swift.String,
+                matches: Swift.Int,
+                byes: Swift.Int,
+                durationMin: Swift.Int? = nil
+            ) {
+                self.eventId = eventId
+                self.name = name
+                self.matches = matches
+                self.byes = byes
+                self.durationMin = durationMin
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case eventId = "event_id"
+                case name
+                case matches
+                case byes
+                case durationMin = "duration_min"
+            }
+        }
+        /// One event's synthetic field size — the count the preview drew a field to
+        /// (the override, the event's cap, or the uncapped default). The immediate,
+        /// pre-solve structure a caller renders a skeleton from, and the ingredient the
+        /// honest-notes strip names per event.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewFieldSummary`.
+        internal struct PreviewFieldSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewFieldSummary/event_id`.
+            internal var eventId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFieldSummary/field_size`.
+            internal var fieldSize: Swift.Int
+            /// Creates a new `PreviewFieldSummary`.
+            ///
+            /// - Parameters:
+            ///   - eventId:
+            ///   - fieldSize:
+            internal init(
+                eventId: Swift.String,
+                fieldSize: Swift.Int
+            ) {
+                self.eventId = eventId
+                self.fieldSize = fieldSize
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case eventId = "event_id"
+                case fieldSize = "field_size"
+            }
+        }
+        /// One drawn synthetic pairing, known the instant the draw runs (before the
+        /// solve returns) so a caller can render the grid skeleton immediately. The
+        /// synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
+        /// sides are always known (the pool stage of a round-robin draw).
+        ///
+        /// ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
+        /// keys a pool by (unique across events); ``pool_name`` is the human label from the
+        /// event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
+        /// a director recognizes rather than the raw composite.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewFixture`.
+        internal struct PreviewFixture: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/fixture_id`.
+            internal var fixtureId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/event_id`.
+            internal var eventId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_id`.
+            internal var poolId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_name`.
+            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_a_id`.
+            internal var playerAId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_b_id`.
+            internal var playerBId: Swift.String
+            /// Creates a new `PreviewFixture`.
+            ///
+            /// - Parameters:
+            ///   - fixtureId:
+            ///   - eventId:
+            ///   - poolId:
+            ///   - poolName:
+            ///   - playerAId:
+            ///   - playerBId:
+            internal init(
+                fixtureId: Swift.String,
+                eventId: Swift.String,
+                poolId: Swift.String,
+                poolName: Swift.String,
+                playerAId: Swift.String,
+                playerBId: Swift.String
+            ) {
+                self.fixtureId = fixtureId
+                self.eventId = eventId
+                self.poolId = poolId
+                self.poolName = poolName
+                self.playerAId = playerAId
+                self.playerBId = playerBId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case fixtureId = "fixture_id"
+                case eventId = "event_id"
+                case poolId = "pool_id"
+                case poolName = "pool_name"
+                case playerAId = "player_a_id"
+                case playerBId = "player_b_id"
+            }
+        }
+        /// A single read of a preview job's status by token: the :attr:`status`, the
+        /// :attr:`result` when (and only when) it is ``done``, and the :attr:`error`
+        /// string when it ``failed``. Make-illegal-states-unrepresentable is deferred to
+        /// the constructor (:func:`app.schedule_preview_solve.preview_job_state` only ever
+        /// sets ``result`` on ``done`` and ``error`` on ``failed``); this is the boundary
+        /// value the poll endpoint and the MCP tool project.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewJobState`.
+        internal struct PreviewJobState: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewJobState/status`.
+            internal var status: Components.Schemas.PreviewJobStatus
+            /// - Remark: Generated from `#/components/schemas/PreviewJobState/result`.
+            internal struct ResultPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PreviewJobState/result/value1`.
+                internal var value1: Components.Schemas.PreviewResult
+                /// Creates a new `ResultPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PreviewResult) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PreviewJobState/result`.
+            internal var result: Components.Schemas.PreviewJobState.ResultPayload?
+            /// - Remark: Generated from `#/components/schemas/PreviewJobState/error`.
+            internal var error: Swift.String?
+            /// Creates a new `PreviewJobState`.
+            ///
+            /// - Parameters:
+            ///   - status:
+            ///   - result:
+            ///   - error:
+            internal init(
+                status: Components.Schemas.PreviewJobStatus,
+                result: Components.Schemas.PreviewJobState.ResultPayload? = nil,
+                error: Swift.String? = nil
+            ) {
+                self.status = status
+                self.result = result
+                self.error = error
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case status
+                case result
+                case error
+            }
+        }
+        /// Where an ephemeral preview job is in its life — the four states a caller
+        /// polling (HTTP) or waiting (MCP) on the token can see. ``queued`` (waiting for a
+        /// free worker slot, possibly behind an in-flight real solve), ``running`` (the
+        /// CP-SAT solve is under way), ``done`` (the :class:`PreviewResult` is ready), or
+        /// ``failed`` (the job errored, was cancelled, or its short-TTL result has already
+        /// expired out of Redis).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewJobStatus`.
+        internal enum PreviewJobStatus: String, Codable, Hashable, Sendable, CaseIterable {
+            case queued = "queued"
+            case running = "running"
+            case done = "done"
+            case failed = "failed"
+        }
+        /// The request body of a schedule-preview enqueue: the optional per-event
+        /// **field-size overrides** a caller explores a ``"what if N show up"`` scenario
+        /// with. Each key is an event id and each value the synthetic count to draw that
+        /// event's field to; an omitted event fills to its own cap (or the uncapped
+        /// default), so the whole body — and :attr:`overrides` itself — is optional.
+        ///
+        /// ``extra="forbid"`` so an unknown key is a ``422`` client bug, not a silently
+        /// dropped field (api/CLAUDE.md — "request models reject the unexpected"). An
+        /// override naming an event this tournament does not have is ignored by the
+        /// builder rather than rejected: a preview is advisory, and a stale event id is
+        /// not worth a refusal.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewRequest`.
+        internal struct PreviewRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewRequest/overrides`.
+            internal struct OverridesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                internal var additionalProperties: [String: Swift.Int]
+                /// Creates a new `OverridesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                internal init(additionalProperties: [String: Swift.Int] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PreviewRequest/overrides`.
+            internal var overrides: Components.Schemas.PreviewRequest.OverridesPayload?
+            /// Creates a new `PreviewRequest`.
+            ///
+            /// - Parameters:
+            ///   - overrides:
+            internal init(overrides: Components.Schemas.PreviewRequest.OverridesPayload? = nil) {
+                self.overrides = overrides
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case overrides
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.overrides = try container.decodeIfPresent(
+                    Components.Schemas.PreviewRequest.OverridesPayload.self,
+                    forKey: .overrides
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "overrides"
+                ])
+            }
+        }
+        /// A schedule preview's whole answer — verdict-first, then the day's shape.
+        ///
+        /// The headline is :attr:`verdict` (does the synthetic field fit?) and
+        /// :attr:`estimated_duration_min` (the day's makespan, in minutes from its first
+        /// window opening), with :attr:`estimated_finish` its wall-clock form when the
+        /// tournament's windows carry real times. Below that: the total match and bye
+        /// counts, the peak concurrent-tables load and its utilization, and a per-event
+        /// breakdown. When it does *not* fit, :attr:`infeasibility_reasons` carries the
+        /// resolved, machine-readable reasons (the same union a real infeasible solve
+        /// records). :attr:`notes` is the always-present honest-notes strip — at minimum
+        /// the disjoint-field caveat and the synthetic counts assumed per event.
+        ///
+        /// A preview is **optimistic by construction**: its synthetic field is disjoint
+        /// across events (no player is in two), so the duration estimate ignores the
+        /// cross-event contention a multi-event human would cause. That is a stated floor,
+        /// surfaced in :attr:`notes`, not a hidden simplification (ADR).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewResult`.
+        internal struct PreviewResult: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/verdict`.
+            internal var verdict: Components.Schemas.PreviewVerdict
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/estimated_duration_min`.
+            internal var estimatedDurationMin: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/estimated_finish`.
+            internal var estimatedFinish: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/total_matches`.
+            internal var totalMatches: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/total_byes`.
+            internal var totalByes: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/peak_concurrent_tables`.
+            internal var peakConcurrentTables: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/table_utilization`.
+            internal var tableUtilization: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/events`.
+            internal var events: [Components.Schemas.PreviewEventBreakdown]
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload`.
+            internal enum InfeasibilityReasonsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/NoSingleCauseRead`.
+                case noSingleCause(Components.Schemas.NoSingleCauseRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PastWindowReasonRead`.
+                case pastWindow(Components.Schemas.PastWindowReasonRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
+                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
+                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
+                case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "no_single_cause":
+                        self = .noSingleCause(try .init(from: decoder))
+                    case "past_window":
+                        self = .pastWindow(try .init(from: decoder))
+                    case "pool_has_no_tables":
+                        self = .poolHasNoTables(try .init(from: decoder))
+                    case "pool_over_capacity":
+                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "window_too_short_for_match":
+                        self = .windowTooShortForMatch(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .noSingleCause(value):
+                        try value.encode(to: encoder)
+                    case let .pastWindow(value):
+                        try value.encode(to: encoder)
+                    case let .poolHasNoTables(value):
+                        try value.encode(to: encoder)
+                    case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .windowTooShortForMatch(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/infeasibility_reasons`.
+            internal typealias InfeasibilityReasonsPayload = [Components.Schemas.PreviewResult.InfeasibilityReasonsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/infeasibility_reasons`.
+            internal var infeasibilityReasons: Components.Schemas.PreviewResult.InfeasibilityReasonsPayload
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/notes`.
+            internal var notes: [Swift.String]
+            /// Whether the day fits — a pure function of :attr:`verdict`
+            /// (``optimal``/``feasible``), exposed as a derived field so the two can
+            /// never drift (api/CLAUDE.md — "don't carry a field and its own
+            /// derivation").
+            ///
+            /// - Remark: Generated from `#/components/schemas/PreviewResult/fits`.
+            internal var fits: Swift.Bool
+            /// Creates a new `PreviewResult`.
+            ///
+            /// - Parameters:
+            ///   - verdict:
+            ///   - estimatedDurationMin:
+            ///   - estimatedFinish:
+            ///   - totalMatches:
+            ///   - totalByes:
+            ///   - peakConcurrentTables:
+            ///   - tableUtilization:
+            ///   - events:
+            ///   - infeasibilityReasons:
+            ///   - notes:
+            ///   - fits: Whether the day fits — a pure function of :attr:`verdict`
+            internal init(
+                verdict: Components.Schemas.PreviewVerdict,
+                estimatedDurationMin: Swift.Int? = nil,
+                estimatedFinish: Foundation.Date? = nil,
+                totalMatches: Swift.Int,
+                totalByes: Swift.Int,
+                peakConcurrentTables: Swift.Int,
+                tableUtilization: Swift.Double,
+                events: [Components.Schemas.PreviewEventBreakdown],
+                infeasibilityReasons: Components.Schemas.PreviewResult.InfeasibilityReasonsPayload,
+                notes: [Swift.String],
+                fits: Swift.Bool
+            ) {
+                self.verdict = verdict
+                self.estimatedDurationMin = estimatedDurationMin
+                self.estimatedFinish = estimatedFinish
+                self.totalMatches = totalMatches
+                self.totalByes = totalByes
+                self.peakConcurrentTables = peakConcurrentTables
+                self.tableUtilization = tableUtilization
+                self.events = events
+                self.infeasibilityReasons = infeasibilityReasons
+                self.notes = notes
+                self.fits = fits
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case verdict
+                case estimatedDurationMin = "estimated_duration_min"
+                case estimatedFinish = "estimated_finish"
+                case totalMatches = "total_matches"
+                case totalByes = "total_byes"
+                case peakConcurrentTables = "peak_concurrent_tables"
+                case tableUtilization = "table_utilization"
+                case events
+                case infeasibilityReasons = "infeasibility_reasons"
+                case notes
+                case fits
+            }
+        }
+        /// A preview's answer — the DB-blind mirror of :class:`app.scheduling.Verdict`.
+        ///
+        /// ``optimal``/``feasible`` mean the day fits (the synthetic field can be placed);
+        /// ``infeasible`` means the engine *proved* it cannot; ``unknown`` means the
+        /// (short) preview time cap ran out before any answer — a preview is deliberately
+        /// cap-bounded, so ``unknown`` is "ask again / the day is large", never "your day
+        /// doesn't fit" (that is ``infeasible`` alone).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviewVerdict`.
+        internal enum PreviewVerdict: String, Codable, Hashable, Sendable, CaseIterable {
+            case optimal = "optimal"
+            case feasible = "feasible"
+            case infeasible = "infeasible"
+            case unknown = "unknown"
         }
         /// What one completed match did to a player's rating — and there are two kinds
         /// of that, not one.
@@ -22566,6 +23185,615 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.RequestScheduleSolveV1TournamentsTournamentIdScheduleSolvesPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Request Schedule Preview
+    ///
+    /// Enqueue an ephemeral **schedule preview** for a pre-live tournament and
+    /// answer with a token plus the immediately-known structure.
+    ///
+    /// A preview asks *"given my tables, windows, formats and games-per-match, would
+    /// the schedule even fit — and roughly how long is the day?"* **before anyone has
+    /// registered**. It runs the same CP-SAT engine a live tournament uses over a
+    /// **synthetic field**, but persists nothing: the whole answer lives only in the
+    /// job's Redis result with a short TTL. Poll `GET …/schedule/preview/{token}` for
+    /// it (the `202` is honest — the solve is accepted, not done).
+    ///
+    /// The body is optional per-event field-size overrides (`{"overrides": {"<event
+    /// id>": N}}`) to explore a "what if N show up" scenario; omit it and each event
+    /// fills to its own cap (or the uncapped default).
+    ///
+    /// Owner-only, and only while the tournament is **pre-live** — a `draft` or a
+    /// `published` (registration open, nothing drawn) tournament. An absent tournament
+    /// is a `404`, a non-owner a `403`, and a `live`/`archived` tournament a `409`
+    /// (there is a real field and a real solve to look at, or it is over). Rate
+    /// limited per session with a per-IP ceiling: too many previews in quick
+    /// succession is a `429`.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
+    internal enum RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost {
+        internal static let id: Swift.String = "request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/requestBody`.
+            internal enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/requestBody/json`.
+                internal struct JsonPayload: Codable, Hashable, Sendable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/requestBody/json/value1`.
+                    internal var value1: Components.Schemas.PreviewRequest
+                    /// Creates a new `JsonPayload`.
+                    ///
+                    /// - Parameters:
+                    ///   - value1:
+                    internal init(value1: Components.Schemas.PreviewRequest) {
+                        self.value1 = value1
+                    }
+                    internal init(from decoder: any Swift.Decoder) throws {
+                        self.value1 = try .init(from: decoder)
+                    }
+                    internal func encode(to encoder: any Swift.Encoder) throws {
+                        try self.value1.encode(to: encoder)
+                    }
+                }
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/requestBody/content/application\/json`.
+                case json(Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Body.JsonPayload)
+            }
+            internal var body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Body?
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            internal init(
+                path: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Path,
+                headers: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Headers = .init(),
+                body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input.Body? = nil
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Accepted: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/202/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/202/content/application\/json`.
+                    case json(Components.Schemas.PreviewEnqueued)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.PreviewEnqueued {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.Accepted.Body
+                /// Creates a new `Accepted`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.Accepted.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)/responses/202`.
+            ///
+            /// HTTP response code: `202 accepted`.
+            case accepted(Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.Accepted)
+            /// The associated value of the enum case if `self` is `.accepted`.
+            ///
+            /// - Throws: An error if `self` is not `.accepted`.
+            /// - SeeAlso: `.accepted`.
+            internal var accepted: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.Accepted {
+                get throws {
+                    switch self {
+                    case let .accepted(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "accepted",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Read Schedule Preview
+    ///
+    /// Poll an ephemeral **schedule preview** by its token and answer with the
+    /// job's state — `queued`, `running`, `done` (carrying the `PreviewResult`), or
+    /// `failed` (carrying an error string, including a result that has already expired
+    /// out of Redis).
+    ///
+    /// Owner-gated the same way the enqueue is: the tournament is re-loaded and the
+    /// caller must own it (an absent tournament is a `404`, a non-owner a `403`, a
+    /// `live`/`archived` tournament a `409`) before the ephemeral job — which is not
+    /// itself scoped to a tournament in Redis — is read, and the token is then bound to
+    /// this tournament: a real job enqueued for a *different* tournament is a `404`, so
+    /// an owner can't pair their own tournament id with another director's token. A
+    /// missing/expired token is *not* a `404`: it is a `done`-or-`failed` job state, so
+    /// the client renders "run it again" rather than a transport error.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)`.
+    internal enum ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet {
+        internal static let id: Swift.String = "read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/path/token`.
+                internal var token: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - token:
+                internal init(
+                    tournamentId: Swift.String,
+                    token: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.token = token
+                }
+            }
+            internal var path: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Path,
+                headers: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.PreviewJobState)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.PreviewJobState {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/get(read_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.ReadSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Cancel Schedule Preview
+    ///
+    /// Best-effort cancel an ephemeral **schedule preview** by its token — the
+    /// director navigated away, so stop the in-flight solve from holding a worker
+    /// slot. Answers `204` whether the job was queued, running, already finished, or
+    /// never existed: a cancel is advisory and idempotent, its only invariant "this
+    /// ephemeral job is no longer consuming a worker", which an absent/finished job
+    /// already satisfies. A cancelled preview's result is dropped, so it cannot be
+    /// polled back as a stale success.
+    ///
+    /// Owner-gated exactly as the poll is (`404`/`403`/`409`) before the
+    /// tournament-blind Redis job is touched, so a token cannot be cancelled by
+    /// anyone but the tournament's owner.
+    ///
+    /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/schedule/preview/{token}`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)`.
+    internal enum CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete {
+        internal static let id: Swift.String = "cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/path/token`.
+                internal var token: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - token:
+                internal init(
+                    tournamentId: Swift.String,
+                    token: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.token = token
+                }
+            }
+            internal var path: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Path,
+                headers: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct NoContent: Sendable, Hashable {
+                /// Creates a new `NoContent`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            case noContent(Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.NoContent)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            internal static var noContent: Self {
+                .noContent(.init())
+            }
+            /// The associated value of the enum case if `self` is `.noContent`.
+            ///
+            /// - Throws: An error if `self` is not `.noContent`.
+            /// - SeeAlso: `.noContent`.
+            internal var noContent: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.NoContent {
+                get throws {
+                    switch self {
+                    case let .noContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "noContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/{token}/DELETE/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/{token}/delete(cancel_schedule_preview_v1_tournaments__tournament_id__schedule_preview__token__delete)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

@@ -22,8 +22,10 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Annotated, Literal
 
+from anyio import to_thread
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
@@ -80,9 +82,17 @@ from app.result_acceptance import (
     accept_result as accept_result_core,
 )
 from app.result_proposal import propose_result as propose_result_core
+from app.schedule_preview_solve import (
+    request_schedule_preview as request_schedule_preview_core,
+)
+from app.schedule_preview_solve import wait_for_preview
 from app.schedule_solves import latest_solve
 from app.schemas.match import MatchDetails, MatchResultsGameWrite
 from app.schemas.player import PlayerMatchListResponse, PlayerRead
+from app.schemas.schedule_preview import (
+    PreviewJobStatus,
+    PreviewResult,
+)
 from app.schemas.tournament import (
     ScheduleSolveRead,
     TournamentDetailRead,
@@ -103,6 +113,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
     TournamentNotFoundError,
+    TournamentNotPreLiveError,
 )
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_queries import (
@@ -955,6 +966,175 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
         # it into the same ``ScheduleSolveRead`` the HTTP route and the schedule
         # projection carry, so the agent reads the run's status back off it.
         return ScheduleSolveRead.model_validate(row)
+
+
+# How long the synchronous ``preview_schedule`` tool waits, in seconds, for the
+# ephemeral preview job to reach a terminal state before it gives up and returns a
+# retryable ``ToolError``. Bounded well under a minute (ADR "MCP waits internally
+# with a bounded timeout") — a preview solve is cap-bounded to a few seconds
+# (``preview_solver_time_cap_s`` defaults to 5s) and the MCP path is not behind the
+# browser-facing nginx ~60s hop, so a generous-but-finite ceiling lets a preview
+# queued behind an in-flight real solve still return in one call, while a stuck
+# wait fails loud (retry) rather than hanging.
+_PREVIEW_WAIT_TIMEOUT_S = 30.0
+
+
+def _map_preview_draw_error(error: DrawError) -> ToolError:
+    """Adapt a ``DrawError`` — the synthetic-field draw the preview tries to build
+    refusing to produce fixtures for one of the tournament's events — to an
+    actionable ``ToolError``.
+
+    A preview must never invent a schedule for a format production cannot run (the
+    false-confidence failure the real-engine decision exists to prevent, ADR "draw
+    coverage is round-robin only; every other type is refused loud"), so an
+    un-drawable event refuses the *whole* preview, never a partial grid. A ``match``
+    over the error names which of the caller's events is not schedulable to preview
+    and why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
+
+    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
+      draw type has no schedule generator yet (only round-robin does today), a fact
+      to change on the event, not a transient one to retry.
+    * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
+      event can never be given a draw (ADR-0788), so it can never be previewed.
+    * ``DegenerateDraw``'s message is domain-authored copy (the numbers the director
+      must change), passed through so the agent reads exactly what a director would.
+    * The fallback arm is a generic sentence, never a future subclass's own message.
+    """
+    match error:
+        case UnsupportedDrawType():
+            return ToolError(
+                f"This tournament isn't schedulable to preview yet: an event's "
+                f"{error.draw_type.value} draw has no schedule generator — only "
+                "round-robin draws can be previewed. Change the event's draw type "
+                "to round-robin, or wait for support."
+            )
+        case NonSinglesDraw():
+            return ToolError(
+                f"A {error.event_format.value} event can't be previewed — only "
+                "singles events can be drawn and scheduled. A fixture seats one "
+                "entrant on each side, with nowhere to record a doubles pairing or "
+                "a team."
+            )
+        case DegenerateDraw():
+            return ToolError(str(error))
+        case _:
+            return ToolError(
+                "This tournament isn't schedulable to preview as its events stand."
+            )
+
+
+@mcp.tool
+async def preview_schedule(
+    tournament_id: uuid.UUID,
+    overrides: dict[uuid.UUID, int] | None = None,
+) -> PreviewResult:
+    """Preview the SCHEDULE for a PRE-LIVE tournament you OWN as the authenticated
+    API-token caller — solve a synthetic field over the tournament's real tables,
+    windows and formats **before anyone has registered** — and return the whole
+    result in ONE call.
+
+    This is NOT a real solve and it persists NOTHING: no entries, no fixtures, no
+    solve-ledger row. It draws a synthetic field (each event auto-filled to its cap,
+    or ``overrides``) and runs the SAME CP-SAT engine a live tournament uses over the
+    tournament's real ``table_catalogue`` and pool windows, so "fits / doesn't fit"
+    means exactly what it will at go-live. It answers *"given my tables, time
+    windows, formats and games-per-match, would the schedule even fit — and roughly
+    how long is the day?"* while there is still time to change the setup.
+
+    Unlike ``request_schedule_solve`` (async — it returns a queued ledger row you
+    poll later), this tool is **SYNCHRONOUS**: it enqueues the ephemeral preview,
+    waits internally (bounded, a few seconds — the preview time cap is short) and
+    returns the finished ``PreviewResult`` — the ``verdict`` (``optimal`` /
+    ``feasible`` = fits; ``infeasible`` = proven not to fit; ``unknown`` = the cap
+    ran out, ask again), the estimated duration + wall-clock finish, the match / bye
+    / peak-table counts, a per-event breakdown, the resolved infeasibility reasons
+    when it does not fit, and an always-present honest-notes strip. The estimate is
+    **optimistic**: the synthetic field is disjoint across events (no player is in
+    two), so it ignores cross-event contention — stated in ``notes``, not hidden.
+
+    ``overrides`` is optional: a map of event id → synthetic field size to explore a
+    ``"what if N show up"`` scenario; an omitted event fills to its own cap (or the
+    uncapped default). Owner-gated (only the creator may preview) and allowed only
+    while the tournament is PRE-LIVE (``draft`` or ``published``); a ``live`` /
+    ``archived`` tournament is refused (there is a real field and a real solve to
+    look at, or it is over).
+
+    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (single- /
+    double-elim, swiss, rr-then-ko) refuses the WHOLE preview with an actionable
+    ``ToolError`` — never a partial grid — because a preview must not invent a
+    schedule for a format production cannot run.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner (only the creator may preview), when the tournament is no
+    longer pre-live (``live`` / ``archived``), when an event's draw type is not
+    round-robin (not schedulable to preview yet — change it or wait for support),
+    when the preview queue is unreachable (nothing was queued; safe to retry), or
+    when the solve is still running past the internal wait (still solving — retry).
+    """
+    user_id = _authenticated_user_id()
+    async with mcp_session() as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            enqueued = await request_schedule_preview_core(
+                db,
+                tournament_id=tournament_id,
+                actor=actor,
+                count_overrides=overrides,
+            )
+        except TournamentNotFoundError as exc:
+            raise ToolError(f"No tournament found with id {tournament_id}.") from exc
+        except NotTournamentOwnerError as exc:
+            raise ToolError(
+                "You can only preview schedules for tournaments you created."
+            ) from exc
+        except TournamentNotPreLiveError as exc:
+            # Carries its own status-aware sentence (draft/published only).
+            raise ToolError(str(exc)) from exc
+        except ScheduleQueueUnavailableError as exc:
+            raise ToolError(
+                "The preview queue is unavailable, so nothing was queued. "
+                "Try again in a moment."
+            ) from exc
+        except DrawError as error:
+            # A non-round-robin (or otherwise un-drawable) event refuses the whole
+            # preview loud — never a partial grid. The enqueue already rolled back
+            # (nothing was written or queued).
+            raise _map_preview_draw_error(error) from error
+
+    # No per-caller rate limit here (unlike the HTTP enqueue's ``preview_request_
+    # rate_limit``): the MCP surface is operator-only — every tool call is an
+    # authenticated API-token holder (``_authenticated_user_id`` above), not an
+    # anonymous browser session that could be rotated to multiply a budget — and a
+    # preview is already self-throttling (one CFS-limited ``preview`` worker slot, a
+    # few-second cap, and this call blocks on it), so a token holder cannot outrun the
+    # single slot regardless. The HTTP limiter exists to cap unauthenticated-ish
+    # session churn, which has no analogue on an API-token tool.
+    #
+    # Wait for the ephemeral job to finish and return the result in this one call
+    # (ADR "MCP waits internally with a bounded timeout"). The wait is a blocking
+    # poll loop, so it runs off the event loop in a worker thread — a synchronous
+    # MCP call is fine here (no browser-facing nginx hop), but it must not stall the
+    # async server. The tournament id binds the token to the tournament just enqueued
+    # for, the same guard the HTTP poll enforces.
+    state = await to_thread.run_sync(
+        partial(
+            wait_for_preview,
+            enqueued.token,
+            tournament_id,
+            timeout_s=_PREVIEW_WAIT_TIMEOUT_S,
+        )
+    )
+    if state.status is PreviewJobStatus.done and state.result is not None:
+        return state.result
+    if state.status is PreviewJobStatus.failed:
+        raise ToolError(state.error or "The preview solve failed.")
+    # Still queued/running past the bounded wait — in flight, not failed. Retryable,
+    # not a hang: the caller runs the tool again.
+    raise ToolError(
+        "The preview is still solving. Try again in a moment to read the result."
+    )
 
 
 @mcp.tool

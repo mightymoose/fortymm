@@ -6,10 +6,20 @@ import {
   mockScheduleSolveEndpoint,
 } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import {
+  mockSchedulePreviewCancelEndpoint,
+  mockSchedulePreviewEnqueueEndpoint,
+  mockSchedulePreviewPollEndpoint,
+} from '@/mocks/endpoints/tournaments/preview.endpoint'
+import {
   buildScheduleSolveRead,
   buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildPreviewEnqueued,
+  buildPreviewJobState,
+} from '@/mocks/factories/tournaments/preview.factory'
 import { server } from '@/mocks/server'
+import { schedulePreviewModalPage } from './schedule-preview-modal.page'
 
 import {
   buildDrawnEvent,
@@ -802,6 +812,99 @@ describe('ScheduleTab', () => {
     await waitFor(() => expect(page.queryRunNotice()).toBeInTheDocument())
     expect(page.queryRunNotice()).toHaveTextContent('Nothing to schedule yet')
     expect(page.queryRunNotice()).toHaveTextContent("Cut at least one event's draw")
+  })
+
+  // ----- the pre-live "Preview schedule" trigger (ADR "a schedule preview is a
+  // non-persistent solve over a synthetic field": owner-gated, allowed only while
+  // the tournament is pre-live — `draft` or `published` — and refused on
+  // `live`/`archived`). The affordance is hidden, never disabled (ADR-0015). The
+  // gating is a truth table over owner × status. ------------------------------
+
+  it('offers the owner the preview trigger on a DRAFT tournament', () => {
+    page.render({
+      tournament: buildTournament({
+        status: 'draft',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryPreviewTrigger()).toBeInTheDocument()
+    // Closed until clicked — the modal has not mounted, nothing has been enqueued.
+    expect(page.queryPreviewModal()).not.toBeInTheDocument()
+  })
+
+  it('offers the owner the preview trigger on a PUBLISHED tournament', () => {
+    page.render({
+      tournament: buildTournament({
+        status: 'published',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryPreviewTrigger()).toBeInTheDocument()
+  })
+
+  it('offers a NON-OWNER no preview trigger, even pre-live', () => {
+    page.render({
+      tournament: buildTournament({
+        canEdit: false,
+        status: 'draft',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryPreviewTrigger()).not.toBeInTheDocument()
+  })
+
+  it('offers the owner no preview trigger once the tournament is LIVE', () => {
+    page.render({
+      tournament: buildTournament({
+        status: 'live',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryPreviewTrigger()).not.toBeInTheDocument()
+  })
+
+  it('offers the owner no preview trigger once the tournament is ARCHIVED', () => {
+    page.render({
+      tournament: buildTournament({
+        status: 'archived',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.queryPreviewTrigger()).not.toBeInTheDocument()
+  })
+
+  it('opens the preview modal when the owner clicks the trigger', async () => {
+    // The modal enqueues on open (and cancels on close): stub the three ephemeral
+    // preview endpoints so the click resolves deterministically to the instant
+    // structure rather than the default store.
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(buildPreviewEnqueued(), { status: 202 }),
+    )
+    mockSchedulePreviewPollEndpoint(server, () =>
+      HttpResponse.json(buildPreviewJobState({ status: 'queued' })),
+    )
+    mockSchedulePreviewCancelEndpoint(server, () => new HttpResponse(null, { status: 204 }))
+
+    page.render({
+      tournament: buildTournament({
+        status: 'draft',
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+
+    expect(page.queryPreviewModal()).not.toBeInTheDocument()
+    page.openPreview()
+
+    // The dialog is up, and its instant structure streams in from the enqueue 202 —
+    // proving it really mounted the preview modal, not just any dialog.
+    expect(page.queryPreviewModal()).toBeInTheDocument()
+    await schedulePreviewModalPage.findFieldSummary()
   })
 
   it('withholds the button while the latest solve is already in flight', () => {

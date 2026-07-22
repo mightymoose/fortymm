@@ -13,6 +13,7 @@ from starlette.requests import Request
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.matches import _match_details_ip_key
+from app.tournaments import _preview_ip_rate_limit_key
 
 # Intentionally duplicated from the deploy manifests (docker-compose.dev/qa.yml,
 # deploy/uat/values.yaml) — YAML can't import a Python constant. Narrowing this
@@ -97,3 +98,22 @@ async def test_match_details_ip_key_buckets_distinct_clients() -> None:
     assert key_a == "match-details-ip:1.1.1.1"
     assert key_b == "match-details-ip:2.2.2.2"
     assert key_a != key_b
+
+
+async def test_preview_ip_rate_limit_key_buckets_distinct_clients() -> None:
+    # The per-IP ceiling on schedule-preview is what stops a caller cycling fresh
+    # /v1/session cookies (each a new per-session bucket) to multiply the per-session
+    # budget: only a stable, per-host key catches that, so two IPs must bucket apart
+    # and one IP must bucket together regardless of session. (The looser 20/min rate
+    # itself is declarative config; this pins the load-bearing key logic, like
+    # ``test_match_details_ip_key_buckets_distinct_clients`` above.)
+    key_a = await _preview_ip_rate_limit_key(_request_from("1.1.1.1"))
+    key_b = await _preview_ip_rate_limit_key(_request_from("2.2.2.2"))
+    key_a_again = await _preview_ip_rate_limit_key(_request_from("1.1.1.1"))
+
+    assert key_a == "schedule-preview-ip:1.1.1.1"
+    assert key_b == "schedule-preview-ip:2.2.2.2"
+    # Two hosts land in different buckets; the same host always lands in one — so a
+    # single host can't rotate sessions to escape the aggregate ceiling.
+    assert key_a != key_b
+    assert key_a == key_a_again
