@@ -45,11 +45,13 @@ from fastmcp.server.auth import (
     RemoteAuthProvider,
     TokenVerifier,
 )
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_http_request
 from pydantic import AnyHttpUrl, BaseModel, Field
+from pyrate_limiter import Duration, Rate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth0_identity import resolve_linked_user
 from app.auth0_provisioning import (
     AUTH0_EMAIL_CLAIM,
     AUTH0_EMAIL_VERIFIED_CLAIM,
@@ -96,6 +98,7 @@ from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
+from app.rate_limiting import RedisRateLimiter
 from app.rbac import user_has_permission
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
@@ -275,6 +278,36 @@ MCP_ACCESS_PERMISSION = "mcp.access"
 _UNCONFIGURED_ORIGIN = "https://mcp-unconfigured.fortymm.invalid"
 
 
+# Per-IP ceiling on the verifier's WRITE path only — the match-bind / provision
+# that a verified-but-*unlinked* token triggers *before* the ``mcp.access`` check,
+# i.e. an as-yet-unauthorized caller writing to ``users``. The steady-state linked
+# path (every later request) skips it entirely. 20/hour/IP is generous for
+# legitimate first-time agent onboarding (a client provisions once, then resolves
+# by ``sub`` forever after) while capping an attacker who mints fresh
+# verified-email identities from one IP to spray accounts — the same order of
+# magnitude as the ``auth0_link`` per-IP ceiling (40/hour). No ``identifier``: the
+# verifier has no FastAPI ``Request``, so it keys ``check()`` by client IP itself.
+_provision_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(20, Duration.HOUR)],
+    bucket_key="mcp-provision-ip",
+)
+
+
+def _provision_client_ip() -> str:
+    """Client IP for the provision/match rate-limit key, from the active MCP HTTP
+    request. ``request.client.host`` is the true client IP given
+    ``FORWARDED_ALLOW_IPS`` at the uvicorn edge (ADR-0008). Falls back to a fixed
+    ``"unknown"`` key when there's no live request context (``verify_token`` called
+    off a request, e.g. a unit test) so the limiter degrades to one shared bucket
+    rather than raising."""
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return "unknown"
+    client = request.client
+    return client.host if client else "unknown"
+
+
 class _RejectAllTokenVerifier(TokenVerifier):
     """The fail-closed verifier the MCP transport uses when Auth0 is unconfigured.
 
@@ -320,18 +353,32 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
         sub = access.claims.get("sub")
         if not isinstance(sub, str) or not sub:
             return None
-        # The namespaced email claims the Auth0 Action ships (see
-        # ``app.auth0_provisioning``). Only a non-empty ``str`` email counts, and
-        # ``email_verified`` must be the literal boolean ``True`` — anything else
-        # is treated as unverified, so an absent/false claim never matches or
-        # provisions.
-        raw_email = access.claims.get(AUTH0_EMAIL_CLAIM)
-        email = raw_email if isinstance(raw_email, str) and raw_email else None
-        email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
         async with mcp_session() as db:
-            user = await resolve_or_provision_user(db, sub, email, email_verified)
+            # Hot path: an already-linked ``sub`` resolves with no write. This is
+            # every steady-state request, so it is NOT rate limited.
+            user = await resolve_linked_user(db, sub)
             if user is None:
-                return None
+                # Write path: the ``sub`` isn't linked yet, so resolving it means
+                # a match-bind or a fresh provision — an as-yet-unauthorized
+                # caller writing to ``users``. Bound per client IP so a stream of
+                # freshly-minted verified-email identities from one source can't
+                # spray accounts; over the ceiling we refuse (→401) without
+                # touching the write path.
+                # ``bucket_key`` already namespaces the ZSET, so the key is just
+                # the client IP (not re-prefixed).
+                if not await _provision_ip_rate_limit.check(_provision_client_ip()):
+                    return None
+                # The namespaced email claims the Auth0 Action ships (see
+                # ``app.auth0_provisioning``). Only a non-empty ``str`` email
+                # counts, and ``email_verified`` must be the literal boolean
+                # ``True`` — anything else is treated as unverified, so an
+                # absent/false claim never matches or provisions.
+                raw_email = access.claims.get(AUTH0_EMAIL_CLAIM)
+                email = raw_email if isinstance(raw_email, str) and raw_email else None
+                email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
+                user = await resolve_or_provision_user(db, sub, email, email_verified)
+                if user is None:
+                    return None
             if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):
                 return None
             user_id = str(user.id)
@@ -2024,13 +2071,18 @@ async def preview_schedule(
             raise _map_preview_draw_error(error) from error
 
     # No per-caller rate limit here (unlike the HTTP enqueue's ``preview_request_
-    # rate_limit``): the MCP surface is operator-only — every tool call is an
-    # authenticated API-token holder (``_authenticated_user_id`` above), not an
-    # anonymous browser session that could be rotated to multiply a budget — and a
-    # preview is already self-throttling (one CFS-limited ``preview`` worker slot, a
-    # few-second cap, and this call blocks on it), so a token holder cannot outrun the
-    # single slot regardless. The HTTP limiter exists to cap unauthenticated-ish
-    # session churn, which has no analogue on an API-token tool.
+    # rate_limit``): a tool body only runs *after* the verifier authenticated the
+    # token AND authorized the resolved user against ``mcp.access``, so every tool
+    # call is an already-authorized account (``_authenticated_user_id`` above), not
+    # an anonymous browser session that could be rotated to multiply a budget. (The
+    # verifier's *write* path — the match-bind / provision that runs before that
+    # ``mcp.access`` check, on an as-yet-unauthorized caller — IS separately per-IP
+    # rate limited; see ``_provision_ip_rate_limit``. That protects account
+    # creation; it doesn't apply once a caller is a permitted token holder here.)
+    # A preview is also already self-throttling (one CFS-limited ``preview`` worker
+    # slot, a few-second cap, and this call blocks on it), so a token holder cannot
+    # outrun the single slot regardless. The HTTP limiter exists to cap
+    # unauthenticated-ish session churn, which has no analogue on an API-token tool.
     #
     # Wait for the ephemeral job to finish and return the result in this one call
     # (ADR "MCP waits internally with a bounded timeout"). The wait is a blocking

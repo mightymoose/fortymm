@@ -1093,8 +1093,11 @@ async def confirm_email(
     """Consume an email-change token: stamp the new email + ``confirmed_at``.
 
     Invariant: ``user.email`` holds the prior confirmed address; the new
-    address lives on ``token.sent_to`` until this endpoint runs. This is
-    the single place either column flips.
+    address lives on ``token.sent_to`` until this endpoint runs. This is one of
+    two places either column flips — the other is
+    ``auth0_provisioning._provision_user``, which stamps ``email`` +
+    ``confirmed_at`` together on a first-seen verified Auth0 email — so both
+    writers preserve the same invariant (email set ⇒ account confirmed).
 
     The token in the email is itself the bearer credential — we don't
     require the click to come from the same browser that requested it.
@@ -1286,9 +1289,10 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    # ``users.email`` is only ever set by ``confirm_email`` (alongside
-    # ``confirmed_at``), so an address lookup can only ever match a confirmed
-    # account — there is no unconfirmed-user branch to handle here.
+    # ``users.email`` is only ever set by ``confirm_email`` or
+    # ``auth0_provisioning._provision_user``, and both stamp ``confirmed_at``
+    # alongside it — so an address lookup can only ever match a confirmed account,
+    # and there is no unconfirmed-user branch to handle here.
     user = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()

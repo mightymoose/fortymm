@@ -42,10 +42,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from pyrate_limiter import Duration, Rate
 from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
+from app import mcp_server
 from app import queue as queue_module
 from app.admin_schedule_solves import SCHEDULING_VIEW_PERMISSION
 from app.auth0_provisioning import AUTH0_EMAIL_CLAIM, AUTH0_EMAIL_VERIFIED_CLAIM
@@ -79,6 +82,7 @@ from app.models import (
     UserRole,
 )
 from app.models.tournament import DrawType, EventFormat
+from app.rate_limiting import RedisRateLimiter
 from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -448,6 +452,98 @@ async def test_linked_sub_still_authorizes_via_verify_token(
 
     assert access is not None
     assert access.claims["user_id"] == str(user.id)
+
+
+def _pin_client_ip(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    """Make ``mcp_server.get_http_request()`` (which the verifier reads the client
+    IP off) return a request whose ``client.host`` is ``host``.
+
+    ``get_http_request()`` IS populated during ``verify_token`` under the real
+    transport (probed), but a direct ``verify_token`` call has no live request, so
+    the write path would otherwise key every call to the ``"unknown"`` fallback
+    bucket. Pinning it lets a test drive the per-IP limiter deterministically."""
+    request = Request({"type": "http", "client": (host, 12345), "headers": []})
+    monkeypatch.setattr(mcp_server, "get_http_request", lambda: request)
+
+
+async def test_write_path_is_rate_limited_per_ip(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlinked-but-verified tokens from one IP that MATCH ``mcp.access`` accounts
+    authorize (the write/match path binds each ``sub``) — until the per-IP provision
+    ceiling is hit, after which the next such token is refused (``verify_token`` →
+    ``None``) with no ``sub`` bound. The verifier calls the module-level limiter, so
+    monkeypatching it to a small rate exercises the real wiring fast."""
+    _pin_client_ip(monkeypatch, "203.0.113.7")
+    limit = 3
+    monkeypatch.setattr(
+        mcp_server,
+        "_provision_ip_rate_limit",
+        RedisRateLimiter(
+            rates=[Rate(limit, Duration.HOUR)],
+            bucket_key="mcp-provision-ip-test-limited",
+        ),
+    )
+
+    # ``limit + 1`` distinct matchable accounts (each verified email → its own
+    # unlinked ``sub``), all reachable only via the write/match path.
+    accounts = []
+    for i in range(limit + 1):
+        user = await make_user(db_session, f"mcp-ratelimit-{i}")
+        user.email = f"ratelimit-{i}@example.com"
+        await db_session.commit()
+        await _grant_mcp_access(db_session, user)
+        sub = "auth0|" + uuid.uuid4().hex
+        token = _sign_token(
+            sub=sub,
+            extra_claims={
+                AUTH0_EMAIL_CLAIM: user.email,
+                AUTH0_EMAIL_VERIFIED_CLAIM: True,
+            },
+        )
+        accounts.append((user, sub, token))
+
+    verifier = _email_verifier()
+    # The first ``limit`` write-path tokens match + bind + authorize.
+    for user, _sub, token in accounts[:limit]:
+        access = await verifier.verify_token(token)
+        assert access is not None
+        assert access.claims["user_id"] == str(user.id)
+
+    # The next is rate limited BEFORE the write: rejected, and its ``sub`` unbound.
+    over_user, over_sub, over_token = accounts[limit]
+    assert await verifier.verify_token(over_token) is None
+    await db_session.refresh(over_user)
+    assert over_user.auth0_sub is None
+
+
+async def test_linked_hot_path_is_not_rate_limited(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The already-linked hot path skips the limiter entirely: with the provision
+    ceiling pinned to an impossibly tight 1/hour, a single linked + permitted user's
+    token authorizes many times over from one IP — proving the steady-state read
+    path is never charged against the write-path budget."""
+    _pin_client_ip(monkeypatch, "203.0.113.9")
+    monkeypatch.setattr(
+        mcp_server,
+        "_provision_ip_rate_limit",
+        RedisRateLimiter(
+            rates=[Rate(1, Duration.HOUR)],
+            bucket_key="mcp-provision-ip-test-hot",
+        ),
+    )
+
+    user = await make_user(db_session, "mcp-hotpath-owner")
+    token = await _mint(db_session, user)
+
+    verifier = _email_verifier()
+    for _ in range(5):
+        access = await verifier.verify_token(token)
+        assert access is not None
+        assert access.claims["user_id"] == str(user.id)
 
 
 def test_partial_auth0_config_yields_reject_all_verifier(

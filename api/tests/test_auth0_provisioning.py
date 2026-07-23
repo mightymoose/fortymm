@@ -231,3 +231,54 @@ async def test_concurrent_insert_reresolves_to_winner(
         await db_session.execute(select(func.count()).where(User.email == email))
     ).scalar_one()
     assert matches == 1
+
+
+async def test_match_branch_reresolves_on_concurrent_sub_bind(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The *match* branch binds ``sub`` to an email-matched account, but a
+    concurrent bind (e.g. a manual ``/auth0/link`` in flight) binds the same
+    ``sub`` to a *different* row first. The branch's commit then hits the unique
+    ``users.auth0_sub`` constraint (``IntegrityError``): it must roll back and
+    re-resolve to the winning row instead of letting the error propagate.
+
+    The race is staged by patching ``_resolve_live_user_by_email`` — called at the
+    top of the match branch, before its commit — to commit a competing row that
+    binds the same ``sub`` to a different user on a separate session first.
+    """
+    sub = _sub()
+    email = "match-race@example.com"
+    # The email-matched account the branch will try to bind (``auth0_sub`` still
+    # ``None``, so it takes the bind branch).
+    matched_user = await _make_user(db_session, "match-race-target", email=email)
+
+    import app.auth0_provisioning as prov
+
+    real_resolve = prov._resolve_live_user_by_email
+    raced = {"done": False}
+
+    async def racing_resolve(db: AsyncSession, e: str) -> User | None:
+        result = await real_resolve(db, e)
+        if not raced["done"]:
+            raced["done"] = True
+            # A concurrent bind of the SAME ``sub`` to a DIFFERENT row wins first,
+            # committed on a separate connection mid-branch.
+            sm = async_sessionmaker(engine, expire_on_commit=False)
+            async with sm() as other:
+                other.add(User(username="sub-race-winner", auth0_sub=sub))
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(prov, "_resolve_live_user_by_email", racing_resolve)
+    resolved = await resolve_or_provision_user(db_session, sub, email, True)
+
+    # Re-resolved cleanly to the concurrent winner (via ``resolve_linked_user``),
+    # not a raised IntegrityError.
+    assert resolved is not None
+    assert resolved.username == "sub-race-winner"
+    assert resolved.auth0_sub == sub
+    # The email-matched row's bind was rolled back — it never took the ``sub``.
+    await db_session.refresh(matched_user)
+    assert matched_user.auth0_sub is None

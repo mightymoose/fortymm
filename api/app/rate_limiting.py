@@ -77,7 +77,7 @@ class RedisRateLimiter:
         *,
         rates: list[Rate],
         bucket_key: str,
-        identifier: Callable[[Request], Awaitable[str]],
+        identifier: Callable[[Request], Awaitable[str]] | None = None,
     ):
         self._rates = rates
         self._bucket_key = bucket_key
@@ -88,26 +88,41 @@ class RedisRateLimiter:
     def _reset(self) -> None:
         self._limiters.clear()
 
-    async def __call__(self, request: Request, response: Response) -> None:
-        if _redis is None:
-            return
+    async def check(self, key: str) -> bool:
+        """Consume one token from ``key``'s bucket; ``False`` when it's exhausted.
 
-        rate_key = await self._identifier(request)
+        The reusable core of the limiter, router-free so a non-HTTP caller (the
+        MCP token verifier) can bound a path directly without a ``Request``.
+        Falls **open** (``True``) when Redis is unpublished or unavailable
+        mid-call — matching the dependency's fail-open stance so a Redis outage
+        never wedges the protected path. ``key`` becomes the ZSET suffix, so each
+        distinct key gets its own independent bucket.
+        """
+        if _redis is None:
+            return True
         try:
-            limiter = self._limiters.get(rate_key)
+            limiter = self._limiters.get(key)
             if limiter is None:
                 bucket = await RedisBucket.init(
-                    self._rates, _redis, f"{self._bucket_key}:{rate_key}"
+                    self._rates, _redis, f"{self._bucket_key}:{key}"
                 )
                 limiter = Limiter(bucket)
-                self._limiters[rate_key] = limiter
-
-            success = await limiter.try_acquire_async(rate_key, blocking=False)
+                self._limiters[key] = limiter
+            return await limiter.try_acquire_async(key, blocking=False)
         except redis_asyncio.RedisError:
             # Redis unavailable mid-request: fall open rather than 500ing the
             # protected route (matches the behaviour when _redis is None).
+            return True
+
+    async def __call__(self, request: Request, response: Response) -> None:
+        if _redis is None:
             return
-        if not success:
+        if self._identifier is None:
+            raise RuntimeError(
+                "RedisRateLimiter used as a FastAPI dependency needs an identifier"
+            )
+        rate_key = await self._identifier(request)
+        if not await self.check(rate_key):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too Many Requests",

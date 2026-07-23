@@ -90,7 +90,20 @@ async def resolve_or_provision_user(
     if matched is not None:
         if matched.auth0_sub is None:
             matched.auth0_sub = sub
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                # A concurrent bind of the same ``sub`` to a *different* row (e.g.
+                # a manual ``/auth0/link`` in flight) wins the unique
+                # ``users.auth0_sub`` constraint first. Same guard as
+                # ``_provision_user`` / ``_bind_auth0_sub``: roll back and
+                # re-resolve (by ``sub``, then by email) so the loser returns the
+                # winning row instead of raising.
+                await db.rollback()
+                winner = await resolve_linked_user(db, sub)
+                if winner is not None:
+                    return winner
+                return await _resolve_live_user_by_email(db, email)
             return matched
         # A *different* Auth0 identity claims an already-linked email — the same
         # ``sub`` would already have returned at step 1 (``resolve_linked_user``),

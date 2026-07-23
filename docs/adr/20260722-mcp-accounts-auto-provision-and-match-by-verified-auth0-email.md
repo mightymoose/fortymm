@@ -77,6 +77,11 @@ Two trust/convergence points this rests on:
   token for a new identity — where previously verification was pure. It is
   first-token-only per `sub`; every later token resolves the now-linked user with
   no write.
+- **The write path is per-IP rate limited** (the match-bind / provision happens on
+  an as-yet-unauthorized caller, before the `mcp.access` check). The steady-state
+  linked-user read path is resolved first and is *not* limited, so a real agent is
+  never throttled; only the first-token write is bounded per client IP so a stream
+  of freshly-minted verified-email identities from one source can't spray accounts.
 - **Dead until an Auth0 Action ships `email` + `email_verified` on the MCP access
   token.** Custom-API tokens carry no profile claims by default; without the
   Action every unlinked token hits step 3 and 401s. Auth0 drops non-namespaced
