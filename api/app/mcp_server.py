@@ -50,7 +50,11 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth0_identity import resolve_linked_user
+from app.auth0_provisioning import (
+    AUTH0_EMAIL_CLAIM,
+    AUTH0_EMAIL_VERIFIED_CLAIM,
+    resolve_or_provision_user,
+)
 from app.config import get_settings
 from app.db import get_sessionmaker
 from app.draws import (
@@ -292,9 +296,17 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
     built-in cache, and RS256 / issuer / audience / expiry checks); we override
     :meth:`verify_token` to add fortymm's authorization on top. On a token that
     fails verification we return ``None`` (→ 401). On a verified token we read its
-    ``sub`` and resolve it to the explicitly **linked**, non-tombstoned ``User``
-    (:func:`app.auth0_identity.resolve_linked_user`); a ``sub`` linked to no live
-    user, or a linked user lacking ``mcp.access``, is also ``None`` (→ 401).
+    ``sub`` (and namespaced email claims) and resolve it to a non-tombstoned
+    ``User`` (:func:`app.auth0_provisioning.resolve_or_provision_user`); a ``sub``
+    that resolves to no live user, or a user lacking ``mcp.access``, is also
+    ``None`` (→ 401).
+
+    Resolution goes through :func:`app.auth0_provisioning.resolve_or_provision_user`,
+    which first tries the explicitly linked user and, failing that, *matches* the
+    token's verified email to an existing account (binding the ``sub``) or
+    *provisions* a fresh registered account on it — so a first-time agent whose
+    verified Auth0 email matches (or has no) fortymm account gets in without a
+    manual link step. An unverified / absent email never matches or provisions.
 
     On success we return an ``AccessToken`` that preserves the existing tool
     contract: the resolved user id rides as ``subject`` / ``client_id`` and under
@@ -308,8 +320,16 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
         sub = access.claims.get("sub")
         if not isinstance(sub, str) or not sub:
             return None
+        # The namespaced email claims the Auth0 Action ships (see
+        # ``app.auth0_provisioning``). Only a non-empty ``str`` email counts, and
+        # ``email_verified`` must be the literal boolean ``True`` — anything else
+        # is treated as unverified, so an absent/false claim never matches or
+        # provisions.
+        raw_email = access.claims.get(AUTH0_EMAIL_CLAIM)
+        email = raw_email if isinstance(raw_email, str) and raw_email else None
+        email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
         async with mcp_session() as db:
-            user = await resolve_linked_user(db, sub)
+            user = await resolve_or_provision_user(db, sub, email, email_verified)
             if user is None:
                 return None
             if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):

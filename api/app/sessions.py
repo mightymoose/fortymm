@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import redis.exceptions
-from coolname import generate_slug
 from fastapi import (
     APIRouter,
     Cookie,
@@ -59,6 +58,7 @@ from app.schemas.session import (
 )
 from app.token_hashing import hash_token
 from app.uniqueness import name_taken
+from app.usernames import generate_username
 
 log = logging.getLogger(__name__)
 
@@ -340,20 +340,6 @@ login_consume_ip_rate_limit = RedisRateLimiter(
 )
 
 
-async def _generate_username(db: AsyncSession) -> str:
-    base = generate_slug(2)
-    result = await db.execute(
-        select(User.username).where(User.username.ilike(f"{base}%", escape="\\"))
-    )
-    taken = {u.lower() for u in result.scalars().all()}
-    if base not in taken:
-        return base
-    suffix = 2
-    while f"{base}-{suffix}" in taken:
-        suffix += 1
-    return f"{base}-{suffix}"
-
-
 def _cookie_secure() -> bool:
     return os.environ.get("SESSION_COOKIE_SECURE", "true").lower() != "false"
 
@@ -502,7 +488,7 @@ async def _load_permissions(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
 
 
 async def _create_session(db: AsyncSession) -> tuple[User, str]:
-    user = User(username=await _generate_username(db))
+    user = User(username=await generate_username(db))
     db.add(user)
     await db.flush()
 
