@@ -129,6 +129,15 @@ mapping, so every `@mcp.tool` and `_authenticated_user_id()` are untouched.
 
 ## Consequences
 
+> **Amended by #1159 (2026-07-23).** Two consequences below are superseded along
+> with decision #4: there is **no longer a one-time human link step** (auto-provision/
+> match by verified Auth0 email binds the identity at MCP-token time — see
+> `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email.md`), and
+> the **Regular Web Application / `client_secret`** registration existed only for that
+> now-removed link flow, so it is no longer used and stores no secret. Only the
+> API/Resource-Server registration remains; verification still needs no secret (JWKS
+> is public).
+
 - **Better agent onboarding, no shared secret.** Hosts complete an OAuth login
   and manage token lifecycle themselves; no operator pastes a long-lived bearer.
 - **A one-time human link step per user.** A fortymm user must log into Auth0
