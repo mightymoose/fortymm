@@ -14,9 +14,10 @@ The verifier does RS256/JWKS/iss/aud/exp checks on the Auth0-issued access token
 then resolves its ``sub`` to the explicitly **linked**, non-tombstoned ``User``
 (:func:`app.auth0_identity.resolve_linked_user`) and admits it only if that user
 holds the ``mcp.access`` permission — so an unauthenticated or unauthorized MCP
-call fails **at the transport** (401), not inside a tool. The old opaque
-``context="api"`` bearer token is no longer accepted on the MCP surface (it stays
-alive for HTTP/iOS). Every tool authenticates before it runs.
+call fails **at the transport** (401), not inside a tool. Auth0 OAuth is the only
+way to authenticate to the MCP surface — the legacy opaque personal-API-token
+flow it briefly shared has since been removed platform-wide. Every tool
+authenticates before it runs.
 
 **Fails closed when unconfigured.** With ``AUTH0_*`` empty (local / qa / e2e /
 dev-compose all boot the api without Auth0), the api still imports and MCP still
@@ -284,8 +285,7 @@ _UNCONFIGURED_ORIGIN = "https://mcp-unconfigured.fortymm.invalid"
 # path (every later request) skips it entirely. 20/hour/IP is generous for
 # legitimate first-time agent onboarding (a client provisions once, then resolves
 # by ``sub`` forever after) while capping an attacker who mints fresh
-# verified-email identities from one IP to spray accounts — the same order of
-# magnitude as the ``auth0_link`` per-IP ceiling (40/hour). No ``identifier``: the
+# verified-email identities from one IP to spray accounts. No ``identifier``: the
 # verifier has no FastAPI ``Request``, so it keys ``check()`` by client IP itself.
 _provision_ip_rate_limit = RedisRateLimiter(
     rates=[Rate(20, Duration.HOUR)],
@@ -539,7 +539,7 @@ async def _load_visible_tournament(
 
 @mcp.tool
 async def get_match(match_id: uuid.UUID) -> MatchDetails:
-    """Read a single match as the authenticated API-token caller.
+    """Read a single match as the authenticated MCP caller.
 
     Returns the same ``MatchDetails`` view the HTTP ``GET /v1/matches/{match_id}``
     endpoint returns for that user: viewer-relative perspective flags
@@ -578,7 +578,7 @@ async def create_match(
     league_id: uuid.UUID | None = None,
     rated: bool = True,
 ) -> MatchDetails:
-    """Start a match as the authenticated API-token caller and return it.
+    """Start a match as the authenticated MCP caller and return it.
 
     Mirrors ``POST /v1/matches``: it reuses the shared creation service and
     serializer, so the MCP and HTTP surfaces can never drift. ``best_of`` is the
@@ -680,7 +680,7 @@ async def enter_game_score(
     side_1_points: int,
     side_2_points: int,
 ) -> MatchDetails:
-    """Save the first score for a game as the authenticated API-token caller and
+    """Save the first score for a game as the authenticated MCP caller and
     return the updated match.
 
     Mirrors ``POST /v1/matches/{match_id}/games/{game_number}/scores/new``: it
@@ -718,7 +718,7 @@ async def list_schedule_solves(
     page_size: ScheduleSolvePageSize = LIST_DEFAULT_PAGE_SIZE,
 ) -> list[AdminScheduleSolveRead]:
     """Read the Administration area's cross-tournament SOLVE LEDGER as the
-    authenticated API-token caller — one page, newest request first.
+    authenticated MCP caller — one page, newest request first.
 
     Mirrors the admin ``GET /v1/admin/schedule-solves``: it composes the exact same
     shared reader the HTTP route composes (``schedule_solve_queries``), so the two
@@ -754,7 +754,7 @@ async def list_schedule_solves(
 
 @mcp.tool
 async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
-    """Read a single tournament as the authenticated API-token caller.
+    """Read a single tournament as the authenticated MCP caller.
 
     Returns the same ``TournamentDetailRead`` view the HTTP
     ``GET /v1/tournaments/{tournament_id}`` endpoint returns for that user: the
@@ -844,7 +844,7 @@ class TournamentScheduleRead(BaseModel):
 
 @mcp.tool
 async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
-    """Read a tournament's SCHEDULE as the authenticated API-token caller — a
+    """Read a tournament's SCHEDULE as the authenticated MCP caller — a
     narrow, agent-shaped projection, not the whole tournament detail.
 
     Returns each event's draw fixtures with their placement (``table_id`` and the
@@ -913,7 +913,7 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
 
 @mcp.tool
 async def list_my_tournaments() -> list[TournamentDetailRead]:
-    """List the tournaments the authenticated API-token caller OWNS, newest first.
+    """List the tournaments the authenticated MCP caller OWNS, newest first.
 
     Returns the same ``TournamentDetailRead`` aggregate the HTTP
     ``GET /v1/tournaments`` list serves — each tournament with its events, their
@@ -1002,7 +1002,7 @@ async def edit_tournament(
     tournament_id: uuid.UUID,
     updates: TournamentUpdate,
 ) -> TournamentRead:
-    """Edit a tournament you OWN as the authenticated API-token caller, and return
+    """Edit a tournament you OWN as the authenticated MCP caller, and return
     the updated tournament.
 
     Mirrors ``PATCH /v1/tournaments/{tournament_id}``: it reuses the shared
@@ -1060,7 +1060,7 @@ async def edit_tournament(
 
 @mcp.tool
 async def create_tournament(payload: TournamentCreate) -> TournamentRead:
-    """Create a tournament as the authenticated API-token caller, and return it.
+    """Create a tournament as the authenticated MCP caller, and return it.
 
     Mirrors ``POST /v1/tournaments``: it reuses the shared ``create_tournament`` verb
     and the same ``TournamentCreate`` schema the HTTP route validates, so the MCP and
@@ -1129,7 +1129,7 @@ class TournamentDeletionConfirmation(BaseModel):
 
 @mcp.tool
 async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfirmation:
-    """Delete a tournament you OWN as the authenticated API-token caller. Returns a
+    """Delete a tournament you OWN as the authenticated MCP caller. Returns a
     confirmation carrying the deleted tournament's id.
 
     Mirrors ``DELETE /v1/tournaments/{tournament_id}`` (which answers a bodiless
@@ -1161,7 +1161,7 @@ async def transition_tournament(
     tournament_id: uuid.UUID,
     to: TournamentStatus,
 ) -> TournamentRead:
-    """Move a tournament you OWN along its lifecycle as the authenticated API-token
+    """Move a tournament you OWN along its lifecycle as the authenticated MCP
     caller, and return the moved tournament.
 
     Mirrors ``POST /v1/tournaments/{tournament_id}/transitions``: it reuses the shared
@@ -1231,7 +1231,7 @@ async def create_event(
     tournament_id: uuid.UUID,
     payload: TournamentEventCreate,
 ) -> TournamentEventRead:
-    """Add an event to a tournament you OWN as the authenticated API-token caller, and
+    """Add an event to a tournament you OWN as the authenticated MCP caller, and
     return the created event.
 
     Mirrors ``POST /v1/tournaments/{tournament_id}/events``: it reuses the shared
@@ -1280,7 +1280,7 @@ async def update_event(
     event_id: uuid.UUID,
     updates: TournamentEventUpdate,
 ) -> TournamentEventRead:
-    """Edit an event of a tournament you OWN as the authenticated API-token caller, and
+    """Edit an event of a tournament you OWN as the authenticated MCP caller, and
     return the updated event.
 
     Mirrors ``PATCH /v1/tournaments/{tournament_id}/events/{event_id}``: it reuses the
@@ -1364,7 +1364,7 @@ async def delete_event(
     tournament_id: uuid.UUID,
     event_id: uuid.UUID,
 ) -> EventDeletionConfirmation:
-    """Delete an event from a tournament you OWN as the authenticated API-token caller.
+    """Delete an event from a tournament you OWN as the authenticated MCP caller.
     Returns a confirmation carrying the deleted event's id.
 
     Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}`` (which answers
@@ -1417,7 +1417,7 @@ async def enter_event(
     event_id: uuid.UUID,
     user_id: uuid.UUID | None = None,
 ) -> TournamentEntrantRead:
-    """Enter a player in a singles event as the authenticated API-token caller —
+    """Enter a player in a singles event as the authenticated MCP caller —
     yourself,
     or (as the tournament's owner) somebody else — and return the created entrant.
 
@@ -1526,7 +1526,7 @@ async def withdraw_from_event(
     event_id: uuid.UUID,
     entry_id: uuid.UUID,
 ) -> EntryWithdrawalConfirmation:
-    """Withdraw an entry from a singles event as the authenticated API-token caller —
+    """Withdraw an entry from a singles event as the authenticated MCP caller —
     your own, or (as the tournament's owner) any entry in it. Returns a confirmation
     carrying the withdrawn entry's id.
 
@@ -1711,7 +1711,7 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
 
 @mcp.tool
 async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
-    """Cut (or re-cut) an event's DRAW as the authenticated API-token caller — generate
+    """Cut (or re-cut) an event's DRAW as the authenticated MCP caller — generate
     its fixtures from its entrants — and return them.
 
     Mirrors ``POST /v1/tournaments/{tournament_id}/events/{event_id}/draw``: it reuses
@@ -1756,7 +1756,7 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
 
 @mcp.tool
 async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
-    """Un-cut an event's DRAW as the authenticated API-token caller: delete its
+    """Un-cut an event's DRAW as the authenticated MCP caller: delete its
     fixtures, leaving the event with no draw. Returns a confirmation carrying the
     resolved tournament, the event, and the fixtures now remaining (``0`` on success).
 
@@ -1804,7 +1804,7 @@ async def place_fixture(
     placement: TournamentFixturePlacementUpdate,
 ) -> TournamentFixtureRead:
     """Set (or clear) a fixture's PLACEMENT — its table and predicted start — for a
-    fixture of a tournament you OWN as the authenticated API-token caller, and return
+    fixture of a tournament you OWN as the authenticated MCP caller, and return
     the updated fixture.
 
     Mirrors ``PATCH /v1/tournaments/{tournament_id}/fixtures/{fixture_id}/placement``:
@@ -1868,7 +1868,7 @@ async def place_fixture(
 
 @mcp.tool
 async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
-    """Run the SCHEDULER for a tournament you OWN as the authenticated API-token
+    """Run the SCHEDULER for a tournament you OWN as the authenticated MCP
     caller — queue a solve that places its cut draws' fixtures onto tables and
     times — and return the ledger row that will carry the outcome.
 
@@ -1996,7 +1996,7 @@ async def preview_schedule(
     overrides: dict[uuid.UUID, int] | None = None,
 ) -> PreviewResult:
     """Preview the SCHEDULE for a PRE-LIVE tournament you OWN as the authenticated
-    API-token caller — solve a synthetic field over the tournament's real tables,
+    MCP caller — solve a synthetic field over the tournament's real tables,
     windows and formats **before anyone has registered** — and return the whole
     result in ONE call.
 
@@ -2082,7 +2082,7 @@ async def preview_schedule(
     # A preview is also already self-throttling (one CFS-limited ``preview`` worker
     # slot, a few-second cap, and this call blocks on it), so a token holder cannot
     # outrun the single slot regardless. The HTTP limiter exists to cap
-    # unauthenticated-ish session churn, which has no analogue on an API-token tool.
+    # unauthenticated-ish session churn, which has no analogue on an MCP tool.
     #
     # Wait for the ephemeral job to finish and return the result in this one call
     # (ADR "MCP waits internally with a bounded timeout"). The wait is a blocking
@@ -2114,7 +2114,7 @@ async def search_players(
     query: str,
     limit: SearchLimit = SEARCH_DEFAULT_LIMIT,
 ) -> list[PlayerRead]:
-    """Search registered players by username as the authenticated API-token
+    """Search registered players by username as the authenticated MCP
     caller — the opponent picker's typeahead.
 
     Mirrors ``GET /v1/players/search``: it reuses the shared
@@ -2138,7 +2138,7 @@ async def list_my_matches(
     page: MatchPage = 1,
     page_size: MatchPageSize = MY_MATCHES_DEFAULT_PAGE_SIZE,
 ) -> PlayerMatchListResponse:
-    """List the authenticated API-token caller's OWN match history, newest first.
+    """List the authenticated MCP caller's OWN match history, newest first.
 
     Reuses the same ``paginated_player_matches`` read the HTTP
     ``GET /v1/players/{id}/matches`` endpoint serves — scoped to the caller — so
@@ -2167,7 +2167,7 @@ async def update_game_score(
     expected_version: int,
 ) -> MatchDetails:
     """Replace a game's committed score under optimistic concurrency as the
-    authenticated API-token caller and return the updated match.
+    authenticated MCP caller and return the updated match.
 
     Mirrors ``PUT /v1/matches/{match_id}/games/{game_number}/scores``: it reuses
     the shared ``match_scoring`` write path (blocking row lock, scorability + the
@@ -2238,7 +2238,7 @@ async def propose_result(
     games: list[MatchResultsGameWrite],
     supersedes_result_id: uuid.UUID | None = None,
 ) -> MatchDetails:
-    """Propose a result for a match as the authenticated API-token caller — the
+    """Propose a result for a match as the authenticated MCP caller — the
     first verb of the propose/accept negotiation — and return the updated match.
 
     Mirrors ``POST /v1/matches/{match_id}/results``: it reuses the shared
@@ -2297,7 +2297,7 @@ async def accept_result(
     match_id: uuid.UUID,
     result_id: uuid.UUID,
 ) -> MatchDetails:
-    """Accept a standing proposal as the authenticated API-token caller — the
+    """Accept a standing proposal as the authenticated MCP caller — the
     second verb of the propose/accept negotiation — and return the completed
     match.
 
@@ -2343,7 +2343,7 @@ async def delete_game_score(
     match_id: uuid.UUID,
     game_number: GameNumber,
 ) -> MatchDetails:
-    """Clear a game's committed score as the authenticated API-token caller and
+    """Clear a game's committed score as the authenticated MCP caller and
     return the updated match.
 
     Mirrors ``DELETE /v1/matches/{match_id}/games/{game_number}/scores``: it

@@ -36,7 +36,6 @@ import { Route as AppAdminScheduleSolvesRouteImport } from './routes/_app/admin.
 import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
 import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
 import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
-import { Route as AppAdminApiTokensRouteImport } from './routes/_app/admin.api-tokens'
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
 import { Route as AppPlayersUserIdMatchesRouteImport } from './routes/_app/players/$userId_.matches'
 import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/matches.$matchId.results.new'
@@ -179,11 +178,6 @@ const AppAdminBroadcastRoute = AppAdminBroadcastRouteImport.update({
   path: '/broadcast',
   getParentRoute: () => AppAdminRoute,
 } as any)
-const AppAdminApiTokensRoute = AppAdminApiTokensRouteImport.update({
-  id: '/api-tokens',
-  path: '/api-tokens',
-  getParentRoute: () => AppAdminRoute,
-} as any)
 const AppMatchesMatchIdIndexRoute = AppMatchesMatchIdIndexRouteImport.update({
   id: '/matches/$matchId/',
   path: '/matches/$matchId/',
@@ -226,7 +220,6 @@ export interface FileRoutesByFullPath {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login/': typeof LoginIndexRoute
-  '/admin/api-tokens': typeof AppAdminApiTokensRoute
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
@@ -257,7 +250,6 @@ export interface FileRoutesByTo {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login': typeof LoginIndexRoute
-  '/admin/api-tokens': typeof AppAdminApiTokensRoute
   '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
@@ -293,7 +285,6 @@ export interface FileRoutesById {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login/': typeof LoginIndexRoute
-  '/_app/admin/api-tokens': typeof AppAdminApiTokensRoute
   '/_app/admin/broadcast': typeof AppAdminBroadcastRoute
   '/_app/admin/permissions': typeof AppAdminPermissionsRoute
   '/_app/admin/roles': typeof AppAdminRolesRoute
@@ -329,7 +320,6 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/login/'
-    | '/admin/api-tokens'
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
@@ -360,7 +350,6 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/login'
-    | '/admin/api-tokens'
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
@@ -395,7 +384,6 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/login/'
-    | '/_app/admin/api-tokens'
     | '/_app/admin/broadcast'
     | '/_app/admin/permissions'
     | '/_app/admin/roles'
@@ -619,13 +607,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBroadcastRouteImport
       parentRoute: typeof AppAdminRoute
     }
-    '/_app/admin/api-tokens': {
-      id: '/_app/admin/api-tokens'
-      path: '/api-tokens'
-      fullPath: '/admin/api-tokens'
-      preLoaderRoute: typeof AppAdminApiTokensRouteImport
-      parentRoute: typeof AppAdminRoute
-    }
     '/_app/matches/$matchId/': {
       id: '/_app/matches/$matchId/'
       path: '/matches/$matchId'
@@ -665,7 +646,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppAdminRouteChildren {
-  AppAdminApiTokensRoute: typeof AppAdminApiTokensRoute
   AppAdminBroadcastRoute: typeof AppAdminBroadcastRoute
   AppAdminPermissionsRoute: typeof AppAdminPermissionsRoute
   AppAdminRolesRoute: typeof AppAdminRolesRoute
@@ -675,7 +655,6 @@ interface AppAdminRouteChildren {
 }
 
 const AppAdminRouteChildren: AppAdminRouteChildren = {
-  AppAdminApiTokensRoute: AppAdminApiTokensRoute,
   AppAdminBroadcastRoute: AppAdminBroadcastRoute,
   AppAdminPermissionsRoute: AppAdminPermissionsRoute,
   AppAdminRolesRoute: AppAdminRolesRoute,

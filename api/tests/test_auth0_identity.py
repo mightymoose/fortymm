@@ -17,7 +17,7 @@ from tests._helpers import make_user
 
 
 async def _link(db_session: AsyncSession, user: User, sub: str) -> None:
-    """Bind ``sub`` to ``user`` the way the link callback does."""
+    """Bind ``sub`` to ``user`` the way auto-provision does."""
     user.auth0_sub = sub
     await db_session.commit()
 

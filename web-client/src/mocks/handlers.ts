@@ -6,12 +6,7 @@ import {
   type RatingRange,
 } from '@/api/players'
 import type { components } from '@/api/schema'
-import {
-  apiTokenCreated,
-  healthCheck,
-  player,
-  sessionResponse,
-} from '@/test/factories'
+import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
   FORTYMM_LEAGUE_ID,
   USATT_LEAGUE_ID,
@@ -87,10 +82,8 @@ export const mockSession = sessionResponse({
     // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
     // tester who can self-register into a singles event, and
     // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
-    // permission-gated) tool renders under `npm run dev`, SCHEDULING_VIEW
-    // so the Scheduling item appears and the solve-ledger page loads, and
-    // API_TOKEN_MANAGE so the API-tokens item appears and its Generate control
-    // renders under `npm run dev`.
+    // permission-gated) tool renders under `npm run dev`, and SCHEDULING_VIEW
+    // so the Scheduling item appears and the solve-ledger page loads.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
@@ -99,17 +92,10 @@ export const mockSession = sessionResponse({
       PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
       PERM.SCHEDULING_VIEW,
-      PERM.API_TOKEN_MANAGE,
-      // MCP_ACCESS so the Settings page's "Agent access" section (Auth0 identity
-      // link) renders under `npm run dev`.
-      PERM.MCP_ACCESS,
     ],
   },
 })
 export const mockHealthy = healthCheck()
-
-// Dev-world Auth0 agent-access link state (see the `/v1/auth0/link` handlers).
-let mockAuth0Linked = true
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -1063,29 +1049,6 @@ export const handlers = [
   http.delete('*/v1/session', async () => {
     await delay(150)
     return new HttpResponse(null, { status: 204 })
-  }),
-  // Mint (rotate) the caller's personal API token — the Administration area's
-  // API-tokens page. Returns a fresh raw token each call, mirroring the server's
-  // one-time reveal; the dev world grants API_TOKEN_MANAGE (see mockSession) so
-  // the Generate control renders under `npm run dev`.
-  http.post('*/v1/api-tokens', async () => {
-    await delay(300)
-    return HttpResponse.json(apiTokenCreated(), { status: 201 })
-  }),
-  // ----- Auth0 agent-access link (Settings → Agent access) ----------------
-  // Whether the dev user's Auth0 identity is bound. Starts linked so the
-  // "Connected" + Unlink state is demoable under `npm run dev`; the DELETE
-  // flips it, so the Unlink interaction actually drives the section back to
-  // "not connected". (The Connect flow is an OAuth *redirect* to the real API,
-  // which MSW can't stand in for — it only works against a live backend.)
-  http.get('*/v1/auth0/link', async () => {
-    await delay(200)
-    return HttpResponse.json({ linked: mockAuth0Linked })
-  }),
-  http.delete('*/v1/auth0/link', async () => {
-    await delay(200)
-    mockAuth0Linked = false
-    return HttpResponse.json({ linked: mockAuth0Linked })
   }),
   // ----- /v1/players list + per-player profile + per-player matches ------
   // BFF endpoints — each returns exactly what its consumer page needs. The

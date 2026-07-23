@@ -7,9 +7,8 @@ imports) so the MCP OAuth Resource-Server verifier (the ``/mcp`` transport, see
 ``docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md``)
 resolves every subject through exactly this function and can never drift.
 
-Mirrors ``app/api_token_auth.py::find_api_token_user`` — the same router-free,
-importable shape and the same tombstone exclusion — since both are shared
-identity resolvers behind the MCP surface.
+Router-free and importable, with the same tombstone exclusion the auth-layer
+session queries use, so a subject linked to a folded-in guest never surfaces.
 """
 
 from sqlalchemy import select

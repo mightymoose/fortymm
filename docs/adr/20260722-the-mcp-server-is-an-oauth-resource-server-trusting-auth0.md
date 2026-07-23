@@ -18,6 +18,14 @@ decision. Those ADRs' *shared-service-layer* decision (one service behind HTTP
 and MCP adapters) is unchanged; only how the **MCP transport authenticates** and
 **who is authorized** changes here.
 
+> **Amended by #1159 (2026-07-23).** Two decisions below have since been
+> superseded and one rested on a false premise — see the inline amendment notes
+> on decisions **4** (the in-session link flow) and **6** (the opaque bearer
+> path). Auto-provision/match by verified Auth0 email
+> (`20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email.md`)
+> is now the **only** MCP onboarding path; both the in-session Auth0-link flow
+> and the opaque `context="api"` API-token flow have been removed platform-wide.
+
 ## Context
 
 Today the MCP server (`app/mcp_server.py`, FastMCP 3.4.x, streamable-HTTP at
@@ -85,6 +93,15 @@ Concretely:
    `sub` only — no email/PII we don't use for authz. At MCP time the verifier
    resolves the token's `sub` → the linked, non-tombstoned `User`.
 
+   > **Superseded by #1159 (2026-07-23).** The in-session link flow
+   > (`/v1/auth0/link/*`, `app/auth0_link.py`, the Settings → *Agent access*
+   > UI) has been **removed**. A `sub` is now bound to a fortymm user
+   > automatically at MCP-token time by matching the token's verified Auth0
+   > email to an existing account (or provisioning one) — see
+   > `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email.md`.
+   > The one-to-one, no-silent-takeover binding rule described here is preserved
+   > by that flow; only the explicit in-session link step is gone.
+
 5. **The `mcp.access` permission is granted via the Beta tester role.** It is a
    new seeded permission (`scripts/seed_rbac.py`), added to the existing "Beta
    tester" bundle, so early-access testers can self-serve-connect an agent while
@@ -96,10 +113,30 @@ Concretely:
    are **kept** — the iOS app depends on HTTP bearer. Migrating HTTP bearer to
    Auth0 (and then deleting `api_tokens.py`) is deliberately out of scope.
 
+   > **Corrected & superseded by #1159 (2026-07-23).** The premise "the iOS app
+   > depends on HTTP bearer" was **false**: the iOS app authenticates with a
+   > `Cookie: session=<token>` header (`context="session"`), never the opaque
+   > `context="api"` bearer — as does the web client and the e2e suite. Since
+   > #1156 the MCP surface stopped resolving opaque tokens, leaving the
+   > `context="api"` bearer path with **zero live consumers**. It has therefore
+   > been removed entirely: `app/api_tokens.py`, `app/api_token_auth.py`, the
+   > bearer branch of `sessions._resolve_current_user`, the `api_token.manage`
+   > permission, and the Administration → *API Tokens* UI are all gone.
+   > Cookie-session auth (what iOS/web/e2e actually use) is unchanged.
+
 The tool contract is unchanged: the verifier injects `claims["user_id"]` after
 mapping, so every `@mcp.tool` and `_authenticated_user_id()` are untouched.
 
 ## Consequences
+
+> **Amended by #1159 (2026-07-23).** Two consequences below are superseded along
+> with decision #4: there is **no longer a one-time human link step** (auto-provision/
+> match by verified Auth0 email binds the identity at MCP-token time — see
+> `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email.md`), and
+> the **Regular Web Application / `client_secret`** registration existed only for that
+> now-removed link flow, so it is no longer used and stores no secret. Only the
+> API/Resource-Server registration remains; verification still needs no secret (JWKS
+> is public).
 
 - **Better agent onboarding, no shared secret.** Hosts complete an OAuth login
   and manage token lifecycle themselves; no operator pastes a long-lived bearer.

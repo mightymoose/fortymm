@@ -14,9 +14,18 @@ Accepted — from GitHub issue #1157.
 auto-provisioning"). That ADR's other decisions stand unchanged: Auth0 is still
 authentication-only, authorization is still fortymm RBAC gated by `mcp.access`
 (#3/#5), the verifier is still a stateless `RemoteAuthProvider`/`JWTVerifier`
-(#1/#2), and the in-session link flow (`/v1/auth0/link/*`) is **kept** as a
-second, still-valid way to bind an identity. Only the "explicit link is the
-*only* way in, we store `sub` only, no email" stance is reversed here.
+(#1/#2), and — as originally decided here — the in-session link flow
+(`/v1/auth0/link/*`) was initially **kept** as a second, still-valid way to bind
+an identity. Only the "explicit link is the *only* way in, we store `sub` only,
+no email" stance is reversed here.
+
+> **Amended by #1159 (2026-07-23).** The in-session link flow kept as a "second
+> way to bind" above has since been **removed** — auto-provision/match by
+> verified email is now the *only* MCP onboarding path. With auto-provision
+> covering the ephemeral-account case the manual link step addressed, keeping a
+> redundant second binding path was net friction and dead surface, so
+> `app/auth0_link.py`, the `/v1/auth0/link/*` routes, and the Settings → *Agent
+> access* UI were deleted (alongside the unrelated opaque API-token flow).
 
 ## Context
 

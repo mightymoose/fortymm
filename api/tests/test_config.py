@@ -46,17 +46,14 @@ def test_get_settings_rereads_env_on_every_call(
     assert get_settings().solver_time_cap_s == 99.0
 
 
-#: The seven Auth0 / MCP OAuth settings, paired with the env var pydantic-settings
+#: The Auth0 / MCP OAuth settings, paired with the env var pydantic-settings
 #: maps each from. Empty (unset) means unconfigured = fail-closed per the Auth0
 #: Resource-Server ADR.
 AUTH0_SETTINGS: list[tuple[str, str]] = [
     ("auth0_domain", "AUTH0_DOMAIN"),
     ("auth0_audience", "AUTH0_AUDIENCE"),
-    ("auth0_link_client_id", "AUTH0_LINK_CLIENT_ID"),
-    ("auth0_link_client_secret", "AUTH0_LINK_CLIENT_SECRET"),
     ("mcp_public_base_url", "MCP_PUBLIC_BASE_URL"),
     ("mcp_public_resource_url", "MCP_PUBLIC_RESOURCE_URL"),
-    ("auth0_link_redirect_uri", "AUTH0_LINK_REDIRECT_URI"),
 ]
 
 

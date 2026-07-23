@@ -94,11 +94,11 @@ async def resolve_or_provision_user(
                 await db.commit()
             except IntegrityError:
                 # A concurrent bind of the same ``sub`` to a *different* row (e.g.
-                # a manual ``/auth0/link`` in flight) wins the unique
+                # a concurrent MCP provision for the same ``sub``) wins the unique
                 # ``users.auth0_sub`` constraint first. Same guard as
-                # ``_provision_user`` / ``_bind_auth0_sub``: roll back and
-                # re-resolve (by ``sub``, then by email) so the loser returns the
-                # winning row instead of raising.
+                # ``_provision_user``: roll back and re-resolve (by ``sub``, then
+                # by email) so the loser returns the winning row instead of
+                # raising.
                 await db.rollback()
                 winner = await resolve_linked_user(db, sub)
                 if winner is not None:

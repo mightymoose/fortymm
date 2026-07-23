@@ -23,10 +23,6 @@ PERMISSIONS = [
     ("tournament.enter", "Enter a tournament event as a player."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
     ("scheduling.view", "See the schedule-solve ledger in the Administration area."),
-    (
-        "api_token.manage",
-        "Generate and rotate a personal API token for programmatic bearer auth.",
-    ),
     ("mcp.access", "Connect an agent to the MCP server over Auth0 OAuth."),
 ]
 
@@ -42,7 +38,6 @@ ROLES = [
             "authorization.manage",
             "notifications.broadcast",
             "scheduling.view",
-            "api_token.manage",
         ],
     ),
     (
