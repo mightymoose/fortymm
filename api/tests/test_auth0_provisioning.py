@@ -239,10 +239,10 @@ async def test_match_branch_reresolves_on_concurrent_sub_bind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The *match* branch binds ``sub`` to an email-matched account, but a
-    concurrent bind (e.g. a manual ``/auth0/link`` in flight) binds the same
-    ``sub`` to a *different* row first. The branch's commit then hits the unique
-    ``users.auth0_sub`` constraint (``IntegrityError``): it must roll back and
-    re-resolve to the winning row instead of letting the error propagate.
+    concurrent bind (e.g. a concurrent MCP provision for the same ``sub``) binds
+    the same ``sub`` to a *different* row first. The branch's commit then hits
+    the unique ``users.auth0_sub`` constraint (``IntegrityError``): it must roll
+    back and re-resolve to the winning row instead of letting the error propagate.
 
     The race is staged by patching ``_resolve_live_user_by_email`` — called at the
     top of the match branch, before its commit — to commit a competing row that

@@ -4,7 +4,7 @@ import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated
 
 import redis.exceptions
 from fastapi import (
@@ -531,19 +531,12 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
-# Which credential authenticated a request. Today the only accepted credential
-# is the browser session cookie, but the session endpoint still threads this so
-# the Set-Cookie decision stays explicit at the call site.
-CredentialSource = Literal["cookie"]
-
-
 async def _resolve_current_user(
     db: AsyncSession,
     *,
     session_cookie: str | None,
-) -> tuple[User, CredentialSource] | None:
-    """Resolve the current user from the session cookie, returning
-    ``(user, source)`` or ``None``.
+) -> User | None:
+    """Resolve the current user from the session cookie, or ``None``.
 
     Preserves the tombstoned-guest handling: a cookie that resolves to a
     merged-away guest (``merged_into_user_id`` set) raises the structured
@@ -557,7 +550,7 @@ async def _resolve_current_user(
         if cookie_user is not None:
             if cookie_user.merged_into_user_id is not None:
                 raise await _merged_session_exception(db, cookie_user)
-            return cookie_user, "cookie"
+            return cookie_user
     return None
 
 
@@ -577,19 +570,17 @@ async def get_session_endpoint(
     Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
     guest and Set-Cookie it — the zero-friction first visit.
     """
-    resolved = await _resolve_current_user(db, session_cookie=session_cookie)
-    if resolved is None:
+    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
-    else:
-        user, _ = resolved
-        if csrf_cookie is None:
-            # Returning session whose (non-HttpOnly) CSRF cookie was dropped —
-            # reissue it so mutations don't permanently 403. Self-heals on the
-            # bootstrap the client makes on every load, without rotating the
-            # cookie (or re-setting the session cookie) when one is already
-            # present.
-            _set_csrf_cookie(response)
+    elif csrf_cookie is None:
+        # Returning session whose (non-HttpOnly) CSRF cookie was dropped —
+        # reissue it so mutations don't permanently 403. Self-heals on the
+        # bootstrap the client makes on every load, without rotating the
+        # cookie (or re-setting the session cookie) when one is already
+        # present.
+        _set_csrf_cookie(response)
     return await _build_session_response(db, user)
 
 
@@ -654,10 +645,9 @@ async def get_current_user(
     ``session_ended`` 401 is raised so the client redirects to sign in (instead of
     acting as a merged-away ghost, or silently minting a new guest).
     """
-    resolved = await _resolve_current_user(db, session_cookie=session_cookie)
-    if resolved is None:
+    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    if user is None:
         raise _session_ended_exception()
-    user, _ = resolved
     return user
 
 

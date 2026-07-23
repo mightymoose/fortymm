@@ -92,9 +92,6 @@ export const mockSession = sessionResponse({
       PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
       PERM.SCHEDULING_VIEW,
-      // MCP_ACCESS so the Settings page's "Agent access" section renders under
-      // `npm run dev`.
-      PERM.MCP_ACCESS,
     ],
   },
 })
