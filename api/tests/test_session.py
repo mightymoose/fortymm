@@ -14,14 +14,12 @@ from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.roles import DEFAULT_ROLE_NAME
 from app.sessions import (
-    API_TOKEN_CONTEXT,
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
     _maybe_merge_prior_session,
 )
-from app.token_hashing import hash_token
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
 
@@ -549,183 +547,14 @@ async def test_authed_endpoint_without_session_401s_session_ended(
     assert "max-age=0" in response.headers.get("set-cookie", "").lower()
 
 
-# ----- bearer API token authentication -------------------------------------
-
-
-async def _mint_api_token(db_session: AsyncSession, user: User) -> str:
-    """Store an ``api``-context token for ``user`` the way production does — only
-    the sha256 hash lands in the DB — and return the raw token to send as a
-    bearer credential."""
-    raw = "api-raw-" + uuid.uuid4().hex
-    db_session.add(
-        UserToken(
-            user_id=user.id,
-            context=API_TOKEN_CONTEXT,
-            token=hash_token(raw),
-        )
-    )
-    await db_session.commit()
-    return raw
-
-
-async def test_bearer_api_token_authenticates_without_cookie(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A request carrying only a valid ``api``-context bearer token (no session
-    cookie) resolves to that token's user on a ``get_current_user``-protected
-    route."""
-    user = await start_session(api_client, db_session)
-    raw = await _mint_api_token(db_session, user)
-    # Drop the cookies the session mint set, so the bearer header is the only
-    # authenticating credential on the wire (the CSRF hook re-injects a
-    # synthetic csrf pair, which the guard skips on a cookieless session).
-    api_client.cookies.clear()
-
-    response = await api_client.patch(
-        "/v1/me",
-        json={"username": "bearer-renamed"},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["user"]["id"] == str(user.id)
-
-
-async def test_unknown_bearer_token_without_cookie_401s(api_client: AsyncClient):
-    """A garbage/unknown bearer token with no cookie falls through to the same
-    ``session_ended`` 401 as no credential at all."""
-    response = await api_client.patch(
-        "/v1/me",
-        json={"username": "nobody"},
-        headers={"Authorization": "Bearer not-a-real-token"},
-    )
-    assert response.status_code == 401, response.text
-    assert response.json()["detail"]["code"] == "session_ended"
-
-
-async def test_bearer_token_wins_over_ambient_cookie(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """With BOTH a valid session cookie and a valid (different-user) bearer token
-    present, the **bearer** user wins — an explicit API token beats the ambient
-    guest cookie (the Postman case), so the API client isn't shadowed by a stray
-    session cookie handed out by an earlier ``GET /v1/session``."""
-    cookie_user = await start_session(api_client, db_session)
-
-    # A second, distinct user who owns the bearer token.
-    async with make_client() as other_client:
-        bearer_user = await start_session(other_client, db_session)
-    raw = await _mint_api_token(db_session, bearer_user)
-    assert bearer_user.id != cookie_user.id
-
-    response = await api_client.patch(
-        "/v1/me",
-        json={"username": "bearer-wins"},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert response.status_code == 200, response.text
-    # The BEARER token's user is the one acted upon, not the cookie's user.
-    assert response.json()["data"]["user"]["id"] == str(bearer_user.id)
-
-
-async def test_bearer_token_for_tombstoned_user_401s(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A bearer token whose user was merged away (``merged_into_user_id`` set)
-    does not resolve — it falls through to the ``session_ended`` 401 rather than
-    authenticating as the folded-in ghost."""
-    user = await start_session(api_client, db_session)
-    raw = await _mint_api_token(db_session, user)
-    api_client.cookies.clear()
-    await _tombstone(db_session, user, "owner-tombstone@example.com")
-
-    response = await api_client.patch(
-        "/v1/me",
-        json={"username": "ghost"},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert response.status_code == 401, response.text
-    assert response.json()["detail"]["code"] == "session_ended"
-
-
-async def test_valid_bearer_with_tombstoned_cookie_succeeds_as_bearer(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A valid bearer token alongside a *tombstoned* (merged-away) session cookie
-    authenticates as the bearer user and does NOT raise ``session_merged`` — the
-    bearer wins, so the cookie (and thus its tombstone) is never consulted."""
-    # The bearer belongs to a second, live user, distinct from the tombstoned
-    # cookie holder.
-    async with make_client() as other_client:
-        bearer_user = await start_session(other_client, db_session)
-    raw = await _mint_api_token(db_session, bearer_user)
-
-    # The api_client's own cookie is for a guest that gets merged away.
-    guest = await start_session(api_client, db_session)
-    await _tombstone(db_session, guest, "owner-bearer-wins@example.com")
-    assert guest.id != bearer_user.id
-
-    response = await api_client.patch(
-        "/v1/me",
-        json={"username": "bearer-over-tombstone"},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["user"]["id"] == str(bearer_user.id)
-
-
-# ----- GET /v1/session credential precedence --------------------------------
-
-
-async def test_get_session_with_bearer_no_cookie_returns_token_user_no_cookie(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """GET /v1/session for an API-token caller (valid bearer, no cookie) returns
-    that token's user and sets **no** ``session`` cookie — we never hand an
-    external tool a browser session."""
-    async with make_client() as other_client:
-        bearer_user = await start_session(other_client, db_session)
-    raw = await _mint_api_token(db_session, bearer_user)
-    # Drop the cookies the api_client's own mint set, so the bearer is the only
-    # authenticating credential on the wire.
-    api_client.cookies.clear()
-
-    response = await api_client.get(
-        "/v1/session", headers={"Authorization": f"Bearer {raw}"}
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["user"]["id"] == str(bearer_user.id)
-    # No browser session handed to an API client — nothing named `session` is set.
-    set_cookies = [h.lower() for h in response.headers.get_list("set-cookie")]
-    assert not any(h.startswith(f"{SESSION_COOKIE_NAME}=") for h in set_cookies)
-
-
-async def test_get_session_bearer_wins_over_guest_cookie(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """GET /v1/session with a guest ``session`` cookie AND a valid bearer for a
-    different user resolves to the **bearer** user (the Postman case)."""
-    cookie_user = await start_session(api_client, db_session)
-
-    async with make_client() as other_client:
-        bearer_user = await start_session(other_client, db_session)
-    raw = await _mint_api_token(db_session, bearer_user)
-    assert bearer_user.id != cookie_user.id
-
-    response = await api_client.get(
-        "/v1/session", headers={"Authorization": f"Bearer {raw}"}
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["user"]["id"] == str(bearer_user.id)
-    # The bearer path never (re)issues a browser session cookie.
-    set_cookies = [h.lower() for h in response.headers.get_list("set-cookie")]
-    assert not any(h.startswith(f"{SESSION_COOKIE_NAME}=") for h in set_cookies)
+# ----- GET /v1/session cookie resolution ------------------------------------
 
 
 async def test_get_session_cookie_only_still_resolves_cookie_user(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Browser flow unchanged: with only a session cookie (no bearer),
-    GET /v1/session still resolves the cookie's own user."""
+    """Browser flow: with a session cookie, GET /v1/session resolves the cookie's
+    own user."""
     cookie_user = await start_session(api_client, db_session)
 
     response = await api_client.get("/v1/session")
@@ -733,13 +562,13 @@ async def test_get_session_cookie_only_still_resolves_cookie_user(
     assert response.json()["data"]["user"]["id"] == str(cookie_user.id)
 
 
-async def test_get_session_merged_cookie_with_no_bearer_still_401s(
+async def test_get_session_merged_cookie_still_401s(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """A tombstoned cookie with NO bearer still raises the ``session_merged`` 401
-    on GET /v1/session — it must not silently mint a fresh guest."""
+    """A tombstoned cookie still raises the ``session_merged`` 401 on
+    GET /v1/session — it must not silently mint a fresh guest."""
     guest = await start_session(api_client, db_session)
-    await _tombstone(db_session, guest, "owner-nobearer@example.com")
+    await _tombstone(db_session, guest, "owner-merged@example.com")
 
     response = await api_client.get("/v1/session")
     assert response.status_code == 401, response.text

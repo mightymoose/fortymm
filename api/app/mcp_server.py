@@ -14,9 +14,10 @@ The verifier does RS256/JWKS/iss/aud/exp checks on the Auth0-issued access token
 then resolves its ``sub`` to the explicitly **linked**, non-tombstoned ``User``
 (:func:`app.auth0_identity.resolve_linked_user`) and admits it only if that user
 holds the ``mcp.access`` permission — so an unauthenticated or unauthorized MCP
-call fails **at the transport** (401), not inside a tool. The old opaque
-``context="api"`` bearer token is no longer accepted on the MCP surface (it stays
-alive for HTTP/iOS). Every tool authenticates before it runs.
+call fails **at the transport** (401), not inside a tool. Auth0 OAuth is the only
+way to authenticate to the MCP surface — the legacy opaque personal-API-token
+flow it briefly shared has since been removed platform-wide. Every tool
+authenticates before it runs.
 
 **Fails closed when unconfigured.** With ``AUTH0_*`` empty (local / qa / e2e /
 dev-compose all boot the api without Auth0), the api still imports and MCP still

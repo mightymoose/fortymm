@@ -26,8 +26,6 @@ from scripts import seed_rbac
 from tests._helpers import CSRF_EVENT_HOOKS
 
 BETA_TESTER = "Beta tester"
-ADMINISTRATOR = "Administrator"
-API_TOKEN_MANAGE = "api_token.manage"
 MCP_ACCESS = "mcp.access"
 
 
@@ -861,41 +859,6 @@ async def test_seed_is_idempotent(db_session: AsyncSession):
     assert len(links) == 1
     assert await _role_permission_names(db_session, BETA_TESTER) == sorted(
         [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER, MCP_ACCESS]
-    )
-
-
-async def test_seed_grants_the_administrator_the_api_token_manage_permission(
-    db_session: AsyncSession,
-):
-    """The operator (`Administrator`) role bundle carries `api_token.manage`, the
-    permission a later chore gates `POST /v1/api-tokens` behind (#1130). The
-    permission row itself must also exist after seeding."""
-    await seed_rbac.upsert_rbac(db_session)
-    await db_session.commit()
-
-    perm = (
-        await db_session.execute(
-            select(Permission).where(Permission.name == API_TOKEN_MANAGE)
-        )
-    ).scalar_one_or_none()
-    assert perm is not None
-
-    assert API_TOKEN_MANAGE in await _role_permission_names(db_session, ADMINISTRATOR)
-    # Discriminating: the permission is *not* handed to the Beta tester bundle.
-    assert API_TOKEN_MANAGE not in await _role_permission_names(db_session, BETA_TESTER)
-
-
-async def test_seed_does_not_grant_api_token_manage_to_the_default_role(
-    db_session: AsyncSession,
-):
-    """Every user holds the default `User` role (ADR-0016); it must not carry the
-    operator-only `api_token.manage` permission."""
-    await seed_rbac.upsert_rbac(db_session)
-    await converge_default_role(db_session)
-    await db_session.commit()
-
-    assert API_TOKEN_MANAGE not in await _role_permission_names(
-        db_session, DEFAULT_ROLE_NAME
     )
 
 
