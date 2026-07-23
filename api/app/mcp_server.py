@@ -284,8 +284,7 @@ _UNCONFIGURED_ORIGIN = "https://mcp-unconfigured.fortymm.invalid"
 # path (every later request) skips it entirely. 20/hour/IP is generous for
 # legitimate first-time agent onboarding (a client provisions once, then resolves
 # by ``sub`` forever after) while capping an attacker who mints fresh
-# verified-email identities from one IP to spray accounts — the same order of
-# magnitude as the ``auth0_link`` per-IP ceiling (40/hour). No ``identifier``: the
+# verified-email identities from one IP to spray accounts. No ``identifier``: the
 # verifier has no FastAPI ``Request``, so it keys ``check()`` by client IP itself.
 _provision_ip_rate_limit = RedisRateLimiter(
     rates=[Rate(20, Duration.HOUR)],

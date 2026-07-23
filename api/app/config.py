@@ -43,14 +43,6 @@ class Settings(BaseSettings):
     #: an agent's access token must carry to be accepted. Empty = fail-closed.
     auth0_audience: str = ""
 
-    #: Client id of the Auth0 Regular Web Application (confidential client) used
-    #: for the one-time account-link code flow. Empty = link flow unconfigured.
-    auth0_link_client_id: str = ""
-
-    #: Client secret of that Auth0 web application — the only Auth0 secret we
-    #: store (verification needs no secret; JWKS is public). Empty = fail-closed.
-    auth0_link_client_secret: str = ""
-
     #: Public base URL of the MCP server (e.g. ``https://uat.fortymm.com/api``).
     #: Passed explicitly rather than derived from the internal ``/mcp/`` mount so
     #: the protected-resource metadata reflects the public origin behind nginx.
@@ -60,25 +52,21 @@ class Settings(BaseSettings):
     #: metadata (the MCP server's public origin). Empty = fail-closed.
     mcp_public_resource_url: str = ""
 
-    #: Redirect URI registered with the Auth0 web application for the account-link
-    #: callback (``GET /v1/auth0/link/callback``). Empty = link flow unconfigured.
-    auth0_link_redirect_uri: str = ""
-
     @property
     def auth0_issuer(self) -> str:
         """The Auth0 tenant's OIDC issuer — ``https://{domain}/`` (Auth0 mints
-        tokens with the trailing slash). The single source of the ``iss`` both the
-        MCP JWT verifier (``app.mcp_server``) and the account-link id_token
-        verification (``app.auth0_link``) trust, so the tenant URL topology is
-        built in exactly one place. Meaningful only when ``auth0_domain`` is set."""
+        tokens with the trailing slash). The single source of the ``iss`` the MCP
+        JWT verifier (``app.mcp_server``) trusts when validating an agent's access
+        token, so the tenant URL topology is built in exactly one place.
+        Meaningful only when ``auth0_domain`` is set."""
         return f"https://{self.auth0_domain}/"
 
     @property
     def auth0_jwks_uri(self) -> str:
         """The Auth0 tenant's JWKS endpoint — ``https://{domain}/.well-known/jwks.json``,
-        where both the MCP verifier and the account-link flow fetch the tenant's
-        public signing keys. The single source of that URL (see ``auth0_issuer``).
-        Meaningful only when ``auth0_domain`` is set."""
+        where the MCP verifier fetches the tenant's public signing keys to verify
+        an agent's access token. The single source of that URL (see
+        ``auth0_issuer``). Meaningful only when ``auth0_domain`` is set."""
         return f"https://{self.auth0_domain}/.well-known/jwks.json"
 
 
