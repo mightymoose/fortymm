@@ -24,17 +24,10 @@ export const PERM = {
   // access without also handing out the RBAC-management keys. Mirrors
   // api/app/admin_schedule_solves.py:SCHEDULING_VIEW_PERMISSION.
   SCHEDULING_VIEW: 'scheduling.view',
-  // Gates the Administration area's API-token page — its own grant (like
-  // notifications.broadcast / scheduling.view) so an operator can hand out the
-  // ability to mint a personal opaque bearer token without also handing out the
-  // RBAC-management keys. Mirrors the server's `api_token.manage` permission,
-  // which fronts `POST /v1/api-tokens`.
-  API_TOKEN_MANAGE: 'api_token.manage',
-  // Gates the Settings page's **Agent access** section — the Auth0 identity link
-  // that lets an AI agent reach the MCP server on the user's behalf. Its own
-  // grant, like the other feature-scoped perms above, so an operator can hand out
+  // Gates agent access to the MCP server on the user's behalf. Its own grant,
+  // like the other feature-scoped perms above, so an operator can hand out
   // agent access without the RBAC-management keys. Mirrors the `mcp.access`
-  // permission the server enforces on the `/v1/auth0/link*` endpoints.
+  // permission the server enforces on the MCP transport.
   MCP_ACCESS: 'mcp.access',
 } as const
 
