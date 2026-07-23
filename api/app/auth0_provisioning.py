@@ -92,13 +92,12 @@ async def resolve_or_provision_user(
             matched.auth0_sub = sub
             await db.commit()
             return matched
-        if matched.auth0_sub == sub:
-            # Idempotent — normally already returned by step 1; here for safety.
-            return matched
-        # A different Auth0 identity claims an already-linked email. Refuse
-        # rather than hijack the existing link: this is a deliberate,
-        # non-destructive decision — the second identity gets in only once the
-        # first unlinks (or the two accounts are merged by magic-link confirm).
+        # A *different* Auth0 identity claims an already-linked email — the same
+        # ``sub`` would already have returned at step 1 (``resolve_linked_user``),
+        # so ``matched.auth0_sub`` here is necessarily some other identity. Refuse
+        # rather than hijack the existing link: a deliberate, non-destructive
+        # decision — the second identity gets in only once the first unlinks (or
+        # the two accounts are merged by magic-link confirm).
         return None
 
     # No account holds the email → provision a fresh registered account.
