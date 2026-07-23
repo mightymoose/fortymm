@@ -63,8 +63,11 @@ internal protocol APIProtocol: Sendable {
     /// Consume an email-change token: stamp the new email + ``confirmed_at``.
     ///
     /// Invariant: ``user.email`` holds the prior confirmed address; the new
-    /// address lives on ``token.sent_to`` until this endpoint runs. This is
-    /// the single place either column flips.
+    /// address lives on ``token.sent_to`` until this endpoint runs. This is one of
+    /// two places either column flips — the other is
+    /// ``auth0_provisioning._provision_user``, which stamps ``email`` +
+    /// ``confirmed_at`` together on a first-seen verified Auth0 email — so both
+    /// writers preserve the same invariant (email set ⇒ account confirmed).
     ///
     /// The token in the email is itself the bearer credential — we don't
     /// require the click to come from the same browser that requested it.
@@ -1077,8 +1080,11 @@ extension APIProtocol {
     /// Consume an email-change token: stamp the new email + ``confirmed_at``.
     ///
     /// Invariant: ``user.email`` holds the prior confirmed address; the new
-    /// address lives on ``token.sent_to`` until this endpoint runs. This is
-    /// the single place either column flips.
+    /// address lives on ``token.sent_to`` until this endpoint runs. This is one of
+    /// two places either column flips — the other is
+    /// ``auth0_provisioning._provision_user``, which stamps ``email`` +
+    /// ``confirmed_at`` together on a first-seen verified Auth0 email — so both
+    /// writers preserve the same invariant (email set ⇒ account confirmed).
     ///
     /// The token in the email is itself the bearer credential — we don't
     /// require the click to come from the same browser that requested it.
@@ -11567,8 +11573,11 @@ internal enum Operations {
     /// Consume an email-change token: stamp the new email + ``confirmed_at``.
     ///
     /// Invariant: ``user.email`` holds the prior confirmed address; the new
-    /// address lives on ``token.sent_to`` until this endpoint runs. This is
-    /// the single place either column flips.
+    /// address lives on ``token.sent_to`` until this endpoint runs. This is one of
+    /// two places either column flips — the other is
+    /// ``auth0_provisioning._provision_user``, which stamps ``email`` +
+    /// ``confirmed_at`` together on a first-seen verified Auth0 email — so both
+    /// writers preserve the same invariant (email set ⇒ account confirmed).
     ///
     /// The token in the email is itself the bearer credential — we don't
     /// require the click to come from the same browser that requested it.

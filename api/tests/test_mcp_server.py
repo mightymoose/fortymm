@@ -42,12 +42,16 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from pyrate_limiter import Duration, Rate
 from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
+from app import mcp_server
 from app import queue as queue_module
 from app.admin_schedule_solves import SCHEDULING_VIEW_PERMISSION
+from app.auth0_provisioning import AUTH0_EMAIL_CLAIM, AUTH0_EMAIL_VERIFIED_CLAIM
 from app.main import app as fastapi_app
 from app.main import mcp, mcp_app
 from app.mcp_server import (
@@ -78,6 +82,7 @@ from app.models import (
     UserRole,
 )
 from app.models.tournament import DrawType, EventFormat
+from app.rate_limiting import RedisRateLimiter
 from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -150,13 +155,25 @@ def _sign_token(
     iss: str = ISSUER,
     private_pem: str | None = None,
     expires_in: int = 300,
+    extra_claims: dict[str, object] | None = None,
 ) -> str:
     """Sign an RS256 access token for ``sub`` — the credential an agent presents
     to the MCP transport. Defaults to the tenant key + right issuer/audience; the
-    knobs reach the wrong-``aud`` / wrong-``iss`` / bad-signature rejection cases."""
+    knobs reach the wrong-``aud`` / wrong-``iss`` / bad-signature rejection cases.
+    ``extra_claims`` merges in the namespaced email claims the Auth0 Action ships,
+    exercising the resolve-or-provision (match-by-verified-email) path."""
     now = int(time.time())
+    claims: dict[str, object] = {
+        "sub": sub,
+        "aud": aud,
+        "iss": iss,
+        "iat": now,
+        "exp": now + expires_in,
+    }
+    if extra_claims is not None:
+        claims.update(extra_claims)
     return jwt.encode(
-        {"sub": sub, "aud": aud, "iss": iss, "iat": now, "exp": now + expires_in},
+        claims,
         private_pem or _PRIVATE_PEM,
         algorithm="RS256",
         headers={"kid": KID},
@@ -351,6 +368,182 @@ async def test_tombstoned_linked_users_token_is_rejected(
 
     async with _mcp_client(token) as client:
         await _assert_rejected(client)
+
+
+def _email_verifier() -> FortymmAuth0TokenVerifier:
+    """A ``FortymmAuth0TokenVerifier`` keyed to the test static key, for calling
+    ``verify_token`` directly — so a test can assert on the minted ``AccessToken``
+    (its ``user_id`` claim) rather than only that the transport handshake 200s."""
+    return FortymmAuth0TokenVerifier(
+        public_key=_PUBLIC_PEM,
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        algorithm="RS256",
+    )
+
+
+async def test_verified_email_matches_unlinked_mcp_account_and_authorizes(
+    db_session: AsyncSession,
+) -> None:
+    """A verified token whose ``sub`` is UNLINKED but whose verified email matches an
+    existing account holding ``mcp.access`` resolves through
+    ``resolve_or_provision_user``: the verifier binds the ``sub`` and mints an
+    ``AccessToken`` carrying that account's id under the ``user_id`` claim — the
+    match path authorizes end-to-end without a manual link step."""
+    user = await make_user(db_session, "mcp-email-match-owner")
+    user.email = "match-me@example.com"
+    await db_session.commit()
+    await _grant_mcp_access(db_session, user)
+    # A brand-new Auth0 subject, linked to nobody — it can only resolve via the
+    # verified-email match below.
+    sub = "auth0|" + uuid.uuid4().hex
+    token = _sign_token(
+        sub=sub,
+        extra_claims={
+            AUTH0_EMAIL_CLAIM: "match-me@example.com",
+            AUTH0_EMAIL_VERIFIED_CLAIM: True,
+        },
+    )
+
+    access = await _email_verifier().verify_token(token)
+
+    assert access is not None
+    assert access.claims["user_id"] == str(user.id)
+
+
+async def test_unverified_or_absent_email_is_rejected(
+    db_session: AsyncSession,
+) -> None:
+    """The same unlinked ``sub`` + matchable ``mcp.access`` account, but with the
+    email UNVERIFIED (``email_verified: false``) — and, separately, with the email
+    claim ABSENT — resolves to ``None`` (→ 401): the JWT signature is valid, yet we
+    never match or provision off an address the caller hasn't proven they control."""
+    user = await make_user(db_session, "mcp-email-unverified-owner")
+    user.email = "unverified@example.com"
+    await db_session.commit()
+    await _grant_mcp_access(db_session, user)
+    sub = "auth0|" + uuid.uuid4().hex
+
+    unverified = _sign_token(
+        sub=sub,
+        extra_claims={
+            AUTH0_EMAIL_CLAIM: "unverified@example.com",
+            AUTH0_EMAIL_VERIFIED_CLAIM: False,
+        },
+    )
+    no_email = _sign_token(sub=sub)
+
+    verifier = _email_verifier()
+    assert await verifier.verify_token(unverified) is None
+    assert await verifier.verify_token(no_email) is None
+
+
+async def test_linked_sub_still_authorizes_via_verify_token(
+    db_session: AsyncSession,
+) -> None:
+    """The pre-existing LINKED-``sub`` path is unchanged by resolve-or-provision: a
+    linked + permitted user's token still mints an ``AccessToken`` carrying that
+    user's id under ``user_id`` — resolved by the linked ``sub`` alone, with no email
+    claim present."""
+    user = await make_user(db_session, "mcp-linked-still-owner")
+    token = await _mint(db_session, user)
+
+    access = await _email_verifier().verify_token(token)
+
+    assert access is not None
+    assert access.claims["user_id"] == str(user.id)
+
+
+def _pin_client_ip(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    """Make ``mcp_server.get_http_request()`` (which the verifier reads the client
+    IP off) return a request whose ``client.host`` is ``host``.
+
+    ``get_http_request()`` IS populated during ``verify_token`` under the real
+    transport (probed), but a direct ``verify_token`` call has no live request, so
+    the write path would otherwise key every call to the ``"unknown"`` fallback
+    bucket. Pinning it lets a test drive the per-IP limiter deterministically."""
+    request = Request({"type": "http", "client": (host, 12345), "headers": []})
+    monkeypatch.setattr(mcp_server, "get_http_request", lambda: request)
+
+
+async def test_write_path_is_rate_limited_per_ip(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlinked-but-verified tokens from one IP that MATCH ``mcp.access`` accounts
+    authorize (the write/match path binds each ``sub``) — until the per-IP provision
+    ceiling is hit, after which the next such token is refused (``verify_token`` →
+    ``None``) with no ``sub`` bound. The verifier calls the module-level limiter, so
+    monkeypatching it to a small rate exercises the real wiring fast."""
+    _pin_client_ip(monkeypatch, "203.0.113.7")
+    limit = 3
+    monkeypatch.setattr(
+        mcp_server,
+        "_provision_ip_rate_limit",
+        RedisRateLimiter(
+            rates=[Rate(limit, Duration.HOUR)],
+            bucket_key="mcp-provision-ip-test-limited",
+        ),
+    )
+
+    # ``limit + 1`` distinct matchable accounts (each verified email → its own
+    # unlinked ``sub``), all reachable only via the write/match path.
+    accounts = []
+    for i in range(limit + 1):
+        user = await make_user(db_session, f"mcp-ratelimit-{i}")
+        user.email = f"ratelimit-{i}@example.com"
+        await db_session.commit()
+        await _grant_mcp_access(db_session, user)
+        sub = "auth0|" + uuid.uuid4().hex
+        token = _sign_token(
+            sub=sub,
+            extra_claims={
+                AUTH0_EMAIL_CLAIM: user.email,
+                AUTH0_EMAIL_VERIFIED_CLAIM: True,
+            },
+        )
+        accounts.append((user, sub, token))
+
+    verifier = _email_verifier()
+    # The first ``limit`` write-path tokens match + bind + authorize.
+    for user, _sub, token in accounts[:limit]:
+        access = await verifier.verify_token(token)
+        assert access is not None
+        assert access.claims["user_id"] == str(user.id)
+
+    # The next is rate limited BEFORE the write: rejected, and its ``sub`` unbound.
+    over_user, over_sub, over_token = accounts[limit]
+    assert await verifier.verify_token(over_token) is None
+    await db_session.refresh(over_user)
+    assert over_user.auth0_sub is None
+
+
+async def test_linked_hot_path_is_not_rate_limited(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The already-linked hot path skips the limiter entirely: with the provision
+    ceiling pinned to an impossibly tight 1/hour, a single linked + permitted user's
+    token authorizes many times over from one IP — proving the steady-state read
+    path is never charged against the write-path budget."""
+    _pin_client_ip(monkeypatch, "203.0.113.9")
+    monkeypatch.setattr(
+        mcp_server,
+        "_provision_ip_rate_limit",
+        RedisRateLimiter(
+            rates=[Rate(1, Duration.HOUR)],
+            bucket_key="mcp-provision-ip-test-hot",
+        ),
+    )
+
+    user = await make_user(db_session, "mcp-hotpath-owner")
+    token = await _mint(db_session, user)
+
+    verifier = _email_verifier()
+    for _ in range(5):
+        access = await verifier.verify_token(token)
+        assert access is not None
+        assert access.claims["user_id"] == str(user.id)
 
 
 def test_partial_auth0_config_yields_reject_all_verifier(
