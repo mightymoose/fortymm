@@ -33,12 +33,12 @@ struct MainTabView: View {
             DashboardView(onViewAll: { username in
                 matchesFilter = MatchesFilter(status: nil, query: username ?? "")
                 selection = .matches
-            })
+            }, selectedTab: selection)
                 .fmTopBar(FMTab.home.title)
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
 
-            MatchesListView(pendingFilter: $matchesFilter)
+            MatchesListView(pendingFilter: $matchesFilter, selectedTab: selection)
                 .fmTopBar(FMTab.matches.title)
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)

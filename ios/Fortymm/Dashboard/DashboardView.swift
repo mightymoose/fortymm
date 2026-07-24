@@ -15,6 +15,10 @@ struct DashboardView: View {
     /// to the Matches tab, filtered to their matches. The argument is the
     /// current username, used as the list's search filter. Nil in previews.
     var onViewAll: ((String?) -> Void)? = nil
+    /// The tab currently selected in `MainTabView`'s `TabView`. Passed down so
+    /// tab-return refetch can ride the deterministic selection change rather than
+    /// `.onAppear`, which fires unreliably on `TabView` tab-return (ADR 0010).
+    var selectedTab: FMTab = .home
 
     /// Non-nil while the resume-scoring flow is presented over the dashboard;
     /// `resumeLoading` covers the brief fetch of the full match (the attention
@@ -46,11 +50,18 @@ struct DashboardView: View {
             }
             .background(FMColor.bgApp.ignoresSafeArea())
             .refreshable { await store.load(force: true) }
-            // onAppear (not task) so returning to the Home tab after posting /
-            // resuming a match re-fetches — clearing a stale "Score needed"
-            // banner and refreshing recent results. force: true silently
-            // refreshes in place once content is loaded.
-            .onAppear { Task { await store.load(force: true) } }
+            // First load rides .task; the non-force load() no-ops once loaded, so
+            // if .task re-fires on a tab return it costs nothing — the actual
+            // tab-return refetch is the selection-driven .onChange below.
+            .task { await store.load() }
+            // Returning to the Home tab must re-fetch (clearing a stale "Score
+            // needed" banner, refreshing recent results). Drive it off the
+            // TabView selection MainTabView owns — this fires deterministically
+            // when selection transitions to .home, unlike .onAppear on tab-return
+            // (ADR 0010). force: true refreshes in place once content is loaded.
+            .onChange(of: selectedTab) { _, tab in
+                if tab == .home { Task { await store.load(force: true) } }
+            }
             // Returning to the foreground may surface cross-device changes (a
             // match the other player just accepted) — refetch in place.
             .refetchOnForeground { Task { await store.load(force: true) } }

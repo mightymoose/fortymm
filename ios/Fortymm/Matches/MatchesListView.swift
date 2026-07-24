@@ -16,6 +16,10 @@ struct MatchesListView: View {
     var service: MatchService = .shared
     /// Set by another tab to pre-apply a filter on arrival; cleared once applied.
     var pendingFilter: Binding<MatchesFilter?> = .constant(nil)
+    /// The tab currently selected in `MainTabView`'s `TabView`. Passed down so the
+    /// tab-return refetch can ride the deterministic selection change rather than
+    /// `.onAppear`, which fires unreliably on `TabView` tab-return (ADR 0010).
+    var selectedTab: FMTab = .matches
 
     @State private var statusTab: StatusTab = .all
     @State private var query = ""
@@ -39,6 +43,11 @@ struct MatchesListView: View {
     /// that programmatically changing `query` would otherwise schedule on top of
     /// `applyPendingFilter`'s own reload.
     @State private var suppressQueryReload = false
+    /// Guards the `.task` first-load so it fetches exactly once. `.task` restarts
+    /// on tab re-appearance the same unreliable way `.onAppear` does, so gating it
+    /// keeps tab-returns solely on the deterministic selection `.onChange` below —
+    /// exactly one fetch per return, no double-fetch (ADR 0010).
+    @State private var didInitialLoad = false
 
     var body: some View {
         ZStack {
@@ -54,14 +63,26 @@ struct MatchesListView: View {
             }
             .background(FMColor.bgApp.ignoresSafeArea())
             .refreshable { await load() }
-            // onAppear (not task) so returning to the tab after posting a match
-            // re-fetches and surfaces it at the top. A queued cross-tab filter is
-            // applied here rather than via .onChange, because TabView renders this
-            // tab lazily — .onChange isn't observing when the value is set on the
-            // other tab, but .onAppear fires when the tab becomes visible.
-            .onAppear {
+            // First load rides .task (once, via the didInitialLoad guard). A
+            // queued cross-tab filter is applied here rather than via .onChange,
+            // because TabView renders this tab lazily on first visit — .onChange
+            // isn't observing when the value is set on the other tab, but .task
+            // fires when the tab first becomes visible.
+            .task {
+                guard !didInitialLoad else { return }
+                didInitialLoad = true
                 if pendingFilter.wrappedValue != nil { applyPendingFilter() }
                 else { reload() }
+            }
+            // Returning to the Matches tab must re-fetch (surfacing a match just
+            // posted at the top). Drive it off the TabView selection MainTabView
+            // owns — fires deterministically on the transition to .matches, unlike
+            // .onAppear on tab-return (ADR 0010). Skip when a cross-tab filter is
+            // queued: the pendingFilter .onChange below owns that reload, so this
+            // guard keeps it to exactly one fetch.
+            .onChange(of: selectedTab) { _, tab in
+                guard tab == .matches else { return }
+                if pendingFilter.wrappedValue == nil { reload() }
             }
             // Foregrounding may surface cross-device changes (a match the opponent
             // just accepted/countered) — re-fetch the feed.
@@ -79,8 +100,16 @@ struct MatchesListView: View {
                     if !Task.isCancelled { reload() }
                 }
             }
+            // The match's state may have changed while in detail (a result
+            // posted, an acceptance, a new proposal). The cover *covers* the list
+            // rather than removing it, so the list's re-appearance triggers don't
+            // fire on dismissal — refetch in place here, mirroring the dashboard
+            // (ADR 0010).
             .fullScreenCover(item: $selected) { match in
-                MatchDetailView(initial: match, onBack: { selected = nil })
+                MatchDetailView(initial: match, onBack: {
+                    selected = nil
+                    reload()
+                })
             }
             // The list now has a stale row for the resumed match (it just gained a
             // posted result / more games) — refetch so it reflects reality.
