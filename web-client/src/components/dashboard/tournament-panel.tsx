@@ -48,7 +48,14 @@ export const TournamentPanel = ({ view }: TournamentPanelProps) => {
           </Overline>
           <h2
             id={headingId}
-            className="font-[family-name:var(--font-display)] text-[26px] leading-none tracking-wide sm:text-[30px]"
+            // The display face, set inline the way the rest of the theme's
+            // display headings do it (`app-shell__wordmark`,
+            // `sys-health__headline`). The `font-display` *class* is not enough
+            // on its own here: its `text-transform` lands but its `font-family`
+            // loses to the inherited UI face, so the heading silently renders in
+            // Space Grotesk — measured in the browser, not assumed.
+            style={{ fontFamily: 'var(--font-display)' }}
+            className="text-[26px] leading-none tracking-[0.02em] uppercase sm:text-[30px]"
           >
             {view.name}
           </h2>
