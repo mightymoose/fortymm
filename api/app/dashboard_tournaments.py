@@ -35,6 +35,7 @@ from typing import assert_never
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.attention import list_attention_kind
 from app.match_queries import current_game_number, match_eager_options
 from app.models import (
     Match,
@@ -138,6 +139,7 @@ async def build_tournament_panels(
             _build_event(
                 event,
                 tables=tables_by_tournament[tournament.id],
+                user_id=user_id,
                 my_entry_id=entry_id,
                 entrants=entrants[event.id],
                 all_fixtures=fixtures[event.id],
@@ -260,6 +262,7 @@ def _build_event(
     event: TournamentEvent,
     *,
     tables: dict[str, TournamentTable],
+    user_id: uuid.UUID,
     my_entry_id: uuid.UUID,
     entrants: Sequence[TournamentEntrantRead],
     all_fixtures: list[TournamentFixtureRead],
@@ -321,6 +324,7 @@ def _build_event(
         if focus is None
         else _build_match(
             focus,
+            user_id=user_id,
             my_entry_id=my_entry_id,
             username_by_entry=username_by_entry,
             match=(
@@ -392,6 +396,7 @@ def _opponent_username(
 def _build_match(
     fixture: TournamentFixtureRead,
     *,
+    user_id: uuid.UUID,
     my_entry_id: uuid.UUID,
     username_by_entry: dict[uuid.UUID, str],
     match: Match | None,
@@ -418,6 +423,9 @@ def _build_match(
         start_label=_time_label(fixture),
         next_game_number=(current_game_number(match) if match is not None else None),
         you_won=(None if state != "completed" else your_games > opponent_games),
+        owed_action=(
+            list_attention_kind(match, user_id) if match is not None else None
+        ),
     )
 
 

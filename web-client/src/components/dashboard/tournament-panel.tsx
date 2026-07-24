@@ -129,7 +129,7 @@ export const TournamentPanel = ({ view }: TournamentPanelProps) => {
           >
             {tab.match === null ? (
               <p
-                className="rounded-[var(--radius-md)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-5 text-[14px] text-[color:var(--fg-3)]"
+                className="min-w-0 rounded-[var(--radius-md)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-5 text-[14px] text-[color:var(--fg-3)]"
                 data-testid="tournament-panel-no-match"
               >
                 The draw for this event hasn&rsquo;t been made yet. Your matches
@@ -138,7 +138,7 @@ export const TournamentPanel = ({ view }: TournamentPanelProps) => {
             ) : (
               <TournamentMatchCard match={tab.match} />
             )}
-            <div className="flex flex-col gap-3.5">
+            <div className="flex min-w-0 flex-col gap-3.5">
               <TournamentStatsStrip stats={tab.stats} />
               <TournamentPathList
                 heading={tab.pathHeading}

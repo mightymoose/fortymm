@@ -180,6 +180,19 @@ class DashboardTournamentMatch(BaseModel):
     # has no outcome, and a ``False`` there would claim the caller lost a match still
     # being played, or one that was struck from the record entirely.
     you_won: bool | None
+    # WHAT THE CALLER OWES on this match, from the very classifier the attention
+    # panel is built on (``app.attention.list_attention_kind``) — so the two panels
+    # on one dashboard cannot label the same match differently.
+    #
+    # ``next_game_number is None`` is NOT enough to decide this, and reading it that
+    # way is a bug the panel shipped once: ``current_game_number`` answers ``None``
+    # both when the board is decided-but-unposted AND when a result is already
+    # posted and awaiting acceptance. Those owe opposite things — post it vs review
+    # it — and the poster of a standing result owes nothing at all.
+    #
+    # ``None`` means there is nothing to do (a completed/voided match, or one this
+    # user does not play in).
+    owed_action: AttentionKind | Literal["waiting_opponent", "waiting_others"] | None
 
 
 class DashboardTournamentFixtureRow(BaseModel):

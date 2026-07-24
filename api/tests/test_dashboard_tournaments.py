@@ -339,6 +339,58 @@ async def test_the_record_is_counted_directly_when_there_are_no_standings(
     )
 
 
+async def test_a_standing_result_owes_a_review_to_one_side_and_nothing_to_the_other(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``owed_action`` is what the CALLER owes, and the two players owe opposite
+    things once a result is standing.
+
+    The panel used to read this off ``next_game_number is None``, which conflates
+    three different states: the board is decided but unposted, a result is posted
+    and awaiting acceptance, and the match is not in progress at all. Under that
+    reading the card told BOTH players to "Post the result" — a job already done, and
+    done by one of them. It comes from ``list_attention_kind`` now, the very
+    classifier the attention panel on the same dashboard is built from, so the two
+    panels cannot label one match two ways.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "owed-opp") as (opp_client, opp):
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        # Mid-board, nothing posted: both sides owe a score.
+        (mine,) = await _panels(client)
+        assert mine["events"][0]["match"]["owed_action"] == "score"
+
+        # The owner proposes a decided board; it stands, unaccepted.
+        post = await client.post(
+            f"/v1/matches/{fixture.match_id}/results",
+            json={
+                "games": [
+                    {"game_number": n, "side_1_points": 11, "side_2_points": 5}
+                    for n in (1, 2)
+                ]
+            },
+        )
+        assert post.status_code == 201, post.text
+
+        (poster_panel,) = await _panels(client)
+        (reviewer_panel,) = await _panels(opp_client)
+
+    assert poster_panel["events"][0]["match"]["owed_action"] == "waiting_opponent", (
+        "the side that posted owes nothing — the move is the opponent's"
+    )
+    assert reviewer_panel["events"][0]["match"]["owed_action"] == "review", (
+        "the other side owes a review, not another post"
+    )
+    assert poster_panel["events"][0]["match"]["next_game_number"] is None
+    assert reviewer_panel["events"][0]["match"]["next_game_number"] is None, (
+        "and next_game_number is None for BOTH — which is exactly why it cannot "
+        "be the thing the label is read off"
+    )
+
+
 async def test_a_voided_match_shows_no_winner_and_no_score(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

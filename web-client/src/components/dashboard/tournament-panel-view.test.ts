@@ -227,6 +227,7 @@ describe('projectTournamentPanelView', () => {
                 state: 'live',
                 match_id: 'm-7',
                 next_game_number: null,
+                owed_action: 'score',
               }),
             }),
           ],
@@ -237,6 +238,48 @@ describe('projectTournamentPanelView', () => {
       expect(view.tabs[0].match?.action?.route.params).toEqual({
         matchId: 'm-7',
       })
+    })
+
+    it('asks the reviewer to REVIEW, not to post what is already posted', () => {
+      // `next_game_number: null` is two different states. This is the one where
+      // the OPPONENT has posted a result: telling this player to "Post the
+      // result" names a job that is done, and done by someone else.
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({
+                state: 'live',
+                match_id: 'm-7',
+                next_game_number: null,
+                owed_action: 'review',
+              }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.action?.label).toBe('Review result')
+      expect(view.tabs[0].match?.action?.route.params).toEqual({ matchId: 'm-7' })
+    })
+
+    it('offers nothing while OUR posted result waits on the opponent', () => {
+      // We posted; the move is theirs. A button here would invite us to redo it.
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({
+                state: 'live',
+                next_game_number: null,
+                owed_action: 'waiting_opponent',
+              }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.action).toBeNull()
     })
 
     it.each([

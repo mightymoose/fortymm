@@ -24,7 +24,13 @@ export const TournamentMatchCard = ({ match }: TournamentMatchCardProps) => {
   return (
     <div
       className={cn(
-        'rounded-[var(--radius-md)] border bg-[color:var(--bg-card)] p-5',
+        // `min-w-0` is load-bearing: this card is a GRID ITEM, whose default
+        // `min-width: auto` lets it size to its widest content and blow out of
+        // its track. At 375px that pushed the card to 377px inside a 303px
+        // column — and because the panel's `Card` clips (`overflow-hidden`), the
+        // spill was silently CUT rather than scrolled, so a page-level overflow
+        // check reads 0 while the winner chip and status line are lost.
+        'min-w-0 rounded-[var(--radius-md)] border bg-[color:var(--bg-card)] p-5',
         live
           ? 'border-[color:var(--serve-500)]/35 shadow-[0_0_0_1px_rgba(0,226,154,0.12),0_0_16px_rgba(0,226,154,0.12)]'
           : 'border-[color:var(--border-subtle)]',

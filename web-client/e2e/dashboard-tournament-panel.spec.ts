@@ -63,6 +63,7 @@ const IN_A_TOURNAMENT = {
             start_label: '4:30 PM CDT',
             next_game_number: 4,
             you_won: null,
+            owed_action: 'score',
           },
           fixtures: [
             {
@@ -118,20 +119,53 @@ const DECIDED_UNPOSTED = {
   ],
 } satisfies DashboardResponse
 
+/** A finished match with long usernames — the widest the card ever gets, and
+ * the shape that used to blow out of its grid track on a phone. */
+const COMPLETED_LONG_NAMES = {
+  ...IN_A_TOURNAMENT,
+  tournaments: [
+    {
+      ...IN_A_TOURNAMENT.tournaments[0],
+      live_count: 0,
+      events: [
+        {
+          ...IN_A_TOURNAMENT.tournaments[0].events[0],
+          is_live: false,
+          stage_label: 'Group complete',
+          match: {
+            ...IN_A_TOURNAMENT.tournaments[0].events[0].match,
+            state: 'completed' as const,
+            opponent_username: 'competent-marten',
+            your_games: 3,
+            opponent_games: 1,
+            next_game_number: null,
+            you_won: true,
+            owed_action: null,
+          },
+        },
+      ],
+    },
+  ],
+} satisfies DashboardResponse
+
 /** The same player between tournaments — the shape almost every load has. */
 const IN_NO_TOURNAMENT = {
   ...IN_A_TOURNAMENT,
   tournaments: [],
 } satisfies DashboardResponse
 
-async function installDashboardMock(page: Page, dashboard: DashboardResponse) {
+async function installDashboardMock(
+  page: Page,
+  dashboard: DashboardResponse,
+  session: typeof SESSION = SESSION,
+) {
   await page.route('**/api/v1/**', (route: Route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
     if (path === '/v1/session') {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(SESSION),
+        body: JSON.stringify(session),
       })
     }
     if (path === '/v1/dashboard') {
@@ -215,6 +249,42 @@ test.describe('Dashboard tournament panel', () => {
     await expect(
       block.getByRole('link', { name: 'Post the result' }),
     ).toHaveAttribute('href', '/matches/77777777-7777-4777-8777-777777777777')
+  })
+
+  test('the match card stays inside its column on a phone', async ({ page }) => {
+    // A page-level overflow check is NOT enough here and never was: the panel's
+    // Card clips (`overflow-hidden`), so a card wider than its grid track is
+    // silently CUT — `scrollWidth - clientWidth` reads 0 while the winner chip
+    // and half the status line are lost. Measure the element against its track.
+    await page.setViewportSize({ width: 375, height: 800 })
+    // The VIEWER's own handle is the long one — it is their row that carries the
+    // winner chip beside the big numeral, so it sets the card's minimum width.
+    await installDashboardMock(
+      page,
+      COMPLETED_LONG_NAMES,
+      sessionResponse({ user: { username: 'observant-chimpanzee' } }),
+    )
+    await page.goto('/dashboard')
+    await expect(panel(page)).toBeVisible()
+
+    const fit = await page.evaluate(() => {
+      const card = document.querySelector(
+        '[data-testid="tournament-panel-match-card"]',
+      ) as HTMLElement
+      const track = card.parentElement as HTMLElement
+      const right = card.getBoundingClientRect().right
+      return {
+        cardWidth: card.getBoundingClientRect().width,
+        trackWidth: track.getBoundingClientRect().width,
+        spilling: [...card.querySelectorAll('*')].filter(
+          (el) => el.getBoundingClientRect().right > right + 0.5,
+        ).length,
+      }
+    })
+
+    expect(fit.cardWidth).toBeLessThanOrEqual(fit.trackWidth)
+    expect(fit.spilling).toBe(0)
+    await expect(panel(page)).toContainText('Winner')
   })
 
   test('renders nothing at all between tournaments', async ({ page }) => {

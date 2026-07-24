@@ -2007,6 +2007,8 @@ export interface components {
             next_game_number: number | null;
             /** You Won */
             you_won: boolean | null;
+            /** Owed Action */
+            owed_action: ("review" | "score") | ("waiting_opponent" | "waiting_others") | null;
         };
         /**
          * DeviceTokenResponse

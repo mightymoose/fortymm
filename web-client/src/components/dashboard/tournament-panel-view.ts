@@ -170,21 +170,30 @@ function actionOf(
   // A scheduled (uncalled) match is not scorable and a finished one has nothing
   // left, so both answer `null` rather than a button that 409s or lies.
   if (match.state !== 'live' || match.match_id === null) return null
-  if (match.next_game_number !== null) {
-    return {
-      label: `Enter Game ${match.next_game_number} result`,
-      route: scoringNewRoute(match.match_id, match.next_game_number),
-    }
+  switch (match.owed_action) {
+    case 'score':
+      // Mid-board: enter the next game. With no next game the board is decided
+      // and unposted — what is left is to post the result, which match detail
+      // holds. (Answering `null` there dead-ended the card at the one moment the
+      // player most needs a way forward.)
+      return match.next_game_number === null
+        ? { label: 'Post the result', route: matchDetailRoute(match.match_id) }
+        : {
+            label: `Enter Game ${match.next_game_number} result`,
+            route: scoringNewRoute(match.match_id, match.next_game_number),
+          }
+    case 'review':
+      // The OPPONENT posted a result; this player owes it a look. Labelling this
+      // "Post the result" told them to do a thing that was already done, and by
+      // the wrong person — `Review result` is the copy the attention panel has
+      // always used for this exact state.
+      return { label: 'Review result', route: matchDetailRoute(match.match_id) }
+    // `waiting_opponent` (we posted, they owe the accept), `waiting_others` and
+    // `null` all mean the move is not ours: no button. The card still links to
+    // match details, which is where the standing result can be watched.
+    default:
+      return null
   }
-  // A live match with NO next game is the decided-but-unposted board: every game
-  // that decides it has been scored, and what is left is to post the result.
-  // Answering `null` here left the card dead-ended at the one moment the player
-  // most needs a way forward — while the attention panel directly beneath it
-  // offered a primary button for the very same match. This is that panel's own
-  // rule (`attention-panel-view`'s `routeOf`: a `score` row with no current game
-  // routes to match detail, which holds the post-result action), applied at the
-  // top of the page where the player is actually looking.
-  return { label: 'Post the result', route: matchDetailRoute(match.match_id) }
 }
 
 function scheduleTextOf(match: DashboardTournamentMatch): string | null {

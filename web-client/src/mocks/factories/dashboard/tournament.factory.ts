@@ -42,6 +42,8 @@ export function buildDashboardTournamentMatch(
     // `null` while a match is unfinished — never `false`, which would claim a
     // loss on a match still being played.
     you_won: null,
+    // Mid-board with a next game to play: the caller owes a score.
+    owed_action: 'score',
     ...overrides,
   }
 }
