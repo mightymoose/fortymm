@@ -129,22 +129,31 @@ function ordinal(n: number): string {
   }
 }
 
+/** Join the parts of a status line, dropping the ones the server had no value for. */
+function joinParts(...parts: (string | null | undefined)[]): string {
+  return parts.filter((part): part is string => Boolean(part)).join(' · ')
+}
+
 function statusTextOf(match: DashboardTournamentMatch): string {
   const table = match.table_label
   switch (match.state) {
-    case 'live': {
-      // The game about to be played, not the count already played — this is the
-      // number on the card the player is about to enter.
-      const game =
-        match.next_game_number ?? match.games.length + 1
-      return ['Live', table, `Game ${game}`]
-        .filter((part): part is string => Boolean(part))
-        .join(' · ')
-    }
+    case 'live':
+      // `next_game_number` is the game about to be played. It is `null` when the
+      // board already DECIDES the match but the result has not been posted — and
+      // there the card must name no game at all. Falling back to
+      // `games.length + 1` would print "Game 3" for a match that is over,
+      // reintroducing on the card the exact phantom game number the server
+      // refuses to emit (`current_game_number`), and contradicting the action
+      // button beside it, which correctly offers nothing to enter.
+      return joinParts(
+        'Live',
+        table,
+        match.next_game_number === null
+          ? null
+          : `Game ${match.next_game_number}`,
+      )
     case 'completed':
-      return ['Match complete', match.round_label, table]
-        .filter((part): part is string => Boolean(part))
-        .join(' · ')
+      return joinParts('Match complete', match.round_label, table)
     case 'scheduled':
       return match.round_label
   }
@@ -171,10 +180,7 @@ function actionOf(
 
 function scheduleTextOf(match: DashboardTournamentMatch): string | null {
   if (match.state !== 'scheduled') return null
-  const parts = [match.start_label, match.table_label].filter(
-    (part): part is string => Boolean(part),
-  )
-  return parts.length ? parts.join(' · ') : 'Not scheduled yet'
+  return joinParts(match.start_label, match.table_label) || 'Not scheduled yet'
 }
 
 function projectMatch(

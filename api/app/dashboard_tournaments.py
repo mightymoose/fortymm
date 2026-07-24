@@ -46,6 +46,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.models.tournament import DrawType
+from app.result_acceptance import side_win_counts
 from app.schemas.dashboard import (
     DashboardTournament,
     DashboardTournamentEvent,
@@ -119,12 +120,24 @@ async def build_tournament_panels(
 
     by_tournament: dict[uuid.UUID, list[DashboardTournamentEvent]] = defaultdict(list)
     tournaments: dict[uuid.UUID, Tournament] = {}
+    # The table catalogue is a per-TOURNAMENT value-object, so it is parsed once per
+    # tournament rather than once per event — a caller entered in two events of one
+    # tournament (singles + doubles) would otherwise re-decode the identical JSONB.
+    tables_by_tournament: dict[uuid.UUID, dict[str, TournamentTable]] = {}
     for entry_id, event, tournament in entries:
         tournaments[tournament.id] = tournament
+        if tournament.id not in tables_by_tournament:
+            tables_by_tournament[tournament.id] = {
+                table.id: table
+                for table in (
+                    TournamentTable.model_validate(raw)
+                    for raw in tournament.table_catalogue
+                )
+            }
         by_tournament[tournament.id].append(
             _build_event(
                 event,
-                tournament=tournament,
+                tables=tables_by_tournament[tournament.id],
                 my_entry_id=entry_id,
                 entrants=entrants[event.id],
                 all_fixtures=fixtures[event.id],
@@ -246,7 +259,7 @@ def _focus_fixture(
 def _build_event(
     event: TournamentEvent,
     *,
-    tournament: Tournament,
+    tables: dict[str, TournamentTable],
     my_entry_id: uuid.UUID,
     entrants: Sequence[TournamentEntrantRead],
     all_fixtures: list[TournamentFixtureRead],
@@ -256,12 +269,6 @@ def _build_event(
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
-    tables = {
-        table.id: table
-        for table in (
-            TournamentTable.model_validate(raw) for raw in tournament.table_catalogue
-        )
-    }
     pools = {
         pool.id: pool for pool in (Pool.model_validate(raw) for raw in event.pools)
     }
@@ -292,6 +299,23 @@ def _build_event(
             if my_standing is not None:
                 break
 
+    # The caller's own decided fixtures, counted directly — draw-type-agnostic, so it
+    # stands in wherever there is no standings row to read (see the record below).
+    record_wins, record_losses = 0, 0
+    for fixture in my_fixtures:
+        if fixture.match_status is not MatchStatus.completed:
+            continue
+        mine, theirs = _games_won(
+            fixture,
+            side=_my_side(fixture, my_entry_id),
+            match=None,
+            game_counts=game_counts,
+        )
+        if mine > theirs:
+            record_wins += 1
+        elif theirs > mine:
+            record_losses += 1
+
     focus_match = (
         None
         if focus is None
@@ -315,11 +339,15 @@ def _build_event(
         name=event.name,
         draw_type=event.draw_type,
         is_live=any(f.match_status is MatchStatus.in_progress for f in my_fixtures),
-        # The record is the caller's own decided fixtures, taken from the standings
-        # row when there is one so it agrees with the table it sits next to; falling
-        # back to a direct count only for an event with no standings projection.
-        wins=my_standing.wins if my_standing is not None else 0,
-        losses=my_standing.losses if my_standing is not None else 0,
+        # Taken from the standings row when there IS one, so the record agrees with
+        # the table it sits beside; counted from the caller's own decided fixtures
+        # otherwise. The fallback is not decoration: ``event_results`` answers
+        # ``None`` for every draw type but round-robin (ADR-0788), so hard-coding a
+        # zero here would show ``0–0`` to every player of the first bracket event we
+        # ship, however many matches they had actually won — and nothing would fail
+        # to catch it.
+        wins=my_standing.wins if my_standing is not None else record_wins,
+        losses=my_standing.losses if my_standing is not None else record_losses,
         position=my_standing.rank if my_standing is not None else None,
         field_size=field_size,
         stage_label=_stage_label(event.draw_type, complete=pool_complete),
@@ -343,6 +371,24 @@ def _build_event(
     )
 
 
+def _opponent_username(
+    fixture: TournamentFixtureRead,
+    side: int | None,
+    username_by_entry: dict[uuid.UUID, str],
+) -> str | None:
+    """Who the caller is playing in this fixture, or ``None`` when that side is still
+    TBD.
+
+    The entry ids on a fixture are just ids — the names live on the event's entrants
+    list (a fixture deliberately carries no copy that could drift, ADR-0786) — so the
+    join happens here, once, for both the card and the path row.
+    """
+    opponent_entry_id = fixture.entry_b_id if side == 1 else fixture.entry_a_id
+    if opponent_entry_id is None:
+        return None
+    return username_by_entry.get(opponent_entry_id)
+
+
 def _build_match(
     fixture: TournamentFixtureRead,
     *,
@@ -355,7 +401,6 @@ def _build_match(
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentMatch:
     side = _my_side(fixture, my_entry_id)
-    opponent_entry_id = fixture.entry_b_id if side == 1 else fixture.entry_a_id
     state = _match_state(fixture.match_status)
     your_games, opponent_games = _games_won(
         fixture, side=side, match=match, game_counts=game_counts
@@ -363,11 +408,7 @@ def _build_match(
     return DashboardTournamentMatch(
         state=state,
         match_id=fixture.match_id,
-        opponent_username=(
-            username_by_entry.get(opponent_entry_id)
-            if opponent_entry_id is not None
-            else None
-        ),
+        opponent_username=_opponent_username(fixture, side, username_by_entry),
         your_games=your_games,
         opponent_games=opponent_games,
         best_of=best_of,
@@ -390,7 +431,6 @@ def _build_fixture_row(
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentFixtureRow:
     side = _my_side(fixture, my_entry_id)
-    opponent_entry_id = fixture.entry_b_id if side == 1 else fixture.entry_a_id
     state = _fixture_state(fixture.match_status)
     you_won: bool | None = None
     if state == "completed":
@@ -410,11 +450,7 @@ def _build_fixture_row(
         detail = " · ".join(parts) if parts else "Not scheduled"
     return DashboardTournamentFixtureRow(
         label=f"M{ordinal}",
-        opponent_username=(
-            username_by_entry.get(opponent_entry_id)
-            if opponent_entry_id is not None
-            else None
-        ),
+        opponent_username=_opponent_username(fixture, side, username_by_entry),
         state=state,
         detail=detail,
         you_won=you_won,
@@ -435,20 +471,13 @@ def _games_won(
     the standings beside it are the same number. A **live** one cannot — ``game_counts``
     is only loaded for completed matches (an in-progress board is not a result and must
     never reach a standings table, ADR-0788) — so it counts the loaded match's own
-    scored games, which is the running score the card is there to show."""
+    scored games through ``side_win_counts``, the same helper the result-acceptance
+    and recent-results paths count with. Counting it inline here instead would be a
+    second implementation of "who won this game", and the two would drift the first
+    time either is edited."""
     if match is not None and fixture.match_status is not MatchStatus.completed:
-        side_1 = sum(
-            1
-            for game in match.games
-            if game.score is not None
-            and game.score.side_1_points > game.score.side_2_points
-        )
-        side_2 = sum(
-            1
-            for game in match.games
-            if game.score is not None
-            and game.score.side_2_points > game.score.side_1_points
-        )
+        counts = side_win_counts(match)
+        side_1, side_2 = counts.get(1, 0), counts.get(2, 0)
     elif fixture.match_id is not None and fixture.match_id in game_counts:
         side_1, side_2 = game_counts[fixture.match_id]
     else:

@@ -9,6 +9,7 @@ what the panel projects is what the product actually writes.
 
 import uuid
 from typing import Any
+from unittest.mock import patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -290,6 +291,51 @@ async def test_an_uncalled_match_reads_as_the_next_one_up(
     )
     assert card["you_won"] is None
     assert panel["events"][0]["fixtures"][0]["state"] == "upcoming"
+
+
+async def test_the_record_is_counted_directly_when_there_are_no_standings(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``event_results`` answers ``None`` for every draw type but round-robin
+    (ADR-0788), so the panel cannot read the record off a standings row there. It
+    counts the caller's own decided fixtures instead.
+
+    Proven by taking a real played round-robin and reading the record back with the
+    standings projection removed — the state every future bracket event will be in.
+    Without the direct count the panel reports ``0–0`` to a player who has won, and
+    nothing type-checks or tests its way to noticing: the standings row is simply
+    absent, and ``0`` is a perfectly well-formed number.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "no-standings-opp") as (opp_client, opp):
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=True,
+        )
+
+        (with_standings,) = await _panels(client)
+        assert (
+            with_standings["events"][0]["wins"],
+            with_standings["events"][0]["losses"],
+        ) == (1, 0)
+
+        # Now the same data with no standings to read — the bracket case.
+        with patch("app.dashboard_tournaments.event_results", return_value=None):
+            (without_standings,) = await _panels(client)
+
+    event = without_standings["events"][0]
+    assert (event["wins"], event["losses"]) == (1, 0), (
+        "the record is counted from the caller's own decided fixtures, not zeroed"
+    )
+    assert event["position"] is None, (
+        "and the position really is absent — the standings are what is missing"
+    )
 
 
 async def test_a_tournament_that_is_not_live_gets_no_panel(

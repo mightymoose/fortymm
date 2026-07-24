@@ -107,9 +107,11 @@ describe('projectTournamentPanelView', () => {
       expect(view.tabs[0].match?.statusText).toBe('Live · Table 4 · Game 4')
     })
 
-    it('falls back to the game after the last played one when there is no next', () => {
-      // A decided-but-unposted board reports no next game; the card still has
-      // to name the game the players are standing at.
+    it('names no game at all when the board is decided but unposted', () => {
+      // `next_game_number: null` means there is no next game — the match is
+      // already decided, only the result is unposted. Inventing "Game 3" here
+      // would announce a game that will never be played, and contradict the
+      // action button beside it, which correctly offers nothing to enter.
       const view = project(
         buildDashboardTournament({
           events: [
@@ -127,7 +129,8 @@ describe('projectTournamentPanelView', () => {
         }),
       )
 
-      expect(view.tabs[0].match?.statusText).toContain('Game 3')
+      expect(view.tabs[0].match?.statusText).not.toContain('Game')
+      expect(view.tabs[0].match?.statusText).toBe('Live · Table 4')
     })
 
     it('names the round and table of a finished match', () => {
