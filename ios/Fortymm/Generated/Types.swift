@@ -3736,6 +3736,65 @@ internal enum Components {
             internal var nextGameNumber: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/you_won`.
             internal var youWon: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action`.
+            internal struct OwedActionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action/value1`.
+                internal enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case review = "review"
+                    case score = "score"
+                }
+                /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action/value1`.
+                internal var value1: Components.Schemas.DashboardTournamentMatch.OwedActionPayload.Value1Payload?
+                /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action/value2`.
+                internal enum Value2Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case waitingOpponent = "waiting_opponent"
+                    case waitingOthers = "waiting_others"
+                }
+                /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action/value2`.
+                internal var value2: Components.Schemas.DashboardTournamentMatch.OwedActionPayload.Value2Payload?
+                /// Creates a new `OwedActionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                ///   - value2:
+                internal init(
+                    value1: Components.Schemas.DashboardTournamentMatch.OwedActionPayload.Value1Payload? = nil,
+                    value2: Components.Schemas.DashboardTournamentMatch.OwedActionPayload.Value2Payload? = nil
+                ) {
+                    self.value1 = value1
+                    self.value2 = value2
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    var errors: [any Swift.Error] = []
+                    do {
+                        self.value1 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value2 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                        [
+                            self.value1,
+                            self.value2
+                        ],
+                        type: Self.self,
+                        codingPath: decoder.codingPath,
+                        errors: errors
+                    )
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                        self.value1,
+                        self.value2
+                    ])
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/owed_action`.
+            internal var owedAction: Components.Schemas.DashboardTournamentMatch.OwedActionPayload?
             /// Creates a new `DashboardTournamentMatch`.
             ///
             /// - Parameters:
@@ -3751,6 +3810,7 @@ internal enum Components {
             ///   - startLabel:
             ///   - nextGameNumber:
             ///   - youWon:
+            ///   - owedAction:
             internal init(
                 state: Components.Schemas.DashboardTournamentMatch.StatePayload,
                 matchId: Swift.String? = nil,
@@ -3763,7 +3823,8 @@ internal enum Components {
                 tableLabel: Swift.String? = nil,
                 startLabel: Swift.String? = nil,
                 nextGameNumber: Swift.Int? = nil,
-                youWon: Swift.Bool? = nil
+                youWon: Swift.Bool? = nil,
+                owedAction: Components.Schemas.DashboardTournamentMatch.OwedActionPayload? = nil
             ) {
                 self.state = state
                 self.matchId = matchId
@@ -3777,6 +3838,7 @@ internal enum Components {
                 self.startLabel = startLabel
                 self.nextGameNumber = nextGameNumber
                 self.youWon = youWon
+                self.owedAction = owedAction
             }
             internal enum CodingKeys: String, CodingKey {
                 case state
@@ -3791,6 +3853,7 @@ internal enum Components {
                 case startLabel = "start_label"
                 case nextGameNumber = "next_game_number"
                 case youWon = "you_won"
+                case owedAction = "owed_action"
             }
         }
         /// Confirmation that the device token is registered to the current user.
