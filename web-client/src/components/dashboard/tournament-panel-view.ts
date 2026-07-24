@@ -29,7 +29,7 @@ export interface TournamentGameChipView {
 }
 
 export interface TournamentMatchCardView {
-  state: 'live' | 'scheduled' | 'completed'
+  state: 'live' | 'scheduled' | 'completed' | 'voided'
   /** The card's status line: `Live · Table 4 · Game 4`, `Match complete ·
    * Group match 2 · Table 2`, or the round for a match not yet started. */
   statusText: string
@@ -154,6 +154,11 @@ function statusTextOf(match: DashboardTournamentMatch): string {
       )
     case 'completed':
       return joinParts('Match complete', match.round_label, table)
+    case 'voided':
+      // A voided match contributes nothing (ADR-0013) — the card names the fact
+      // and shows no outcome. It deliberately does NOT read as a completed
+      // match, which would derive a loss from the empty board beneath it.
+      return joinParts('Match voided', match.round_label)
     case 'scheduled':
       return match.round_label
   }
@@ -196,7 +201,11 @@ function projectMatch(
   return {
     state: match.state,
     statusText: statusTextOf(match),
-    bestOfText: `Best of ${match.best_of}`,
+    // A best-of-1 is a single game, so it drops the "Best of N" race framing that
+    // only means something for a multi-game set — the copy #908 settled for every
+    // surface that states a match length.
+    bestOfText:
+      match.best_of === 1 ? 'Single game' : `Best of ${match.best_of}`,
     youName,
     opponentName,
     yourGames: match.your_games,

@@ -108,16 +108,22 @@ class DashboardRating(BaseModel):
     stats: list[DashboardRatingStat]
 
 
-TournamentMatchState = Literal["live", "scheduled", "completed"]
+TournamentMatchState = Literal["live", "scheduled", "completed", "voided"]
 """The state of the ONE match the tournament panel puts in front of the player: the
-one being played now, the next one due, or the last one finished. Closed set — the
-panel's card renders a different shape per arm, so a fourth state must be a type
-error here rather than a card that renders nothing."""
+one being played now, the next one due, the last one finished, or one that was
+voided. Closed set — the panel's card renders a different shape per arm, so a fifth
+state must be a type error here rather than a card that renders nothing.
 
-TournamentFixtureState = Literal["completed", "live", "upcoming"]
+``voided`` is its own arm and NOT a flavour of ``completed``, because a voided match
+has **no winner** (``app.match_voiding`` — "any surface that derives a result must
+see *no winner*, not a stale W/L"). Folding it into ``completed`` makes the panel
+derive an outcome from a 0–0 board and announce a loss the player never took."""
+
+TournamentFixtureState = Literal["completed", "live", "upcoming", "voided"]
 """A row's state in the panel's "Your matches" path. Deliberately NOT
 ``MatchStatus``: a fixture that has not materialized into a match yet has no match
-status at all, and that is the ``upcoming`` case the path exists to show."""
+status at all, and that is the ``upcoming`` case the path exists to show. ``voided``
+is its own arm here for the same reason it is on the match state above."""
 
 
 class DashboardTournamentGame(BaseModel):
@@ -170,9 +176,9 @@ class DashboardTournamentMatch(BaseModel):
     # ``DashboardAttentionItem.current_game_number``: ``None`` when the board is
     # already decided but unposted, or the match is not in progress.
     next_game_number: int | None
-    # ``None`` unless ``state`` is ``completed`` — a live or scheduled match has no
-    # outcome, and a ``False`` there would claim the caller lost a match still being
-    # played.
+    # ``None`` unless ``state`` is ``completed`` — a live, scheduled or VOIDED match
+    # has no outcome, and a ``False`` there would claim the caller lost a match still
+    # being played, or one that was struck from the record entirely.
     you_won: bool | None
 
 

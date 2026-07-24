@@ -1943,7 +1943,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "completed" | "live" | "upcoming";
+            state: "completed" | "live" | "upcoming" | "voided";
             /** Detail */
             detail: string;
             /** You Won */
@@ -1984,7 +1984,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "live" | "scheduled" | "completed";
+            state: "live" | "scheduled" | "completed" | "voided";
             /** Match Id */
             match_id: string | null;
             /** Opponent Username */

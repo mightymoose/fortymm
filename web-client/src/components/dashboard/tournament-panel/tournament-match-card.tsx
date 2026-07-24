@@ -71,6 +71,11 @@ export const TournamentMatchCard = ({ match }: TournamentMatchCardProps) => {
         won={match.opponentWon}
         dimmed={match.state === 'completed' && !match.opponentWon}
       />
+      {match.state === 'voided' && (
+        <p className="mt-3 text-[13px] text-[color:var(--fg-3)]">
+          This match was voided — it counts for nothing and has no winner.
+        </p>
+      )}
 
       {match.gamesLegend !== null && (
         <TournamentGameChips legend={match.gamesLegend} games={match.games} />

@@ -439,6 +439,10 @@ def _build_fixture_row(
         )
         you_won = your_games > opponent_games
         detail = f"{'Won' if you_won else 'Lost'} {your_games}–{opponent_games}"
+    elif state == "voided":
+        # No score, and ``you_won`` stays ``None``: a voided match contributes
+        # nothing (ADR-0013), so the row states the fact and derives no outcome.
+        detail = "Voided"
     elif state == "live":
         detail = "In progress"
     else:
@@ -506,31 +510,42 @@ def _games(match: Match | None, *, side: int | None) -> list[DashboardTournament
 
 
 def _match_state(status: MatchStatus | None) -> TournamentMatchState:
-    """A fixture's match status as the card's three-way state.
+    """A fixture's match status as the card's state.
 
     ``None`` (not materialized) and ``pending`` are both ``scheduled`` — from the
-    player's chair they are the same thing: a match they have not started. ``voided``
-    is ``completed`` in the sense the card means it (nothing left to play); it carries
-    no games, so the card renders a 0–0 finished board rather than inviting scoring."""
+    player's chair they are the same thing: a match they have not started.
+
+    ``voided`` is its OWN state, not a flavour of ``completed``. A voided match has no
+    winner (``app.match_voiding``: "any surface that derives a result must see *no
+    winner*, not a stale W/L"), and it is not true that it carries no games — an
+    account-merge self-play collision (ADR-0013) voids a match that may have been
+    played out in full. Folded into ``completed``, the card would read the void's
+    empty game count as a 0–0 board and announce a loss the player never took."""
     match status:
         case None | MatchStatus.pending:
             return "scheduled"
         case MatchStatus.in_progress:
             return "live"
-        case MatchStatus.completed | MatchStatus.voided:
+        case MatchStatus.completed:
             return "completed"
+        case MatchStatus.voided:
+            return "voided"
         case _:
             assert_never(status)
 
 
 def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
+    """The same four-way split as ``_match_state``, in the path list's vocabulary —
+    ``voided`` kept separate for the same reason (see it)."""
     match status:
         case None | MatchStatus.pending:
             return "upcoming"
         case MatchStatus.in_progress:
             return "live"
-        case MatchStatus.completed | MatchStatus.voided:
+        case MatchStatus.completed:
             return "completed"
+        case MatchStatus.voided:
+            return "voided"
         case _:
             assert_never(status)
 

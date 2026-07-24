@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react'
+import { Ban, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TournamentPathRowView } from '../../tournament-panel-view'
 
@@ -25,7 +25,11 @@ export const TournamentPathRow = ({ row }: TournamentPathRowProps) => (
     data-testid={`tournament-panel-path-row-${row.label}`}
   >
     <span className="flex w-4 shrink-0 justify-center" aria-hidden="true">
-      {row.state === 'completed' ? (
+      {row.state === 'voided' ? (
+        // Struck through, not checked: a voided match was not played to a
+        // result, so it must not wear the glyph that means "decided".
+        <Ban size={13} strokeWidth={2.5} className="text-[color:var(--fg-3)]" />
+      ) : row.state === 'completed' ? (
         <Check
           size={14}
           strokeWidth={3}
@@ -55,7 +59,7 @@ export const TournamentPathRow = ({ row }: TournamentPathRowProps) => (
     <span
       className={cn(
         'shrink-0 font-mono text-[12px]',
-        row.state === 'upcoming'
+        row.state === 'upcoming' || row.state === 'voided'
           ? 'text-[color:var(--fg-3)]'
           : 'font-bold text-[color:var(--serve-500)]',
         // A loss keeps the row readable without shouting: the detail text

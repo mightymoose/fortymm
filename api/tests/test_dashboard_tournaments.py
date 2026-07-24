@@ -14,6 +14,7 @@ from unittest.mock import patch
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.match_voiding import void_match
 from app.models import (
     Match,
     MatchStatus,
@@ -335,6 +336,59 @@ async def test_the_record_is_counted_directly_when_there_are_no_standings(
     )
     assert event["position"] is None, (
         "and the position really is absent — the standings are what is missing"
+    )
+
+
+async def test_a_voided_match_shows_no_winner_and_no_score(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A voided match contributes nothing (ADR-0013) — and the panel must say exactly
+    that, not derive a result from it.
+
+    Voiding nulls both sides' ``won`` precisely so that "any surface that derives a
+    result must see *no winner*, not a stale W/L" (``app.match_voiding``). It also
+    drops the match out of ``completed_match_ids``, so the panel has no game counts
+    for it. Folding ``voided`` into ``completed`` therefore produced the worst of
+    both: an outcome derived from an empty board, announcing ``Lost 0–0`` on a match
+    the player may well have won before it was struck from the record.
+
+    The match here is played to a real 2–0 win FIRST, then voided, so the test
+    distinguishes "reports no result" from "had no result to report".
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "void-opp") as (opp_client, opp):
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=True,
+        )
+        match = await db_session.get(Match, fixture.match_id)
+        assert match is not None
+        await void_match(db_session, match)
+        await db_session.commit()
+
+        (panel,) = await _panels(client)
+
+    event = panel["events"][0]
+    card = event["match"]
+    assert card["state"] == "voided", "not 'completed' — a void is its own state"
+    assert card["you_won"] is None, (
+        "a voided match has no winner, so the card crowns nobody"
+    )
+
+    (row,) = event["fixtures"]
+    assert row["state"] == "voided"
+    assert row["you_won"] is None
+    assert row["detail"] == "Voided", (
+        "the row states the fact rather than a fabricated 'Lost 0–0'"
+    )
+    assert (event["wins"], event["losses"]) == (0, 0), (
+        "and the void counts toward neither column of the record"
     )
 
 

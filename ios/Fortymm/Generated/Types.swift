@@ -3615,6 +3615,7 @@ internal enum Components {
                 case completed = "completed"
                 case live = "live"
                 case upcoming = "upcoming"
+                case voided = "voided"
             }
             /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/state`.
             internal var state: Components.Schemas.DashboardTournamentFixtureRow.StatePayload
@@ -3709,6 +3710,7 @@ internal enum Components {
                 case live = "live"
                 case scheduled = "scheduled"
                 case completed = "completed"
+                case voided = "voided"
             }
             /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/state`.
             internal var state: Components.Schemas.DashboardTournamentMatch.StatePayload

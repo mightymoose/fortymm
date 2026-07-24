@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { Overline } from '@/components/overline'
+import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TournamentMatchCard } from './tournament-panel/tournament-match-card'
 import { TournamentPathList } from './tournament-panel/tournament-path-list'
@@ -36,11 +37,16 @@ export const TournamentPanel = ({ view }: TournamentPanelProps) => {
   const current =
     view.tabs.find((tab) => tab.eventId === active) ?? view.tabs[0]
   return (
-    <section
-      aria-labelledby={headingId}
-      className="mb-6 rounded-[var(--radius-lg)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] p-5 sm:p-6"
+    // The design-system `Card` IS the content-panel primitive (web-client
+    // CLAUDE.md), and `asChild` exists so it can be the `<section
+    // aria-labelledby>` landmark rather than wrapping one — the same shape
+    // `AttentionPanel` beneath it uses.
+    <Card
+      asChild
+      className="mb-6 gap-0 bg-[color:var(--bg-panel)] p-5 sm:p-6"
       data-testid="dashboard-tournament-panel"
     >
+    <section aria-labelledby={headingId}>
       <div className="flex flex-wrap items-start gap-4">
         <div className="min-w-0">
           <Overline className="mb-1.5 text-[color:var(--ball-500)]">
@@ -144,5 +150,6 @@ export const TournamentPanel = ({ view }: TournamentPanelProps) => {
         ))}
       </Tabs>
     </section>
+    </Card>
   )
 }

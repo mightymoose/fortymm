@@ -326,6 +326,62 @@ describe('projectTournamentPanelView', () => {
       expect(view.tabs[0].match?.gamesLegend).toBeNull()
     })
 
+    it('reports a voided match as voided, with no winner', () => {
+      // A voided match contributes nothing (ADR-0013). It must not read as a
+      // completed one, which would derive a loss from the empty board.
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({
+                state: 'voided',
+                round_label: 'Group match 2',
+                games: [],
+                your_games: 0,
+                opponent_games: 0,
+                you_won: null,
+              }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.statusText).toBe('Match voided · Group match 2')
+      expect(view.tabs[0].match?.youWon).toBe(false)
+      expect(view.tabs[0].match?.opponentWon).toBe(false)
+      expect(view.tabs[0].match?.action).toBeNull()
+    })
+
+    it('frames a best-of-1 as a single game, not "Best of 1"', () => {
+      // The copy #908 settled for every surface that states a match length —
+      // the "Best of N" race framing only means something for a multi-game set.
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({ best_of: 1 }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.bestOfText).toBe('Single game')
+    })
+
+    it('keeps the "Best of N" framing for a multi-game set', () => {
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({ best_of: 5 }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.bestOfText).toBe('Best of 5')
+    })
+
     it('calls an undecided opposing side TBD', () => {
       const view = project(
         buildDashboardTournament({

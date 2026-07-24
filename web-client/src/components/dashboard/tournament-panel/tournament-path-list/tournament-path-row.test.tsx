@@ -57,6 +57,27 @@ describe('TournamentPathRow', () => {
     )
   })
 
+  it('states a voided match as voided, with no win or loss tone', () => {
+    // A voided match was never played to a result, so the row must not wear the
+    // check that means "decided" nor the loss tone that means "you lost".
+    tournamentPathRowPage.render({
+      row: buildTournamentPathRowView({
+        state: 'voided',
+        detail: 'Voided',
+        youWon: null,
+      }),
+    })
+
+    const row = tournamentPathRowPage.getRow('M1')
+    expect(row).toHaveTextContent('Voided')
+    expect(
+      row.querySelector('.text-\\[color\\:var\\(--loss\\)\\]'),
+    ).toBeNull()
+    expect(
+      row.querySelector('.text-\\[color\\:var\\(--serve-500\\)\\]'),
+    ).toBeNull()
+  })
+
   it('shows TBD rather than a blank where the opponent is undecided', () => {
     tournamentPathRowPage.render({
       row: buildTournamentPathRowView({
