@@ -215,9 +215,32 @@ describe('projectTournamentPanelView', () => {
       })
     })
 
+    it('offers the result as the action once the board is decided', () => {
+      // The decided-but-unposted state. Answering `null` here dead-ended the
+      // card at the one moment the player most needs a way forward — while the
+      // attention panel beneath it offered a button for the very same match.
+      const view = project(
+        buildDashboardTournament({
+          events: [
+            buildDashboardTournamentEvent({
+              match: buildDashboardTournamentMatch({
+                state: 'live',
+                match_id: 'm-7',
+                next_game_number: null,
+              }),
+            }),
+          ],
+        }),
+      )
+
+      expect(view.tabs[0].match?.action?.label).toBe('Post the result')
+      expect(view.tabs[0].match?.action?.route.params).toEqual({
+        matchId: 'm-7',
+      })
+    })
+
     it.each([
       ['a match that is not live', { state: 'scheduled' as const }],
-      ['a decided board with no next game', { next_game_number: null }],
       ['a fixture with no match behind it', { match_id: null }],
     ])('offers no action for %s', (_case, overrides) => {
       const view = project(

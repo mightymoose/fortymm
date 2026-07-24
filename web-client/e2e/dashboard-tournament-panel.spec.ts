@@ -96,6 +96,28 @@ const IN_A_TOURNAMENT = {
   ],
 } satisfies DashboardResponse
 
+/** The board is decided but the result is unposted — every game that decides
+ * the match is scored, so there is no next game, only a result to post. */
+const DECIDED_UNPOSTED = {
+  ...IN_A_TOURNAMENT,
+  tournaments: [
+    {
+      ...IN_A_TOURNAMENT.tournaments[0],
+      events: [
+        {
+          ...IN_A_TOURNAMENT.tournaments[0].events[0],
+          match: {
+            ...IN_A_TOURNAMENT.tournaments[0].events[0].match,
+            your_games: 3,
+            opponent_games: 0,
+            next_game_number: null,
+          },
+        },
+      ],
+    },
+  ],
+} satisfies DashboardResponse
+
 /** The same player between tournaments — the shape almost every load has. */
 const IN_NO_TOURNAMENT = {
   ...IN_A_TOURNAMENT,
@@ -179,6 +201,20 @@ test.describe('Dashboard tournament panel', () => {
     await expect(block).toContainText('Won 3–1')
     await expect(block).toContainText('In progress')
     await expect(block).toContainText('5:20 PM CDT · Table 6')
+  })
+
+  test('offers the result to post once the board is decided', async ({ page }) => {
+    // The card must not dead-end at the moment the match is finished: there is
+    // no next game to enter, so the action becomes the result itself.
+    await installDashboardMock(page, DECIDED_UNPOSTED)
+    await page.goto('/dashboard')
+
+    const block = panel(page)
+    await expect(block).toContainText('Live · Table 4')
+    await expect(block).not.toContainText('Game 4')
+    await expect(
+      block.getByRole('link', { name: 'Post the result' }),
+    ).toHaveAttribute('href', '/matches/77777777-7777-4777-8777-777777777777')
   })
 
   test('renders nothing at all between tournaments', async ({ page }) => {
