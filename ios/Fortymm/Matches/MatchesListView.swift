@@ -16,10 +16,11 @@ struct MatchesListView: View {
     var service: MatchService = .shared
     /// Set by another tab to pre-apply a filter on arrival; cleared once applied.
     var pendingFilter: Binding<MatchesFilter?> = .constant(nil)
-    /// The tab currently selected in `MainTabView`'s `TabView`. Passed down so the
-    /// tab-return refetch can ride the deterministic selection change rather than
-    /// `.onAppear`, which fires unreliably on `TabView` tab-return (ADR 0010).
-    var selectedTab: FMTab = .matches
+    /// Whether Matches is the currently-selected tab (derived by `MainTabView` from
+    /// the `TabView` selection it owns). Drives `.refetchWhenSelected` so tab-return
+    /// refetch rides the deterministic selection change rather than `.onAppear`,
+    /// which fires unreliably on `TabView` tab-return (ADR 0010).
+    var isSelected: Bool = false
 
     @State private var statusTab: StatusTab = .all
     @State private var query = ""
@@ -45,7 +46,7 @@ struct MatchesListView: View {
     @State private var suppressQueryReload = false
     /// Guards the `.task` first-load so it fetches exactly once. `.task` restarts
     /// on tab re-appearance the same unreliable way `.onAppear` does, so gating it
-    /// keeps tab-returns solely on the deterministic selection `.onChange` below —
+    /// keeps tab-returns solely on the deterministic `.refetchWhenSelected` below —
     /// exactly one fetch per return, no double-fetch (ADR 0010).
     @State private var didInitialLoad = false
 
@@ -75,20 +76,17 @@ struct MatchesListView: View {
                 else { reload() }
             }
             // Returning to the Matches tab must re-fetch (surfacing a match just
-            // posted at the top). Drive it off the TabView selection MainTabView
-            // owns — fires deterministically on the transition to .matches, unlike
-            // .onAppear on tab-return (ADR 0010). Skip when a cross-tab filter is
-            // queued: the pendingFilter .onChange below owns that reload, so this
-            // guard keeps it to exactly one fetch.
-            .onChange(of: selectedTab) { _, tab in
-                guard tab == .matches else { return }
+            // posted at the top). Skip when a cross-tab filter is queued: the
+            // pendingFilter .onChange below owns that reload, so this guard keeps
+            // it to exactly one fetch.
+            .refetchWhenSelected(isSelected) {
                 if pendingFilter.wrappedValue == nil { reload() }
             }
             // Foregrounding may surface cross-device changes (a match the opponent
             // just accepted/countered) — re-fetch the feed.
             .refetchOnForeground { reload() }
             // Also handle the case where this tab is already visible when the
-            // filter is set (no fresh .onAppear) — apply it live.
+            // filter is set (no fresh `.task`) — apply it live.
             .onChange(of: pendingFilter.wrappedValue) { _, filter in
                 if filter != nil { applyPendingFilter() }
             }
