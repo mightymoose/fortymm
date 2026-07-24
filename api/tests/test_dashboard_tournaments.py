@@ -1,0 +1,600 @@
+"""``DashboardResponse.tournaments`` — the panel that tops the dashboard while the
+caller is playing in a live tournament.
+
+Read through the real ``GET /v1/dashboard`` rather than the builder, because the shape
+on the wire is the contract the panel renders. The tournaments themselves are built
+through the real tournament routes (create → enter → cut → go live → call → play), so
+what the panel projects is what the product actually writes.
+"""
+
+import uuid
+from typing import Any
+from unittest.mock import patch
+
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.match_voiding import void_match
+from app.models import (
+    Match,
+    MatchStatus,
+    TournamentEntryStatus,
+    TournamentStatus,
+    User,
+)
+from tests._helpers import opponent_session
+from tests.test_tournaments import (
+    POOL_A,
+    _call_fixtures,
+    _cut_the_draw,
+    _enter,
+    _fixture_rows,
+    _go_live,
+    _live_two_player_pool,
+    _rr_payload,
+    _set_status,
+    _tournament_with_events,
+    _win_fixture_match,
+)
+from tests.test_tournaments import (
+    _withdraw as _withdraw_entry,
+)
+
+# The tournament suite's own fixture — the primary client with a real session holding
+# the tournament permissions the create/read routes gate on. Imported (rather than
+# re-declared) so a change to what a director may do reaches this file too.
+from tests.test_tournaments import authed_client as authed_client  # noqa: F401
+
+
+async def _panels(client: AsyncClient) -> list[dict[str, Any]]:
+    response = await client.get("/v1/dashboard")
+    assert response.status_code == 200, response.text
+    panels: list[dict[str, Any]] = response.json()["tournaments"]
+    return panels
+
+
+async def test_a_player_in_no_tournament_gets_no_panel(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The overwhelmingly common case: nobody is mid-tournament most days, so the
+    field is an empty list and the dashboard renders no panel at all — not an empty
+    one with a heading and nothing under it."""
+    client, _ = authed_client
+
+    assert await _panels(client) == []
+
+
+async def test_a_live_tournament_the_caller_is_entered_in_becomes_a_panel(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The whole projection, end to end: a live round-robin the caller is playing in
+    comes back as one panel, with a tab for the event, the live match in the card, the
+    caller's own record and pool position, and their schedule."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "panel-opp") as (_opp_client, opp):
+        await _live_two_player_pool(client, owner, opp, db_session, rated=True)
+
+        (panel,) = await _panels(client)
+
+    assert panel["live_count"] == 1, "the caller's called match is being played now"
+    (event,) = panel["events"]
+    assert event["is_live"] is True
+    assert event["draw_type"] == "round-robin"
+    assert event["stage_label"] == "Group play"
+    assert event["pool_label"] == "Pool A", (
+        "the pool the caller was drawn into, by name — not its 'p-a' string ref"
+    )
+
+    card = event["match"]
+    assert card["state"] == "live"
+    assert card["opponent_username"] == "panel-opp"
+    assert card["your_games"] == 0 and card["opponent_games"] == 0
+    assert card["best_of"] == 3
+    assert card["round_label"] == "Group match 1"
+    assert card["next_game_number"] == 1, (
+        "the card deep-links straight to the game that is about to be played"
+    )
+    assert card["you_won"] is None, "a match still being played has no outcome"
+
+    (row,) = event["fixtures"]
+    assert row["label"] == "M1"
+    assert row["state"] == "live"
+    assert row["detail"] == "In progress"
+    assert row["opponent_username"] == "panel-opp"
+
+
+async def test_the_panel_states_the_score_from_the_callers_own_side(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The side flip, which is the whole reason this projection exists.
+
+    A fixture seats ``entry_a`` on side 1 and ``entry_b`` on side 2 (#788), so a raw
+    side-shaped score reads *backwards* for whichever player is entry B. Here the
+    caller is entry B and the board is 5–11 in side terms — a game they **won** — and
+    every number the panel gives them says so: ``your_games`` is 1, and the game chip
+    reads 11–5 their way round.
+
+    Proven by handing the same match to both players and asserting the two panels are
+    mirror images. Asserting only the caller's side would pass just as well if the
+    server never flipped anything and the caller happened to be entry A.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "flip-opp") as (opp_client, opp):
+        # Owner is seed 1 → entry A → side 1. The *opponent* is entry B, so the
+        # opponent's panel is the one that must be flipped.
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        write = await client.post(
+            f"/v1/matches/{fixture.match_id}/games/1/scores/new",
+            json={"side_1_points": 5, "side_2_points": 11},
+        )
+        assert write.status_code == 201, write.text
+
+        (owner_panel,) = await _panels(client)
+        (opp_panel,) = await _panels(opp_client)
+
+    owner_card = owner_panel["events"][0]["match"]
+    opp_card = opp_panel["events"][0]["match"]
+
+    assert (owner_card["your_games"], owner_card["opponent_games"]) == (0, 1)
+    assert (opp_card["your_games"], opp_card["opponent_games"]) == (1, 0), (
+        "entry B won that game, and their own panel must say so"
+    )
+    assert owner_card["games"] == [
+        {"number": 1, "your_points": 5, "opponent_points": 11}
+    ]
+    assert opp_card["games"] == [{"number": 1, "your_points": 11, "opponent_points": 5}]
+    assert owner_card["opponent_username"] == "flip-opp"
+    assert opp_card["opponent_username"] == owner.username
+
+
+async def test_a_completed_match_carries_its_outcome_and_the_record_follows(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Once the caller's only match is decided, the card flips to ``completed`` with
+    the outcome stated from their side, the path row states the result, and the stats
+    strip reads the standings the tournament page reads (ADR-0788) rather than a second
+    count of the same match."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "done-opp") as (opp_client, opp):
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=True,
+        )
+
+        (panel,) = await _panels(client)
+        (loser_panel,) = await _panels(opp_client)
+
+    assert panel["live_count"] == 0, "nothing of the caller's is being played now"
+    event = panel["events"][0]
+    assert event["is_live"] is False
+    assert (event["wins"], event["losses"]) == (1, 0)
+    assert event["position"] == 1 and event["field_size"] == 2
+    assert event["stage_label"] == "Group complete", (
+        "the pool's only fixture is decided, so group play is over"
+    )
+
+    card = event["match"]
+    assert card["state"] == "completed"
+    assert card["you_won"] is True
+    assert (card["your_games"], card["opponent_games"]) == (2, 0)
+    assert card["next_game_number"] is None, "there is no next game to deep-link"
+
+    (row,) = event["fixtures"]
+    assert row["state"] == "completed"
+    assert row["you_won"] is True
+    assert row["detail"] == "Won 2–0"
+
+    loser_event = loser_panel["events"][0]
+    assert (loser_event["wins"], loser_event["losses"]) == (0, 1)
+    assert loser_event["position"] == 2
+    assert loser_event["fixtures"][0]["detail"] == "Lost 0–2", (
+        "the loser's own row reads as a loss — the row is stated from each side"
+    )
+
+
+async def test_the_card_prefers_the_live_match_over_a_finished_one(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A player mid-match must never have to scroll past a result to find the game
+    they are standing at a table for: with one match finished and another called, the
+    card shows the one being played.
+
+    Three-player pool so the caller has two fixtures and the choice is real — with a
+    single fixture the priority rule is unobservable, since whichever match exists is
+    also the only one that could be picked.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "prio-second") as (second_client, second):
+        async with opponent_session(db_session, "prio-third") as (_third_client, third):
+            tournament_id, (event,) = await _tournament_with_events(
+                client,
+                _rr_payload(
+                    POOL_A,
+                    match_settings={"rated": False, "length_games": 3},
+                    predicates=[],
+                ),
+            )
+            entries = {
+                user.username: await _enter(db_session, event["id"], user, seed=seed)
+                for seed, user in enumerate((owner, second, third), start=1)
+            }
+            await _cut_the_draw(client, tournament_id, event["id"])
+            await _set_status(db_session, tournament_id, TournamentStatus.published)
+            assert (await _go_live(client, tournament_id)).status_code == 201
+
+            fixtures = await _fixture_rows(db_session, event["id"])
+            mine = [
+                f
+                for f in fixtures
+                if entries[owner.username].id in (f.entry_a_id, f.entry_b_id)
+            ]
+            assert len(mine) == 2, "the caller plays both of the other two"
+            finished, playing = mine
+            await _call_fixtures(db_session, tournament_id, [finished, playing])
+            reloaded = await _fixture_rows(db_session, event["id"])
+            (finished,) = [f for f in reloaded if f.id == finished.id]
+            await _win_fixture_match(
+                finished,
+                clients_by_entry={
+                    entries[owner.username].id: client,
+                    entries[second.username].id: second_client,
+                },
+                winner_entry_id=entries[owner.username].id,
+                rated=False,
+            )
+
+            (panel,) = await _panels(client)
+
+    card = panel["events"][0]["match"]
+    assert card["state"] == "live", (
+        "the called, unfinished match wins the card over the decided one"
+    )
+    assert card["match_id"] == str(playing.match_id)
+    assert panel["events"][0]["fixtures"][0]["state"] == "completed", (
+        "the finished match is still on the path — it is just not the card"
+    )
+
+
+async def test_an_uncalled_match_reads_as_the_next_one_up(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A materialized-but-uncalled match is ``pending`` in the domain and
+    ``scheduled`` on the panel: from the player's chair "not created yet" and "created
+    but not called" are the same thing — a match they have not started — and the card
+    must invite neither scoring nor a result."""
+    client, owner = authed_client
+    async with opponent_session(db_session, "uncalled-opp") as (_opp_client, opp):
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True, call=False
+        )
+        match = await db_session.get(Match, fixture.match_id)
+        assert match is not None and match.status is MatchStatus.pending
+
+        (panel,) = await _panels(client)
+
+    assert panel["live_count"] == 0
+    card = panel["events"][0]["match"]
+    assert card["state"] == "scheduled"
+    assert card["next_game_number"] is None, (
+        "an uncalled match is not scorable, so there is no game to deep-link"
+    )
+    assert card["you_won"] is None
+    assert panel["events"][0]["fixtures"][0]["state"] == "upcoming"
+
+
+async def test_the_record_is_counted_directly_when_there_are_no_standings(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``event_results`` answers ``None`` for every draw type but round-robin
+    (ADR-0788), so the panel cannot read the record off a standings row there. It
+    counts the caller's own decided fixtures instead.
+
+    Proven by taking a real played round-robin and reading the record back with the
+    standings projection removed — the state every future bracket event will be in.
+    Without the direct count the panel reports ``0–0`` to a player who has won, and
+    nothing type-checks or tests its way to noticing: the standings row is simply
+    absent, and ``0`` is a perfectly well-formed number.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "no-standings-opp") as (opp_client, opp):
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=True,
+        )
+
+        (with_standings,) = await _panels(client)
+        assert (
+            with_standings["events"][0]["wins"],
+            with_standings["events"][0]["losses"],
+        ) == (1, 0)
+
+        # Now the same data with no standings to read — the bracket case.
+        with patch("app.dashboard_tournaments.event_results", return_value=None):
+            (without_standings,) = await _panels(client)
+
+    event = without_standings["events"][0]
+    assert (event["wins"], event["losses"]) == (1, 0), (
+        "the record is counted from the caller's own decided fixtures, not zeroed"
+    )
+    assert event["position"] is None, (
+        "and the position really is absent — the standings are what is missing"
+    )
+
+
+async def test_a_standing_result_owes_a_review_to_one_side_and_nothing_to_the_other(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``owed_action`` is what the CALLER owes, and the two players owe opposite
+    things once a result is standing.
+
+    The panel used to read this off ``next_game_number is None``, which conflates
+    three different states: the board is decided but unposted, a result is posted
+    and awaiting acceptance, and the match is not in progress at all. Under that
+    reading the card told BOTH players to "Post the result" — a job already done, and
+    done by one of them. It comes from ``list_attention_kind`` now, the very
+    classifier the attention panel on the same dashboard is built from, so the two
+    panels cannot label one match two ways.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "owed-opp") as (opp_client, opp):
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        # Mid-board, nothing posted: both sides owe a score.
+        (mine,) = await _panels(client)
+        assert mine["events"][0]["match"]["owed_action"] == "score"
+
+        # The owner proposes a decided board; it stands, unaccepted.
+        post = await client.post(
+            f"/v1/matches/{fixture.match_id}/results",
+            json={
+                "games": [
+                    {"game_number": n, "side_1_points": 11, "side_2_points": 5}
+                    for n in (1, 2)
+                ]
+            },
+        )
+        assert post.status_code == 201, post.text
+
+        (poster_panel,) = await _panels(client)
+        (reviewer_panel,) = await _panels(opp_client)
+
+    assert poster_panel["events"][0]["match"]["owed_action"] == "waiting_opponent", (
+        "the side that posted owes nothing — the move is the opponent's"
+    )
+    assert reviewer_panel["events"][0]["match"]["owed_action"] == "review", (
+        "the other side owes a review, not another post"
+    )
+    assert poster_panel["events"][0]["match"]["next_game_number"] is None
+    assert reviewer_panel["events"][0]["match"]["next_game_number"] is None, (
+        "and next_game_number is None for BOTH — which is exactly why it cannot "
+        "be the thing the label is read off"
+    )
+
+
+async def test_a_voided_match_shows_no_winner_and_no_score(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A voided match contributes nothing (ADR-0013) — and the panel must say exactly
+    that, not derive a result from it.
+
+    Voiding nulls both sides' ``won`` precisely so that "any surface that derives a
+    result must see *no winner*, not a stale W/L" (``app.match_voiding``). It also
+    drops the match out of ``completed_match_ids``, so the panel has no game counts
+    for it. Folding ``voided`` into ``completed`` therefore produced the worst of
+    both: an outcome derived from an empty board, announcing ``Lost 0–0`` on a match
+    the player may well have won before it was struck from the record.
+
+    The match here is played to a real 2–0 win FIRST, then voided, so the test
+    distinguishes "reports no result" from "had no result to report".
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "void-opp") as (opp_client, opp):
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+            client, owner, opp, db_session, rated=True
+        )
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry={e_owner.id: client, e_opp.id: opp_client},
+            winner_entry_id=e_owner.id,
+            rated=True,
+        )
+        match = await db_session.get(Match, fixture.match_id)
+        assert match is not None
+        await void_match(db_session, match)
+        await db_session.commit()
+
+        (panel,) = await _panels(client)
+
+    event = panel["events"][0]
+    card = event["match"]
+    assert card["state"] == "voided", "not 'completed' — a void is its own state"
+    assert card["you_won"] is None, (
+        "a voided match has no winner, so the card crowns nobody"
+    )
+
+    (row,) = event["fixtures"]
+    assert row["state"] == "voided"
+    assert row["you_won"] is None
+    assert row["detail"] == "Voided", (
+        "the row states the fact rather than a fabricated 'Lost 0–0'"
+    )
+    assert (event["wins"], event["losses"]) == (0, 0), (
+        "and the void counts toward neither column of the record"
+    )
+
+
+async def test_a_tournament_that_is_not_live_gets_no_panel(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``live`` is the whole membership test. A published tournament has no draw being
+    played yet and an archived one is over; neither belongs at the top of a
+    dashboard."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _enter(db_session, event["id"], owner, seed=1)
+
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert await _panels(client) == []
+
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+    assert len(await _panels(client)) == 1, "the same tournament, now live, is a panel"
+
+    await _set_status(db_session, tournament_id, TournamentStatus.archived)
+    assert await _panels(client) == []
+
+
+async def test_a_withdrawn_player_gets_no_panel(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Withdrawal is a soft delete (ADR-0016) — the row survives — so the panel has to
+    filter on the status rather than on the row's existence, or a player who pulled out
+    keeps being shown a tournament they are no longer in."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    entry = await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+    assert len(await _panels(client)) == 1
+
+    await _withdraw_entry(db_session, entry)
+
+    assert await _panels(client) == [], (
+        "the withdrawn entry's row is still on the books, but it is not an entry"
+    )
+
+
+async def test_a_live_tournament_the_caller_only_directs_gets_no_panel(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The panel is a PLAYER's surface, keyed on holding an entry — not on owning the
+    tournament. A director who is running an event they are not playing in has no match
+    to be shown, and their dashboard must not claim otherwise."""
+    client, _owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    async with opponent_session(db_session, "entrant-not-owner") as (_c, entrant):
+        await _enter(db_session, event["id"], entrant, seed=1)
+        await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+        assert await _panels(client) == [], (
+            "the owner created it, but they are not in it"
+        )
+
+
+async def test_an_event_with_no_draw_cut_stands_the_player_nowhere(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """``position: None`` is a fact, not a zero: an event whose draw has not been cut
+    has no standings to stand in, and a ``0`` there would read as a rank."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    (panel,) = await _panels(client)
+
+    (panel_event,) = panel["events"]
+    assert panel_event["position"] is None
+    assert panel_event["field_size"] == 0
+    assert panel_event["match"] is None, "no fixtures, so there is no match to show"
+    assert panel_event["fixtures"] == []
+    assert panel_event["pool_label"] is None, (
+        "the caller has no fixture yet, so no pool has been dealt to them"
+    )
+
+
+async def test_every_event_the_caller_entered_becomes_a_tab_of_one_panel(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Two events of one tournament are two tabs of one panel, not two panels — the
+    tournament is the thing the player is *at*, and its events are how they move around
+    inside it."""
+    client, owner = authed_client
+    tournament_id, (first, second) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A, name="Open Singles"),
+        _rr_payload(POOL_A, name="U1500"),
+    )
+    await _enter(db_session, first["id"], owner, seed=1)
+    await _enter(db_session, second["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    (panel,) = await _panels(client)
+
+    assert [event["name"] for event in panel["events"]] == ["Open Singles", "U1500"], (
+        "tabs are in event-creation order, so the tab strip does not reshuffle "
+        "between loads"
+    )
+
+
+async def test_the_panel_names_the_tournament_and_its_venue(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The header's two lines. The subtitle folds venue and dates into one sentence
+    server-side, because three optional facts assembled on each client would be
+    assembled slightly differently on each."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A),
+        name="Riverside Summer Slam",
+        start_date="2026-07-24",
+        end_date="2026-07-25",
+    )
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    (panel,) = await _panels(client)
+
+    assert panel["id"] == tournament_id
+    assert panel["name"] == "Riverside Summer Slam"
+    assert panel["subtitle"].endswith("Jul 24–25"), (
+        f"a same-month range collapses to one month name: {panel['subtitle']}"
+    )
+
+
+async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A guard on the membership query itself: an entry row belonging to *another*
+    user in the same live event must not put that event on this caller's panel."""
+    client, _owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    async with opponent_session(db_session, "someone-else") as (_c, other):
+        await _enter(
+            db_session,
+            event["id"],
+            other,
+            seed=1,
+            status=TournamentEntryStatus.entered,
+            entry_id=uuid.uuid4(),
+        )
+        await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+        assert await _panels(client) == []

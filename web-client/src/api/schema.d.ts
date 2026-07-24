@@ -1852,6 +1852,11 @@ export interface components {
             rating?: components["schemas"]["DashboardRating"] | null;
             /** Completed Match Count */
             completed_match_count: number;
+            /**
+             * Tournaments
+             * @default []
+             */
+            tournaments: components["schemas"]["DashboardTournament"][];
         };
         /** DashboardStreak */
         DashboardStreak: {
@@ -1862,6 +1867,148 @@ export interface components {
             kind: "W" | "L";
             /** N */
             n: number;
+        };
+        /**
+         * DashboardTournament
+         * @description A live tournament the caller is playing in — the whole panel, one per
+         *     tournament, with one tab per event they entered.
+         */
+        DashboardTournament: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Subtitle */
+            subtitle: string;
+            /** Live Count */
+            live_count: number;
+            /** Events */
+            events: components["schemas"]["DashboardTournamentEvent"][];
+        };
+        /**
+         * DashboardTournamentEvent
+         * @description One event of a live tournament that the caller holds an active entry in — one
+         *     tab of the panel.
+         *
+         *     The record, position and stage are the panel's stats strip; they are derived here
+         *     from the same live standings projection the tournament-detail page uses
+         *     (ADR-0788), so the two surfaces cannot disagree about where a player stands.
+         */
+        DashboardTournamentEvent: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            draw_type: components["schemas"]["DrawType"];
+            /** Is Live */
+            is_live: boolean;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Position */
+            position: number | null;
+            /** Field Size */
+            field_size: number;
+            /** Stage Label */
+            stage_label: string;
+            /** Pool Label */
+            pool_label: string | null;
+            match: components["schemas"]["DashboardTournamentMatch"] | null;
+            /** Fixtures */
+            fixtures: components["schemas"]["DashboardTournamentFixtureRow"][];
+        };
+        /**
+         * DashboardTournamentFixtureRow
+         * @description One line of the panel's "Your matches" path — every fixture in this event the
+         *     caller is a side of, in draw order.
+         *
+         *     ``detail`` is the row's right-hand text, composed server-side because what belongs
+         *     there changes with ``state`` (a result, "In progress", or a time and table). The
+         *     client prints it verbatim rather than reassembling three optional fields into a
+         *     sentence.
+         */
+        DashboardTournamentFixtureRow: {
+            /** Label */
+            label: string;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "completed" | "live" | "upcoming" | "voided";
+            /** Detail */
+            detail: string;
+            /** You Won */
+            you_won: boolean | null;
+            /** Match Id */
+            match_id: string | null;
+        };
+        /**
+         * DashboardTournamentGame
+         * @description One completed game of the panel's focus match, scored from the CURRENT USER's
+         *     side — ``your_points`` is always the caller's, never side 1's.
+         *
+         *     The panel prints these as chips ("Game 3 · 11–9"), and a chip that silently means
+         *     "side 1 first" would read backwards for whichever player happens to be entry B.
+         *     The flip happens once, here, where the caller's side is known.
+         */
+        DashboardTournamentGame: {
+            /** Number */
+            number: number;
+            /** Your Points */
+            your_points: number;
+            /** Opponent Points */
+            opponent_points: number;
+        };
+        /**
+         * DashboardTournamentMatch
+         * @description The one match the tournament panel's card shows for an event, already resolved
+         *     server-side to the single most relevant one: the live match if there is one, else
+         *     the next scheduled fixture, else the last completed match (see
+         *     ``app.dashboard_tournaments``).
+         *
+         *     Everything is stated from the CALLER's side. ``your_games``/``opponent_games`` are
+         *     games won (not points) — the score the card's big numerals print — and
+         *     ``games`` carries the per-game points behind them.
+         */
+        DashboardTournamentMatch: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "live" | "scheduled" | "completed" | "voided";
+            /** Match Id */
+            match_id: string | null;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /** Your Games */
+            your_games: number;
+            /** Opponent Games */
+            opponent_games: number;
+            /** Best Of */
+            best_of: number;
+            /** Games */
+            games: components["schemas"]["DashboardTournamentGame"][];
+            /** Round Label */
+            round_label: string;
+            /** Table Label */
+            table_label: string | null;
+            /** Start Label */
+            start_label: string | null;
+            /** Next Game Number */
+            next_game_number: number | null;
+            /** You Won */
+            you_won: boolean | null;
+            /** Owed Action */
+            owed_action: ("review" | "score") | ("waiting_opponent" | "waiting_others") | null;
         };
         /**
          * DeviceTokenResponse

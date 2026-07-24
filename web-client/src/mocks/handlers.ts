@@ -38,6 +38,7 @@ import {
   buildAdminSolveLedgerSeed,
   pageAdminScheduleSolves,
 } from './factories/tournaments/tournament.factory'
+import { buildDashboardTournament } from './factories/dashboard/tournament.factory'
 import { mockUuid } from './mock-uuid'
 import { notificationHandlers } from './notifications-store'
 import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
@@ -1606,6 +1607,13 @@ export const handlers = [
       recent_results: recentResults,
       rating: projectRating(mockMatches),
       completed_match_count: completedMatchCount,
+      // A seeded live tournament, so the dashboard's tournament panel is
+      // visible in `npm run dev`. It is a fixed payload rather than a
+      // projection off `tournaments-store`, because that store seeds no LIVE
+      // tournament with a cut draw and materialized matches — the only state
+      // this panel has anything to say about — and inventing one there would
+      // put a phantom live event on the tournaments list too.
+      tournaments: [buildDashboardTournament()],
     })
   }),
 

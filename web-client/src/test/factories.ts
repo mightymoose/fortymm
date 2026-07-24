@@ -328,6 +328,10 @@ export function dashboardResponse(
     // Default mirrors the visible list. Override directly to model the
     // "history exceeds the recent window" case the guest banner cares about.
     completed_match_count: recent_results.length,
+    // Nobody is mid-tournament by default — the real shape of almost every
+    // dashboard load, and the one that renders no panel. Override with
+    // `buildDashboardTournament()` to model a player who is.
+    tournaments: [],
     ...overrides,
   }
 }

@@ -7,6 +7,8 @@ import { projectAttentionPanelView } from '@/components/dashboard/attention-pane
 import { FirstMatchDashboard } from '@/components/dashboard/first-match/first-match-dashboard'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { PageTitle } from '@/components/dashboard/page-title'
+import { TournamentPanel } from '@/components/dashboard/tournament-panel'
+import { projectTournamentPanelViews } from '@/components/dashboard/tournament-panel-view'
 import { YourGameRow } from '@/components/dashboard/your-game-row'
 import { useMediaQuery } from '@/lib/use-media-query'
 
@@ -51,6 +53,12 @@ export function DashboardPage() {
     data.completed_match_count === 0 &&
     data.attention_total_count === 0 &&
     data.waiting_count === 0
+  // The tournament panels that top the page while the user is playing in a live
+  // tournament — `[]` the rest of the time, which is almost always.
+  const tournamentViews = useMemo(
+    () => projectTournamentPanelViews(data?.tournaments ?? [], username),
+    [data?.tournaments, username],
+  )
   const attentionView = useMemo(
     () =>
       projectAttentionPanelView(
@@ -81,6 +89,14 @@ export function DashboardPage() {
         compact={compact}
         loading={session.isLoading}
       />
+      {/* Above everything else on the page, and outside the first-match branch:
+          while a tournament is being played, the match in front of you outranks
+          every other to-do on the dashboard — including the "log your first
+          match" hero, which a player standing at a table has already moved past
+          even if none of their matches has been completed yet. */}
+      {tournamentViews.map((tournamentView) => (
+        <TournamentPanel key={tournamentView.tournamentId} view={tournamentView} />
+      ))}
       {isFirstMatch ? (
         <FirstMatchDashboard />
       ) : (

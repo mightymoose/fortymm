@@ -68,6 +68,9 @@ const DASHBOARD = {
       my_rating_change: { before: null, after: 1268, delta: null },
     },
   ],
+  // No live tournament, so the dashboard's tournament panel never renders in
+  // these specs.
+  tournaments: [],
 } satisfies components['schemas']['DashboardResponse']
 
 /** The index of the established-rating row in `recent_results` (and so in the
