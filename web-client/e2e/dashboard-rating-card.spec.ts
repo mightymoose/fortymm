@@ -63,6 +63,9 @@ const ESTABLISHED_DASHBOARD = {
       my_rating_change: { before: null, after: 1268, delta: null },
     },
   ],
+  // No live tournament, so the dashboard's tournament panel never renders here
+  // — this suite is about the rating hero beneath it.
+  tournaments: [],
 } satisfies DashboardResponse
 
 /** A player with a real history: the last match MOVED them, so the chip is there

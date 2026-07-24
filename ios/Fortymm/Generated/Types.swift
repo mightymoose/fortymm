@@ -3377,6 +3377,8 @@ internal enum Components {
             internal var rating: Components.Schemas.DashboardResponse.RatingPayload?
             /// - Remark: Generated from `#/components/schemas/DashboardResponse/completed_match_count`.
             internal var completedMatchCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardResponse/tournaments`.
+            internal var tournaments: [Components.Schemas.DashboardTournament]?
             /// Creates a new `DashboardResponse`.
             ///
             /// - Parameters:
@@ -3386,13 +3388,15 @@ internal enum Components {
             ///   - recentResults:
             ///   - rating:
             ///   - completedMatchCount:
+            ///   - tournaments:
             internal init(
                 attention: [Components.Schemas.DashboardAttentionItem],
                 attentionTotalCount: Swift.Int,
                 waitingCount: Swift.Int,
                 recentResults: [Components.Schemas.DashboardRecentResult],
                 rating: Components.Schemas.DashboardResponse.RatingPayload? = nil,
-                completedMatchCount: Swift.Int
+                completedMatchCount: Swift.Int,
+                tournaments: [Components.Schemas.DashboardTournament]? = nil
             ) {
                 self.attention = attention
                 self.attentionTotalCount = attentionTotalCount
@@ -3400,6 +3404,7 @@ internal enum Components {
                 self.recentResults = recentResults
                 self.rating = rating
                 self.completedMatchCount = completedMatchCount
+                self.tournaments = tournaments
             }
             internal enum CodingKeys: String, CodingKey {
                 case attention
@@ -3408,6 +3413,7 @@ internal enum Components {
                 case recentResults = "recent_results"
                 case rating
                 case completedMatchCount = "completed_match_count"
+                case tournaments
             }
         }
         /// - Remark: Generated from `#/components/schemas/DashboardStreak`.
@@ -3436,6 +3442,353 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case kind
                 case n
+            }
+        }
+        /// A live tournament the caller is playing in — the whole panel, one per
+        /// tournament, with one tab per event they entered.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardTournament`.
+        internal struct DashboardTournament: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardTournament/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournament/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournament/subtitle`.
+            internal var subtitle: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournament/live_count`.
+            internal var liveCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournament/events`.
+            internal var events: [Components.Schemas.DashboardTournamentEvent]
+            /// Creates a new `DashboardTournament`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - subtitle:
+            ///   - liveCount:
+            ///   - events:
+            internal init(
+                id: Swift.String,
+                name: Swift.String,
+                subtitle: Swift.String,
+                liveCount: Swift.Int,
+                events: [Components.Schemas.DashboardTournamentEvent]
+            ) {
+                self.id = id
+                self.name = name
+                self.subtitle = subtitle
+                self.liveCount = liveCount
+                self.events = events
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case subtitle
+                case liveCount = "live_count"
+                case events
+            }
+        }
+        /// One event of a live tournament that the caller holds an active entry in — one
+        /// tab of the panel.
+        ///
+        /// The record, position and stage are the panel's stats strip; they are derived here
+        /// from the same live standings projection the tournament-detail page uses
+        /// (ADR-0788), so the two surfaces cannot disagree about where a player stands.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent`.
+        internal struct DashboardTournamentEvent: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/draw_type`.
+            internal var drawType: Components.Schemas.DrawType
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/is_live`.
+            internal var isLive: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/wins`.
+            internal var wins: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/losses`.
+            internal var losses: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/position`.
+            internal var position: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/field_size`.
+            internal var fieldSize: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/stage_label`.
+            internal var stageLabel: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/pool_label`.
+            internal var poolLabel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/match`.
+            internal struct MatchPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/match/value1`.
+                internal var value1: Components.Schemas.DashboardTournamentMatch
+                /// Creates a new `MatchPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.DashboardTournamentMatch) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/match`.
+            internal var match: Components.Schemas.DashboardTournamentEvent.MatchPayload?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/fixtures`.
+            internal var fixtures: [Components.Schemas.DashboardTournamentFixtureRow]
+            /// Creates a new `DashboardTournamentEvent`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - drawType:
+            ///   - isLive:
+            ///   - wins:
+            ///   - losses:
+            ///   - position:
+            ///   - fieldSize:
+            ///   - stageLabel:
+            ///   - poolLabel:
+            ///   - match:
+            ///   - fixtures:
+            internal init(
+                id: Swift.String,
+                name: Swift.String,
+                drawType: Components.Schemas.DrawType,
+                isLive: Swift.Bool,
+                wins: Swift.Int,
+                losses: Swift.Int,
+                position: Swift.Int? = nil,
+                fieldSize: Swift.Int,
+                stageLabel: Swift.String,
+                poolLabel: Swift.String? = nil,
+                match: Components.Schemas.DashboardTournamentEvent.MatchPayload? = nil,
+                fixtures: [Components.Schemas.DashboardTournamentFixtureRow]
+            ) {
+                self.id = id
+                self.name = name
+                self.drawType = drawType
+                self.isLive = isLive
+                self.wins = wins
+                self.losses = losses
+                self.position = position
+                self.fieldSize = fieldSize
+                self.stageLabel = stageLabel
+                self.poolLabel = poolLabel
+                self.match = match
+                self.fixtures = fixtures
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case drawType = "draw_type"
+                case isLive = "is_live"
+                case wins
+                case losses
+                case position
+                case fieldSize = "field_size"
+                case stageLabel = "stage_label"
+                case poolLabel = "pool_label"
+                case match
+                case fixtures
+            }
+        }
+        /// One line of the panel's "Your matches" path — every fixture in this event the
+        /// caller is a side of, in draw order.
+        ///
+        /// ``detail`` is the row's right-hand text, composed server-side because what belongs
+        /// there changes with ``state`` (a result, "In progress", or a time and table). The
+        /// client prints it verbatim rather than reassembling three optional fields into a
+        /// sentence.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow`.
+        internal struct DashboardTournamentFixtureRow: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/label`.
+            internal var label: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/opponent_username`.
+            internal var opponentUsername: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case completed = "completed"
+                case live = "live"
+                case upcoming = "upcoming"
+            }
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/state`.
+            internal var state: Components.Schemas.DashboardTournamentFixtureRow.StatePayload
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/detail`.
+            internal var detail: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/you_won`.
+            internal var youWon: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentFixtureRow/match_id`.
+            internal var matchId: Swift.String?
+            /// Creates a new `DashboardTournamentFixtureRow`.
+            ///
+            /// - Parameters:
+            ///   - label:
+            ///   - opponentUsername:
+            ///   - state:
+            ///   - detail:
+            ///   - youWon:
+            ///   - matchId:
+            internal init(
+                label: Swift.String,
+                opponentUsername: Swift.String? = nil,
+                state: Components.Schemas.DashboardTournamentFixtureRow.StatePayload,
+                detail: Swift.String,
+                youWon: Swift.Bool? = nil,
+                matchId: Swift.String? = nil
+            ) {
+                self.label = label
+                self.opponentUsername = opponentUsername
+                self.state = state
+                self.detail = detail
+                self.youWon = youWon
+                self.matchId = matchId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case label
+                case opponentUsername = "opponent_username"
+                case state
+                case detail
+                case youWon = "you_won"
+                case matchId = "match_id"
+            }
+        }
+        /// One completed game of the panel's focus match, scored from the CURRENT USER's
+        /// side — ``your_points`` is always the caller's, never side 1's.
+        ///
+        /// The panel prints these as chips ("Game 3 · 11–9"), and a chip that silently means
+        /// "side 1 first" would read backwards for whichever player happens to be entry B.
+        /// The flip happens once, here, where the caller's side is known.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardTournamentGame`.
+        internal struct DashboardTournamentGame: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentGame/number`.
+            internal var number: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentGame/your_points`.
+            internal var yourPoints: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentGame/opponent_points`.
+            internal var opponentPoints: Swift.Int
+            /// Creates a new `DashboardTournamentGame`.
+            ///
+            /// - Parameters:
+            ///   - number:
+            ///   - yourPoints:
+            ///   - opponentPoints:
+            internal init(
+                number: Swift.Int,
+                yourPoints: Swift.Int,
+                opponentPoints: Swift.Int
+            ) {
+                self.number = number
+                self.yourPoints = yourPoints
+                self.opponentPoints = opponentPoints
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case number
+                case yourPoints = "your_points"
+                case opponentPoints = "opponent_points"
+            }
+        }
+        /// The one match the tournament panel's card shows for an event, already resolved
+        /// server-side to the single most relevant one: the live match if there is one, else
+        /// the next scheduled fixture, else the last completed match (see
+        /// ``app.dashboard_tournaments``).
+        ///
+        /// Everything is stated from the CALLER's side. ``your_games``/``opponent_games`` are
+        /// games won (not points) — the score the card's big numerals print — and
+        /// ``games`` carries the per-game points behind them.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch`.
+        internal struct DashboardTournamentMatch: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case live = "live"
+                case scheduled = "scheduled"
+                case completed = "completed"
+            }
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/state`.
+            internal var state: Components.Schemas.DashboardTournamentMatch.StatePayload
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/match_id`.
+            internal var matchId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/opponent_username`.
+            internal var opponentUsername: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/your_games`.
+            internal var yourGames: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/opponent_games`.
+            internal var opponentGames: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/best_of`.
+            internal var bestOf: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/games`.
+            internal var games: [Components.Schemas.DashboardTournamentGame]
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/round_label`.
+            internal var roundLabel: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/table_label`.
+            internal var tableLabel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/start_label`.
+            internal var startLabel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/next_game_number`.
+            internal var nextGameNumber: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentMatch/you_won`.
+            internal var youWon: Swift.Bool?
+            /// Creates a new `DashboardTournamentMatch`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            ///   - matchId:
+            ///   - opponentUsername:
+            ///   - yourGames:
+            ///   - opponentGames:
+            ///   - bestOf:
+            ///   - games:
+            ///   - roundLabel:
+            ///   - tableLabel:
+            ///   - startLabel:
+            ///   - nextGameNumber:
+            ///   - youWon:
+            internal init(
+                state: Components.Schemas.DashboardTournamentMatch.StatePayload,
+                matchId: Swift.String? = nil,
+                opponentUsername: Swift.String? = nil,
+                yourGames: Swift.Int,
+                opponentGames: Swift.Int,
+                bestOf: Swift.Int,
+                games: [Components.Schemas.DashboardTournamentGame],
+                roundLabel: Swift.String,
+                tableLabel: Swift.String? = nil,
+                startLabel: Swift.String? = nil,
+                nextGameNumber: Swift.Int? = nil,
+                youWon: Swift.Bool? = nil
+            ) {
+                self.state = state
+                self.matchId = matchId
+                self.opponentUsername = opponentUsername
+                self.yourGames = yourGames
+                self.opponentGames = opponentGames
+                self.bestOf = bestOf
+                self.games = games
+                self.roundLabel = roundLabel
+                self.tableLabel = tableLabel
+                self.startLabel = startLabel
+                self.nextGameNumber = nextGameNumber
+                self.youWon = youWon
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+                case matchId = "match_id"
+                case opponentUsername = "opponent_username"
+                case yourGames = "your_games"
+                case opponentGames = "opponent_games"
+                case bestOf = "best_of"
+                case games
+                case roundLabel = "round_label"
+                case tableLabel = "table_label"
+                case startLabel = "start_label"
+                case nextGameNumber = "next_game_number"
+                case youWon = "you_won"
             }
         }
         /// Confirmation that the device token is registered to the current user.

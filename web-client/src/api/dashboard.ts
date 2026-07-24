@@ -9,6 +9,15 @@ export type DashboardRecentResult =
   components['schemas']['DashboardRecentResult']
 export type DashboardRating = components['schemas']['DashboardRating']
 export type DashboardStreak = components['schemas']['DashboardStreak']
+export type DashboardTournament = components['schemas']['DashboardTournament']
+export type DashboardTournamentEvent =
+  components['schemas']['DashboardTournamentEvent']
+export type DashboardTournamentMatch =
+  components['schemas']['DashboardTournamentMatch']
+export type DashboardTournamentFixtureRow =
+  components['schemas']['DashboardTournamentFixtureRow']
+export type DashboardTournamentGame =
+  components['schemas']['DashboardTournamentGame']
 
 export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
 

@@ -48,6 +48,9 @@ const DASHBOARD = {
   rating: null,
   completed_match_count: 0,
   recent_results: [],
+  // No live tournament, so the dashboard's tournament panel never renders in
+  // these specs — they are about the shell and the cards beneath it.
+  tournaments: [],
 } satisfies components['schemas']['DashboardResponse']
 
 /** The page-load reads of every route this spec visits, keyed by path. */

@@ -58,10 +58,14 @@ from app.tournament_queries import (
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
 # and the MCP adapter import. ``_serialize_event`` is public too because the
 # per-event routes (cut/uncut draw, place fixtures) serialize a single event
-# directly. Everything else (``_tournament_fields``, ``_entry_state``,
-# ``_event_results``, ``_serialize_results``) is a module-internal helper and
-# stays private.
+# directly, and ``event_results`` because the dashboard's tournament panel
+# (``app.dashboard_tournaments``) stands the caller in the very same standings the
+# tournament page shows — two projections of one table is the one way the panel could
+# tell a player they are 2nd on one screen and 3rd on another. Everything else
+# (``_tournament_fields``, ``_entry_state``, ``_serialize_results``) is a
+# module-internal helper and stays private.
 __all__ = [
+    "event_results",
     "serialize",
     "serialize_detail",
     "serialize_event",
@@ -178,7 +182,7 @@ def _entry_state(
             assert_never(decision)
 
 
-def _event_results(
+def event_results(
     e: TournamentEvent,
     *,
     fixtures: list[TournamentFixtureRead],
@@ -358,7 +362,7 @@ def serialize_event(
             "results": (
                 None
                 if game_counts is None
-                else _event_results(e, fixtures=fixtures, game_counts=game_counts)
+                else event_results(e, fixtures=fixtures, game_counts=game_counts)
             ),
         }
     )

@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.models.tournament import DrawType
 from app.schemas.rating import RatingChange
 
 # The actionable bucket a match falls in for the current user, in priority
@@ -107,6 +108,137 @@ class DashboardRating(BaseModel):
     stats: list[DashboardRatingStat]
 
 
+TournamentMatchState = Literal["live", "scheduled", "completed"]
+"""The state of the ONE match the tournament panel puts in front of the player: the
+one being played now, the next one due, or the last one finished. Closed set — the
+panel's card renders a different shape per arm, so a fourth state must be a type
+error here rather than a card that renders nothing."""
+
+TournamentFixtureState = Literal["completed", "live", "upcoming"]
+"""A row's state in the panel's "Your matches" path. Deliberately NOT
+``MatchStatus``: a fixture that has not materialized into a match yet has no match
+status at all, and that is the ``upcoming`` case the path exists to show."""
+
+
+class DashboardTournamentGame(BaseModel):
+    """One completed game of the panel's focus match, scored from the CURRENT USER's
+    side — ``your_points`` is always the caller's, never side 1's.
+
+    The panel prints these as chips ("Game 3 · 11–9"), and a chip that silently means
+    "side 1 first" would read backwards for whichever player happens to be entry B.
+    The flip happens once, here, where the caller's side is known."""
+
+    number: int
+    your_points: int
+    opponent_points: int
+
+
+class DashboardTournamentMatch(BaseModel):
+    """The one match the tournament panel's card shows for an event, already resolved
+    server-side to the single most relevant one: the live match if there is one, else
+    the next scheduled fixture, else the last completed match (see
+    ``app.dashboard_tournaments``).
+
+    Everything is stated from the CALLER's side. ``your_games``/``opponent_games`` are
+    games won (not points) — the score the card's big numerals print — and
+    ``games`` carries the per-game points behind them.
+    """
+
+    state: TournamentMatchState
+    # ``None`` for a ``scheduled`` fixture that has not materialized into a match yet
+    # — the panel then has nothing to deep-link, which is exactly what an un-called
+    # fixture is. Never ``None`` for ``live``/``completed``.
+    match_id: uuid.UUID | None
+    # ``None`` means the opposing side is still TBD (an undecided feeding fixture),
+    # the same fact ``TournamentFixtureRead.entry_b_id is None`` carries.
+    opponent_username: str | None
+    your_games: int
+    opponent_games: int
+    best_of: int
+    games: list[DashboardTournamentGame]
+    # e.g. ``"Group match 2"`` — composed from the fixture's round in the vocabulary
+    # of its draw type, so the client never maps a round number to a word.
+    round_label: str
+    # The venue table this fixture is placed on (``TournamentTable.label``), or
+    # ``None`` when unplaced (ADR-0790).
+    table_label: str | None
+    # The scheduled start, already rendered in the event's venue timezone with its
+    # abbreviation (e.g. ``"4:30 PM CDT"``) — clients stay timezone-math-free (ADR
+    # "tournament times are timezone-aware instants"). ``None`` when unscheduled.
+    start_label: str | None
+    # The next un-scored game, for the card's "Enter Game N result" deep link. Mirrors
+    # ``DashboardAttentionItem.current_game_number``: ``None`` when the board is
+    # already decided but unposted, or the match is not in progress.
+    next_game_number: int | None
+    # ``None`` unless ``state`` is ``completed`` — a live or scheduled match has no
+    # outcome, and a ``False`` there would claim the caller lost a match still being
+    # played.
+    you_won: bool | None
+
+
+class DashboardTournamentFixtureRow(BaseModel):
+    """One line of the panel's "Your matches" path — every fixture in this event the
+    caller is a side of, in draw order.
+
+    ``detail`` is the row's right-hand text, composed server-side because what belongs
+    there changes with ``state`` (a result, "In progress", or a time and table). The
+    client prints it verbatim rather than reassembling three optional fields into a
+    sentence."""
+
+    # e.g. ``"M2"`` — the fixture's ordinal within the caller's own schedule.
+    label: str
+    opponent_username: str | None
+    state: TournamentFixtureState
+    detail: str
+    # ``None`` for anything not yet decided, for the same reason as on the match above.
+    you_won: bool | None
+    match_id: uuid.UUID | None
+
+
+class DashboardTournamentEvent(BaseModel):
+    """One event of a live tournament that the caller holds an active entry in — one
+    tab of the panel.
+
+    The record, position and stage are the panel's stats strip; they are derived here
+    from the same live standings projection the tournament-detail page uses
+    (ADR-0788), so the two surfaces cannot disagree about where a player stands."""
+
+    id: uuid.UUID
+    name: str
+    draw_type: DrawType
+    # Whether this event holds the caller's currently-live match — what puts the
+    # "Live" marker on the tab.
+    is_live: bool
+    wins: int
+    losses: int
+    # The caller's 1-based rank in their pool, and how many players are in it.
+    # ``position`` is ``None`` when the event has no standings yet (no draw cut, or a
+    # draw type with no results strategy — only round-robin has one today), which is
+    # a fact, not a zero.
+    position: int | None
+    field_size: int
+    # e.g. ``"Group play"`` / ``"Group complete"``.
+    stage_label: str
+    # The caller's pool name, or ``None`` for an un-pooled draw.
+    pool_label: str | None
+    match: DashboardTournamentMatch | None
+    fixtures: list[DashboardTournamentFixtureRow]
+
+
+class DashboardTournament(BaseModel):
+    """A live tournament the caller is playing in — the whole panel, one per
+    tournament, with one tab per event they entered."""
+
+    id: uuid.UUID
+    name: str
+    # e.g. ``"Riverside TTC · Jul 24"`` — venue and dates, composed server-side.
+    subtitle: str
+    # How many of the caller's matches in this tournament are being played right now.
+    # Drives the header's "N live now" pill; ``0`` hides it.
+    live_count: int
+    events: list[DashboardTournamentEvent]
+
+
 class DashboardResponse(BaseModel):
     # The current user's most-urgent actionable matches, pre-ranked by attention
     # priority (§5 of the PRD), capped server-side (``ATTENTION_BANNERS_LIMIT``)
@@ -127,3 +259,13 @@ class DashboardResponse(BaseModel):
     # persistence banner uses this to reference history concretely ("Your N
     # matches…") and to stay hidden until the user has any history at all.
     completed_match_count: int
+    # Every LIVE tournament the caller holds an active entry in, newest first — the
+    # panel that sits at the very top of the dashboard while they are playing one.
+    # Empty (and the panel absent) the rest of the time, which is almost always: a
+    # tournament is only ``live`` for the day or two it is being run.
+    #
+    # It rides on this payload rather than on a ``GET /v1/dashboard/tournaments`` of
+    # its own because the panel loads with the page, not in response to a click — the
+    # BFF rule's test for "one endpoint per page" (root CLAUDE.md). Its tabs switch
+    # between events that are all already here; no tab costs a round-trip.
+    tournaments: list[DashboardTournament] = []

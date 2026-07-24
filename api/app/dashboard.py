@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.attention import attention_priority, list_attention_kind
+from app.dashboard_tournaments import build_tournament_panels
 from app.db import get_session
 from app.match_queries import (
     _attention_matches_query,
@@ -163,6 +164,11 @@ async def get_dashboard(
         for match in completed
     ]
     rating = await _build_rating(db, current_user.id)
+    # The tournament panel that sits above everything else while the user is playing
+    # in a live tournament — ``[]`` (and no panel) the rest of the time, which is
+    # almost always. It rides on this endpoint rather than one of its own because it
+    # loads with the page, not on a click (the BFF rule, root CLAUDE.md).
+    tournaments = await build_tournament_panels(db, current_user.id)
 
     return DashboardResponse(
         attention=attention,
@@ -171,6 +177,7 @@ async def get_dashboard(
         recent_results=recent_results,
         rating=rating,
         completed_match_count=completed_match_count,
+        tournaments=tournaments,
     )
 
 
