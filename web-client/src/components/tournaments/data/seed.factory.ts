@@ -8,13 +8,15 @@ import type {
   Address,
   Entrant,
   EventEntryState,
-  EventResults,
+  FinishesResults,
+  FinishRow,
   Fixture,
   FixtureTime,
   Pool,
   PoolStandings,
   Predicate,
   StandingRow,
+  StandingsResults,
   Tournament,
   TournamentEvent,
   TournamentTable,
@@ -538,14 +540,68 @@ export function buildPoolStandings(
  * no single champion without a knockout stage yet — pass `pools` + `champion: null` for
  * that case). */
 export function buildEventResults(
-  overrides: Partial<EventResults> = {},
-): EventResults {
+  overrides: Partial<StandingsResults> = {},
+): StandingsResults {
   return {
+    kind: 'standings',
     pools: [buildPoolStandings()],
     complete: true,
     champion: 'entry-1',
     ...overrides,
   }
+}
+
+/** One line of a single-elimination event's finishes (ADR-0785): entry `entry-1`, finishing
+ * 1st (the champion), never eliminated. A same-round tie is built by giving two rows the same
+ * `position` (e.g. the two semifinal losers both `position: 3`). */
+export function buildFinishRow(overrides: Partial<FinishRow> = {}): FinishRow {
+  return {
+    entryId: 'entry-1',
+    position: 1,
+    eliminatedInRound: null,
+    ...overrides,
+  }
+}
+
+/** A single-elimination event's results — a **complete** four-entrant bracket's finishes, in
+ * the server's order: `entry-1` champion (1st), `entry-2` runner-up (2nd), and the two
+ * semifinal losers `entry-3`/`entry-4` **tied 3rd**. The champion is `entry-1`. A partial
+ * (live) bracket is built by overriding `finishes` with only the entrants placed so far and
+ * `complete: false` / `champion: null`. */
+export function buildFinishesResults(
+  overrides: Partial<FinishesResults> = {},
+): FinishesResults {
+  return {
+    kind: 'finishes',
+    finishes: [
+      buildFinishRow({ entryId: 'entry-1', position: 1, eliminatedInRound: null }),
+      buildFinishRow({ entryId: 'entry-2', position: 2, eliminatedInRound: 2 }),
+      buildFinishRow({ entryId: 'entry-3', position: 3, eliminatedInRound: 1 }),
+      buildFinishRow({ entryId: 'entry-4', position: 3, eliminatedInRound: 1 }),
+    ],
+    complete: true,
+    champion: 'entry-1',
+    ...overrides,
+  }
+}
+
+/** A single-elimination event **with finishes**: an Open Singles bracket projected forward to
+ * a decided four-entrant field whose placement list and champion the panel renders. The
+ * entrant ids the finishes name (`entry-1`…`entry-4`) are the ones the event lists, so the
+ * name join lands. */
+export function buildFinishesEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-single-elim',
+    name: 'Championship Singles',
+    drawType: 'single-elim',
+    maxPlayers: 16,
+    entrants: buildEntrants(4),
+    pools: [],
+    results: buildFinishesResults(),
+    ...overrides,
+  })
 }
 
 /** A round-robin event **with results**: the drawn U1200 pool play (`buildDrawnEvent`)

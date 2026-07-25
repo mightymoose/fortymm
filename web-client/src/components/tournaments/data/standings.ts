@@ -75,7 +75,10 @@ function nameOf(entryId: string, byId: Map<string, string>): string {
  */
 export function eventStandings(event: TournamentEvent): StandingsView | null {
   const results = event.results
-  if (results === null) return null
+  // Only the `standings` arm of the results union stands here (ADR-0785). `null` (no
+  // results) and the `finishes` arm (single-elimination — a placement list, `./finishes`)
+  // both render nothing off this view-model.
+  if (results === null || results.kind !== 'standings') return null
 
   const nameByEntryId = new Map(event.entrants.map((e) => [e.id, e.username]))
   const poolNameById = new Map(event.pools.map((p) => [p.id, p.name]))

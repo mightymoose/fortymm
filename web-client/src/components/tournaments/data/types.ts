@@ -229,18 +229,16 @@ export interface PoolStandings {
 
 /**
  * A round-robin event's **results** (ADR-0788): a standings table per pool, whether the
- * whole event is decided, and its champion when there is one.
+ * whole event is decided, and its champion when there is one. The `standings` arm of the
+ * `EventResults` discriminated union (ADR-0785), tagged `kind: 'standings'`.
  *
  * Derived **live** on the server from the fixtures' currently-`completed` matches — never
  * a snapshot — so a corrected or voided match re-orders the standings the instant it
  * leaves `completed`. On the FE it is just BFF data, so TanStack Query invalidation drives
  * the live update; nothing here polls or recomputes.
- *
- * On the event it is `null` for an event with **no draw** (nothing to stand) or one whose
- * draw type has no results strategy yet (only round-robin does today) — an honest "no
- * results", never an empty table that would read as a played event with nobody in it.
  */
-export interface EventResults {
+export interface StandingsResults {
+  kind: 'standings'
   pools: PoolStandings[]
   /** True when every fixture of every pool is decided. */
   complete: boolean
@@ -250,6 +248,66 @@ export interface EventResults {
    * (a later slice). Joined to a username at render, like a row's `entryId`. */
   champion: string | null
 }
+
+/**
+ * One entrant's **finish** in a single-elimination bracket (ADR-0785): the finishing
+ * position the server derived from the round it was eliminated in.
+ *
+ * The entry is an **id only** — exactly as a standings row and a fixture are — joined to a
+ * username at render from the event's `entrants` (copying the name onto the row would carry
+ * a field and its own derivation, and the two would drift when a player is renamed).
+ *
+ * `position` is 1-based and **shared by same-round losers**: the two semifinal losers both
+ * carry `3`, the four quarterfinal losers `5`. It is deliberately *not* distinct per row —
+ * single-elimination does not rank same-round losers against each other, so a shared
+ * position is honest, and the client renders those as a tie (e.g. `T3`), never inventing an
+ * order the format never produced. It is the **server's** figure; the client shows it and
+ * never computes a placement of its own.
+ */
+export interface FinishRow {
+  entryId: string
+  /** 1-based finishing position; `1` is the champion. Shared by same-round losers. */
+  position: number
+  /** The 1-based round the entrant lost in, or `null` for the champion (never eliminated).
+   * Carried for completeness; the placement list keys off `position`. */
+  eliminatedInRound: number | null
+}
+
+/**
+ * A single-elimination event's **results** (ADR-0785): its **finishes** — a placement list
+ * derived live from the bracket, whether the whole bracket is decided, and its champion
+ * when the final is. The `finishes` arm of the `EventResults` discriminated union, tagged
+ * `kind: 'finishes'`.
+ *
+ * Only *placed* entrants appear: every loser of a decided fixture, plus the champion once
+ * the final is decided. An entrant still alive in a partially-played bracket has no finish
+ * yet and is simply **absent** — a partial, live result the client renders as-is (it never
+ * computes a placement). Like every results shape it is derived live, so a correction or
+ * void re-derives it (and can re-crown) with no snapshot.
+ */
+export interface FinishesResults {
+  kind: 'finishes'
+  /** In the server's order — **position ascending, ties sharing a position** — rendered
+   * untouched (the order *is* the result). */
+  finishes: FinishRow[]
+  /** True when the final is decided (the whole bracket is played out). */
+  complete: boolean
+  /** The champion's **entry id** — the final's winner (finish position 1) — or `null` until
+   * the final is decided. Joined to a username at render, like a row's `entryId`. */
+  champion: string | null
+}
+
+/**
+ * An event's **results**, a discriminated union tagged by shape (ADR-0785): `standings`
+ * for round-robin, `finishes` for single-elimination. Each draw type's results strategy
+ * returns its own shape; the BFF emits the `kind` tag; the client switches on it. A future
+ * draw type is a type error until it declares its shape.
+ *
+ * On the event it is `null` for an event with **no draw** (nothing to stand) or one whose
+ * draw type has no results strategy yet — an honest "no results", never an empty table that
+ * would read as a played event with nobody in it.
+ */
+export type EventResults = StandingsResults | FinishesResults
 
 /** One *active* entry in an event. Withdrawn entries are not entrants — they
  * appear in neither this list nor the `entered` count (ADR-0016).

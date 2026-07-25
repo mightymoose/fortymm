@@ -1,10 +1,12 @@
-// The **results** boundary (ADR-0788): where an event's standings stop being bytes off
-// the wire and become a typed domain value.
+// The **results** boundary (ADR-0788, widened by ADR-0785): where an event's results stop
+// being bytes off the wire and become a typed domain value.
 //
-// An event's results are its pool standings, whether the whole event is decided, and its
-// champion — all derived *live* on the server from the fixtures' currently-completed
-// matches (never a snapshot). This is the runtime parse that guards them, the twin of
-// `./fixtures` for the draw.
+// An event's results are a **discriminated union tagged by shape** — `standings` (a table
+// per pool) for round-robin, `finishes` (a placement list) for single-elimination — plus
+// whether the whole event is decided and its champion, all derived *live* on the server
+// from the fixtures' currently-completed matches (never a snapshot). This is the runtime
+// parse that guards them, the twin of `./fixtures` for the draw. The parse switches on
+// `kind`, so an **unknown shape fails HERE**, at the boundary, before it can leak inward.
 //
 // Why a Zod parse and not just the generated types: `schema.d.ts` is a *compile-time*
 // claim about what the server sends (root `CLAUDE.md`), and `api.GET` casts the decoded
@@ -23,7 +25,12 @@
 
 import { z } from 'zod'
 
-import type { EventResults, PoolStandings, StandingRow } from './types'
+import type {
+  EventResults,
+  FinishRow,
+  PoolStandings,
+  StandingRow,
+} from './types'
 
 /** The wire shape (`StandingRowRead`), snake_case, every field required — a standings row
  * has no nullable columns: an entry that has played nothing still has a row of zeroes, not
@@ -76,9 +83,11 @@ const poolStandingsSchema = poolStandingsWireSchema.transform(
   }),
 )
 
-/** The wire shape (`EventResultsRead`): the pools, whether the whole event is decided, and
- * its champion (an **entry id**, or `null`). */
-const eventResultsWireSchema = z.object({
+/** The wire shape (`StandingsResultsRead`): the round-robin arm, tagged `kind: "standings"`
+ * — the pools, whether the whole event is decided, and its champion (an **entry id**, or
+ * `null`). */
+const standingsResultsWireSchema = z.object({
+  kind: z.literal('standings'),
   pools: z.array(poolStandingsSchema),
   complete: z.boolean(),
   /** `null` while any fixture is unplayed, and for a multi-pool event, which has no single
@@ -86,13 +95,62 @@ const eventResultsWireSchema = z.object({
   champion: z.string().nullable(),
 })
 
-export const eventResultsSchema = eventResultsWireSchema.transform(
-  (r): EventResults => ({
-    pools: r.pools,
-    complete: r.complete,
-    champion: r.champion,
+/** The wire shape (`FinishRowRead`), snake_case, every field required. `position` is 1-based
+ * and shared by same-round losers; `eliminated_in_round` is the 1-based round the entrant
+ * lost in, or `null` for the champion (never eliminated). */
+const finishRowWireSchema = z.object({
+  entry_id: z.string(),
+  position: z.number().int(),
+  eliminated_in_round: z.number().int().nullable(),
+})
+
+/** One wire finish → one domain `FinishRow`. Annotated `: FinishRow` on purpose — the same
+ * discipline as the standings row: drop a field from either the interface or this schema and
+ * this line is a compile error, so the runtime parser and the type the app holds cannot
+ * drift. */
+const finishRowSchema = finishRowWireSchema.transform(
+  (r): FinishRow => ({
+    entryId: r.entry_id,
+    position: r.position,
+    eliminatedInRound: r.eliminated_in_round,
   }),
 )
+
+/** The wire shape (`FinishesResultsRead`): the single-elimination arm, tagged
+ * `kind: "finishes"` — the finishes **in the server's order** (position ascending, ties
+ * sharing a position; NOT re-sorted here — the order *is* the result), whether the bracket
+ * is decided, and its champion (an **entry id**, or `null` until the final is decided). */
+const finishesResultsWireSchema = z.object({
+  kind: z.literal('finishes'),
+  finishes: z.array(finishRowSchema),
+  complete: z.boolean(),
+  champion: z.string().nullable(),
+})
+
+/** The results union, **discriminated on `kind`**: Zod picks the arm by the tag and rejects
+ * any other shape (a missing/unknown `kind`, or a `finishes` block carrying `pools`) HERE,
+ * at the boundary. The transform switches on the same tag to hand the app a domain value
+ * that still carries `kind`, so every consumer narrows the union exhaustively. */
+export const eventResultsSchema = z
+  .discriminatedUnion('kind', [
+    standingsResultsWireSchema,
+    finishesResultsWireSchema,
+  ])
+  .transform((r): EventResults =>
+    r.kind === 'standings'
+      ? {
+          kind: 'standings',
+          pools: r.pools,
+          complete: r.complete,
+          champion: r.champion,
+        }
+      : {
+          kind: 'finishes',
+          finishes: r.finishes,
+          complete: r.complete,
+          champion: r.champion,
+        },
+  )
 
 /** An event's `results`, or `null`. **`.nullable()`, never `.optional()`** — the key must
  * be present, and a `null` is the designed "no results here" state, not a missing field
@@ -103,13 +161,14 @@ export const resultsSchema = eventResultsSchema.nullable()
  * Parse an event's `results` off the wire, or throw.
  *
  * Takes `unknown`, deliberately: the value it is handed is typed
- * `EventResultsRead | null` by the generated schema, and that type is exactly the claim
- * this function exists to check at runtime. Accepting the typed shape would let the
- * compiler talk us out of the runtime guarantee.
+ * `(StandingsResultsRead | FinishesResultsRead) | null` by the generated schema, and that
+ * union is exactly the claim this function exists to check at runtime. Accepting the typed
+ * shape would let the compiler talk us out of the runtime guarantee.
  *
- * Throws a `ZodError`. Called from the tournament queries' `queryFn` (via `apiToEvent`,
- * `./api.ts`), so a malformed results block fails the *query* — the error boundary gets
- * it, the cache is never primed with it, and no component ever renders a half-row.
+ * Throws a `ZodError` — including for an unknown `kind`. Called from the tournament queries'
+ * `queryFn` (via `apiToEvent`, `./api.ts`), so a malformed results block fails the *query* —
+ * the error boundary gets it, the cache is never primed with it, and no component ever
+ * renders a half-row.
  */
 export function parseResults(input: unknown): EventResults | null {
   return resultsSchema.parse(input)
