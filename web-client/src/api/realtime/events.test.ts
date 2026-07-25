@@ -1,0 +1,109 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  decodeRealtimeEvent,
+  REALTIME_PROTOCOL_VERSION,
+  UNKNOWN_EVENT_KIND,
+} from './events'
+
+const TS = '2026-07-25T00:26:37.607498Z'
+
+describe('decodeRealtimeEvent', () => {
+  it('decodes the two kinds the server publishes today', () => {
+    expect(decodeRealtimeEvent(`{"v":1,"kind":"dashboard.changed","ts":"${TS}"}`)).toEqual({
+      ok: true,
+      event: { v: 1, kind: 'dashboard.changed', ts: TS },
+    })
+    expect(decodeRealtimeEvent(`{"v":1,"kind":"resync","ts":"${TS}"}`)).toEqual({
+      ok: true,
+      event: { v: 1, kind: 'resync', ts: TS },
+    })
+  })
+
+  it('ignores fields a newer server adds to the envelope', () => {
+    expect(
+      decodeRealtimeEvent(`{"v":1,"kind":"resync","ts":"${TS}","tournamentId":"abc"}`),
+    ).toEqual({ ok: true, event: { v: 1, kind: 'resync', ts: TS } })
+  })
+
+  // ----- lenient on kind --------------------------------------------------------
+
+  it('degrades an unknown kind to the fallback instead of failing', () => {
+    // A newer server publishing `tournament.changed` must not be able to kill an
+    // older client's connection.
+    expect(decodeRealtimeEvent(`{"v":1,"kind":"tournament.changed","ts":"${TS}"}`)).toEqual({
+      ok: true,
+      event: { v: 1, kind: UNKNOWN_EVENT_KIND, ts: TS },
+    })
+  })
+
+  it('degrades an empty kind rather than refusing it', () => {
+    expect(decodeRealtimeEvent(`{"v":1,"kind":"","ts":"${TS}"}`)).toEqual({
+      ok: true,
+      event: { v: 1, kind: UNKNOWN_EVENT_KIND, ts: TS },
+    })
+  })
+
+  // ----- strict on v ------------------------------------------------------------
+
+  it('refuses a protocol version it does not speak', () => {
+    expect(decodeRealtimeEvent(`{"v":2,"kind":"dashboard.changed","ts":"${TS}"}`)).toEqual({
+      ok: false,
+      reason: 'unsupported-version',
+    })
+  })
+
+  it('refuses an older protocol version too, not just a newer one', () => {
+    expect(decodeRealtimeEvent(`{"v":0,"kind":"resync","ts":"${TS}"}`)).toEqual({
+      ok: false,
+      reason: 'unsupported-version',
+    })
+  })
+
+  it('reports a bad version distinctly from a malformed frame', () => {
+    // The two failures want different responses upstream — an unreadable frame
+    // is noise, a version bump is a deploy-shaped problem worth surfacing — so
+    // they must not collapse into one `null`.
+    const versioned = decodeRealtimeEvent(`{"v":9,"kind":"resync","ts":"${TS}"}`)
+    const garbage = decodeRealtimeEvent('{"kind":"resync"}')
+
+    expect(versioned).not.toEqual(garbage)
+  })
+
+  it('does not accept a version that merely stringifies to 1', () => {
+    expect(decodeRealtimeEvent(`{"v":"1","kind":"resync","ts":"${TS}"}`)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    })
+  })
+
+  // ----- malformed --------------------------------------------------------------
+
+  it.each([
+    ['not JSON at all', 'ping'],
+    ['a truncated payload', '{"v":1,"kind":"resy'],
+    ['an empty string', ''],
+    ['a JSON scalar', '42'],
+    ['a JSON null', 'null'],
+    ['a JSON array', '[{"v":1,"kind":"resync","ts":"2026-07-25T00:00:00Z"}]'],
+    ['a missing version', '{"kind":"resync","ts":"2026-07-25T00:00:00Z"}'],
+    ['a missing kind', '{"v":1,"ts":"2026-07-25T00:00:00Z"}'],
+    ['a missing timestamp', '{"v":1,"kind":"resync"}'],
+    ['a non-string kind', '{"v":1,"kind":7,"ts":"2026-07-25T00:00:00Z"}'],
+    ['a non-string timestamp', '{"v":1,"kind":"resync","ts":1769300000}'],
+  ])('rejects %s', (_label, payload) => {
+    expect(decodeRealtimeEvent(payload)).toEqual({ ok: false, reason: 'malformed' })
+  })
+
+  it('never throws, whatever the frame carried', () => {
+    for (const payload of ['', '}{', 'undefined', '{"v":{}}', '\x00']) {
+      expect(() => decodeRealtimeEvent(payload)).not.toThrow()
+    }
+  })
+
+  it('pins the protocol version this build speaks', () => {
+    // A bump here is a deliberate act, not a typo: it must be made alongside the
+    // server's, and this line is where a reviewer sees it.
+    expect(REALTIME_PROTOCOL_VERSION).toBe(1)
+  })
+})

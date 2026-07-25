@@ -93,6 +93,27 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Server-Sent Events stream (GET /v1/stream), reached from the SPA via
+    # /api/v1/stream. Longer, more-specific prefix than /api/ above, so it wins
+    # the longest-prefix match and these streaming settings apply instead of that
+    # block's defaults: buffering/caching OFF so each `data:`/`: ping` frame is
+    # flushed to the browser immediately, and a read timeout far above both the
+    # ~15s keepalive and the 15m stream lifetime so nginx's default 60s doesn't
+    # cut the connection. The stream is stateless across api replicas, so no
+    # session affinity is needed.
+    location /api/v1/stream {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://api_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Tolerate clients that strip the trailing slash (e.g. Claude): serve the
     # bare /api/mcp straight from the /mcp/ mount instead of emitting a
     # slash-append 301 that a POST client won't follow.
@@ -202,6 +223,27 @@ server {
         rewrite ^/faro/(.*)$ /$1 break;
         proxy_pass http://$faro_upstream;
         proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Direct (non-/api-prefixed) hit on the SSE stream — curl / API clients.
+    #
+    # The `^~` is LOAD-BEARING, not stylistic. nginx picks the longest matching
+    # PREFIX location, then — unless that prefix was declared `^~` — still runs
+    # the regex locations and lets the FIRST matching regex win. A plain
+    # `location /v1/stream` would therefore LOSE to the
+    # `~ ^/(v1|openapi\.json|docs|redoc)(/|$)` block below, and the stream would
+    # silently inherit its proxy_buffering ON + default 60s proxy_read_timeout.
+    # `^~` stops the regex phase after the prefix match. Do not "simplify" it.
+    location ^~ /v1/stream {
+        proxy_pass http://api_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

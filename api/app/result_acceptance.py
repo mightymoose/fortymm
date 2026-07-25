@@ -52,6 +52,7 @@ from app.match_errors import (
     StandingResultConflictError,
     UndecidedBoardError,
 )
+from app.match_realtime import stage_match_participant_hints
 from app.models import (
     Match,
     MatchGameScore,
@@ -407,11 +408,17 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     The tournament hook runs **last and unconditionally**: :func:`on_match_completed`
     early-returns on a non-tournament match (the overwhelmingly common case), so a plain
     ladder match pays only an indexed lookup that misses. Runs in the caller's
-    transaction under the match row lock; does **not** commit."""
+    transaction under the match row lock; does **not** commit.
+
+    Because it does not commit, the realtime hint for the participants is *staged*
+    rather than published (:func:`app.realtime.outbox.stage_event`): whoever owns the
+    transaction boundary decides whether this completion is real, and the outbox's
+    ``after_commit`` listener publishes only if it is."""
     match.mark_completed()
     _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
     await on_match_completed(db, match)
+    stage_match_participant_hints(db, match)
 
 
 async def _reload_accepted_match(db: AsyncSession, match_id: uuid.UUID) -> Match:

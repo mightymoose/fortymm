@@ -52,6 +52,41 @@ class Settings(BaseSettings):
     #: metadata (the MCP server's public origin). Empty = fail-closed.
     mcp_public_resource_url: str = ""
 
+    #: How long an attached realtime stream lets hints pile up before emitting,
+    #: in milliseconds. Coalescing is what stops one burst of writes (a draw
+    #: advance, a wave of tournament completions) from becoming one dashboard
+    #: refetch per write per viewer; it is lossless because a hint is an
+    #: idempotent invalidation, so N collapse to 1 with nothing lost. Raise it
+    #: to trade freshness for fewer refetches; 0 disables coalescing entirely
+    #: (which the tests use so assertions don't each wait a window).
+    realtime_coalesce_ms: int = 250
+
+    #: Hard lifetime of a single ``GET /v1/stream`` connection, in seconds.
+    #: A stream is deliberately finite: the client reconnects (``EventSource``
+    #: does it for free), which re-runs auth, releases any proxy-held buffer,
+    #: and bounds how long a process can accumulate attachments that no browser
+    #: is on the other end of any more.
+    realtime_max_stream_seconds: int = 900
+
+    #: Concurrent streams one user may hold, so a tab-hoarding (or looping)
+    #: client cannot pin an unbounded number of attachments in a process. Four
+    #: is "a few tabs". Past this, attaching **displaces** that user's oldest
+    #: stream rather than refusing the new one: the slot being competed for may
+    #: belong to a client that is gone but still connected (a suspended app, a
+    #: frozen tab, a sleeping laptop), which the server cannot detect, and
+    #: refusing would leave the live newcomer silently deaf until the old
+    #: stream's ``realtime_max_stream_seconds`` finally expired.
+    realtime_max_connections_per_user: int = 4
+
+    #: Base of the SSE ``retry:`` hint sent to the client, in milliseconds —
+    #: how long it waits before reconnecting after the stream ends.
+    realtime_retry_base_ms: int = 3000
+
+    #: Random spread added to ``realtime_retry_base_ms``, in milliseconds. The
+    #: jitter is the point: without it every stream a restarting pod dropped
+    #: reconnects in the same millisecond and the pod is stampeded awake.
+    realtime_retry_spread_ms: int = 5000
+
     @property
     def auth0_issuer(self) -> str:
         """The Auth0 tenant's OIDC issuer — ``https://{domain}/`` (Auth0 mints

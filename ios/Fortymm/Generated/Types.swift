@@ -911,6 +911,36 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/admin/schedule-solves`.
     /// - Remark: Generated from `#/paths//v1/admin/schedule-solves/get(list_schedule_solves_v1_admin_schedule_solves_get)`.
     func listScheduleSolvesV1AdminScheduleSolvesGet(_ input: Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Input) async throws -> Operations.ListScheduleSolvesV1AdminScheduleSolvesGet.Output
+    /// Stream
+    ///
+    /// Live dashboard invalidation hints for the signed-in caller, over
+    /// Server-Sent Events.
+    ///
+    /// Takes no parameters: the topic is always the caller's own user, resolved from
+    /// the session cookie. A client cannot subscribe to anything else.
+    ///
+    /// The stream never carries domain data — only a hint that something the
+    /// caller's dashboard shows has changed, which the client answers by refetching
+    /// `GET /v1/dashboard` through its normal authenticated read. Frames are one
+    /// unnamed `message` stream (no `event:` field), so a client needs exactly one
+    /// parser; the kind lives in the JSON payload.
+    ///
+    /// On connect the server sends a reconnection-delay directive, then a single
+    /// `resync` hint — a reconnecting client may have missed events while it was
+    /// away, and refetching once on connect is what makes that recoverable without a
+    /// replay log or a cursor. Live hints follow as they happen, coalesced over a
+    /// short window so a burst of writes is one refetch rather than many.
+    ///
+    /// The connection is deliberately finite and ends on its own after
+    /// `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
+    /// re-runs authentication. A user may hold only a few concurrent streams: past
+    /// that, opening a new one ends their oldest, which that client answers with its
+    /// ordinary reconnect. A process with no realtime backend answers 503, and the
+    /// dashboard simply falls back to its existing refetch-on-navigation freshness.
+    ///
+    /// - Remark: HTTP `GET /v1/stream`.
+    /// - Remark: Generated from `#/paths//v1/stream/get(stream_v1_stream_get)`.
+    func streamV1StreamGet(_ input: Operations.StreamV1StreamGet.Input) async throws -> Operations.StreamV1StreamGet.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -2341,6 +2371,38 @@ extension APIProtocol {
             query: query,
             headers: headers
         ))
+    }
+    /// Stream
+    ///
+    /// Live dashboard invalidation hints for the signed-in caller, over
+    /// Server-Sent Events.
+    ///
+    /// Takes no parameters: the topic is always the caller's own user, resolved from
+    /// the session cookie. A client cannot subscribe to anything else.
+    ///
+    /// The stream never carries domain data — only a hint that something the
+    /// caller's dashboard shows has changed, which the client answers by refetching
+    /// `GET /v1/dashboard` through its normal authenticated read. Frames are one
+    /// unnamed `message` stream (no `event:` field), so a client needs exactly one
+    /// parser; the kind lives in the JSON payload.
+    ///
+    /// On connect the server sends a reconnection-delay directive, then a single
+    /// `resync` hint — a reconnecting client may have missed events while it was
+    /// away, and refetching once on connect is what makes that recoverable without a
+    /// replay log or a cursor. Live hints follow as they happen, coalesced over a
+    /// short window so a burst of writes is one refetch rather than many.
+    ///
+    /// The connection is deliberately finite and ends on its own after
+    /// `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
+    /// re-runs authentication. A user may hold only a few concurrent streams: past
+    /// that, opening a new one ends their oldest, which that client answers with its
+    /// ordinary reconnect. A process with no realtime backend answers 503, and the
+    /// dashboard simply falls back to its existing refetch-on-navigation freshness.
+    ///
+    /// - Remark: HTTP `GET /v1/stream`.
+    /// - Remark: Generated from `#/paths//v1/stream/get(stream_v1_stream_get)`.
+    internal func streamV1StreamGet(headers: Operations.StreamV1StreamGet.Input.Headers = .init()) async throws -> Operations.StreamV1StreamGet.Output {
+        try await streamV1StreamGet(Operations.StreamV1StreamGet.Input(headers: headers))
     }
     /// Health
     ///
@@ -24222,6 +24284,198 @@ internal enum Operations {
             }
             internal static var allCases: [Self] {
                 [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Stream
+    ///
+    /// Live dashboard invalidation hints for the signed-in caller, over
+    /// Server-Sent Events.
+    ///
+    /// Takes no parameters: the topic is always the caller's own user, resolved from
+    /// the session cookie. A client cannot subscribe to anything else.
+    ///
+    /// The stream never carries domain data — only a hint that something the
+    /// caller's dashboard shows has changed, which the client answers by refetching
+    /// `GET /v1/dashboard` through its normal authenticated read. Frames are one
+    /// unnamed `message` stream (no `event:` field), so a client needs exactly one
+    /// parser; the kind lives in the JSON payload.
+    ///
+    /// On connect the server sends a reconnection-delay directive, then a single
+    /// `resync` hint — a reconnecting client may have missed events while it was
+    /// away, and refetching once on connect is what makes that recoverable without a
+    /// replay log or a cursor. Live hints follow as they happen, coalesced over a
+    /// short window so a burst of writes is one refetch rather than many.
+    ///
+    /// The connection is deliberately finite and ends on its own after
+    /// `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
+    /// re-runs authentication. A user may hold only a few concurrent streams: past
+    /// that, opening a new one ends their oldest, which that client answers with its
+    /// ordinary reconnect. A process with no realtime backend answers 503, and the
+    /// dashboard simply falls back to its existing refetch-on-navigation freshness.
+    ///
+    /// - Remark: HTTP `GET /v1/stream`.
+    /// - Remark: Generated from `#/paths//v1/stream/get(stream_v1_stream_get)`.
+    internal enum StreamV1StreamGet {
+        internal static let id: Swift.String = "stream_v1_stream_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/stream/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StreamV1StreamGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StreamV1StreamGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.StreamV1StreamGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.StreamV1StreamGet.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/stream/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/stream/GET/responses/200/content/text\/event-stream`.
+                    case textEventStream(OpenAPIRuntime.HTTPBody)
+                    /// The associated value of the enum case if `self` is `.textEventStream`.
+                    ///
+                    /// - Throws: An error if `self` is not `.textEventStream`.
+                    /// - SeeAlso: `.textEventStream`.
+                    internal var textEventStream: OpenAPIRuntime.HTTPBody {
+                        get throws {
+                            switch self {
+                            case let .textEventStream(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.StreamV1StreamGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.StreamV1StreamGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/stream/get(stream_v1_stream_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.StreamV1StreamGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.StreamV1StreamGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/stream/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/stream/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.StreamV1StreamGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.StreamV1StreamGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/stream/get(stream_v1_stream_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.StreamV1StreamGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.StreamV1StreamGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case textEventStream
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "text/event-stream":
+                    self = .textEventStream
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .textEventStream:
+                    return "text/event-stream"
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .textEventStream,
                     .json
                 ]
             }

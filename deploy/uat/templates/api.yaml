@@ -19,12 +19,33 @@ spec:
       labels:
         {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 8 }}
     spec:
+      # Bounded pod shutdown. Paired with uvicorn's
+      # --timeout-graceful-shutdown below: uvicorn gets 5s to drain, so the pod
+      # exits well inside this window instead of being SIGKILLed.
+      terminationGracePeriodSeconds: 20
       containers:
         - name: api
           image: {{ include "fortymm-uat.apiImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           # Migrations + seeds run in the migrate Job, not here.
-          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          #
+          # --timeout-graceful-shutdown is required now that /v1/stream holds
+          # long-lived SSE connections. On SIGTERM uvicorn stops accepting and
+          # waits for open connections to close — and an SSE connection never
+          # closes on its own. Without the flag it waits forever, k8s SIGKILLs
+          # at the 30s default, and the lifespan shutdown never runs: every pod
+          # replacement becomes a 30s hang plus a hard kill. Cutting streams on
+          # shutdown is correct here — the events are self-healing invalidation
+          # hints, so clients just reconnect onto a live replica.
+          command:
+            - uvicorn
+            - app.main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --timeout-graceful-shutdown
+            - "5"
           resources:
             requests:
               cpu: 100m

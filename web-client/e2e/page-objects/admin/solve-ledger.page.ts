@@ -6,6 +6,7 @@ import {
   pageAdminScheduleSolves,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
+import { stubRealtimeStream } from '../../support/realtime'
 
 type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 
@@ -69,6 +70,10 @@ export class SolveLedgerPage {
   ): Promise<SolveLedgerPage> {
     const pom = new SolveLedgerPage(page)
     const rows = options.rows ?? buildLedgerSeed()
+
+    // `_app` opens a realtime stream alongside the session bootstrap; this
+    // suite has no catch-all, so it needs its own stub (`../../support/realtime`).
+    await stubRealtimeStream(page)
 
     await page.route('**/v1/session', (route) =>
       route.fulfill({

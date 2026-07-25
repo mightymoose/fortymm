@@ -7,6 +7,8 @@ import {
 } from '@tanstack/react-query'
 import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
+import { handleIdentityChange } from './identity-change'
+import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
 
@@ -252,9 +254,13 @@ export function useConfirmEmail() {
     // This can sign the caller into a *different* existing account
     // (skip_merge). Drop the prior identity's cached per-user data first — the
     // same leak useLogout guards against (#754) — then reseed the session so
-    // it doesn't need a refetch.
+    // it doesn't need a refetch. `clearAppEntered` is deliberately NOT part of
+    // it: this browser is arriving, not leaving.
     onSuccess: (session) => {
-      qc.clear()
+      handleIdentityChange({
+        closeRealtime: closeRealtimeConnections,
+        clearQueryCache: () => qc.clear(),
+      })
       cacheSession(qc, session)
     },
   })
@@ -295,9 +301,17 @@ export function useLogout() {
     // Drop ALL cached per-user data (matches, dashboard, players, ...), not
     // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
     // into the next ephemeral session.
+    //
+    // Through the shared sequence, not inline: this is the path MOST exposed to
+    // the ordering hazard, because it always fires from inside `_app` with a
+    // live `/v1/stream` open (the user menu and the settings footer). The
+    // caller owns the navigation that follows, so no `navigateToLogin` here.
     onSuccess: () => {
-      qc.clear()
-      clearAppEntered()
+      handleIdentityChange({
+        closeRealtime: closeRealtimeConnections,
+        clearAppEntered,
+        clearQueryCache: () => qc.clear(),
+      })
     },
   })
 }
@@ -318,7 +332,10 @@ export function useConsumeLoginToken() {
     // Same identity-leak guard as useConfirmEmail (#754): this can sign a
     // browsing guest into a different existing account.
     onSuccess: (session) => {
-      qc.clear()
+      handleIdentityChange({
+        closeRealtime: closeRealtimeConnections,
+        clearQueryCache: () => qc.clear(),
+      })
       cacheSession(qc, session)
     },
   })

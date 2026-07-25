@@ -46,6 +46,7 @@ from app.match_errors import (
     UndecidedBoardError,
 )
 from app.match_queries import match_eager_options
+from app.match_realtime import stage_match_participant_hints
 from app.match_scoring import (
     MatchLockUnavailable,  # re-exported for the router adapter
     _MatchWriteLoader,
@@ -300,6 +301,18 @@ async def propose_result(
         # stays unset until the opposing side accepts. Status is (re)set to
         # in_progress.
         match.status = MatchStatus.in_progress
+
+    # A proposal changes both participants' dashboards even when nothing
+    # completed: the proposer's match moves to "waiting on them", and the other
+    # side gains the "needs your attention" review row. Staged inside this
+    # transaction, so the concurrent-counter rollback below discards it — a
+    # proposal that lost the race proposed nothing. The solo/unrated branch above
+    # already staged the same hints inside ``finalize_match``; the outbox dedupes
+    # ``(user_id, kind)``, so that path still publishes exactly once per player.
+    #
+    # No query: ``match.sides`` → ``players`` come loaded on
+    # ``match_rating_eager_options()``.
+    stage_match_participant_hints(db, match)
 
     try:
         await db.commit()

@@ -8,6 +8,8 @@ import './index.css'
 import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
 import { setSessionEndedHandler } from '@/api/client'
+import { closeRealtimeConnections } from '@/api/realtime/connection'
+import { handleIdentityChange } from '@/api/identity-change'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import { initFaro } from '@/observability/faro'
 import { routeTree } from './routeTree.gen'
@@ -47,17 +49,24 @@ declare module '@tanstack/react-router' {
 // signed-out case has none). Never let the next bootstrap silently mint a fresh
 // guest in the signed-out user's place.
 //
-// `clear()`, not `removeQueries(['session'])`: this is an identity-loss event,
-// so drop ALL cached per-user data (dashboard, matches, players, ...) the same
-// way `useLogout`/`useConsumeLoginToken` do — otherwise the departed user's BFF
-// responses leak into the next ephemeral session if the browser re-enters the
-// app as a fresh guest before those queries go stale (#754).
-setSessionEndedHandler(({ message, email }) => {
-  clearAppEntered()
-  queryClient.clear()
-  toast.message(message)
-  void router.navigate({ to: '/login', search: { email, error: undefined } })
-})
+// The sequence lives in `api/identity-change.ts`, shared with the deliberate
+// sign-out path and with the sign-ins that can land on a different account,
+// where its ORDER is testable — closing the realtime stream has to happen
+// before the cache is cleared, and a step order written inline here could only
+// ever be checked by reading it.
+setSessionEndedHandler((info) =>
+  handleIdentityChange(
+    {
+      closeRealtime: closeRealtimeConnections,
+      clearAppEntered,
+      clearQueryCache: () => queryClient.clear(),
+      notify: (message) => void toast.message(message),
+      navigateToLogin: (email) =>
+        void router.navigate({ to: '/login', search: { email, error: undefined } }),
+    },
+    info,
+  ),
+)
 
 async function unregisterServiceWorkers() {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return

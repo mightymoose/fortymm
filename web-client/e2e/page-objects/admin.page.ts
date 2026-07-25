@@ -7,6 +7,7 @@ import {
   sessionResponse,
   solverCheck,
 } from '../../src/test/factories'
+import { stubRealtimeStream } from '../support/realtime'
 
 type HealthResponse = components['schemas']['HealthResponse']
 
@@ -68,6 +69,9 @@ export class AdminPage {
   constructor(public readonly page: Page) {}
 
   async mockSession(permissions: string[] = [PERM.ADMIN_VIEW]) {
+    // `_app` opens a realtime stream alongside the session bootstrap; this
+    // suite has no catch-all, so it needs its own stub (`../support/realtime`).
+    await stubRealtimeStream(this.page)
     await this.page.route('**/v1/session', async (route) => {
       await route.fulfill({
         status: 200,

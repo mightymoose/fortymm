@@ -18,6 +18,16 @@ spec:
         - name: redis
           image: {{ .Values.images.redis }}
           imagePullPolicy: {{ .Values.pullPolicy }}
+          # Cap the per-subscriber pub/sub output buffer. Redis's default is
+          # `32mb 8mb 60` PER SUBSCRIBER; with 2-3 api pods each holding a
+          # subscriber for the SSE fan-out that's up to ~96MB of allowance
+          # inside a 128Mi container running at Guaranteed QoS (requests ==
+          # limits, below) — i.e. one wedged subscriber could OOM-kill the whole
+          # data tier. At 8mb hard / 2mb-for-60s soft, Redis disconnects the
+          # slow subscriber instead; the api reconnects and clients re-sync.
+          args:
+            - --client-output-buffer-limit
+            - "pubsub 8mb 2mb 60"
           # requests==limits → Guaranteed QoS, so the kubelet/kernel evict the
           # burstable app pods before this data tier under memory pressure (#763).
           resources:

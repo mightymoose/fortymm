@@ -12,6 +12,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import type { components } from '../src/api/schema'
 import { sessionResponse } from '../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
 const SESSION = sessionResponse({ user: { username: 'mightymoose' } })
 
@@ -161,6 +162,9 @@ async function installDashboardMock(
 ) {
   await page.route('**/api/v1/**', (route: Route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    // The realtime stream is not JSON, so it cannot fall through to the `[]`
+    // below — see `./support/realtime`.
+    if (path === STREAM_PATH) return fulfillParkedStream(route)
     if (path === '/v1/session') {
       return route.fulfill({
         status: 200,

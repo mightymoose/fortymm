@@ -55,3 +55,24 @@ in-progress matches, iOS Live Activity) rather than an iOS-only polling
 stopgap. Anyone tempted to add polling to close the gap should do it as part of
 that effort, not bolt it on here — that is why this refetch is navigation-driven
 and stops there.
+
+## Superseded in part (2026-07-24)
+
+The cross-platform realtime effort this ADR deferred to has happened, for the
+**dashboard** — see
+`20260724-the-dashboard-is-kept-fresh-by-pushed-invalidation-hints-not-payloads.md`
+and `20260724-realtime-topics-are-per-user-and-the-server-resolves-who-is-affected.md`.
+iOS now holds a Server-Sent-Events connection **while the dashboard is
+foregrounded**, so the "you sit on the dashboard and your opponent posts a result"
+gap named above is closed on both web and iOS.
+
+What still stands from this ADR: the navigation-driven triggers themselves. The
+tab-selection and cover-dismissal refetches remain the freshness mechanism for
+every *other* screen (the matches list, match detail), and they remain the recovery
+path for the dashboard whenever the stream is not connected — the app suspends
+network connections in the background, so a foregrounding app reloads through
+`.refetchOnForeground` before its stream reconnects. The stream is a fast path
+layered over those triggers, not a replacement for them.
+
+Still open, and still deferred: an iOS Live Activity for in-progress matches
+(gh #1063), which needs APNs rather than a held connection.

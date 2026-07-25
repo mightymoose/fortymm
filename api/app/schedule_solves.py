@@ -201,6 +201,7 @@ from app.schemas.schedule_solve import (
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
 from app.tournament_draws import event_pools
+from app.tournament_realtime import stage_event_entrant_hints
 
 log = logging.getLogger(__name__)
 
@@ -1234,7 +1235,18 @@ async def _apply_result(
     first: SolveInputs,
     result: SolveResult,
 ) -> None:
-    """Phase (c): the guarded, whole-or-nothing apply (module docstring)."""
+    """Phase (c): the guarded, whole-or-nothing apply (module docstring).
+
+    A landed plan moves tables and times on the entrants' dashboard panels, so the
+    active entrants of every event this apply actually *changed* get a staged
+    ``dashboard.changed`` hint before the commit
+    (:func:`app.tournament_realtime.stage_event_entrant_hints`). It is staged on
+    the worker's own session rather than published inline: the outbox's
+    ``after_commit`` listener is what makes "the plan landed" and "the players were
+    told" one decision, here in the worker exactly as in the API process. A
+    drift-discarded run, an infeasible one, and a re-solve that re-derives the
+    identical plan all write nothing and therefore hint nobody.
+    """
     async with sessionmaker() as db:
         # Lock order: tournament → schedule_solves → tournament_fixtures.
         # The full tournament row (not just the id): the call evaluation below
@@ -1281,6 +1293,13 @@ async def _apply_result(
             return
 
         call_fanout: list[NotificationJob] = []
+        # The events whose entrants' dashboard panels this apply actually moved —
+        # the realtime hint audience, gathered as the writes are made rather than
+        # guessed at afterwards. A re-solve that re-derives the identical plan
+        # (the steady state, since every completion triggers one) writes the same
+        # bytes back and moves nobody's panel, so it must hint nobody: an empty
+        # set here is the difference between a hint and a hint storm.
+        moved_event_ids: set[uuid.UUID] = set()
         match result.verdict:
             case scheduling.Verdict.optimal | scheduling.Verdict.feasible:
                 placed = 0
@@ -1288,6 +1307,8 @@ async def _apply_result(
                 moved_repairs: list[TournamentFixture] = []
                 for placement in result.placements:
                     fixture = fresh.fixtures[uuid.UUID(placement.fixture_id)]
+                    new_table = str(placement.table_id)
+                    new_start = fresh.base + timedelta(minutes=placement.start_min)
                     if (
                         fixture.pinned_at is not None
                         and fixture.id not in fresh.broken_pin_moves
@@ -1304,7 +1325,6 @@ async def _apply_result(
                         # and fires the SAME "moved" correction (its
                         # ``table_id`` write is a no-op, since the solver never
                         # re-tables a pin).
-                        new_start = fresh.base + timedelta(minutes=placement.start_min)
                         if (
                             fixture.scheduled_start is None
                             or new_start <= fixture.scheduled_start
@@ -1314,10 +1334,15 @@ async def _apply_result(
                             pinned += 1
                             continue
                     repaired_pin = fixture.pinned_at is not None
-                    fixture.table_id = str(placement.table_id)
-                    fixture.scheduled_start = fresh.base + timedelta(
-                        minutes=placement.start_min
-                    )
+                    if (fixture.table_id, fixture.scheduled_start) != (
+                        new_table,
+                        new_start,
+                    ):
+                        # A placement that genuinely moved: this event's panels now
+                        # show a different table or a different time.
+                        moved_event_ids.add(fixture.event_id)
+                    fixture.table_id = new_table
+                    fixture.scheduled_start = new_start
                     if repaired_pin:
                         # Broken pin, case (a): physics moved the promise, so
                         # it is renewed — still a pin, re-dated to the moment
@@ -1337,6 +1362,7 @@ async def _apply_result(
                     fixture.scheduled_start = None
                     fixture.pinned_at = None
                     voided_repairs.append(fixture)
+                    moved_event_ids.add(fixture.event_id)
                 row.status = ScheduleSolveStatus.succeeded
                 row.verdict = (
                     SolverVerdict.optimal
@@ -1434,6 +1460,14 @@ async def _apply_result(
             for conflict in result.conflicts
         ]
 
+        # The realtime hint for the players whose panels this apply moved. Staged
+        # on this session — the same outbox the API-process write paths use, which
+        # is exactly why the publisher is synchronous: this runs in the RQ worker,
+        # with no event loop to await a publish into, and the ``after_commit``
+        # listener on the commit below is what puts the hints on the wire. Nothing
+        # is staged on the drift path (it returned above having written nothing) or
+        # on an infeasible/unknown verdict, which place nothing.
+        await stage_event_entrant_hints(db, sorted(moved_event_ids))
         if rerun_was_requested:
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)
         await db.commit()

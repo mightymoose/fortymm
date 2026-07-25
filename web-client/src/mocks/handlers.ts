@@ -40,6 +40,7 @@ import {
 } from './factories/tournaments/tournament.factory'
 import { buildDashboardTournament } from './factories/dashboard/tournament.factory'
 import { mockUuid } from './mock-uuid'
+import { PARKED_STREAM_BODY, SSE_CONTENT_TYPE } from './realtime-stream'
 import { notificationHandlers } from './notifications-store'
 import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
@@ -1050,6 +1051,28 @@ export const handlers = [
   http.delete('*/v1/session', async () => {
     await delay(150)
     return new HttpResponse(null, { status: 204 })
+  }),
+  // ----- /v1/stream (realtime hints) -------------------------------------
+  // A PARKED stream: the reconnect directive and then silence, held open for
+  // ever (see `./realtime-stream`). Every authenticated surface opens one, so
+  // without this handler any test that renders `_app` — and dev mode itself —
+  // would fall through: vitest errors on the unhandled request, and the dev
+  // browser would get `index.html` back from vite and reconnect-loop over it.
+  //
+  // Written by hand rather than with MSW's `sse()` helper on purpose: `sse()`
+  // invariants on a global `EventSource` that neither jsdom nor Node 26
+  // exposes, and it buys nothing here — the frame is one literal string.
+  http.get('*/v1/stream', () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(PARKED_STREAM_BODY))
+        // Never closed: a real stream stays open, and closing would send the
+        // client into its reconnect path for no reason.
+      },
+    })
+    return new HttpResponse(body, {
+      headers: { 'Content-Type': SSE_CONTENT_TYPE, 'Cache-Control': 'no-cache' },
+    })
   }),
   // ----- /v1/players list + per-player profile + per-player matches ------
   // BFF endpoints — each returns exactly what its consumer page needs. The

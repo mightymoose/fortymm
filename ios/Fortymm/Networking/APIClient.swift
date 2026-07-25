@@ -222,6 +222,43 @@ struct APIClient {
         query: [URLQueryItem] = [],
         body: (some Encodable)?
     ) async throws -> (Data, HTTPURLResponse) {
+        let prepared = try await makeRequest(method, path, query: query, body: body)
+        let (data, response) = try await session.data(for: prepared.request)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+        try await handleSessionDrop(http: http, body: data, sentToken: prepared.sentToken)
+        await captureSessionCookie(from: http, url: prepared.url, sentToken: prepared.sentToken)
+        return (data, http)
+    }
+
+    /// A request with its auth attached, plus the two things the response side
+    /// needs back: the resolved URL (for cookie capture) and the session token
+    /// the request actually carried.
+    private struct PreparedRequest {
+        let request: URLRequest
+        let url: URL
+        /// The token this request sent, so a session-dropping reply can be
+        /// matched against the token we still hold (vs. one a newer sign-in has
+        /// since replaced).
+        let sentToken: String?
+    }
+
+    /// Build an authenticated request: query, JSON body, session + CSRF cookies,
+    /// and the CSRF header on mutating methods.
+    ///
+    /// Shared by the buffered `perform` and the streaming `openStream`, so the
+    /// hand-rolled `Cookie` header this client depends on (URLSession's own
+    /// cookie handling is off — see `makeSession`) can't be present on one and
+    /// missing on the other. A streaming request without it is anonymous, and
+    /// `/v1/stream` answers that with a 401.
+    private func makeRequest(
+        _ method: String,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: (some Encodable)?,
+        accept: String = "application/json"
+    ) async throws -> PreparedRequest {
         let base = APIClient.baseURL.appendingPathComponent(path)
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidResponse
@@ -231,7 +268,7 @@ struct APIClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             do {
@@ -242,10 +279,7 @@ struct APIClient {
         }
         // Send the session and its CSRF companion as cookies. The server's
         // double-submit check compares the CSRF cookie against the header, so
-        // both must be present and equal on mutations. `sentToken` is captured
-        // so the response handling can tell whether a session-dropping reply
-        // pertains to the token *this* request used (vs. one a newer sign-in
-        // has since replaced).
+        // both must be present and equal on mutations.
         let sentToken = await tokens.token()
         let csrf = await tokens.csrfToken()
         let cookieHeader = [
@@ -258,32 +292,99 @@ struct APIClient {
         if let csrf, !Self.csrfSafeMethods.contains(method) {
             request.setValue(csrf, forHTTPHeaderField: Self.csrfHeaderName)
         }
+        return PreparedRequest(request: request, url: url, sentToken: sentToken)
+    }
 
-        let (data, response) = try await session.data(for: request)
+    /// Throw if this response says the caller's session was merged away.
+    ///
+    /// A merged-away guest's cookie still resolves server-side, so this 401 can
+    /// land on *any* request. It is handled before the generic cookie capture
+    /// and is token-aware: only drop the token + broadcast the sign-out if the
+    /// cookie this request sent is still the one we hold. Otherwise a stale
+    /// in-flight request — whose token a newer sign-in already replaced — would
+    /// wipe the *new* token and kick the user out of a live session.
+    private func handleSessionDrop(
+        http: HTTPURLResponse, body: Data, sentToken: String?
+    ) async throws {
+        guard http.statusCode == 401, let info = Self.mergedSessionInfo(from: body) else {
+            return
+        }
+        if await tokens.clearIfCurrent(sentToken) {
+            var userInfo: [String: Any] = ["message": info.message]
+            if let email = info.email { userInfo["email"] = email }
+            NotificationCenter.default.post(
+                name: Self.sessionEndedNotification, object: nil, userInfo: userInfo
+            )
+            throw APIError.sessionMerged(message: info.message, email: info.email)
+        }
+        // Token already superseded — fail this request without disturbing the
+        // current session.
+        throw APIError.http(status: http.statusCode, detail: Self.detail(from: body))
+    }
+
+    // MARK: - Streaming
+
+    /// How much of a refused stream's body to read before giving up on finding
+    /// a `{"detail": …}` in it. The refusals are small JSON objects; a bound
+    /// keeps a hostile or misconfigured upstream from streaming an "error page"
+    /// into memory forever.
+    private static let errorBodyByteLimit = 64 * 1024
+
+    /// Open a long-lived streaming `GET` and hand back its bytes, un-consumed.
+    ///
+    /// This is how `Realtime/RealtimeConnection` reads `GET /v1/stream`. It goes
+    /// through `APIClient` rather than a private `URLSession` for one concrete
+    /// reason beyond convention: this client turns URLSession's cookie storage
+    /// **off** (`makeSession`) and attaches the Keychain-held session cookie by
+    /// hand, so a stream opened on any other session is anonymous and refused.
+    /// Routing it through `makeRequest` also means the CSRF companion cookie,
+    /// the structured `session_merged` 401, the rotated-cookie capture, and the
+    /// API's own error messages all behave exactly as they do everywhere else.
+    ///
+    /// A non-2xx never becomes a stream: the (bounded) body is drained so the
+    /// API's `detail` survives, and the same `APIError` any other call would
+    /// throw is thrown here.
+    ///
+    /// The response only needs its *headers* to return, so this resolves as
+    /// soon as the server accepts — the body arrives through the returned
+    /// sequence. Cancelling the consuming `Task` ends the iteration and the
+    /// request with it.
+    func openStream(_ path: String) async throws -> URLSession.AsyncBytes {
+        let prepared = try await makeRequest(
+            "GET", path, body: Optional<Empty>.none, accept: "text/event-stream"
+        )
+        var request = prepared.request
+        // A stream is never a cache hit, and a caching proxy holding one open
+        // is worse than useless.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
-        // A merged-away guest's cookie still resolves server-side, so this 401
-        // can land on *any* request. Handle it before the generic cookie capture
-        // and make it token-aware: only drop the token + broadcast the sign-out
-        // if the cookie this request sent is still the one we hold. Otherwise a
-        // stale in-flight request — whose token a newer sign-in already replaced
-        // — would wipe the *new* token and kick the user out of a live session.
-        if http.statusCode == 401, let info = Self.mergedSessionInfo(from: data) {
-            if await tokens.clearIfCurrent(sentToken) {
-                var userInfo: [String: Any] = ["message": info.message]
-                if let email = info.email { userInfo["email"] = email }
-                NotificationCenter.default.post(
-                    name: Self.sessionEndedNotification, object: nil, userInfo: userInfo
-                )
-                throw APIError.sessionMerged(message: info.message, email: info.email)
-            }
-            // Token already superseded — fail this request without disturbing the
-            // current session.
-            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+        guard (200..<300).contains(http.statusCode) else {
+            let body = await Self.drain(bytes, limit: Self.errorBodyByteLimit)
+            try await handleSessionDrop(http: http, body: body, sentToken: prepared.sentToken)
+            throw APIError.http(status: http.statusCode, detail: Self.detail(from: body))
         }
-        await captureSessionCookie(from: http, url: url, sentToken: sentToken)
-        return (data, http)
+        await captureSessionCookie(from: http, url: prepared.url, sentToken: prepared.sentToken)
+        return bytes
+    }
+
+    /// Read at most `limit` bytes off a refused stream's body. Never throws —
+    /// a body that fails mid-read just yields what arrived, because the caller
+    /// is already on its way to throwing the status.
+    private static func drain(_ bytes: URLSession.AsyncBytes, limit: Int) async -> Data {
+        var data = Data()
+        do {
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count >= limit { break }
+            }
+        } catch {
+            // Partial body is fine; `detail(from:)` simply won't find anything.
+        }
+        return data
     }
 
     /// FastAPI serialises datetimes as ISO-8601, usually with fractional

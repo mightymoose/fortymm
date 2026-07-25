@@ -2,6 +2,11 @@ import type { Locator, Page, Request as PWRequest, Route } from '@playwright/tes
 import { PERM } from '../../../src/lib/permissions'
 import { sessionResponse } from '../../../src/test/factories'
 import {
+  fulfillParkedStream,
+  STREAM_PATH,
+  stubRealtimeStream,
+} from '../../support/realtime'
+import {
   createRbacState,
   dispatchRbac,
   type Permission,
@@ -45,6 +50,10 @@ export async function mockAdminSession(page: Page) {
       body: JSON.stringify(SESSION),
     }),
   )
+  // …and the realtime stream `_app` opens alongside it. A spec that gets here
+  // has no catch-all, so an unstubbed stream would fall through to vite's SPA
+  // fallback and be answered with `index.html` (`../../support/realtime`).
+  await stubRealtimeStream(page)
 }
 
 export interface FailureSpec {
@@ -120,6 +129,14 @@ export class RbacStore {
     const method = request.method()
     const url = request.url()
     this.requests.push({ method, url })
+
+    // Before the failure table: the realtime stream is shell infrastructure, and
+    // an injected failure is always aimed at an RBAC read or write
+    // (`../../support/realtime`).
+    if (new URL(url).pathname.replace(/^\/api/, '') === STREAM_PATH) {
+      await fulfillParkedStream(route)
+      return
+    }
 
     const failure = this.matchFailure(method, url)
     if (failure) {

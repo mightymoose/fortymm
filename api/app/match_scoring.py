@@ -42,6 +42,7 @@ from app.match_errors import (
     ScoreNotAllowedError,
 )
 from app.match_queries import match_eager_options
+from app.match_realtime import stage_match_participant_hints
 from app.match_serialization import (
     first_decider,
     games_payload_from_match,
@@ -323,6 +324,20 @@ async def _enter_game_score_locked(
         side_2_points=side_2_points,
     )
 
+    # A mid-match score completes *nothing* — no result is proposed, no match is
+    # finalized — so the completion hook in ``finalize_match`` never fires for
+    # it. Without this staging the dashboard's live-match panel would freeze on
+    # the score chips it first rendered until somebody proposed a result. The
+    # affected set is the same one: both participants watch this scoreboard.
+    #
+    # Staged inside the transaction, so the ``IntegrityError`` rollback below
+    # discards it — the losing side of a same-game race saved nothing.
+    #
+    # No query: ``match.sides`` → ``players`` come loaded on the read chain
+    # ``load_match_for_write`` uses (``match_eager_options``), which is also how
+    # its ``is_participant`` check runs synchronously.
+    stage_match_participant_hints(db, match)
+
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -393,6 +408,11 @@ async def _update_game_score_locked(
         await db.refresh(game.score)
         raise ScoreConflictError(committed_score=score_view(game.score))
 
+    # Both participants' scoreboards changed — see ``_enter_game_score_locked``.
+    # Staged only past the optimistic-concurrency guard: the branch above never
+    # wrote a row, so it has nothing to hint about.
+    stage_match_participant_hints(db, match)
+
     await db.commit()
 
     return await _reload_match(db, match.id)
@@ -422,6 +442,9 @@ async def _delete_game_score_locked(
         )
 
     game.score = None
+    # Clearing a score changes the board both participants are watching just as
+    # much as writing one — see ``_enter_game_score_locked``.
+    stage_match_participant_hints(db, match)
     await db.commit()
 
     return await _reload_match(db, match.id)

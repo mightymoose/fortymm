@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 
 import fakeredis
 import pytest
@@ -25,6 +26,7 @@ from app.notifications.taxonomy import (
 )
 from app.notifications.taxonomy import NotificationChannel as ChannelEnum
 from app.roles import DEFAULT_ROLE_DESCRIPTION, DEFAULT_ROLE_NAME
+from app.stream import SessionFactory, get_stream_session_factory
 from tests._helpers import CSRF_EVENT_HOOKS
 
 
@@ -133,6 +135,62 @@ async def rate_limiter_fakeredis(_rate_limiter_redis):
     """Flush rate-limit counters between tests so each starts clean."""
     await _rate_limiter_redis.flushall()
     return _rate_limiter_redis
+
+
+@pytest.fixture(scope="session")
+def realtime_redis_server():
+    """One ``fakeredis.FakeServer`` shared by the realtime write and read sides.
+
+    The publisher is synchronous (``redis.Redis``) and the broker is async
+    (``redis.asyncio``), so they are two *different* fakeredis clients. Handing
+    both the same ``FakeServer`` is what makes a sync ``PUBLISH`` visible to the
+    async subscriber — without it each client gets a private server and every
+    realtime test passes by not delivering anything."""
+    return fakeredis.FakeServer()
+
+
+@pytest.fixture(autouse=True)
+def realtime_publisher_redis(realtime_redis_server, monkeypatch):
+    """Point ``publish_event`` at the shared fake server.
+
+    Autouse so no test can ever dial a real Redis — publish call sites live in
+    ordinary write paths (result acceptance, match calls), so this is the same
+    blanket the ``fake_*_queue`` fixtures provide for RQ.
+
+    Replacing ``_connection`` itself — rather than the client it memoizes —
+    is what keeps the fake per-test: production caches *inside* ``_connection``
+    (see its docstring), so patching over it bypasses the memo entirely and no
+    fake can outlive the test that installed it. One ``FakeStrictRedis`` per
+    test, reused across that test's publishes, because constructing one costs
+    ~120ms (it builds a whole command table)."""
+    from app.realtime import publisher as realtime_publisher
+
+    client = fakeredis.FakeStrictRedis(server=realtime_redis_server)
+    monkeypatch.setattr(realtime_publisher, "_connection", lambda: client)
+    return realtime_redis_server
+
+
+@pytest_asyncio.fixture
+async def realtime_broker(realtime_redis_server):
+    """A started :class:`RealtimeBroker` published via ``init_broker``.
+
+    ``httpx.ASGITransport`` never runs the app lifespan, so — exactly like
+    ``_rate_limiter_redis`` — a test that exercises the stream has to install
+    the process-wide broker itself. ``coalesce_delay=0`` so assertions don't
+    each pay the 250ms production window."""
+    import fakeredis.aioredis
+
+    from app.realtime import RealtimeBroker, init_broker, shutdown_broker
+
+    fake = fakeredis.aioredis.FakeRedis(server=realtime_redis_server, encoding="utf-8")
+    broker = RealtimeBroker(fake, coalesce_delay=0.0, poll_interval=0.01)
+    await broker.start()
+    init_broker(broker)
+    try:
+        yield broker
+    finally:
+        await shutdown_broker()
+        await fake.aclose()
 
 
 @pytest.fixture(scope="session")
@@ -326,7 +384,23 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async def _override() -> AsyncIterator[AsyncSession]:
         yield db_session
 
+    # ``GET /v1/stream`` deliberately takes a session *factory* rather than
+    # ``Depends(get_session)`` (a yield dependency would pin a pooled connection
+    # for the life of the stream — see ``app/stream.py``), so overriding
+    # ``get_session`` alone would leave it dialling the real ``DATABASE_URL``
+    # engine. Hand it a factory over the same shared session, which it must not
+    # close: the test goes on asserting against it after the request.
+    @asynccontextmanager
+    async def _shared_session() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    async def _override_stream_session_factory() -> SessionFactory:
+        return _shared_session
+
     fastapi_app.dependency_overrides[get_session] = _override
+    fastapi_app.dependency_overrides[get_stream_session_factory] = (
+        _override_stream_session_factory
+    )
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(
         transport=transport,

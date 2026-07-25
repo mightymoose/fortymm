@@ -27,6 +27,7 @@ import {
   notificationTaxonomy,
   sessionResponse,
 } from '../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
 
@@ -66,6 +67,9 @@ const STUBS: Record<string, unknown> = {
 async function installMocks(page: Page) {
   await page.route('**/api/v1/**', (route: Route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    // The realtime stream is not JSON, so it cannot fall through to the `[]`
+    // below — see `./support/realtime`.
+    if (path === STREAM_PATH) return fulfillParkedStream(route)
     const stub = STUBS[path]
     return route.fulfill({
       status: 200,

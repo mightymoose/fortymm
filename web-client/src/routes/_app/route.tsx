@@ -1,6 +1,7 @@
 import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
 import { AppError } from '@/components/app-error'
+import { RealtimeProvider } from '@/components/realtime-provider'
 import { RootLoader } from '@/components/root-loader'
 import { sessionQueryOptions } from '@/api/session'
 
@@ -37,10 +38,19 @@ export const Route = createFileRoute('/_app')({
   component: AppLayout,
 })
 
+/**
+ * `RealtimeProvider` wraps the shell rather than living inside it: this route is
+ * exactly the authenticated surface, and its loader has already established the
+ * session by the time anything below renders — so the stream's first request
+ * always carries a session cookie, and the signed-out routes never open one.
+ * See the component's own note for why not `AppShell`.
+ */
 function AppLayout() {
   return (
-    <AppShell>
-      <Outlet />
-    </AppShell>
+    <RealtimeProvider>
+      <AppShell>
+        <Outlet />
+      </AppShell>
+    </RealtimeProvider>
   )
 }

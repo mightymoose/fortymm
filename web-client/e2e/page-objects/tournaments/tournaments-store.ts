@@ -22,6 +22,7 @@ import {
   planRoundRobinFixtures,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
@@ -1099,6 +1100,13 @@ export class TournamentsStore {
     }
     if (path === '/v1/notifications/unread-count') {
       return json(route, 200, UNREAD_COUNT)
+    }
+    // Same story as the bell above, one layer down: `_app` holds a realtime
+    // stream open on every page. Parked rather than left to the 404 below, so
+    // the client stands down instead of reconnect-looping and filling
+    // `unhandled` (`../../support/realtime`).
+    if (path === STREAM_PATH) {
+      return fulfillParkedStream(route)
     }
 
     // Writes wait on the gate (reads never do) — see `holdWrites`.
