@@ -2,7 +2,7 @@
 # Reject NEW ADRs that don't use the date-prefixed naming scheme.
 #
 # docs/adr/ carries three historical numbering schemes — sequential (0001-0018),
-# issue-number (0783, 0915, 1001) and date (20260716+) — and ten duplicated
+# issue-number (0783, 0915, 1001) and date (20260716+) — and seven duplicated
 # numeric prefixes, including FOUR different `0008-*.md` files. Cause: parallel
 # worktrees each number off a `main` that has already moved on, so two branches
 # pick the same "next" number and both land. `YYYYMMDD-slug.md` cannot collide
@@ -22,16 +22,22 @@ adr_dir="docs/adr"
 
 cd "$(git rev-parse --show-toplevel)"
 
-if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
-  echo "check-adr-numbering: base ref '$base' not found — skipping." >&2
-  exit 0
+if git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+  # Three-dot: compare against the merge base, so unrelated ADRs that landed on
+  # main after this branch was cut don't read as "added by this branch".
+  # --diff-filter=A: additions only. A push straight to main degenerates to an
+  # empty range, which passes.
+  added="$(git diff --name-only --diff-filter=A "$base...HEAD" -- "$adr_dir" || true)"
+else
+  # Fail toward CHECKING, matching api.yml and openapi-schema.yml's `changes`.
+  # Exiting 0 here would let any badly-named ADR through, and an empty `$base`
+  # would silently degenerate to `...HEAD` — an empty range that passes
+  # everything. Inspect the whole directory instead: noisier on a legacy name,
+  # but it cannot wave a bad one through.
+  echo "check-adr-numbering: base ref '$base' not resolvable — inspecting every" >&2
+  echo "  ADR in the tree rather than only the ones this branch adds." >&2
+  added="$(git ls-files "$adr_dir" || true)"
 fi
-
-# Three-dot: compare against the merge base, so unrelated ADRs that landed on
-# main after this branch was cut don't read as "added by this branch".
-# --diff-filter=A: additions only. A push straight to main degenerates to an
-# empty range, which passes.
-added="$(git diff --name-only --diff-filter=A "$base...HEAD" -- "$adr_dir" || true)"
 
 bad=""
 while IFS= read -r path; do

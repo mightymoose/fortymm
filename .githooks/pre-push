@@ -15,6 +15,7 @@
 #
 # Escape hatches:
 #   SKIP_OPENAPI_CHECK=1 git push       # skip the whole hook
+#   SKIP_WEB_OPENAPI_CHECK=1 git push   # skip only the web half (schema.d.ts)
 #   SKIP_IOS_OPENAPI_CHECK=1 git push   # skip only the (slow) Swift half
 #   git push --no-verify                # skip every pre-push hook
 #
@@ -96,6 +97,13 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
 
   if [ -n "$base" ]; then
     files="$(git diff --name-only "$base" "$local_sha" 2>/dev/null || true)"
+    # Fail toward CHECKING, per the note above: an unresolvable base (force-push,
+    # rewritten remote, partial fetch) makes `git diff` error into an empty list,
+    # which would otherwise read as "nothing relevant changed" and skip silently.
+    if [ -z "$files" ] && [ -n "$base" ]; then
+      echo "pre-push: cannot diff against '$base' — checking anyway." >&2
+      relevant=1; break
+    fi
   else
     files="$(git show --pretty=format: --name-only "$local_sha" 2>/dev/null || true)"
   fi
@@ -110,8 +118,10 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
 $files
 EOF
 
-  # NB: `[ ... ] && break` as the last command of a loop body would trip
-  # `set -e` when the test is false. Keep it an `if`.
+  # NB: an `if`, not `[ "$relevant" -eq 1 ] && break`. Not because the latter
+  # trips `set -e` — it doesn't; a failing non-final member of an `&&` list is
+  # exempt — but because the loop's own exit status would then become 1, which
+  # does matter when a loop is the last command of a function or an `&&` chain.
   if [ "$relevant" -eq 1 ]; then
     break
   fi
@@ -121,7 +131,7 @@ if [ "$relevant" -ne 1 ]; then
   exit 0
 fi
 
-echo "pre-push: this push touches api/ — checking generated OpenAPI types..." >&2
+echo "pre-push: this push touches api/ or ios/openapi/ — checking generated OpenAPI types..." >&2
 
 # --- Regenerate, reusing the same machinery as the mise tasks / CI ---------
 #
@@ -221,6 +231,8 @@ fi
   echo " To regenerate by hand instead:"
   echo "     mise run regen-api-types"
   echo "     mise run regen-ios-api-types"
+  echo
+  echo " Skip just one half with SKIP_WEB_OPENAPI_CHECK=1 / SKIP_IOS_OPENAPI_CHECK=1."
   echo
   echo " If the diff is not yours (e.g. unrelated uncommitted work under api/),"
   echo " bypass with:  SKIP_OPENAPI_CHECK=1 git push"

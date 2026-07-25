@@ -28,7 +28,7 @@ Run each suite the project ships. Use the project root as cwd. Run independent s
 - **Web client unit tests (vitest):** `cd web-client && npm run test:run`
 - **Web client lint + typecheck/build:** `cd web-client && npm run lint && npm run build` (the `build` script is `tsc -b && vite build` — it's the only typecheck.)
 - **Web client e2e (Playwright):** `cd web-client && npm run test:e2e`. Playwright defaults to port 5174 which collides with the dev compose web-client; set `PLAYWRIGHT_PORT` to a free port when the dev compose stack is up.
-- **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; it self-manages the stack, so just run it. It is the *only* coverage for the tournament create → go-live → play → crown lifecycle (a QA-stack browser pass can't create tournaments at all — no role, 403).
+- **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; it self-manages the stack, so just run it. It is the only **automated** coverage for the tournament create → go-live → play → crown lifecycle. A browser QA pass can reach those flows once it grants itself the Beta tester role (see `qa-review.md` §2b), but that is a hand-driven exploratory pass, not a regression gate — it proves the flow worked once, for one operator, on one stack.
 
   **Never scope it out because "the branch didn't touch `e2e/`".** A web-client-only or api-only change absolutely can break it; that is precisely what it is for, and skipping it on that reasoning once already shipped a break that CI then caught, costing a full merge cycle. Run it whenever the branch touches **`api/`, `web-client/`, `ios/`, `e2e/`, `deploy/`, `nginx/`, or any `docker-compose*.yml`**.
 

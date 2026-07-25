@@ -106,7 +106,7 @@ echo
 # second, divergent definition of "junk" governing a destructive decision.
 is_junk() {
   case "$1" in
-    .venv/*|.venv)                        return 0 ;;   # only api/.gitignore has it
+    .venv/*|*/.venv/*|.venv)              return 0 ;;   # api/.venv is the real one
     */.vite/*|*/xcshareddata/*)           return 0 ;;
     .qa-artifacts/*|.playwright-cli/*|*/.playwright-cli/*) return 0 ;;
     *) return 1 ;;
@@ -121,8 +121,10 @@ git worktree list --porcelain | awk '
   /^locked/   { print w }
 ' > "$LOCKED"
 
-# Both arrays use the same packed "path|branch|reason" encoding, so nothing has
-# to keep two parallel arrays in step.
+# Both arrays pack their fields into one string, TAB-separated, so nothing has to
+# keep two parallel arrays in step. Tab (not `|`) because a `|` is legal in a git
+# branch name while a control character is not — so the delimiter can never
+# appear in the data. `safe` carries path+branch; `review` adds the reason.
 safe=(); review=(); keep_n=0
 
 while IFS= read -r line; do
@@ -161,10 +163,18 @@ while IFS= read -r line; do
 
   # 2. Untracked files that don't look like build junk.
   if [ -z "$why" ]; then
+    # Read one MORE than the cap so truncation is detectable. A bounded scan
+    # that silently stops is worse than no scan: the one path that can lose work
+    # is a file we never looked at being classified SAFE and force-removed.
+    n=0
     while IFS= read -r f; do
       [ -n "$f" ] || continue
+      n=$((n+1))
+      if [ "$n" -gt 200 ]; then
+        why="more than 200 untracked files — not audited, review by hand"; break
+      fi
       if ! is_junk "$f"; then why="untracked: $f"; break; fi
-    done < <(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null | head -200)
+    done < <(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null | head -201)
   fi
 
   # 3. Commits made AFTER the PR merged — the only way a merged branch can still
@@ -195,9 +205,9 @@ while IFS= read -r line; do
   fi
 
   if [ -n "$why" ]; then
-    review+=("$wt|$branch|$why")
+    review+=("$wt	$branch	$why")
   else
-    safe+=("$wt|$branch")
+    safe+=("$wt	$branch")
   fi
 done < <(git worktree list --porcelain)
 
@@ -214,14 +224,19 @@ if [ "${#review[@]}" -gt 0 ]; then
   # `${arr[@]+"${arr[@]}"}`: under `set -u`, macOS's bash 3.2 treats a plain
   # "${arr[@]}" on an EMPTY array as an unbound variable and aborts.
   for r in ${review[@]+"${review[@]}"}; do
-    rest="${r#*|}"; echo "    ${rest%%|*} — ${rest#*|}"
+    IFS=$'\t' read -r _ b w <<<"$r"; echo "    $b — $w"
   done
 fi
 
 # Recoverability: record branch -> sha -> path before anything is removed, so a
-# reap can always be undone with `git worktree add -b <branch> <path> <sha>`.
-# The shas are all reachable (they are what the merged PRs contain), but making
-# the mapping durable means you never have to go spelunking for one.
+# reap can be undone with `git worktree add -b <branch> <path> <sha>`.
+#
+# Be honest about the shelf life. Because this repo SQUASH-merges, the recorded
+# sha is NOT an ancestor of main (see the note on $MERGED), so once the branch is
+# deleted its only local anchors are the reflog and gc's grace period. After that
+# the commit is recoverable from the remote — `git fetch origin refs/pull/<N>/head`
+# — but not from this clone. The content itself is never at risk: it is in main,
+# squashed.
 MANIFEST="${MAIN_ROOT}/.claude/reaped-worktrees.tsv"
 
 reap_one() {
@@ -243,13 +258,12 @@ reap_one() {
 echo
 if [ "$FORCE" -eq 1 ]; then echo "Reaping..."; else echo "DRY RUN — nothing will be removed. Re-run with --force."; fi
 for entry in ${safe[@]+"${safe[@]}"}; do
-  reap_one "${entry%%|*}" "${entry#*|}"
+  IFS=$'\t' read -r wt_ br_ <<<"$entry"; reap_one "$wt_" "$br_"
 done
 if [ "$INCLUDE_REVIEW" -eq 1 ]; then
   echo "  (--include-review)"
   for entry in ${review[@]+"${review[@]}"}; do
-    rest="${entry#*|}"
-    reap_one "${entry%%|*}" "${rest%%|*}"
+    IFS=$'\t' read -r wt_ br_ _ <<<"$entry"; reap_one "$wt_" "$br_"
   done
 fi
 

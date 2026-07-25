@@ -10,7 +10,7 @@ Format and "when is a decision worth an ADR" live in
 ## Why dates and not `0019-`, `0020-`, …
 
 This directory used to say "scan for the highest number and increment". That
-produced **ten duplicated numeric prefixes**, including four different
+produced **seven duplicated numeric prefixes**, including four different
 `0008-*.md` files, because work happens in parallel worktrees: each one numbers
 off a `main` that has already moved on, so two branches confidently pick the
 same next number and both land. Issue-number prefixes (`0783-`, `0915-`) collide

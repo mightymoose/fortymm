@@ -124,9 +124,11 @@ own, so per-call discipline was never going to cover it.
 - Reproduce flakes with `--no-file-parallelism`, repeatedly; warm runs hide it.
 - **Corollary: a 5000ms timeout is not a discriminating "red".** It can't tell
   "the guard blocked the navigation" from "the harness never landed the
-  refetch", so a red built on one proves nothing. Discriminate by holding the
-  harness, handlers and fixtures byte-identical and varying only the thing under
-  test, or by probing the DOM at failure time.
+  refetch", so a red built on one proves nothing — the local case of the
+  repo-wide "an undiscriminated red proves nothing" rule
+  (`.claude/rules/verify-the-artifact-under-test.md`). Discriminate by holding
+  the harness, handlers and fixtures byte-identical and varying only the thing
+  under test, or by probing the DOM at failure time.
 
 ## Conventions
 

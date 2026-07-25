@@ -30,7 +30,7 @@ the slug is lowercase words joined by hyphens, and should read as the decision
 itself ("a-null-player-cap-means-no-cap"), not as a topic.
 
 **Do not scan for "the highest number and increment".** That is what this repo
-used to say, and it produced ten duplicated prefixes — including four different
+used to say, and it produced seven duplicated numeric prefixes — including four different
 `0008-*.md` files — because every worktree numbers off a `main` that has already
 moved on, and two agents working in parallel both pick the same "next" number.
 Issue numbers (`0783-`, `0915-`) collide the same way when one issue produces

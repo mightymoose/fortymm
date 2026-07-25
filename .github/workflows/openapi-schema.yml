@@ -67,7 +67,7 @@ jobs:
           changed="$(git diff --name-only "${BASE_SHA}...HEAD" -- \
             api ios/openapi ios/Tools/OpenAPIGeneratorCLI \
             scripts/ensure-api-up.sh \
-            web-client/package-lock.json web-client/src/api/schema.d.ts \
+            web-client/package.json web-client/package-lock.json web-client/src/api/schema.d.ts \
             ios/Fortymm/Generated/Types.swift \
             .github/workflows/openapi-schema.yml \
             | grep -v '\.md$' || true)"
@@ -85,34 +85,38 @@ jobs:
   # trigger-level `paths:` filter would hang every PR instead.
   verify:
     needs: changes
+    # `always()` so a failure in `changes` cannot SKIP this job: GitHub reports a
+    # skipped required check as SUCCESSFUL, which would turn the drift guard
+    # into a silent pass — the exact inversion this gating was meant to avoid.
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         with:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: api/pyproject.toml
 
       - uses: actions/setup-node@v7
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         with:
           node-version: '26.1.0'
           cache: npm
           cache-dependency-path: web-client/package-lock.json
 
       - run: pip install -e '.[dev]'
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         working-directory: api
 
       - run: npm ci
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         working-directory: web-client
 
       - name: Regenerate OpenAPI types
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         run: |
           API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
           eval "$API_STATUS"
@@ -122,7 +126,7 @@ jobs:
           API_URL="$API_URL" npm run gen:api
 
       - name: Verify committed schema is up to date
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         run: |
           if ! git diff --exit-code web-client/src/api/schema.d.ts; then
             echo "::error::web-client/src/api/schema.d.ts is out of date. Run 'mise run regen-api-types' locally and commit the result."
@@ -131,19 +135,20 @@ jobs:
 
   verify-ios:
     needs: changes
+    if: always()          # see the note on `verify`
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         with:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: api/pyproject.toml
 
       - name: Cache Swift toolchain
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         id: swift-cache
         uses: actions/cache@v6
         with:
@@ -151,7 +156,7 @@ jobs:
           key: ${{ runner.os }}-swift-6.1-RELEASE-ubuntu24.04
 
       - name: Install Swift toolchain
-        if: needs.changes.outputs.openapi == 'true' && steps.swift-cache.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.openapi != 'false' && steps.swift-cache.outputs.cache-hit != 'true'
         run: |
           # Not swift-actions/setup-swift: its Swiftly installer verifies a
           # GPG signature against a key the runner's keyring doesn't have,
@@ -161,21 +166,21 @@ jobs:
           tar xzf /tmp/swift.tar.gz -C /tmp
 
       - run: echo "/tmp/swift-6.1-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
 
       - run: pip install -e '.[dev]'
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         working-directory: api
 
       - name: Cache swift-openapi-generator build
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         uses: actions/cache@v6
         with:
           path: ios/Tools/OpenAPIGeneratorCLI/.build
           key: ${{ runner.os }}-openapi-generator-cli-${{ hashFiles('ios/Tools/OpenAPIGeneratorCLI/Package.resolved') }}
 
       - name: Regenerate iOS OpenAPI types
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         run: |
           API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
           eval "$API_STATUS"
@@ -192,7 +197,7 @@ jobs:
             --output-directory ../../Fortymm/Generated
 
       - name: Verify committed Types.swift is up to date
-        if: needs.changes.outputs.openapi == 'true'
+        if: needs.changes.outputs.openapi != 'false'
         run: |
           if ! git diff --exit-code ios/Fortymm/Generated/Types.swift; then
             echo "::error::ios/Fortymm/Generated/Types.swift is out of date. Run 'mise run regen-ios-api-types' locally and commit the result."
