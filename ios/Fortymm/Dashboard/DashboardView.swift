@@ -91,19 +91,37 @@ struct DashboardView: View {
     /// (review/dispute, or a board that has since been decided). Mirrors the web
     /// view-model's `routeOf` and the matches-list `openResume` fallback.
     private func act(on row: AttentionRowView) {
+        switch row.target {
+        case .scoring: open(matchId: row.matchId, preferScoring: true)
+        case .detail: open(matchId: row.matchId, preferScoring: false)
+        }
+    }
+
+    /// Run a tournament card's action. Deliberately the *same* path as the
+    /// attention row above — one dashboard must not have two ways to open the
+    /// same match. The projection has already chosen the target; the game number
+    /// it carries is informational, since the resume flow resumes at whatever
+    /// game the fetched board says is next (exactly as the attention row does).
+    private func act(on target: TournamentMatchTarget) {
+        switch target {
+        case let .scoring(matchId, _): open(matchId: matchId, preferScoring: true)
+        case let .detail(matchId): open(matchId: matchId, preferScoring: false)
+        }
+    }
+
+    /// Fetch the full match behind a row/card and present it: live scoring when
+    /// the caller asked for it *and* the board still allows it, match detail
+    /// otherwise. The fallback matters — a board decided since the dashboard
+    /// loaded has no `resumeContext`, and detail is where the result gets posted.
+    private func open(matchId: UUID, preferScoring: Bool) {
         guard !resumeLoading else { return }
         resumeLoading = true
         Task {
-            let detail = try? await service.matchDetails(row.matchId)
+            let detail = try? await service.matchDetails(matchId)
             resumeLoading = false
             guard let detail else { return }
-            switch row.target {
-            case .scoring:
-                if let ctx = detail.resumeContext { resuming = ctx }
-                else { selected = detail }
-            case .detail:
-                selected = detail
-            }
+            if preferScoring, let ctx = detail.resumeContext { resuming = ctx }
+            else { selected = detail }
         }
     }
 
@@ -146,6 +164,17 @@ struct DashboardView: View {
     @ViewBuilder
     private func yourGame(_ data: DashboardResponse) -> some View {
         VStack(alignment: .leading, spacing: FMSpace.s4) {
+            // ABOVE everything else, and only while it exists: the tournament
+            // the user is currently playing in. During a tournament the match in
+            // front of you outranks every other to-do on this screen, so a
+            // player standing at a table doesn't scroll for it. `[]` the rest of
+            // the time — which is almost always — and then the dashboard looks
+            // exactly as it did before. Mirrors the web dashboard, which renders
+            // its `TournamentPanel` above the attention panel.
+            ForEach(projectTournamentPanels(data.tournaments, youName: currentUsername)) { panel in
+                DashboardTournamentPanel(view: panel, onAct: { act(on: $0) })
+            }
+
             // Server-ranked triage of every match needing the user's move —
             // disputes, results to review, matches to score (issue #445).
             // Mirrors the web dashboard's "Needs your attention" panel: top 3

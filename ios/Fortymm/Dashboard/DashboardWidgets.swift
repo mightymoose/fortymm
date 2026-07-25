@@ -38,6 +38,25 @@ private struct DashPill: View {
     }
 }
 
+/// The rating card's toned "+12 last match" chip.
+///
+/// Takes a NON-OPTIONAL delta on purpose, mirroring the web client's `DeltaPill`
+/// (`web-client/src/components/dashboard/your-game-row/rating-card/delta-pill.tsx`):
+/// the chip has to pick a direction and a tone, and neither exists for a rating
+/// that was ESTABLISHED rather than moved. Making the absent case unrepresentable
+/// here means a call site cannot render "+0 last match" under a brand-new
+/// player's first rating (#952) — it has to unwrap first, or render nothing.
+private struct DashDeltaPill: View {
+    let delta: Double
+
+    var body: some View {
+        DashPill(
+            text: "\(signedRating(delta)) last match",
+            tone: delta >= 0 ? .win : .loss
+        )
+    }
+}
+
 /// A single stat tile in the rating card's 3-up grid (Peak / RD / Volatility…).
 private struct DashStatTile: View {
     let label: String
@@ -109,10 +128,17 @@ struct DashboardRatingCard: View {
                         .font(FMFont.mono(56, weight: .bold))
                         .foregroundStyle(FMColor.fg1)
                     VStack(alignment: .leading, spacing: 5) {
-                        DashPill(
-                            text: "\(signedRating(rating.delta)) last match",
-                            tone: rating.delta >= 0 ? .win : .loss
-                        )
+                        // No delta ⇒ NO CHIP. A `nil` delta means the player's
+                        // last rated match ESTABLISHED this rating instead of
+                        // moving it, so there is no movement to report: the big
+                        // number beside this already says everything that
+                        // happened. The 1500 a league-join seeds is not a rating
+                        // anyone held to fall from — "−232 last match" under a
+                        // 1268 was exactly that phantom (#952) — and a "+0"
+                        // would claim a rated match moved nothing.
+                        if let delta = rating.delta {
+                            DashDeltaPill(delta: delta)
+                        }
                         percentileLine
                     }
                 }
@@ -236,10 +262,16 @@ struct DashboardRecentResultsCard: View {
                 .font(FMFont.mono(FMFont.sm, weight: .medium))
                 .foregroundStyle(tint)
 
+            // Two nils, one em dash. `myRatingChange` is nil when the match
+            // moved no rating at all; a *present* change whose `delta` is nil is
+            // the player's FIRST rated match — it established their rating
+            // rather than moving it, so there is no movement to report here
+            // either. Never a signed figure off the seeded 1500 (#952). Matches
+            // the web client's recent-results column.
             Group {
-                if let change = row.myRatingChange {
-                    Text(signedRating(change.delta))
-                        .foregroundStyle(change.delta >= 0 ? FMColor.serve500 : FMColor.loss)
+                if let delta = row.myRatingChange?.delta {
+                    Text(signedRating(delta))
+                        .foregroundStyle(delta >= 0 ? FMColor.serve500 : FMColor.loss)
                 } else {
                     Text("—").foregroundStyle(FMColor.fgMuted)
                 }

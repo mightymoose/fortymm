@@ -21,6 +21,23 @@ struct DashboardResponse: Decodable {
     let recentResults: [DashboardRecentResult]
     let rating: DashboardRating?
     let completedMatchCount: Int
+    /// Every LIVE tournament the caller holds an active entry in, newest first —
+    /// the panel that sits at the very top of the dashboard while they're playing
+    /// one. Empty (and the panel absent) the rest of the time, which is almost
+    /// always: a tournament is only `live` for the day or two it's being run.
+    ///
+    /// It rides on this payload rather than an endpoint of its own because the
+    /// panel loads with the page (the BFF rule in the root `CLAUDE.md`); its tabs
+    /// switch between events that are all already here, so no tab costs a
+    /// round-trip.
+    ///
+    /// Optional because the field carries a server-side default and is therefore
+    /// *not required* in the OpenAPI schema (see `Generated/Types.swift`), so an
+    /// API older than the one that introduced it simply omits the key — which
+    /// must leave the rest of the dashboard decoding, not blank the screen.
+    /// `projectTournamentPanels` takes the optional directly and reads a missing
+    /// array the same as an empty one: no panel.
+    let tournaments: [DashboardTournament]?
 }
 
 /// The actionable bucket a match falls in for the current user, in priority
@@ -70,10 +87,27 @@ struct DashboardRecentResult: Decodable, Identifiable {
     var id: UUID { matchId }
 }
 
+/// What one completed match did to the player's rating — and there are two kinds
+/// of that. Mirror of the API's `RatingChange` (`api/app/schemas/rating.py`).
 struct RatingChange: Decodable {
+    /// `nil` == the player was UNRATED going in; this match is what gave them a
+    /// rating. Not "unknown", and not zero.
     let before: Double?
     let after: Double
-    let delta: Double
+    /// How far the rating MOVED, or `nil` when it was ESTABLISHED rather than
+    /// moved (the player's first rated match).
+    ///
+    /// Optional because the API's `delta` is a computed `float | None` (see
+    /// `Generated/Types.swift`, `RatingChange.delta: Swift.Double?`) and the key
+    /// is always PRESENT on the wire carrying an explicit `null`. Declaring it
+    /// non-optional threw `valueNotFound` and failed the decode of the WHOLE
+    /// `DashboardResponse` — a blank dashboard, not a degraded row — for every
+    /// player whose recent matches include their first rated one.
+    ///
+    /// Readers must render *absence* (no signed number, no tone), never a
+    /// fabricated `+0`: a zero claims a rated match moved the rating by nothing,
+    /// which is a different and false statement (#952).
+    let delta: Double?
 }
 
 /// The "Current rating" card payload. Emitted only for automatic-strategy
@@ -83,7 +117,17 @@ struct DashboardRating: Decodable {
     let leagueName: String
     let strategyKey: String
     let current: Double
-    let delta: Double
+    /// What the player's last rated match did to them — the "+12 last match"
+    /// chip. `nil` means THERE IS NO MOVE TO REPORT and the card must render
+    /// nothing (no chip, no arrow, no tone) rather than a zero: either that
+    /// match ESTABLISHED this rating instead of moving it, or no rated match
+    /// lies behind the current value at all (a `manual` override / `import`).
+    ///
+    /// Optional for the same wire reason as `RatingChange.delta` — the API sends
+    /// `float | None` (`Generated/Types.swift`) with the key always present — and
+    /// it is a SECOND, independent decode blocker: `recentResults` is decoded
+    /// first, so its failure masked this one entirely.
+    let delta: Double?
     let peak: Double
     let percentile: Int?
     let sparkData: [Double]
