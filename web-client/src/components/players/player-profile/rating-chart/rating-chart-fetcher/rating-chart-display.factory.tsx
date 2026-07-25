@@ -1,6 +1,7 @@
 import {
   buildEmptyRatingWindow,
   buildRatingHistoryWindow,
+  buildRatingPoint,
 } from '@/mocks/factories/players/rating-history.factory'
 
 import type { RatingChartDisplayProps } from './rating-chart-display'
@@ -25,6 +26,35 @@ export function buildChartView(window = buildRatingHistoryWindow()): ChartView {
  * chip at all. Never a "+0". */
 export function buildEmptyChartView(): ChartView {
   return selectRatingChart(buildEmptyRatingWindow(), '90d')
+}
+
+/**
+ * A brand-new player whose whole history is **one instant** (#957): `matchCount`
+ * matches all recorded at the same moment, ≈ now, with no carry-in anchor. The
+ * calendar axis cannot fan them out, so the projected view carries
+ * `singleInstant` set — the card renders an "N matches today" label rather than a
+ * spike.
+ *
+ * Built by running the real projection over a fixed `now` that equals the
+ * matches' instant, so the collapse is deterministic rather than racing the wall
+ * clock.
+ */
+export function buildSingleInstantChartView(matchCount = 6): ChartView {
+  const now = Date.now()
+  const instant = new Date(now).toISOString()
+  const points = Array.from({ length: matchCount }, (_, i) =>
+    buildRatingPoint({ at: instant, rating: 1500 + i * 4, match_id: `m-${i}` }),
+  )
+  return selectRatingChart(
+    {
+      anchor: null,
+      points,
+      peak: points.at(-1) ?? null,
+      change: matchCount * 4,
+    },
+    '90d',
+    now,
+  )
 }
 
 /** Props for `RatingChartDisplay` — the settled, painted card. */

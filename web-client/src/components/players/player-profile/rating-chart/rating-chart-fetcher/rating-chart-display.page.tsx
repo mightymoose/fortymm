@@ -46,6 +46,12 @@ const scoped = (container: Container) => ({
   queryChangeChip(): HTMLElement | null {
     return this.getChartCard().querySelector('.rating-chart__chip')
   },
+  /** The single-instant fallback's label — "N matches today", rendered *in place
+   * of the SVG* when the whole history is one instant and a calendar axis cannot
+   * fan it out (#957). `null` in every drawable case. */
+  querySingleInstantLabel(): HTMLElement | null {
+    return this.getChartCard().querySelector('.rating-chart__single-instant')
+  },
   /** The in-card failure — "Couldn't load that range", *in place of the SVG*, with
    * the rest of the profile still painted around it. */
   findChartError() {

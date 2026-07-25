@@ -1,6 +1,7 @@
 import {
   buildChartView,
   buildEmptyChartView,
+  buildSingleInstantChartView,
 } from './rating-chart-display.factory'
 import { ratingChartDisplayPage } from './rating-chart-display.page'
 
@@ -28,6 +29,29 @@ describe('RatingChartDisplay', () => {
     )
     // …and it still draws: a flat line at their current rating, not an empty box.
     expect(ratingChartDisplayPage.queryChartLine()).toBeInTheDocument()
+  })
+
+  it('shows an "N matches today" label instead of a spike when the whole history is one instant', async () => {
+    // #957: a brand-new player who played several matches at one moment cannot be
+    // drawn on a calendar axis — the line would be a sub-pixel spike hard against
+    // the right edge. The card states the real count in words instead.
+    ratingChartDisplayPage.render({ chart: buildSingleInstantChartView(6) })
+
+    await ratingChartDisplayPage.findChartCard()
+    expect(ratingChartDisplayPage.querySingleInstantLabel()).toHaveTextContent(
+      '6 matches today',
+    )
+    // …and it does NOT draw the line: no SVG, no spike.
+    expect(ratingChartDisplayPage.queryChartLine()).not.toBeInTheDocument()
+  })
+
+  it('pluralises the single-instant label — "1 match today", not "1 matches today"', async () => {
+    ratingChartDisplayPage.render({ chart: buildSingleInstantChartView(1) })
+
+    await ratingChartDisplayPage.findChartCard()
+    expect(ratingChartDisplayPage.querySingleInstantLabel()).toHaveTextContent(
+      '1 match today',
+    )
   })
 
   it('puts a failed range IN the card — the SVG goes, the card stays', async () => {

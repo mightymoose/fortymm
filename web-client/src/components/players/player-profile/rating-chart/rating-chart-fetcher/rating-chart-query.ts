@@ -72,6 +72,34 @@ const PLOT_HEIGHT = CHART_HEIGHT - PLOT.top - PLOT.bottom
  * and paint every point at `NaN`). */
 const FLAT_PADDING = 20
 
+/* ------------------------------------------------- zoom-to-fit (#957) --
+ * The calendar axis has a sharp edge (ADR-0915 amendment). A brand-new player's
+ * whole history is one evening, so on a 30d/90d/1y axis every point shares almost
+ * the same `x` and the series collapses to a ~1px vertical spike hard against the
+ * right edge — the honest rendering of one instant on a calendar, and unusable.
+ * These three constants size the fix.
+ */
+
+/** When the drawn line reaches back **less than this fraction** of the selected
+ * window, the calendar axis is almost entirely empty and the series piles up on
+ * the right edge — so the x-domain zooms to the data instead of running
+ * window-start → now. 5%: an evening is *hours* against 30–365 days, far under
+ * this; a player whose activity genuinely reaches back a meaningful slice of the
+ * window stays on the full calendar domain, whose flat run is honest inactivity
+ * (ADR-0915), not something to zoom away. */
+const COLLAPSE_RANGE_FRACTION = 0.05
+
+/** The tightest the zoomed axis goes — its minimum-span floor. Matches closer
+ * together than this fan into a near-vertical cluster rather than being spread
+ * edge-to-edge, which would imply hours between matches that were minutes (or
+ * seconds) apart. Three hours reads as "one session". */
+const MIN_SPAN_FLOOR_MS = 3 * 60 * 60 * 1000
+
+/** Below this drawn x-extent (in viewBox units) even the floored zoom has not
+ * separated the points: every match shares one instant (≈ now), so there is no
+ * line to draw. The card shows an "N matches today" label instead of a spike. */
+const SINGLE_INSTANT_MIN_SPAN = 1
+
 /* ------------------------------------------------------- the peak's label --
  * The peak carries a dot AND its rating, and the two must not sit on top of each
  * other. The label normally rides ABOVE the dot — but the peak is very often the
@@ -157,6 +185,17 @@ export type ChartView = {
    * false and in the second is better said in words than in a chip.
    */
   change: ChartChangeView | null
+  /**
+   * The genuinely-single-instant fallback (#957), or **`null`** in every drawable
+   * case.
+   *
+   * When a whole history is one instant — N matches recorded at the same moment,
+   * ≈ now — the time axis cannot fan them out even after the minimum-span floor,
+   * and the line above collapses to a sub-pixel spike. The card then renders an
+   * "N matches today" label *in place of* the SVG. `matchCount` is the real number
+   * of in-window matches, for the "1 match" / "6 matches" copy.
+   */
+  singleInstant: { matchCount: number } | null
 }
 
 const round = (value: number): number => Math.round(value * 100) / 100
@@ -322,6 +361,57 @@ const formatDay = (at: number, now: number): string => {
   })
 }
 
+/** The x-domain the line is drawn into: normally window-start → now, but zoomed
+ * to fit when the data has collapsed against the right edge. `collapsed` says
+ * which branch was taken, so the caller knows a single-instant fallback is even
+ * possible. */
+type XDomain = { xMin: number; xMax: number; collapsed: boolean }
+
+/**
+ * Where the x-axis starts and ends (#957).
+ *
+ * The default is ADR-0915's calendar domain: `windowStart → now`, stretched back
+ * to take in any point OLDER than the window start (the previous range's line,
+ * held on screen while a flip loads — see `selectRatingChart`).
+ *
+ * The zoom-to-fit branch fires only when **there is no carry-in anchor**. An
+ * anchor is drawn at the domain's left edge — it *is* the rating the window opens
+ * at (ADR-0915) — so an anchored line already spans the plot edge-to-edge and can
+ * never collapse; and re-homing the anchor onto a zoomed domain would misdate a
+ * point whose whole meaning is "as of the window start". So an anchored window,
+ * and the empty/unrated windows with no points at all, keep the full domain
+ * unchanged.
+ *
+ * Without an anchor, the deciding measure is how far back the DRAWN line reaches:
+ * from its earliest match to today (the line runs flat to now). That — not the
+ * matches' own max−min span — is what tells "brand-new player, first session
+ * tonight" (reaches back hours → zoom) apart from "played early, quiet since"
+ * (reaches back the whole window → keep it; that flat run is the honest story).
+ * When the reach is under `COLLAPSE_RANGE_FRACTION` of the window, the domain
+ * zooms to the data, floored to `MIN_SPAN_FLOOR_MS`, with the right edge pinned at
+ * now so the flat-run-to-today and the current dot are always in frame.
+ */
+function xDomain(
+  window: RatingHistoryWindow,
+  range: RatingRange,
+  now: number,
+  windowStart: number,
+  pointTimes: number[],
+): XDomain {
+  const fullMin = Math.min(windowStart, ...pointTimes)
+  const full: XDomain = { xMin: fullMin, xMax: now, collapsed: false }
+
+  if (window.anchor || pointTimes.length === 0) return full
+
+  const minPoint = Math.min(...pointTimes)
+  const reach = now - minPoint
+  const rangeSpan = RANGE_DAYS[range] * DAY_MS
+  if (reach >= COLLAPSE_RANGE_FRACTION * rangeSpan) return full
+
+  const xMin = Math.min(minPoint, now - MIN_SPAN_FLOOR_MS)
+  return { xMin, xMax: now, collapsed: true }
+}
+
 /**
  * The chart, projected out of one window of rating history.
  *
@@ -347,14 +437,18 @@ export function selectRatingChart(
   now: number = Date.now(),
 ): ChartView {
   const windowStart = now - RANGE_DAYS[range] * DAY_MS
-  // The domain's left edge: the window's, stretched back to take in any point
-  // older than it (see above — that is the previous range's line, held on screen
-  // while this one loads).
-  const xMin = Math.min(
+  const pointTimes = window.points.map((point) => Date.parse(point.at))
+  // The domain: the calendar window, stretched back to take in any point older
+  // than it (the previous range's line, held on screen while this one loads) —
+  // OR, when the data has collapsed against the right edge, zoomed to fit it
+  // (#957). See `xDomain`.
+  const { xMin, xMax, collapsed } = xDomain(
+    window,
+    range,
+    now,
     windowStart,
-    ...window.points.map((point) => Date.parse(point.at)),
+    pointTimes,
   )
-  const xMax = now
   const xSpan = Math.max(1, xMax - xMin)
   const drawn = vertices(window, xMin, now)
 
@@ -387,6 +481,20 @@ export function selectRatingChart(
     first && last
       ? `${line} L${last.x} ${baseline} L${first.x} ${baseline} Z`
       : ''
+
+  // The genuinely-single-instant fallback (#957): the zoom branch was taken, yet
+  // even the floored domain has not separated the drawn vertices — every match is
+  // at one instant ≈ now, so the line is a sub-pixel spike. The card shows an
+  // "N matches today" label rather than draw it. Measured on the DRAWN x-extent,
+  // not the raw timestamps, so it is exactly "did the zoom fail to fan them".
+  const drawnXs = coords.map((point) => point.x)
+  const drawnXExtent = drawnXs.length
+    ? Math.max(...drawnXs) - Math.min(...drawnXs)
+    : 0
+  const singleInstant =
+    collapsed && drawnXExtent < SINGLE_INSTANT_MIN_SPAN
+      ? { matchCount: window.points.length }
+      : null
 
   const currentVertex = drawn.at(-1)
   // The peak of the DRAWN line, anchor included — not `window.peak` read straight
@@ -425,6 +533,7 @@ export function selectRatingChart(
     ],
     summary: summarize(window, range),
     change: changeChip(window.change),
+    singleInstant,
   }
 }
 

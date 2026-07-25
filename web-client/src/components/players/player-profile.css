@@ -2054,6 +2054,19 @@
   display: block;
 }
 
+/* The whole history is one instant (#957): a calendar axis can't fan N matches
+ * played at the same moment, so the plot states the fact rather than draw a
+ * sub-pixel spike. Sized like the pending slot so the card doesn't jump. */
+.rating-chart__single-instant {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+
 /* No rating, no chart (CONTEXT.md, "Rating"): the slot says what would end that,
  * rather than drawing an axis with nothing on it. */
 .rating-chart__unrated {
