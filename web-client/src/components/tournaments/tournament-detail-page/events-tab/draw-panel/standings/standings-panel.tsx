@@ -1,8 +1,8 @@
-import { Trophy } from 'lucide-react'
 import { useId } from 'react'
 
 import { eventStandings } from '../../../../data/standings'
 import type { TournamentEvent } from '../../../../data/types'
+import { ChampionBanner } from '../champion-banner'
 import { PoolStandingsTable } from './pool-standings-table'
 
 export interface StandingsPanelProps {
@@ -61,14 +61,10 @@ export const StandingsPanel = ({ event }: StandingsPanelProps) => {
           Alert: it is not the app talking back to an action and it does not dismiss, it is
           a fact about the finished event. Shown only when there IS one champion. */}
       {standings.complete && standings.champion !== null && (
-        <p
-          data-testid={`standings-champion-${event.id}`}
-          className="mt-1.5 flex items-center gap-1.5 rounded-[10px] border border-[color:rgba(255,122,26,0.3)] bg-[color:var(--bg-accent-soft)] px-3 py-2 text-[13px] font-medium text-[color:var(--fg-1)] [box-shadow:var(--shadow-glow)]"
-        >
-          <Trophy size={14} className="text-[color:var(--ball-500)]" />
-          <span className="text-[color:var(--fg-3)]">Champion</span>
-          <span className="text-[color:var(--ball-500)]">{standings.champion}</span>
-        </p>
+        <ChampionBanner
+          name={standings.champion}
+          testId={`standings-champion-${event.id}`}
+        />
       )}
 
       <div className="mt-2 flex flex-col gap-2.5">

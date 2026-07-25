@@ -12,6 +12,7 @@ import {
 
 import { eventFinishes } from '../../../../data/finishes'
 import type { TournamentEvent } from '../../../../data/types'
+import { ChampionBanner } from '../champion-banner'
 
 export interface FinishesPanelProps {
   event: TournamentEvent
@@ -62,14 +63,10 @@ export const FinishesPanel = ({ event }: FinishesPanelProps) => {
           treatment as the standings champion). Shown only when the final is decided and
           there is a champion. */}
       {finishes.complete && finishes.champion !== null && (
-        <p
-          data-testid={`finishes-champion-${event.id}`}
-          className="mt-1.5 flex items-center gap-1.5 rounded-[10px] border border-[color:rgba(255,122,26,0.3)] bg-[color:var(--bg-accent-soft)] px-3 py-2 text-[13px] font-medium text-[color:var(--fg-1)] [box-shadow:var(--shadow-glow)]"
-        >
-          <Trophy size={14} className="text-[color:var(--ball-500)]" />
-          <span className="text-[color:var(--fg-3)]">Champion</span>
-          <span className="text-[color:var(--ball-500)]">{finishes.champion}</span>
-        </p>
+        <ChampionBanner
+          name={finishes.champion}
+          testId={`finishes-champion-${event.id}`}
+        />
       )}
 
       {/* A real `<table>`, like the standings: placement is tabular data (a position and a

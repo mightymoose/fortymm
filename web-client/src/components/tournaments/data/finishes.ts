@@ -19,7 +19,7 @@
 // All of it is a pure function of one event, so it is unit-tested (`./finishes.test.ts`)
 // rather than asserted through a DOM.
 
-import { WITHDRAWN_LABEL } from './draw'
+import { nameByEntryId, nameOf } from './entrant-names'
 import type { FinishRow, TournamentEvent } from './types'
 
 /** One placement line, ready to render: the server's finish row, the entrant's name joined
@@ -50,13 +50,6 @@ export interface FinishesView {
   /** The champion's username when the final is decided, else `null` — the server's own
    * `champion`, joined to a name. */
   champion: string | null
-}
-
-/** Join one entry id to a display name. An id the event no longer lists is a withdrawal
- * (`WITHDRAWN_LABEL`, shared with `./draw` and `./standings`) — never a blank, and never the
- * raw id. */
-function nameOf(entryId: string, byId: Map<string, string>): string {
-  return byId.get(entryId) ?? WITHDRAWN_LABEL
 }
 
 /** `1 → "1st"`, `2 → "2nd"`, `3 → "3rd"`, `21 → "21st"` — English ordinal, for a position
@@ -93,7 +86,7 @@ export function eventFinishes(event: TournamentEvent): FinishesView | null {
   const results = event.results
   if (results === null || results.kind !== 'finishes') return null
 
-  const nameByEntryId = new Map(event.entrants.map((e) => [e.id, e.username]))
+  const names = nameByEntryId(event)
 
   // How many finishes share each position — the tie test. A partially-played bracket sends
   // only the finishes so far, so this counts exactly what is on the wire, never a full field.
@@ -106,7 +99,7 @@ export function eventFinishes(event: TournamentEvent): FinishesView | null {
     const tied = (countByPosition.get(row.position) ?? 0) > 1
     return {
       ...row,
-      name: nameOf(row.entryId, nameByEntryId),
+      name: nameOf(row.entryId, names),
       tied,
       isChampion: row.position === 1,
       positionLabel: tied ? `T${row.position}` : ordinal(row.position),
@@ -117,6 +110,6 @@ export function eventFinishes(event: TournamentEvent): FinishesView | null {
     finishes,
     complete: results.complete,
     champion:
-      results.champion === null ? null : nameOf(results.champion, nameByEntryId),
+      results.champion === null ? null : nameOf(results.champion, names),
   }
 }

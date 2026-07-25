@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import Side, SideFill, strategy_for
+from app.draws import Side, SideFill, ready_fixtures, strategy_for
 from app.models import (
     Match,
     MatchSettings,
@@ -83,11 +83,13 @@ async def materialize_event(
     fixture made ready by a decided one becomes a match at once.
 
     It applies ``advance()``'s ``side_fills`` **before** deciding readiness, then
-    re-runs ``advance()`` over the now-filled state so a fixture the fills just made
-    whole (single-elim seating a decided fixture's winner onto its successor, #785) is
-    materialized into a match in the **same** transaction. For round-robin — the only
-    other strategy today — the plan carries no side-fills at all (every pairing is known
-    at the cut), so that step is a no-op and its behaviour is byte-identical.
+    recomputes readiness (via ``app.draws.ready_fixtures`` — the same helper
+    ``advance()`` reports in ``ready_fixture_ids``) over the now-filled state so a
+    fixture the fills just made whole (single-elim seating a decided fixture's winner
+    onto its successor, #785) is materialized into a match in the **same** transaction.
+    For round-robin — the only other strategy today — the plan carries no side-fills at
+    all (every pairing is known at the cut), so that step is a no-op and its behaviour
+    is byte-identical.
     """
     fixtures = (
         (
@@ -114,22 +116,21 @@ async def materialize_event(
     fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
     for fill in plan.side_fills:
         _apply_side_fill(fixtures_by_id[fill.fixture_id], fill)
-    # Readiness is decided by ``advance()`` again — not a hand-rolled "both sides
-    # known?" — now over the just-filled state, so the one definition of readiness is
-    # honoured and a fixture the fills completed is seen ready here. Fills only add
-    # sides (never a match or a winner), so this second plan's ready set is a superset
-    # of the first's and carries no fills the loop above did not already apply.
-    ready = set(
-        strategy.advance([fixture_state(f) for f in fixtures]).ready_fixture_ids
-    )
-    ready_fixtures = [f for f in fixtures if f.id in ready]
-    if not ready_fixtures:
+    # Readiness is decided by ``ready_fixtures`` — the shared helper ``advance()``
+    # itself returns as ``ready_fixture_ids``, not a hand-rolled "both sides known?" —
+    # now over the just-filled state, so the one definition of readiness is honoured and
+    # a fixture the fills completed is seen ready here. Fills only add sides (never a
+    # match or a winner), so this recomputed ready set is a superset of the first
+    # plan's and needs no second side-fill pass beyond the loop above.
+    ready = set(ready_fixtures([fixture_state(f) for f in fixtures]))
+    ready_fixture_rows = [f for f in fixtures if f.id in ready]
+    if not ready_fixture_rows:
         return
 
-    entry_users = await _entry_user_ids(db, ready_fixtures)
+    entry_users = await _entry_user_ids(db, ready_fixture_rows)
     settings = EventMatchSettings.model_validate(event.match_settings)
     built: list[tuple[TournamentFixture, Match]] = []
-    for fixture in ready_fixtures:
+    for fixture in ready_fixture_rows:
         # A ready fixture always has both sides known (that is what "ready" means); the
         # guard narrows the Optional for the type checker and can never actually skip a
         # fixture ``advance()`` reported ready.
