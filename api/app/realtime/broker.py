@@ -44,6 +44,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 from redis.asyncio.client import PubSub
+from redis.exceptions import RedisError
 
 from app.realtime.events import EventKind, RealtimeEvent, user_channel
 
@@ -161,10 +162,17 @@ class RealtimeBroker:
         is a scheduling-width window in which hints for it are published into a
         channel nobody is listening on yet. Best-effort: if Redis is down at
         boot the loop's backoff picks it up (and everyone attached by then gets
-        a resync when it comes back)."""
+        a resync when it comes back).
+
+        "Best-effort" means *Redis being unreachable*, and only that: a
+        ``RedisError`` (redis-py's root, covering the SUBSCRIBE round trip) or a
+        raw ``OSError`` from the socket. A boot that fails for any other reason —
+        a client that is not a client, a broken ``pubsub()`` — is a wiring bug
+        that would otherwise start a dispatch loop doomed to log the same
+        exception once a second forever, so it is left to crash the lifespan."""
         if self._task is not None:
             return
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(RedisError, OSError):
             await self._connect()
         self._task = asyncio.create_task(self._dispatch_loop())
 
@@ -276,9 +284,20 @@ class RealtimeBroker:
     async def _dispatch_loop(self) -> None:
         """The process's single reader. Survives Redis going away.
 
-        Same shape as ``app.match_calls.pin_tick_loop``: a broad guard around
-        the body with a log and a backoff, and ``CancelledError`` (not an
-        ``Exception``) left to propagate so shutdown is clean.
+        Same shape as ``app.match_calls.pin_tick_loop`` (``app/match_calls.py``,
+        the ``except Exception`` at line 1249): a broad guard around the body with
+        a log and a backoff, and ``CancelledError`` (not an ``Exception``) left to
+        propagate so shutdown is clean.
+
+        This is the one place in the module where broad is the point rather than
+        laziness. The narrow set — ``RedisError``/``OSError`` — is what we *expect*,
+        but an unhandled anything here does not fail one hint: it ends the
+        process's only reader, and every attached stream then sits believing it is
+        live while messages vanish, which is the exact silent-drop failure the
+        module docstring is built to avoid. So the loop absorbs a programming
+        error too; the difference from a swallow is that ``log.exception`` prints
+        the whole traceback and the loop keeps announcing it every
+        ``reconnect_delay`` until someone fixes it.
         """
         while True:
             try:
@@ -286,7 +305,7 @@ class RealtimeBroker:
                 await self._pump()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 -- the loop's boundary: a flap costs a reconnect, never the loop
+            except Exception:  # noqa: BLE001 -- the loop's boundary; see the docstring
                 log.exception(
                     "Realtime dispatch failed; reconnecting in %.1fs",
                     self._reconnect_delay,
@@ -357,15 +376,26 @@ class RealtimeBroker:
                 attachment.push(kind)
 
     async def _discard_pubsub(self) -> None:
+        """Throw the pub/sub connection away. Total by contract — see below."""
         async with self._lock:
             pubsub, self._pubsub = self._pubsub, None
             if pubsub is None:
                 return
             self._resync_on_connect = True
-        # Deliberately broad: we are discarding an already-suspect connection,
-        # so anything the close raises is about that connection and is exactly
-        # what we came here to get rid of. The alternative — letting it out —
-        # would abort a lifespan shutdown or bounce the dispatch loop's backoff.
+        # Deliberately broad, and it has to be: this runs *inside* the dispatch
+        # loop's own recovery handler (``_dispatch_loop``, above), so anything
+        # escaping here escapes the loop's guard entirely and kills the reader —
+        # the silent-drop failure that guard exists to prevent. The other caller
+        # is ``close()``, where an escape aborts a lifespan shutdown.
+        #
+        # Named expectations: ``RedisError`` (redis-py's ``TimeoutError`` when
+        # the socket won't close in time) and ``OSError``. Beyond those,
+        # ``PubSub.aclose`` reaches ``asyncio.timeout`` and the writer, which on
+        # a loop being torn down raise ``RuntimeError`` ("Event loop is closed",
+        # redis-py#3856) — not nameable as one family. Swallowing even a genuine
+        # bug is still right here because the object is being *discarded*: its
+        # state after a failed close cannot matter, we already dropped the only
+        # reference.
         with contextlib.suppress(Exception):
             # redis-py's PubSub.aclose carries no annotations.
             await pubsub.aclose()  # type: ignore[no-untyped-call]

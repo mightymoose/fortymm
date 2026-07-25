@@ -117,10 +117,22 @@ def _publish_staged_hints(session: Session) -> None:
     event-loop thread inside ``await db.commit()``, so a per-hint publish would
     make a 32-entrant go-live a 32-round-trip stall on that loop; the fan-out
     the outbox exists to collect is exactly the fan-out worth batching.
+
+    The guard below is the module's one deliberate blanket catch, and it is the
+    same one — for the same reason — that
+    ``app.notifications.service.enqueue_notification_job``
+    (``app/notifications/service.py``, the ``except Exception`` at line 306) uses:
+    this runs after the COMMIT has already landed, so *any* escape reports a
+    durable write as failed. Narrowing it would only move which exceptions get
+    to do that. It is deliberately the outer of two: ``publish_events`` catches
+    the transport itself (``RedisError``/``OSError``) and logs the specific
+    "Failed to publish realtime hints"; what reaches here is a bug — in the
+    publisher, in ``_take_staged``, in a staged tuple — and gets a traceback under
+    its own distinct message rather than being disguised as a Redis blip.
     """
     try:
         publish_events(_take_staged(session))
-    except Exception:  # noqa: BLE001 -- post-COMMIT: an escape would fail an already-committed write
+    except Exception:  # noqa: BLE001 -- post-COMMIT; see the docstring
         log.exception("Failed to flush staged realtime hints after commit")
 
 
@@ -134,8 +146,9 @@ def _discard_staged_hints(
     ``after_soft_rollback`` fires even when the transaction never reached the
     connection, which is the common case for the ``await db.rollback()``
     guard-clause style — ``after_rollback`` alone would leak the hints.
+
+    Unguarded, unlike its ``after_commit`` twin, because there is nothing here to
+    guard: ``pop`` with a default is total over ``Session.info``'s dict, so the
+    only exception a ``try`` could catch is one no rollback path can produce.
     """
-    try:
-        session.info.pop(STAGED_HINTS_KEY, None)
-    except Exception:  # noqa: BLE001 -- a rollback path must not raise on top of whatever caused it
-        log.exception("Failed to discard staged realtime hints on rollback")
+    session.info.pop(STAGED_HINTS_KEY, None)

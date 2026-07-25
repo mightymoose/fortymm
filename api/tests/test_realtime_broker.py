@@ -187,6 +187,42 @@ def test_publish_event_swallows_redis_failure(monkeypatch, caplog) -> None:
     assert "Failed to publish realtime" in caplog.text
 
 
+def test_publish_event_swallows_a_raw_socket_failure(monkeypatch, caplog) -> None:
+    """``redis.exceptions.RedisError`` does **not** derive from the builtin
+    ``OSError``, so naming only the former would let a socket/DNS failure that
+    reaches us before redis-py wraps it fail the write that triggered the hint."""
+
+    def _boom() -> Any:
+        raise ConnectionError("connection refused")  # the builtin, i.e. an OSError
+
+    monkeypatch.setattr(publisher_module, "_connection", _boom)
+    with caplog.at_level(logging.ERROR, logger="uvicorn.error"):
+        assert publish_event(uuid.uuid4(), EventKind.dashboard_changed) is False
+    assert "Failed to publish realtime" in caplog.text
+
+
+def test_publish_event_lets_a_programming_error_propagate(monkeypatch, caplog) -> None:
+    """The other half of fire-and-forget: only the *transport* is swallowed.
+
+    A blanket catch here reports a ``TypeError`` from a malformed hint — or an
+    ``AttributeError`` from a mis-wired client — as "Failed to publish realtime
+    hints" and returns ``False``, which is indistinguishable from a Redis blip
+    and which nothing branches on. That bug would be invisible forever, so it
+    has to come out. (Post-commit, ``app.realtime.outbox`` still stops it from
+    failing an already-committed write — under its own distinct message.)
+    """
+
+    class _NotAClient:
+        def pipeline(self, transaction: bool = True) -> Any:
+            raise TypeError("'NoneType' object is not iterable")
+
+    monkeypatch.setattr(publisher_module, "_connection", _NotAClient)
+    with caplog.at_level(logging.ERROR, logger="uvicorn.error"):
+        with pytest.raises(TypeError):
+            publish_event(uuid.uuid4(), EventKind.dashboard_changed)
+    assert "Failed to publish realtime" not in caplog.text
+
+
 # --- proves 1: per-user isolation ----------------------------------------
 
 

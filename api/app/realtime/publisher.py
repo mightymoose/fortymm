@@ -30,12 +30,19 @@ The memo is keyed by pid as well as URL because the RQ worker forks per job: a
 client inherited across ``fork`` would share a socket with the parent. Publishes
 happen in the child, which therefore builds its own on first use.
 
-Failure is swallowed on purpose. A hint is an optimization over the client's
-existing refetch-on-navigation freshness, so a Redis hiccup must degrade the
-dashboard to its pre-realtime behaviour rather than fail the write that
+*Transport* failure is swallowed on purpose. A hint is an optimization over the
+client's existing refetch-on-navigation freshness, so a Redis hiccup must degrade
+the dashboard to its pre-realtime behaviour rather than fail the write that
 triggered it — the contract ``app.notifications.service.enqueue_notification_job``
 already establishes. Callers get a ``bool`` if they want to assert on it in a
 test; nothing in a request path should branch on it.
+
+Swallowed is not the same as blanket, though. Only the transport is caught
+(:class:`redis.exceptions.RedisError` and :class:`OSError`, see
+:func:`publish_events`); a ``TypeError`` from a malformed :data:`Hint` or an
+``AttributeError`` from a mis-wired client is a bug in *us*, and logging it as
+"Failed to publish realtime hints" would make it indistinguishable from a Redis
+blip forever — nothing branches on the ``False``. Those propagate.
 
 ``REDIS_URL`` is read here rather than added to ``app.config.Settings``,
 matching ``app/queue.py``'s grandfathered status: the publisher must be
@@ -50,6 +57,7 @@ from collections.abc import Sequence
 from functools import lru_cache
 
 from redis import Redis
+from redis.exceptions import RedisError
 
 from app.realtime.events import EventKind, RealtimeEvent, user_channel
 
@@ -105,6 +113,13 @@ def publish_events(hints: Sequence[Hint]) -> bool:
     ``transaction=False``: the commands are independent idempotent
     invalidations, so wrapping them in MULTI/EXEC would buy atomicity nobody
     needs and cost two extra commands.
+
+    Only the *transport* is caught. ``RedisError`` is redis-py's own root — every
+    way a connect/AUTH/round trip can fail (``ConnectionError``, its
+    ``TimeoutError``, ``ResponseError``) derives from it, and it deliberately does
+    **not** derive from the builtin ``OSError``; ``OSError`` is here for the
+    socket/DNS failure that reaches us before redis-py wraps it. A ``TypeError``
+    or ``AttributeError`` is not a Redis outage and must not be reported as one.
     """
     if not hints:
         return True
@@ -114,7 +129,7 @@ def publish_events(hints: Sequence[Hint]) -> bool:
             event = RealtimeEvent(kind=kind)
             pipeline.publish(user_channel(user_id), event.model_dump_json())
         pipeline.execute()
-    except Exception:  # noqa: BLE001 -- fire-and-forget: a hint must never fail its write
+    except (RedisError, OSError):
         log.exception(
             "Failed to publish realtime hints (%d) for %d user(s)",
             len(hints),
