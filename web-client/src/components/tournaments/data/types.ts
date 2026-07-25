@@ -407,4 +407,11 @@ export interface Tournament {
    * the boundary by `./solve`; read it, never write it — a new row appears only
    * through `POST …/schedule/solves` (or the server's own triggers). */
   latestScheduleSolve: ScheduleSolve | null
+  /** How far this tournament's venue is from the point the list query was given a
+   * location for — a non-negative haversine distance in **miles** — or `null` when the
+   * query sent no location (the default list, and the detail payload). The server
+   * computes it (`distance_miles`) and this client only reads it, parsed at the boundary
+   * by `./api`. Optional because the tournaments the app builds from seeds/drafts carry
+   * no distance; a mapped API row always sets it (to `null` when no location was sent). */
+  distanceMiles?: number | null
 }

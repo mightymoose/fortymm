@@ -1,3 +1,4 @@
+import type { APIResponse } from '@playwright/test'
 import type { Guest } from './match-api'
 
 // Composed-stack API helpers for provisioning the **inert scaffolding** of a
@@ -45,6 +46,29 @@ export interface TableSpec {
   readonly court: string
 }
 
+/** A venue's six free-text address components (`AddressInput` on the wire). The
+ * server geocodes these to coordinates at write time via the injected
+ * `Geocoder` — the compose stack sets no `GOOGLE_GEOCODING_API_KEY`, so that is
+ * the deterministic, network-free `FakeGeocoder`, which maps the composed
+ * address string to stable coords by SHA-256. Two *different* addresses
+ * therefore geocode to two different, stable points — which is exactly what the
+ * near-me filter spec needs to place a venue at a known distance from another. */
+export interface AddressInput {
+  readonly venue: string
+  readonly street: string
+  readonly city: string
+  readonly region: string
+  readonly postal: string
+  readonly country: string
+}
+
+/** A venue's stored coordinates as geocoded server-side and read back off the
+ * tournament's `address` value-object — both NOT NULL by the ADR. */
+export interface Coords {
+  readonly latitude: number
+  readonly longitude: number
+}
+
 /** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
  * shape (one table, one pool, a far-future window), so existing specs are
  * untouched; the solver-schedule spec overrides both — its pool window must
@@ -61,6 +85,11 @@ export interface SeedTournamentOptions {
    * the real solver returns a fast, clean "fits" verdict rather than an
    * over-the-cap `unknown`. */
   readonly maxPlayers?: number
+  /** The venue address the server geocodes to the tournament's coordinates.
+   * Defaults to a single fixed address (so existing specs are untouched); the
+   * near-me spec passes two *distinct* addresses so the two tournaments land at
+   * two different, stable `FakeGeocoder` points. */
+  readonly address?: AddressInput
 }
 
 /** A seeded tournament and the ids a spec needs to address it and its event. */
@@ -93,19 +122,20 @@ export async function seedTournament(
 ): Promise<SeededTournament> {
   const slot = options.slot ?? { date: '2026-08-01', start: '09:00', end: '17:00' }
   const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
+  const address = options.address ?? {
+    venue: 'Test Arena',
+    street: '1 Test Way',
+    city: 'Testville',
+    region: 'TS',
+    postal: '00000',
+    country: 'Testland',
+  }
 
   const tournamentRes = await director.ctx.post(`${API}/tournaments`, {
     headers: { [CSRF_HEADER]: director.csrf },
     data: {
       name,
-      address: {
-        venue: 'Test Arena',
-        street: '1 Test Way',
-        city: 'Testville',
-        region: 'TS',
-        postal: '00000',
-        country: 'Testland',
-      },
+      address,
       // The pool references these tables by id, so the catalogue must carry them.
       table_catalogue: tables,
     },
@@ -393,4 +423,75 @@ export async function callFixture(
   if (res.status() !== 200) {
     throw new Error(`call fixture failed: ${res.status()} ${await res.text()}`)
   }
+}
+
+/**
+ * Read back the coordinates the server geocoded a tournament's venue to, off the
+ * detail read's `address` value-object (`GET /v1/tournaments/{id}`).
+ *
+ * The near-me spec's whole method rests on this: the `FakeGeocoder` is
+ * deterministic but its SHA-256 mapping from address to lat/lng is not something
+ * a spec should reproduce or hardcode — so a spec seeds an address, then *reads
+ * the coordinates back* here and computes its query point/radius from the real,
+ * stored numbers. That keeps the assertion robust to the actual coords rather
+ * than a guessed literal.
+ */
+export async function getVenueCoords(
+  viewer: Guest,
+  tournamentId: string,
+): Promise<Coords> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  const { address } = (await res.json()) as { address: Coords }
+  return { latitude: address.latitude, longitude: address.longitude }
+}
+
+/** One row of the tournament list, scoped to the near-me facts a spec reads:
+ * which tournament (`id`) and its server-computed `distance_miles` from the
+ * query point (a haversine great-circle distance, in miles; `null` on any read
+ * that was not location-filtered). */
+export interface NearMeListing {
+  readonly id: string
+  readonly distance_miles: number | null
+}
+
+/** The all-or-nothing near-me query triple the list endpoint accepts: a point
+ * plus a radius, in miles. Supplying a partial triple is a 422 by design. */
+export interface NearMeQuery {
+  readonly lat: number
+  readonly lng: number
+  readonly radiusMiles: number
+}
+
+/** Raw `GET /v1/tournaments` with an arbitrary (possibly partial) near-me query,
+ * returning the `APIResponse` so a spec can assert on its status — e.g. that a
+ * partial `lat`/`lng`/`radius_miles` triple is a 422. */
+export async function listTournamentsRaw(
+  viewer: Guest,
+  params: Record<string, string | number>,
+): Promise<APIResponse> {
+  return viewer.ctx.get(`${API}/tournaments`, { params })
+}
+
+/**
+ * List the tournaments within `radiusMiles` of `(lat, lng)` — the near-me filter
+ * through the real API — returning each surviving row's id and its
+ * server-computed `distance_miles`. Only the near-me slice is parsed; the cards'
+ * other fields are the browser's concern, not this seam's.
+ */
+export async function listTournamentsNearMe(
+  viewer: Guest,
+  query: NearMeQuery,
+): Promise<ReadonlyArray<NearMeListing>> {
+  const res = await listTournamentsRaw(viewer, {
+    lat: query.lat,
+    lng: query.lng,
+    radius_miles: query.radiusMiles,
+  })
+  if (!res.ok()) {
+    throw new Error(`near-me list failed: ${res.status()} ${await res.text()}`)
+  }
+  return (await res.json()) as ReadonlyArray<NearMeListing>
 }

@@ -604,7 +604,54 @@ function readEvent(event: StoredEvent): TournamentEventRead {
 }
 
 function readDetail(t: StoredTournament): TournamentDetailRead {
-  return { ...t, events: t.events.map(readEvent) }
+  // `distance_miles` is a property of a *near-me* read, not of the tournament: the
+  // default list and every detail read carry `null` (no location was asked about),
+  // exactly as the server sends it. `listTournaments` overwrites it for the rows a
+  // near-me query keeps.
+  return { ...t, events: t.events.map(readEvent), distance_miles: null }
+}
+
+// ----- near-me filtering (mirrors the API's haversine) ---------------------
+//
+// The list can be scoped to tournaments **near a point** (the all-or-nothing
+// `lat`/`lng`/`radius_miles` triple): only venues within `radius_miles` come back, each
+// carrying its `distance_miles`. The store computes that distance the way the server does
+// — a haversine over the coords each address already stores (`geocodeAddress`) — so
+// `npm run dev` and vitest exercise real filtering with no backend behind them.
+
+/** A location + radius the list is scoped to. All three fields or none: the handler
+ * enforces the all-or-nothing contract at the boundary, so by the time a filter reaches
+ * here it is complete. */
+export type NearMeFilter = {
+  lat: number
+  lng: number
+  radiusMiles: number
+}
+
+/** Earth's mean radius in miles — the SAME constant the API's haversine uses, so a mock
+ * `distance_miles` rounds to the value the real server would send. */
+const EARTH_RADIUS_MILES = 3958.8
+
+const toRadians = (deg: number): number => (deg * Math.PI) / 180
+
+/** Great-circle distance in miles between two `(lat, lng)` points, rounded to one decimal
+ * — the API's `distance_miles` precision. Mirrors the server's haversine so a mock card
+ * shows the distance the real card would. */
+function haversineMiles(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number,
+): number {
+  const dLat = toRadians(bLat - aLat)
+  const dLng = toRadians(bLng - aLng)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(aLat)) *
+      Math.cos(toRadians(bLat)) *
+      Math.sin(dLng / 2) ** 2
+  const miles = 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h))
+  return Math.round(miles * 10) / 10
 }
 
 /** Reset the store to its seed — used by the dev worker bootstrap if needed, and
@@ -662,12 +709,29 @@ function isVisible(t: StoredTournament): boolean {
 }
 
 /** The list, newest-created first (mirrors the API's ordering) — and scoped to what
- * the dev user may see: another organiser's draft never appears. */
-export function listTournaments(): TournamentDetailRead[] {
-  return tournaments
+ * the dev user may see: another organiser's draft never appears.
+ *
+ * Pass `nearMe` to scope it to venues **within the radius of a point**: each surviving
+ * row carries its `distance_miles` (a haversine from that point to its venue), and the
+ * ones outside the radius are dropped — the server's near-me contract. Omit it and every
+ * visible tournament comes back with `distance_miles` null (via `readDetail`). */
+export function listTournaments(nearMe?: NearMeFilter): TournamentDetailRead[] {
+  const visible = tournaments
     .filter(isVisible)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(readDetail)
+  if (!nearMe) return visible
+  return visible
+    .map((t) => ({
+      ...t,
+      distance_miles: haversineMiles(
+        nearMe.lat,
+        nearMe.lng,
+        t.address.latitude,
+        t.address.longitude,
+      ),
+    }))
+    .filter((t) => t.distance_miles <= nearMe.radiusMiles)
 }
 
 /** A single tournament's detail, or `undefined` if it is missing **or hidden**.

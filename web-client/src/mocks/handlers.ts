@@ -53,6 +53,7 @@ import {
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
+  type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
   transitionTournament,
@@ -1039,6 +1040,33 @@ function notNull<T>(value: T | null): value is T {
   return value !== null
 }
 
+/** Parse the list's near-me triple off the query string. The API's `lat`/`lng`/
+ * `radius_miles` are ALL-OR-NOTHING (they describe one location filter, not three
+ * independent knobs), so a partial triple is a 422 there and here. Returns `{}` when none
+ * are present (the default list), a `filter` when all three are, or an `error` string when
+ * some — but not all — are. A non-numeric value is treated as present-but-invalid, so it
+ * cannot silently drop out and turn a partial triple into a valid pair. */
+function parseNearMe(params: URLSearchParams):
+  | { filter?: NearMeFilter; error?: undefined }
+  | { error: string; filter?: undefined } {
+  const raw = [
+    params.get('lat'),
+    params.get('lng'),
+    params.get('radius_miles'),
+  ]
+  const present = raw.filter(notNull)
+  if (present.length === 0) return {}
+  if (present.length < 3 || present.some((v) => !Number.isFinite(Number(v)))) {
+    return {
+      error:
+        'lat, lng and radius_miles must be sent together as valid numbers — a location ' +
+        'filter is all-or-nothing.',
+    }
+  }
+  const [lat, lng, radiusMiles] = raw.map(Number)
+  return { filter: { lat, lng, radiusMiles } }
+}
+
 export const handlers = [
   http.get('*/v1/health', async () => {
     await delay(400)
@@ -1675,9 +1703,14 @@ export const handlers = [
   // announced tournaments plus the dev user's own, so the seeded foreign draft is
   // missing from the list and 404s (not 403s) on detail — no branch here, because
   // `findTournament` simply does not find it.
-  http.get('*/v1/tournaments', async () => {
+  http.get('*/v1/tournaments', async ({ request }) => {
     await delay(250)
-    return HttpResponse.json(listTournaments())
+    const near = parseNearMe(new URL(request.url).searchParams)
+    // The near-me triple is ALL-OR-NOTHING on the server: a partial one is a 422, not a
+    // silent default. The mock mirrors that so a UI that sent, say, a lat with no radius
+    // meets the same wall in `npm run dev` and vitest that it would in production.
+    if (near.error) return detail(near.error, 422)
+    return HttpResponse.json(listTournaments(near.filter))
   }),
   http.post('*/v1/tournaments', async ({ request }) => {
     await delay(250)

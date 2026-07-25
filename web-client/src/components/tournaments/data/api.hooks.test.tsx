@@ -107,6 +107,54 @@ describe('useTournaments', () => {
       tableIds: ['t1', 't2', 't3', 't4'],
     })
   })
+
+  // The near-me filter (chore 3a): a location + radius goes on the wire as the API's
+  // all-or-nothing `lat`/`lng`/`radius_miles` triple, and each row's server-computed
+  // `distance_miles` is parsed onto `distanceMiles`.
+  it('sends lat/lng/radius_miles and surfaces the parsed distanceMiles when given a location', async () => {
+    let seenUrl = ''
+    mockTournamentsListEndpoint(server, ({ request }) => {
+      seenUrl = request.url
+      return HttpResponse.json([
+        buildTournamentDetailRead({
+          id: 't-1',
+          name: 'Bay Area Open 2026',
+          distance_miles: 4.2,
+        }),
+      ])
+    })
+
+    const { result } = renderHook(() =>
+      useTournaments({ lat: 37.7749, lng: -122.4194, radiusMiles: 25 }),
+    )
+
+    await waitFor(() => expect(result.current).toHaveLength(1))
+
+    const params = new URL(seenUrl).searchParams
+    expect(params.get('lat')).toBe('37.7749')
+    expect(params.get('lng')).toBe('-122.4194')
+    expect(params.get('radius_miles')).toBe('25')
+    // The server-computed haversine distance, parsed at the boundary (`./api`).
+    expect(result.current[0].distanceMiles).toBe(4.2)
+  })
+
+  // Absent a location the request is EXACTLY the default list — no query params at all —
+  // and every row's `distanceMiles` is the designed `null` (the server sent none).
+  it('sends no query params for the default list, and surfaces distanceMiles null', async () => {
+    let seenUrl = ''
+    mockTournamentsListEndpoint(server, ({ request }) => {
+      seenUrl = request.url
+      return HttpResponse.json([buildTournamentDetailRead({ id: 't-1' })])
+    })
+
+    const { result } = renderHook(() => useTournaments())
+
+    await waitFor(() => expect(result.current).toHaveLength(1))
+
+    // No `?lat=…&lng=…&radius_miles=…` — the default list is unchanged.
+    expect(new URL(seenUrl).search).toBe('')
+    expect(result.current[0].distanceMiles).toBeNull()
+  })
 })
 
 describe('useTournament', () => {

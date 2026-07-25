@@ -7,8 +7,10 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 import { EmptyState } from './empty-state'
+import { NearMeControl } from './near-me-control'
 import { NewTournamentModal } from './new-tournament-modal'
 import { STATUS_FILTER_OPTIONS } from './data/options'
+import type { TournamentsNearMe } from './data/api'
 import type { Tournament } from './data/types'
 import { PageHeading } from './page-heading'
 import { TournamentCard } from './tournament-card'
@@ -21,6 +23,11 @@ export interface TournamentsListPageProps {
   /** Whether to surface the "New tournament" action — gated on the caller's
    * `tournament.create` permission. Creating 403s without it, so hide it. */
   canCreate: boolean
+  /** The "Near me" filter changed: the resolved `{ lat, lng, radiusMiles }`
+   * triple, or `undefined` when off/denied/unavailable. The route lifts this to
+   * where the list query is called so the query re-runs — the filtering is
+   * server-side, layered on top of the client-side name/status filters below. */
+  onNearMeChange: (nearMe: TournamentsNearMe | undefined) => void
 }
 
 type StatusFilter = (typeof STATUS_FILTER_OPTIONS)[number]['value']
@@ -33,6 +40,7 @@ export const TournamentsListPage = ({
   onCreate,
   onDelete,
   canCreate,
+  onNearMeChange,
 }: TournamentsListPageProps) => {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<StatusFilter>('all')
@@ -93,6 +101,7 @@ export const TournamentsListPage = ({
             ))}
           </TabsList>
         </Tabs>
+        <NearMeControl onNearMeChange={onNearMeChange} />
         <span className="flex-1" />
         <span className="font-mono text-[11px] text-[color:var(--fg-3)]">
           {filtered.length} {filtered.length === 1 ? 'result' : 'results'}

@@ -5,6 +5,7 @@ import {
   type TournamentsListPageProps,
 } from './tournaments-list-page'
 import { buildTournamentsListPageProps } from './tournaments-list-page.factory'
+import { nearMeControlPage } from './near-me-control.page'
 import { tournamentCardPage } from './tournament-card.page'
 
 const scoped = (container: Container) => ({
@@ -37,6 +38,8 @@ const scoped = (container: Container) => ({
   },
   /** Reuse the card delete control query. */
   ...tournamentCardPage.within(container),
+  /** The "Near me" toggle + radius picker live in the filter row. */
+  nearMe: nearMeControlPage.within(container),
 })
 
 /** Test page-object for `TournamentsListPage`. */
