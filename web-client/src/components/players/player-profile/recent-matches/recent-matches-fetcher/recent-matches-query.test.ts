@@ -118,6 +118,7 @@ describe('recentMatchesQuery', () => {
       ],
     })
     expect(row.delta).toEqual({
+      kind: 'change',
       label: '+12',
       ariaLabel: 'Gained 12 rating',
       tone: 'win',
@@ -129,8 +130,12 @@ describe('recentMatchesQuery', () => {
     const row = await selectRow(buildLossMatchRow())
 
     expect(row.status.tone).toBe('lost')
-    expect(row.delta?.label).toBe('-14')
-    expect(row.delta?.tone).toBe('loss')
+    expect(row.delta).toEqual({
+      kind: 'change',
+      label: '-14',
+      ariaLabel: 'Lost 14 rating',
+      tone: 'loss',
+    })
   })
 
   it('shows an em dash for the match that ESTABLISHED the rating', async () => {
@@ -141,7 +146,9 @@ describe('recentMatchesQuery', () => {
     // result and its score: the match was decided, it just moved no rating.
     const row = await selectRow(buildFirstRatedMatchRow())
 
-    expect(row.delta).toBeNull()
+    // The em-dash cell, named for THIS state — "Rating established", not the
+    // "No rating change" it once announced for all three no-move rows (#915).
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'Rating established' })
     expect(row.status).toEqual({ tone: 'lost', label: 'Lost' })
     expect(row.score.kind).toBe('games')
   })
@@ -160,8 +167,16 @@ describe('recentMatchesQuery', () => {
     expect(established.rating_change?.before).toBeNull()
     expect(established.rating_change?.after).toBe(1268)
 
-    expect((await selectRow(unrated)).delta).toBeNull()
-    expect((await selectRow(established)).delta).toBeNull()
+    // Both read `—`, but the em-dash cell now names WHICH: an unrated decided
+    // match moved no rating; the first rated one established one.
+    expect((await selectRow(unrated)).delta).toEqual({
+      kind: 'empty',
+      ariaLabel: 'No rating change',
+    })
+    expect((await selectRow(established)).delta).toEqual({
+      kind: 'empty',
+      ariaLabel: 'Rating established',
+    })
   })
 
   it('reports a live match as Live — no score, no delta', async () => {
@@ -171,7 +186,8 @@ describe('recentMatchesQuery', () => {
 
     expect(row.status).toEqual({ tone: 'live', label: 'Live' })
     expect(row.score).toEqual({ kind: 'text', text: 'Live' })
-    expect(row.delta).toBeNull()
+    // Undecided, so the em-dash cell says so — not "No rating change".
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'Not yet decided' })
   })
 
   it('tells an awaiting-acceptance match apart from a live one', async () => {
@@ -184,7 +200,7 @@ describe('recentMatchesQuery', () => {
       label: 'Awaiting acceptance',
     })
     expect(row.score).toEqual({ kind: 'text', text: 'Awaiting' })
-    expect(row.delta).toBeNull()
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'Not yet decided' })
   })
 
   it('reports an up-next match with an em dash where the score would go', async () => {
@@ -192,7 +208,7 @@ describe('recentMatchesQuery', () => {
 
     expect(row.status).toEqual({ tone: 'up_next', label: 'Up next' })
     expect(row.score).toEqual({ kind: 'text', text: '—' })
-    expect(row.delta).toBeNull()
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'Not yet decided' })
   })
 
   it('keeps a voided match, and lets it decide nothing', async () => {
@@ -200,7 +216,9 @@ describe('recentMatchesQuery', () => {
 
     expect(row.status).toEqual({ tone: 'voided', label: 'Voided' })
     expect(row.score).toEqual({ kind: 'text', text: '—' })
-    expect(row.delta).toBeNull()
+    // A voided match is decided — it reached a terminal state — so its em dash
+    // reads "No rating change", not "Not yet decided".
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'No rating change' })
   })
 
   it('has NO delta — not a "+0" — for a decided but UNRATED win', async () => {
@@ -211,7 +229,8 @@ describe('recentMatchesQuery', () => {
 
     expect(row.status.tone).toBe('won')
     expect(row.score.kind).toBe('games')
-    expect(row.delta).toBeNull()
+    // Decided, but unrated — nothing moved, so "No rating change".
+    expect(row.delta).toEqual({ kind: 'empty', ariaLabel: 'No rating change' })
   })
 
   it('carries the opponent’s id, so the row can link to their profile', async () => {

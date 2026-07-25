@@ -46,16 +46,26 @@ export function buildRecentMatchStatusView(
   return { tone: 'won', label: 'Won', ...overrides }
 }
 
-/** A rating gain from a decided, rated match. */
+/** A rating gain from a decided, rated match — the `change` variant. */
 export function buildRecentMatchDeltaView(
-  overrides: Partial<RecentMatchDeltaView> = {},
+  overrides: Partial<Extract<RecentMatchDeltaView, { kind: 'change' }>> = {},
 ): RecentMatchDeltaView {
   return {
+    kind: 'change',
     label: '+12',
     ariaLabel: 'Gained 12 rating',
     tone: 'win',
     ...overrides,
   }
+}
+
+/** An em-dash Δ cell — the `empty` variant, no signed figure. `ariaLabel`
+ * defaults to "No rating change"; pass "Not yet decided" / "Rating established"
+ * for the other two no-move states. */
+export function buildEmptyRecentMatchDeltaView(
+  overrides: Partial<Extract<RecentMatchDeltaView, { kind: 'empty' }>> = {},
+): RecentMatchDeltaView {
+  return { kind: 'empty', ariaLabel: 'No rating change', ...overrides }
 }
 
 /** A decided, rated **win**: a green dot, three game chips and a +12. Every
@@ -108,7 +118,7 @@ export function buildLiveRecentMatchRowView(
     id: LIVE_MATCH_ID,
     status: buildRecentMatchStatusView({ tone: 'live', label: 'Live' }),
     score: { kind: 'text', text: 'Live' },
-    delta: null,
+    delta: buildEmptyRecentMatchDeltaView({ ariaLabel: 'Not yet decided' }),
     ...overrides,
   })
 }

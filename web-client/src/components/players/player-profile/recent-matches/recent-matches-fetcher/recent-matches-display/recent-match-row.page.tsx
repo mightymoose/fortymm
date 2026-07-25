@@ -92,8 +92,10 @@ const scoped = (container: Container) => ({
   getScoreCell(opponent: string) {
     return cellsOf(container, opponent)[1]
   },
-  /** The Δ cell. Reads `—` for any row that moved no rating — undecided *or*
-   * unrated. Never "+0". */
+  /** The Δ cell. Reads `—` for any row that moved no rating — undecided,
+   * unrated, or a rating just established. Never "+0". The em-dash cell still
+   * carries a truthful accessible name naming which of those it is, so read the
+   * `role="img"` inside it for that. */
   getDeltaCell(opponent: string) {
     return cellsOf(container, opponent)[2]
   },

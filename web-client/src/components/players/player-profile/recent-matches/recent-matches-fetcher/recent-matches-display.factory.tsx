@@ -39,6 +39,7 @@ export function buildRecentMatchesView(
         }),
         status: buildRecentMatchStatusView({ tone: 'lost', label: 'Lost' }),
         delta: {
+          kind: 'change',
           label: '-14',
           ariaLabel: 'Lost 14 rating',
           tone: 'loss',
