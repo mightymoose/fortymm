@@ -23,11 +23,15 @@ export interface PaginationFooterProps {
   pageSize: number
   totalPages: number
   /**
-   * What the readout counts — "…of 26 **matches**", "…of 40 **players**".
-   * Required on purpose: this footer is shared across pages, and a default
-   * would let a new caller silently ship someone else's copy.
+   * The counted noun, in both grammatical numbers — "…of 1 **match**",
+   * "…of 26 **matches**", "…of 40 **players**". The footer prints `one` when
+   * `total` is exactly 1 and `other` otherwise, so a single-row result reads
+   * grammatically ("of 1 match", not the ungrammatical "of 1 matches").
+   *
+   * Both forms are required on purpose: this footer is shared across pages, and
+   * a default would let a new caller silently ship someone else's copy.
    */
-  noun: string
+  noun: { one: string; other: string }
 }
 
 /**
@@ -67,11 +71,16 @@ export const PaginationFooter = ({
   // page-1 token.
   const isEmpty = total === 0
 
+  // Inflect the noun to match the count so a lone result reads grammatically —
+  // "of 1 match", never "of 1 matches" (mirrors the singular special-case in
+  // `recent-matches/recent-matches-query.ts`'s "View match" label).
+  const countedNoun = total === 1 ? noun.one : noun.other
+
   return (
     <div className="footer">
       <div className="footer-info">
         Showing <span className="mono">{first}–{last}</span> of{' '}
-        <span className="mono">{total}</span> {noun}
+        <span className="mono">{total}</span> {countedNoun}
       </div>
       <div className="footer-spacer" />
       {!isEmpty && (

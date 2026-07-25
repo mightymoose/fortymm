@@ -18,6 +18,11 @@ const scoped = (container: Container) => ({
   getCourtInput() {
     return container.getByRole('textbox', { name: 'Court' })
   },
+  /** The Court field's placeholder — must hint a BARE value (e.g. "A"), never
+   * "Court", or a user following it types "Court A" → card "Court Court A". */
+  getCourtPlaceholder() {
+    return this.getCourtInput().getAttribute('placeholder')
+  },
   getAddButton() {
     return container.getByRole('button', { name: 'Add table' })
   },

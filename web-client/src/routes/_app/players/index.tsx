@@ -150,7 +150,7 @@ function PlayersPage() {
         total={total}
         pageSize={PAGE_SIZE}
         totalPages={totalPages}
-        noun="players"
+        noun={{ one: 'player', other: 'players' }}
       />
     </div>
   )

@@ -11,6 +11,26 @@ describe('PaginationFooter', () => {
     )
   })
 
+  it('inflects the noun to the singular at a count of 1', () => {
+    paginationFooterPage.render({ total: 1, pageSize: 25, totalPages: 1 })
+
+    const info = paginationFooterPage.getInfo()
+    // "of 1 matches" is ungrammatical — a lone result reads the singular.
+    expect(info).toHaveTextContent('Showing 1–1 of 1 match')
+    // Discriminating: "of 1 match" is a substring of the ungrammatical "of 1
+    // matches", so the positive check alone stays green against the old
+    // fixed-plural code. Assert the plural is absent so a regression reds.
+    expect(info).not.toHaveTextContent(/of 1 matches/)
+  })
+
+  it('keeps the plural noun for a count above 1', () => {
+    paginationFooterPage.render({ total: 2, pageSize: 25, totalPages: 1 })
+
+    expect(paginationFooterPage.getInfo()).toHaveTextContent(
+      'Showing 1–2 of 2 matches',
+    )
+  })
+
   it('renders an in-range page range correctly', () => {
     // Page 2 of 4, 100 results, 25/page => Showing 26–50.
     paginationFooterPage.render({

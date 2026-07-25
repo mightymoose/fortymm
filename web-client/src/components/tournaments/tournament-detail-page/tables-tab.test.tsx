@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 
-import { buildTables } from '../data/seed.factory'
+import { buildTable, buildTables } from '../data/seed.factory'
 import { tablesTabPage } from './tables-tab.page'
 
 describe('TablesTab', () => {
@@ -21,6 +21,42 @@ describe('TablesTab', () => {
     expect(next[2]).toEqual(
       expect.objectContaining({ label: 'T9', court: '9' }),
     )
+  })
+
+  // The Court field is already labeled "Court" (its aria-label), and the card
+  // renders "Court {court}" — so the value stored is a BARE identifier. The
+  // placeholder must hint that bare value, never "Court", or a user who follows
+  // it types "Court A" and the card reads "Court Court A".
+  it('hints a bare Court value, not "Court", so "Court Court A" is impossible', async () => {
+    const onChangeCatalogue = vi.fn()
+    tablesTabPage.render({
+      catalogue: buildTables(2),
+      onChangeCatalogue,
+    })
+
+    const placeholder = tablesTabPage.getCourtPlaceholder()
+    expect(placeholder).not.toBe('Court')
+    expect(placeholder).not.toMatch(/court/i)
+
+    // A user following the placeholder types just "A".
+    await userEvent.type(tablesTabPage.getLabelInput(), 'T9')
+    await userEvent.type(tablesTabPage.getCourtInput(), 'A')
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    const next = onChangeCatalogue.mock.calls[0][0]
+    // Stored raw as "A" (not "Court A") → the card's "Court " prefix reads "Court A".
+    expect(next[2]).toEqual(expect.objectContaining({ label: 'T9', court: 'A' }))
+  })
+
+  // The card prepends "Court " to the raw value, so a bare "A" reads "Court A"
+  // (and never the "Court Court A" a "Court"-nudged value would produce).
+  it('renders a bare court value as "Court A" on the card', () => {
+    tablesTabPage.render({
+      catalogue: [buildTable({ id: 't1', label: 'T1', court: 'A' })],
+    })
+
+    expect(document.body).toHaveTextContent('Court A')
+    expect(document.body).not.toHaveTextContent('Court Court A')
   })
 
   it('keeps the add button disabled until a label is entered', async () => {

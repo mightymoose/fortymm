@@ -229,7 +229,7 @@ export const MatchList = () => {
         total={total}
         pageSize={PAGE_SIZE}
         totalPages={totalPages}
-        noun="matches"
+        noun={{ one: 'match', other: 'matches' }}
       />
     </div>
   )

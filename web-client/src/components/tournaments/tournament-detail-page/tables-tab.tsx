@@ -140,8 +140,13 @@ export const TablesTab = ({
               className="w-36"
             />
             <Input
+              // The card renders "Court {court}", so the field is already
+              // labeled "Court" (aria-label) — the value is a bare identifier.
+              // Placeholder hints a bare value ("A"), never "Court", so a user
+              // following it types "A" → card reads "Court A", not the
+              // "Court Court A" a "Court" placeholder would nudge them into.
               aria-label="Court"
-              placeholder="Court"
+              placeholder="e.g. A"
               value={court}
               onChange={(e) => setCourt(e.target.value)}
               className="w-28"
