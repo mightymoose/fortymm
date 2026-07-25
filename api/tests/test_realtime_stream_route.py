@@ -24,15 +24,17 @@ assertion.
 
 import asyncio
 import hashlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.sse import ServerSentEvent
 from httpx import AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.routing import BaseRoute
 
 from app.db import get_session
 from app.main import app as fastapi_app
@@ -558,6 +560,53 @@ async def test_a_published_hint_reaches_the_stream_through_the_broker(
 # the P0 regression guard: the stream must hold no database connection
 
 
+def _api_routes(routes: Iterable[BaseRoute]) -> Iterator[APIRoute]:
+    """Every ``APIRoute`` reachable from ``routes``, whatever shape the installed
+    FastAPI keeps them in.
+
+    Up to FastAPI 0.139, ``include_router`` **copied** each route into the
+    parent's ``app.routes``, so every route was one flat iteration away. 0.140
+    changed that: an include now contributes a single opaque ``_IncludedRouter``
+    node that holds the original router and resolves through it at request time,
+    so the parent's ``routes`` no longer contains the ``APIRoute`` at all.
+
+    That difference is not cosmetic for a guard like the one below — a top-level
+    scan simply stops finding the route it is supposed to be checking, and a
+    scan written as ``next(...)`` turns that into
+    ``RuntimeError: coroutine raised StopIteration`` rather than anything that
+    names the problem. (It did exactly that: green locally on 0.136, red on CI,
+    which floats to the newest release.) So the walk descends through includes,
+    and :func:`_route_for` makes "no such route" an assertion.
+    """
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+            continue
+        # FastAPI >= 0.140: an ``_IncludedRouter`` standing in for one
+        # ``include_router`` call, holding the router whose routes it serves.
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            yield from _api_routes(included.routes)
+
+
+def _route_for(path: str) -> APIRoute:
+    """The one route serving ``path``, or a failure that says so.
+
+    Deliberately not ``next(genexp)``: inside a coroutine a missing match raises
+    ``StopIteration``, which PEP 479 converts into an inscrutable
+    ``RuntimeError`` about a coroutine, naming neither the route nor the lookup.
+    """
+    matches = [route for route in _api_routes(fastapi_app.routes) if route.path == path]
+
+    assert len(matches) == 1, (
+        f"expected exactly one route serving {path}, found {len(matches)}. "
+        "If it is zero, the route moved or FastAPI changed how it stores "
+        "included routes again — fix the walk in _api_routes, because a guard "
+        "that cannot find its route is not guarding anything."
+    )
+    return matches[0]
+
+
 async def test_get_session_is_not_in_the_stream_route_dependency_graph() -> None:
     """``Depends(get_session)`` anywhere in this route's graph would pin a pooled
     connection for the *life of the stream* — FastAPI enters yield dependencies
@@ -566,19 +615,27 @@ async def test_get_session_is_not_in_the_stream_route_dependency_graph() -> None
     and every other request on that pod would start taking the 503 path in
     ``app.main.db_pool_timeout_handler``. A self-inflicted outage, so it is
     asserted structurally as well as at runtime."""
-    route = next(
-        route
-        for route in fastapi_app.routes
-        if getattr(route, "path", None) == "/v1/stream"
-    )
+    route = _route_for("/v1/stream")
 
-    seen = []
-    stack = list(route.dependant.dependencies)  # type: ignore[attr-defined]
+    seen: list[Callable[..., Any] | None] = []
+    stack = list(route.dependant.dependencies)
     while stack:
         dependant = stack.pop()
         seen.append(dependant.call)
         stack.extend(dependant.dependencies)
 
+    # The walk reached the leaves. Asserted because every interesting way this
+    # guard can rot — a route that isn't found, a dependency tree read off the
+    # wrong object, a walk that stops at depth one — ends with an empty-ish
+    # ``seen``, in which "get_session is absent" is true of nothing at all.
+    # ``get_stream_session_factory`` is the deepest node and is precisely what
+    # stands in for ``get_session`` here, so its presence is the positive half
+    # of the same statement.
+    assert get_stream_session_factory in seen, (
+        "the dependency walk did not reach get_stream_session_factory, so it "
+        f"never got near the leaves — it saw only {seen}. The absence of "
+        "get_session below proves nothing until this holds."
+    )
     assert get_session not in seen, (
         "GET /v1/stream must not depend on get_session — it would pin a pooled "
         "database connection for the whole life of the stream."

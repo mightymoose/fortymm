@@ -303,8 +303,16 @@ async def test_deleting_a_game_score_hints_both_players(
 
     _assert_still_in_progress(updated)
     # The MatchGame row survives so a fresh score can attach to the same number.
-    game = next(g for g in updated.games if g.game_number == 1)
-    assert game.score is None
+    # Not ``next(genexp)``: the row being *gone* is the regression this line
+    # exists to catch, and inside a coroutine a bare ``StopIteration`` surfaces
+    # as ``RuntimeError: coroutine raised StopIteration``, which names neither.
+    surviving = [g for g in updated.games if g.game_number == 1]
+    assert len(surviving) == 1, (
+        "deleting the score deleted the MatchGame row for game 1 — a fresh "
+        "score can no longer attach to the same number. Games now: "
+        f"{sorted(g.game_number for g in updated.games)}"
+    )
+    assert surviving[0].score is None
     assert hints[cast.creator_id] == DASHBOARD
     assert hints[cast.opponent_id] == DASHBOARD
     assert hints[cast.bystander_id] == []
