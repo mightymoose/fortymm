@@ -19,9 +19,11 @@ compose the shared ``serialize_detail`` serializer; keeping them out of
 ``tournament_queries`` keeps that module import-free of the serializer.
 """
 
+import math
 import uuid
 
-from sqlalchemy import ColumnElement, select
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import ColumnElement, Float, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tournament, TournamentEvent, User
@@ -37,12 +39,105 @@ from app.tournament_queries import (
 )
 from app.tournament_serialization import serialize_detail
 
+# The Earth's mean radius in miles — the constant the haversine is scaled by, and the
+# unit the ADR fixes (``radius_miles`` in, ``distance_miles`` out): "Distance is a
+# haversine expression, not PostGIS ... it keeps the Postgres image unchanged".
+_EARTH_RADIUS_MILES = 3958.8
+
+# Miles per degree of latitude (``EARTH_RADIUS * pi / 180`` ≈ 69.09). Deliberately
+# rounded *down* to 69.0: the bounding-box prefilter must be a SUPERSET of the true
+# radius (the haversine ``WHERE`` below is what actually decides membership), and a
+# smaller miles-per-degree makes the degree window it computes slightly *wider* — so
+# the box can never exclude a venue the haversine would have kept.
+_MILES_PER_DEGREE_LAT = 69.0
+
+
+class NearMeFilter(BaseModel):
+    """A parsed, all-three-present "near me" location filter for the tournament list.
+
+    The HTTP list endpoint's ``lat``/``lng``/``radius_miles`` query triple, once it has
+    passed the all-or-nothing boundary check (a partial triple is a 422, ADR "Distance
+    is a haversine expression"). Its presence is what switches the list from "every
+    visible tournament, ``distance_miles`` null" to "only those within ``radius_miles``
+    of ``(lat, lng)``, each carrying its ``distance_miles``". The MCP list never
+    constructs one, so its read is unaffected.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    lat: float
+    lng: float
+    radius_miles: float
+
+
+def _venue_coordinate(key: str) -> ColumnElement[float]:
+    """The venue's ``latitude``/``longitude`` lifted out of the ``address`` JSONB as a
+    real ``float`` column, for the haversine and the bounding box to compute on.
+
+    Both keys are NOT NULL inside the value-object (they are geocoded server-side on
+    every write, ADR "a venue's coordinates are geocoded server-side ... and are NOT
+    NULL"), so the cast never meets a null — there is no "tournament with no
+    coordinates" row to defend against here."""
+    return cast(Tournament.address[key].astext, Float)
+
+
+def _distance_miles_column(near: NearMeFilter) -> ColumnElement[float]:
+    """The haversine great-circle distance, in miles, from ``near`` to each row's venue.
+
+    Computed in SQL with stdlib-equivalent trig (``postgres`` ``radians``/``sin``/
+    ``cos``/``asin``/``sqrt``) rather than PostGIS, which the stack does not ship
+    (ADR "Distance is a haversine expression, not PostGIS"). The query point is a
+    Python constant, so only the venue coordinates are columns."""
+    venue_lat = _venue_coordinate("latitude")
+    venue_lng = _venue_coordinate("longitude")
+    d_lat = func.radians(venue_lat - near.lat)
+    d_lng = func.radians(venue_lng - near.lng)
+    sin_half_lat = func.sin(d_lat / 2)
+    sin_half_lng = func.sin(d_lng / 2)
+    a = (
+        sin_half_lat * sin_half_lat
+        + func.cos(func.radians(near.lat))
+        * func.cos(func.radians(venue_lat))
+        * sin_half_lng
+        * sin_half_lng
+    )
+    return 2 * _EARTH_RADIUS_MILES * func.asin(func.sqrt(a))
+
+
+def _bounding_box(near: NearMeFilter) -> ColumnElement[bool]:
+    """A cheap lat/lng rectangle around ``near`` that contains its whole radius — the
+    prefilter that runs before (and alongside) the haversine so the query can discard
+    the far-away rows on plain range comparisons rather than trig on every row.
+
+    The window half-widths are Python constants (the query point and radius are known
+    off the wire), so the box is a pair of literal ``BETWEEN``s, not an expression over
+    the row. It is deliberately a SUPERSET of the true circle — see
+    ``_MILES_PER_DEGREE_LAT`` — so it never drops a venue the haversine would keep; the
+    haversine ``<= radius`` is the exact membership test. Longitude degrees shrink with
+    latitude (``cos``); near the poles ``cos`` collapses, so the longitude bound falls
+    back to the whole ``[-180, 180]`` span rather than dividing by ~0."""
+    lat_delta = near.radius_miles / _MILES_PER_DEGREE_LAT
+    cos_lat = math.cos(math.radians(near.lat))
+    if abs(cos_lat) < 1e-9:
+        lng_delta = 360.0
+    else:
+        lng_delta = near.radius_miles / (_MILES_PER_DEGREE_LAT * cos_lat)
+    venue_lat = _venue_coordinate("latitude")
+    venue_lng = _venue_coordinate("longitude")
+    return and_(
+        venue_lat >= near.lat - lat_delta,
+        venue_lat <= near.lat + lat_delta,
+        venue_lng >= near.lng - lng_delta,
+        venue_lng <= near.lng + lng_delta,
+    )
+
 
 async def list_tournament_details(
     db: AsyncSession,
     *,
     where: ColumnElement[bool],
     current_user_id: uuid.UUID,
+    near_me: NearMeFilter | None = None,
 ) -> list[TournamentDetailRead]:
     """Every tournament matching ``where``, newest first, as the full
     ``TournamentDetailRead`` aggregate the list cards render.
@@ -66,15 +161,44 @@ async def list_tournament_details(
 
     ``current_user_id`` is the perspective the aggregate is projected from — the
     ``can_edit`` flag, the per-event ``entry_state``, and the ladder ``rating``.
+
+    ``near_me`` is the HTTP list's optional "near me" filter (ADR "Distance is a
+    haversine expression, not PostGIS"). When present, the FIRST query gains a WHERE —
+    a cheap bounding-box prefilter plus the exact ``haversine <= radius_miles`` — so
+    only tournaments within ``radius_miles`` of ``(lat, lng)`` survive, and each
+    carries its computed ``distance_miles``. Both the predicate and the computed
+    column ride on that one existing query, so the statement count is unchanged and
+    the tripwire still reads five. When ``near_me`` is ``None`` (the unfiltered list,
+    and the MCP owner-scoped list, which never passes it) the query, the row set and
+    every ``distance_miles`` are exactly as before — the latter all null.
     """
-    rows = (
-        await db.execute(
-            select(Tournament, User.username)
-            .join(User, User.id == Tournament.created_by_user_id)
-            .where(where)
-            .order_by(Tournament.created_at.desc())
+    stmt = (
+        select(Tournament, User.username)
+        .join(User, User.id == Tournament.created_by_user_id)
+        .where(where)
+        .order_by(Tournament.created_at.desc())
+    )
+    distance_by_id: dict[uuid.UUID, float] = {}
+    rows: list[tuple[Tournament, str]]
+    if near_me is not None:
+        # The distance column and the radius filter both ride on this ONE query — a
+        # computed column and a WHERE predicate, not a per-row follow-up — so the
+        # five-statement batched read stays five (the tripwire in test_tournaments.py).
+        # The bounding box discards the far rows cheaply; the haversine is the exact
+        # membership test and the number a card shows.
+        distance = _distance_miles_column(near_me)
+        stmt = stmt.add_columns(distance.label("distance_miles")).where(
+            _bounding_box(near_me), distance <= near_me.radius_miles
         )
-    ).all()
+        rows = []
+        for row in (await db.execute(stmt)).all():
+            tournament, username, distance_miles = row[0], row[1], row[2]
+            rows.append((tournament, username))
+            # Round to one decimal — a card shows "12.3 mi away"; the raw float would
+            # print a spurious-precision tail. Still a float, per the response schema.
+            distance_by_id[tournament.id] = round(distance_miles, 1)
+    else:
+        rows = [(row[0], row[1]) for row in (await db.execute(stmt)).all()]
     tournament_ids = [tournament.id for tournament, _ in rows]
     events_by_tournament: dict[uuid.UUID, list[TournamentEvent]] = {
         tid: [] for tid in tournament_ids
@@ -129,6 +253,9 @@ async def list_tournament_details(
             # it skips the ledger read rather than paying a query for a field every
             # card throws away. The solve strip is a detail-BFF concern.
             latest_schedule_solve=None,
+            # The near-me distance, or ``None`` when the list was not location-filtered
+            # (``distance_by_id`` is empty then, so every card carries a null distance).
+            distance_miles=distance_by_id.get(tournament.id),
         )
         for tournament, username in rows
     ]

@@ -302,6 +302,10 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     startDate: null,
     endDate: null,
     description: '',
+    // `Tournament` is the READ model, so its `Address` carries the geocoded
+    // coordinates; a blank draft has none yet, so they seed at 0. The write path
+    // (`draftToCreateBody`) drops them — a client never sends coordinates — so
+    // these placeholders never reach the wire.
     address: {
       venue: '',
       street: '',
@@ -309,6 +313,8 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
       region: '',
       postal: '',
       country: 'USA',
+      latitude: 0,
+      longitude: 0,
     },
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [],

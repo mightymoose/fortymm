@@ -612,6 +612,8 @@ export function buildTournamentDetailRead(
       region: 'CA',
       postal: '94703',
       country: 'USA',
+      latitude: 37.8715,
+      longitude: -122.273,
     },
     table_catalogue: [
       buildTournamentTable({ id: 't1', label: 'T1', court: '1' }),

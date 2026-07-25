@@ -1539,6 +1539,8 @@ async def _seed_owned_tournament(
             "region": "CA",
             "postal": "94607",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[],
         league_id=league.id,
@@ -2096,6 +2098,8 @@ async def _seed_drawable_tournament(
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[
             {"id": "t1", "label": "Table 1", "court": "A"},
@@ -2561,6 +2565,8 @@ async def _seed_previewable_tournament(
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[
             {"id": "t1", "label": "Table 1", "court": "A"},
@@ -2851,6 +2857,43 @@ async def test_create_tournament_without_permission_raises_tool_error(
             )
 
     # Nothing was created.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.created_by_user_id == me_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_create_tournament_unresolvable_address_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """A venue address the geocoder cannot resolve (the ``FakeGeocoder``
+    ``__unresolvable__`` sentinel) surfaces as a ``ToolError`` naming the same
+    machine-readable code the HTTP surface answers with (``address_not_geocodable``),
+    and nothing is created — the coordinate NOT NULL invariant holds on the MCP path
+    too (ADR "an unresolvable address is a 422 at the boundary")."""
+    me = await make_user(db_session, "mcp-create-bad-address")
+    me_id = me.id
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+    payload: dict[str, object] = {
+        **_tournament_payload(),
+        "address": {
+            "venue": "__unresolvable__",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+    }
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="address_not_geocodable"):
+            await client.call_tool("create_tournament", {"payload": payload})
+
+    # Nothing was created — the geocode failed before the write.
     db_session.expire_all()
     assert (
         await db_session.execute(
@@ -3878,6 +3921,8 @@ async def _seed_placeable_fixture(
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[
             {"id": "t1", "label": "Table 1", "court": "A"},

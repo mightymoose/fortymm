@@ -23,6 +23,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.geocoding import Geocoder
 from app.leagues import _load_league
 from app.models import ScheduleSolveTrigger, Tournament, TournamentStatus, User
 from app.schedule_solves import request_solve, tournament_has_drawn_event
@@ -33,6 +34,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
+from app.tournament_geocoding import geocode_address
 
 
 async def _load_tournament_for_update(
@@ -101,6 +103,7 @@ async def edit_tournament(
     tournament_id: uuid.UUID,
     actor: User,
     updates: TournamentUpdate,
+    geocoder: Geocoder,
 ) -> Tournament:
     """Apply the partial ``updates`` to the tournament ``actor`` owns, and return
     the refreshed :class:`Tournament`.
@@ -121,6 +124,19 @@ async def edit_tournament(
     * **404** — a ``league_id`` that names no league raises
       :class:`LeagueNotFoundError` (the STRICT resolution, via the FastAPI-free
       ``_load_league``): a director's typo must not silently swap to the default.
+
+    An **address change re-geocodes** (:func:`geocode_address`, via the injected
+    ``geocoder``): a patch that carries ``address`` (the six free-text components,
+    :class:`~app.schemas.tournament.AddressInput`) resolves the new address to
+    coordinates and stores the coordinate-bearing
+    :class:`~app.schemas.tournament.Address`, so an edited venue keeps the NOT NULL
+    coordinates invariant (ADR "a venue's coordinates are geocoded server-side at write
+    time and are NOT NULL"). A patch that does **not** touch ``address`` geocodes
+    nothing — the stored address and its coordinates are left unchanged. An unresolvable
+    new address raises :class:`~app.geocoding.AddressNotGeocodableError` **before** any
+    field is written or committed, so the edit is atomic — nothing changes; the caller
+    maps it to a coded ``422``
+    (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
 
     Then it applies the remaining fields (``model_dump(exclude_unset=True)``
     already serialized the nested value-objects to plain dicts/lists, so one
@@ -154,6 +170,19 @@ async def edit_tournament(
         if league is None:
             raise LeagueNotFoundError()
         tournament.league_id = league.id
+
+    # An address patch RE-geocodes the new address; a patch that doesn't touch the
+    # address geocodes nothing (its coordinates are left as they stand). ``updates``
+    # rejects an explicit ``null`` for ``address``, so ``updates.address is not None``
+    # is exactly "the address is being changed" — and it holds the parsed
+    # ``AddressInput``. Replace the coordinate-less dict ``model_dump`` put in
+    # ``fields`` with the geocoded, coordinate-bearing ``Address`` before the generic
+    # apply loop writes it. Geocoded before any ``setattr``, so an unresolvable address
+    # aborts the whole edit (nothing is written or committed).
+    if updates.address is not None:
+        fields["address"] = (
+            await geocode_address(geocoder, updates.address)
+        ).model_dump()
 
     catalogue_ids_before = _catalogue_ids(tournament)
     for key, value in fields.items():

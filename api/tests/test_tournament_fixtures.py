@@ -69,6 +69,8 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
             "region": "CA",
             "postal": "94704",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         league_id=league.id,
         created_by_user_id=owner.id,

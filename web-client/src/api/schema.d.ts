@@ -986,7 +986,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Tournaments */
+        /**
+         * List Tournaments
+         * @description List the tournaments the caller may see, newest first, each as the full detail
+         *     aggregate the list cards render.
+         *
+         *     Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+         *     tournaments **near a point**: only those whose venue is within `radius_miles` of
+         *     `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+         *     great-circle distance, in miles). Supplying some but not all three is a `422` — the
+         *     three describe one location filter, not three independent knobs. Omit all three
+         *     (the default) for every visible tournament, with `distance_miles` null.
+         */
         get: operations["list_tournaments_v1_tournaments_get"];
         put?: never;
         /** Create Tournament */
@@ -1570,9 +1581,53 @@ export interface components {
     schemas: {
         /**
          * Address
-         * @description A tournament venue address. Stored as a JSONB value-object.
+         * @description A tournament venue address as **stored and read**. A JSONB value-object.
+         *
+         *     The six free-text components a client sends (:class:`AddressInput`) **plus**
+         *     the ``latitude``/``longitude`` the server geocoded at write time — both NOT
+         *     NULL (ADR "a venue's coordinates are geocoded server-side at write time and are
+         *     NOT NULL"). Coordinates live inside the JSONB value-object, so the stored
+         *     address always carries them; a read that validates the column into this model
+         *     can rely on non-null coordinates rather than threading ``Optional[float]``
+         *     through every downstream reader.
+         *
+         *     This is the shape on the *read* schemas (:class:`TournamentRead` and the
+         *     detail/dashboard reads); the write schemas take :class:`AddressInput`, which
+         *     has no coordinates.
          */
         Address: {
+            /** Venue */
+            venue: string;
+            /** Street */
+            street: string;
+            /** City */
+            city: string;
+            /** Region */
+            region: string;
+            /** Postal */
+            postal: string;
+            /** Country */
+            country: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+        };
+        /**
+         * AddressInput
+         * @description The venue address a client **sends** on a write (create/edit).
+         *
+         *     Six free-text components and **no coordinates**: coordinates are geocoded
+         *     server-side at write time and are never supplied by a client (ADR "a venue's
+         *     coordinates are geocoded server-side at write time and are NOT NULL"). A client
+         *     that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
+         *     rather than an unverified number the server would have to trust or re-check.
+         *
+         *     The write verbs geocode this input and construct the stored :class:`Address`
+         *     (with coordinates) before persisting; this is the shape on the *request*
+         *     schemas, and :class:`Address` is the shape on the *read* schemas.
+         */
+        AddressInput: {
             /** Venue */
             venue: string;
             /** Street */
@@ -4187,7 +4242,7 @@ export interface components {
             start_date?: string | null;
             /** End Date */
             end_date?: string | null;
-            address: components["schemas"]["Address"];
+            address: components["schemas"]["AddressInput"];
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][];
             /** League Id */
@@ -4238,6 +4293,8 @@ export interface components {
             updated_at: string;
             /** Events */
             events: components["schemas"]["TournamentEventRead"][];
+            /** Distance Miles */
+            distance_miles?: number | null;
             latest_schedule_solve: components["schemas"]["ScheduleSolveRead"] | null;
         };
         /**
@@ -4667,7 +4724,7 @@ export interface components {
             start_date?: string | null;
             /** End Date */
             end_date?: string | null;
-            address?: components["schemas"]["Address"] | null;
+            address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][] | null;
             /** League Id */
@@ -6597,7 +6654,11 @@ export interface operations {
     };
     list_tournaments_v1_tournaments_get: {
         parameters: {
-            query?: never;
+            query?: {
+                lat?: number | null;
+                lng?: number | null;
+                radius_miles?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: {

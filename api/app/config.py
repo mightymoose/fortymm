@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     #: stream's ``realtime_max_stream_seconds`` finally expired.
     realtime_max_connections_per_user: int = 4
 
+    #: Google Geocoding API key. When set, a venue's coordinates are resolved
+    #: server-side by ``GoogleGeocoder`` on write (ADR "a venue's coordinates are
+    #: geocoded server-side and not null"). Unset — the default in local dev, CI,
+    #: and tests — selects the deterministic, network-free ``FakeGeocoder`` in
+    #: ``app.geocoding.dependencies.get_geocoder``.
+    google_geocoding_api_key: str | None = None
+
     #: Base of the SSE ``retry:`` hint sent to the client, in milliseconds —
     #: how long it waits before reconnecting after the stream ends.
     realtime_retry_base_ms: int = 3000

@@ -29,6 +29,7 @@ import {
 } from './solve'
 import type { LifecycleEdge } from './lifecycle'
 import type {
+  Address,
   Entrant,
   EventEntryState,
   Fixture,
@@ -46,6 +47,7 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type ApiPool = components['schemas']['Pool']
@@ -192,6 +194,23 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
   }
 }
 
+/** Project the read `Address` (which carries the server-geocoded
+ * `latitude`/`longitude`) down to the coordinate-free `AddressInput` a write
+ * verb sends. Coordinates are geocoded server-side at write time and a client
+ * NEVER supplies them — the write schema is `extra="forbid"`, so sending them
+ * would 422. Picking the six text fields keeps the write path coord-free no
+ * matter what the read side accreted. */
+function toAddressInput(a: Address): AddressInput {
+  return {
+    venue: a.venue,
+    street: a.street,
+    city: a.city,
+    region: a.region,
+    postal: a.postal,
+    country: a.country,
+  }
+}
+
 /** Build the `TournamentCreate` body from a prototype draft (the "New
  * tournament" modal). The modal collects no tables, so `table_catalogue` is the
  * empty array the bare-create endpoint expects.
@@ -209,7 +228,7 @@ export function draftToCreateBody(
     description: draft.description,
     start_date: draft.startDate,
     end_date: draft.endDate,
-    address: draft.address,
+    address: toAddressInput(draft.address),
     table_catalogue: [],
   }
 }
@@ -232,7 +251,7 @@ export function tournamentToUpdateBody(
     description: t.description,
     start_date: t.startDate,
     end_date: t.endDate,
-    address: t.address,
+    address: toAddressInput(t.address),
     table_catalogue: catalogue,
   }
 }

@@ -36,6 +36,14 @@ export interface Address {
   region: string
   postal: string
   country: string
+  /** Server-geocoded at write time and **NOT NULL** on the read schema — mirrors
+   * `Address` in `schema.d.ts` (the ADR "a venue's coordinates are geocoded
+   * server-side at write time and are NOT NULL"). The *write* shape a client
+   * sends (`AddressInput`) has no coordinates; a client never supplies these.
+   * The read model always carries them, so downstream readers (distance badge,
+   * map) can rely on non-null coordinates rather than threading `number | null`. */
+  latitude: number
+  longitude: number
 }
 
 /** Eligibility-rule field keys understood by the predicate builder.

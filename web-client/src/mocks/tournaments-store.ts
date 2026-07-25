@@ -42,6 +42,8 @@ type TournamentStatus = components['schemas']['TournamentStatus']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+type Address = components['schemas']['Address']
+type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -180,6 +182,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '94703',
         country: 'USA',
+        latitude: 37.8715,
+        longitude: -122.273,
       },
       table_catalogue: tables(12),
       created_by_user_id: DEV_USER_ID,
@@ -383,6 +387,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '94303',
         country: 'USA',
+        latitude: 37.4419,
+        longitude: -122.143,
       },
       table_catalogue: tables(8),
       created_by_user_id: DEV_USER_ID,
@@ -450,6 +456,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '95112',
         country: 'USA',
+        latitude: 37.3382,
+        longitude: -121.8863,
       },
       table_catalogue: tables(10),
       created_by_user_id: 'u-office',
@@ -549,6 +557,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '95112',
         country: 'USA',
+        latitude: 37.3382,
+        longitude: -121.8863,
       },
       table_catalogue: tables(6),
       created_by_user_id: 'u-office',
@@ -697,6 +707,15 @@ function slugId(name: string): string {
  *
  * It is born `draft`, unconditionally: `TournamentCreate` has no `status` to ask
  * for one (ADR-0017), so this mirrors the server's column default. */
+/** Stand in for the server's write-time geocoding: a client sends the six-field
+ * coordinate-free `AddressInput`, and the server derives and stores the read
+ * `Address` (with `latitude`/`longitude`, NOT NULL). The store can't geocode, so
+ * it stamps a fixed Bay-Area coordinate — enough to satisfy the read contract
+ * every reader now depends on. */
+function geocodeAddress(input: AddressInput): Address {
+  return { ...input, latitude: 37.8715, longitude: -122.273 }
+}
+
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
@@ -712,7 +731,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     // names the ladder it will be judged on — the caller only says which when it
     // is not the default. No client surface sends one yet.
     league_id: body.league_id ?? DEFAULT_LEAGUE_ID,
-    address: body.address,
+    address: geocodeAddress(body.address),
     table_catalogue: body.table_catalogue ?? [],
     created_by_user_id: DEV_USER_ID,
     created_by_username: DEV_USERNAME,
@@ -843,7 +862,8 @@ export function updateTournament(
     start_date:
       patch.start_date === undefined ? existing.start_date : patch.start_date,
     end_date: patch.end_date === undefined ? existing.end_date : patch.end_date,
-    address: patch.address ?? existing.address,
+    address:
+      patch.address == null ? existing.address : geocodeAddress(patch.address),
     table_catalogue:
       patch.table_catalogue === undefined || patch.table_catalogue === null
         ? existing.table_catalogue

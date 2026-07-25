@@ -45,6 +45,8 @@ from tests._helpers import make_user
 
 
 def _address() -> Address:
+    # The stored/read shape: it seeds a ``Tournament`` row's JSONB address, which
+    # carries the NOT NULL geocoded coordinates.
     return Address(
         venue="Berkeley TT Club",
         street="2727 Milvia St",
@@ -52,6 +54,8 @@ def _address() -> Address:
         region="CA",
         postal="94703",
         country="USA",
+        latitude=37.8703,
+        longitude=-122.2731,
     )
 
 

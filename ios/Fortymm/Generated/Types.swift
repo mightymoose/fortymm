@@ -532,6 +532,16 @@ internal protocol APIProtocol: Sendable {
     func broadcastNotificationV1NotificationsBroadcastPost(_ input: Operations.BroadcastNotificationV1NotificationsBroadcastPost.Input) async throws -> Operations.BroadcastNotificationV1NotificationsBroadcastPost.Output
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
     func listTournamentsV1TournamentsGet(_ input: Operations.ListTournamentsV1TournamentsGet.Input) async throws -> Operations.ListTournamentsV1TournamentsGet.Output
@@ -1833,10 +1843,26 @@ extension APIProtocol {
     }
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
-    internal func listTournamentsV1TournamentsGet(headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()) async throws -> Operations.ListTournamentsV1TournamentsGet.Output {
-        try await listTournamentsV1TournamentsGet(Operations.ListTournamentsV1TournamentsGet.Input(headers: headers))
+    internal func listTournamentsV1TournamentsGet(
+        query: Operations.ListTournamentsV1TournamentsGet.Input.Query = .init(),
+        headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()
+    ) async throws -> Operations.ListTournamentsV1TournamentsGet.Output {
+        try await listTournamentsV1TournamentsGet(Operations.ListTournamentsV1TournamentsGet.Input(
+            query: query,
+            headers: headers
+        ))
     }
     /// Create Tournament
     ///
@@ -2420,7 +2446,19 @@ internal enum Servers {}
 internal enum Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     internal enum Schemas {
-        /// A tournament venue address. Stored as a JSONB value-object.
+        /// A tournament venue address as **stored and read**. A JSONB value-object.
+        ///
+        /// The six free-text components a client sends (:class:`AddressInput`) **plus**
+        /// the ``latitude``/``longitude`` the server geocoded at write time — both NOT
+        /// NULL (ADR "a venue's coordinates are geocoded server-side at write time and are
+        /// NOT NULL"). Coordinates live inside the JSONB value-object, so the stored
+        /// address always carries them; a read that validates the column into this model
+        /// can rely on non-null coordinates rather than threading ``Optional[float]``
+        /// through every downstream reader.
+        ///
+        /// This is the shape on the *read* schemas (:class:`TournamentRead` and the
+        /// detail/dashboard reads); the write schemas take :class:`AddressInput`, which
+        /// has no coordinates.
         ///
         /// - Remark: Generated from `#/components/schemas/Address`.
         internal struct Address: Codable, Hashable, Sendable {
@@ -2436,7 +2474,123 @@ internal enum Components {
             internal var postal: Swift.String
             /// - Remark: Generated from `#/components/schemas/Address/country`.
             internal var country: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Address/latitude`.
+            internal var latitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/Address/longitude`.
+            internal var longitude: Swift.Double
             /// Creates a new `Address`.
+            ///
+            /// - Parameters:
+            ///   - venue:
+            ///   - street:
+            ///   - city:
+            ///   - region:
+            ///   - postal:
+            ///   - country:
+            ///   - latitude:
+            ///   - longitude:
+            internal init(
+                venue: Swift.String,
+                street: Swift.String,
+                city: Swift.String,
+                region: Swift.String,
+                postal: Swift.String,
+                country: Swift.String,
+                latitude: Swift.Double,
+                longitude: Swift.Double
+            ) {
+                self.venue = venue
+                self.street = street
+                self.city = city
+                self.region = region
+                self.postal = postal
+                self.country = country
+                self.latitude = latitude
+                self.longitude = longitude
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case venue
+                case street
+                case city
+                case region
+                case postal
+                case country
+                case latitude
+                case longitude
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.venue = try container.decode(
+                    Swift.String.self,
+                    forKey: .venue
+                )
+                self.street = try container.decode(
+                    Swift.String.self,
+                    forKey: .street
+                )
+                self.city = try container.decode(
+                    Swift.String.self,
+                    forKey: .city
+                )
+                self.region = try container.decode(
+                    Swift.String.self,
+                    forKey: .region
+                )
+                self.postal = try container.decode(
+                    Swift.String.self,
+                    forKey: .postal
+                )
+                self.country = try container.decode(
+                    Swift.String.self,
+                    forKey: .country
+                )
+                self.latitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .latitude
+                )
+                self.longitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .longitude
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "venue",
+                    "street",
+                    "city",
+                    "region",
+                    "postal",
+                    "country",
+                    "latitude",
+                    "longitude"
+                ])
+            }
+        }
+        /// The venue address a client **sends** on a write (create/edit).
+        ///
+        /// Six free-text components and **no coordinates**: coordinates are geocoded
+        /// server-side at write time and are never supplied by a client (ADR "a venue's
+        /// coordinates are geocoded server-side at write time and are NOT NULL"). A client
+        /// that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
+        /// rather than an unverified number the server would have to trust or re-check.
+        ///
+        /// The write verbs geocode this input and construct the stored :class:`Address`
+        /// (with coordinates) before persisting; this is the shape on the *request*
+        /// schemas, and :class:`Address` is the shape on the *read* schemas.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AddressInput`.
+        internal struct AddressInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AddressInput/venue`.
+            internal var venue: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/street`.
+            internal var street: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/city`.
+            internal var city: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/region`.
+            internal var region: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/postal`.
+            internal var postal: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/country`.
+            internal var country: Swift.String
+            /// Creates a new `AddressInput`.
             ///
             /// - Parameters:
             ///   - venue:
@@ -9091,7 +9245,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/end_date`.
             internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/address`.
-            internal var address: Components.Schemas.Address
+            internal var address: Components.Schemas.AddressInput
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/league_id`.
@@ -9111,7 +9265,7 @@ internal enum Components {
                 description: Swift.String? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
-                address: Components.Schemas.Address,
+                address: Components.Schemas.AddressInput,
                 tableCatalogue: [Components.Schemas.TournamentTable]? = nil,
                 leagueId: Swift.String? = nil
             ) {
@@ -9151,7 +9305,7 @@ internal enum Components {
                     forKey: .endDate
                 )
                 self.address = try container.decode(
-                    Components.Schemas.Address.self,
+                    Components.Schemas.AddressInput.self,
                     forKey: .address
                 )
                 self.tableCatalogue = try container.decodeIfPresent(
@@ -9205,6 +9359,8 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/events`.
             internal var events: [Components.Schemas.TournamentEventRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/distance_miles`.
+            internal var distanceMiles: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
             internal struct LatestScheduleSolvePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve/value1`.
@@ -9243,6 +9399,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - events:
+            ///   - distanceMiles:
             ///   - latestScheduleSolve:
             internal init(
                 id: Swift.String,
@@ -9260,6 +9417,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 events: [Components.Schemas.TournamentEventRead],
+                distanceMiles: Swift.Double? = nil,
                 latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil
             ) {
                 self.id = id
@@ -9277,6 +9435,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.events = events
+                self.distanceMiles = distanceMiles
                 self.latestScheduleSolve = latestScheduleSolve
             }
             internal enum CodingKeys: String, CodingKey {
@@ -9295,6 +9454,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case events
+                case distanceMiles = "distance_miles"
                 case latestScheduleSolve = "latest_schedule_solve"
             }
         }
@@ -10463,12 +10623,12 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address/value1`.
-                internal var value1: Components.Schemas.Address
+                internal var value1: Components.Schemas.AddressInput
                 /// Creates a new `AddressPayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
-                internal init(value1: Components.Schemas.Address) {
+                internal init(value1: Components.Schemas.AddressInput) {
                     self.value1 = value1
                 }
                 internal init(from decoder: any Swift.Decoder) throws {
@@ -20530,11 +20690,46 @@ internal enum Operations {
     }
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
     internal enum ListTournamentsV1TournamentsGet {
         internal static let id: Swift.String = "list_tournaments_v1_tournaments_get"
         internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/lat`.
+                internal var lat: Swift.Double?
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/lng`.
+                internal var lng: Swift.Double?
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/radius_miles`.
+                internal var radiusMiles: Swift.Double?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - lat:
+                ///   - lng:
+                ///   - radiusMiles:
+                internal init(
+                    lat: Swift.Double? = nil,
+                    lng: Swift.Double? = nil,
+                    radiusMiles: Swift.Double? = nil
+                ) {
+                    self.lat = lat
+                    self.lng = lng
+                    self.radiusMiles = radiusMiles
+                }
+            }
+            internal var query: Operations.ListTournamentsV1TournamentsGet.Input.Query
             /// - Remark: Generated from `#/paths/v1/tournaments/GET/header`.
             internal struct Headers: Sendable, Hashable {
                 internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListTournamentsV1TournamentsGet.AcceptableContentType>]
@@ -20550,8 +20745,13 @@ internal enum Operations {
             /// Creates a new `Input`.
             ///
             /// - Parameters:
+            ///   - query:
             ///   - headers:
-            internal init(headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()) {
+            internal init(
+                query: Operations.ListTournamentsV1TournamentsGet.Input.Query = .init(),
+                headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()
+            ) {
+                self.query = query
                 self.headers = headers
             }
         }

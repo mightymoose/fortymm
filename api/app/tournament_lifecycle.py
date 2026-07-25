@@ -29,6 +29,7 @@ from typing import assert_never
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.geocoding import Geocoder
 from app.leagues import _load_league, get_default_league
 from app.models import (
     League,
@@ -49,6 +50,7 @@ from app.tournament_errors import (
     TournamentAlreadyInStatusError,
     TournamentNotReadyToGoLiveError,
 )
+from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_realtime import stage_tournament_entrant_hints
 
@@ -99,12 +101,22 @@ async def create_tournament(
     *,
     actor: User,
     payload: TournamentCreate,
+    geocoder: Geocoder,
 ) -> Tournament:
     """Create a tournament owned by ``actor`` from ``payload``, and return the
     refreshed :class:`Tournament`.
 
     Runs the same orchestration the HTTP handler used to run inline:
 
+    * The venue ``address`` is **geocoded on write** (:func:`geocode_address`, via the
+      injected ``geocoder``): the client sends the six free-text components
+      (:class:`~app.schemas.tournament.AddressInput`, no coordinates) and this verb
+      persists the stored :class:`~app.schemas.tournament.Address` that carries the
+      resolved ``latitude`` / ``longitude`` (ADR "a venue's coordinates are geocoded
+      server-side at write time and are NOT NULL"). An unresolvable address raises
+      :class:`~app.geocoding.AddressNotGeocodableError` **before** anything is written,
+      so a write that cannot produce coordinates commits nothing; the caller maps it to
+      a coded ``422`` (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
     * The value-objects (``address``, ``table_catalogue``) persist as plain JSONB;
       the dicts ``model_dump`` produces don't propagate beyond this write boundary.
     * **No** ``status`` is set: it isn't on the create schema (ADR-0017), so a
@@ -117,15 +129,19 @@ async def create_tournament(
       default raises :class:`NoDefaultLeagueError`.
 
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
-    caller adapts each domain exception to its transport.
+    caller adapts each domain exception (league misses, an unresolvable address) to its
+    transport.
     """
     league = await _resolve_league_strict(db, payload.league_id)
+    # Geocode before constructing the row, so an unresolvable address fails at the edge
+    # and never reaches ``db.add``/``commit`` — the write is atomic (writes nothing).
+    address = await geocode_address(geocoder, payload.address)
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
         start_date=payload.start_date,
         end_date=payload.end_date,
-        address=payload.address.model_dump(),
+        address=address.model_dump(),
         table_catalogue=[t.model_dump() for t in payload.table_catalogue],
         league_id=league.id,
         created_by_user_id=actor.id,

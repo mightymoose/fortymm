@@ -379,6 +379,7 @@ def serialize_detail(
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
     latest_schedule_solve: ScheduleSolve | None,
+    distance_miles: float | None = None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
@@ -403,6 +404,9 @@ def serialize_detail(
                 if latest_schedule_solve is not None
                 else None
             ),
+            # The near-me distance in miles, or ``None`` on every read that was not
+            # location-filtered (the detail read, the unfiltered/owner-scoped lists).
+            "distance_miles": distance_miles,
             "events": [
                 serialize_event(
                     e,
