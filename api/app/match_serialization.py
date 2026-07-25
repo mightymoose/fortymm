@@ -12,6 +12,7 @@ modules — never a router — so it stays cycle-free.
 
 import uuid
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -593,7 +594,28 @@ async def view_extras(
             match_id=match.id,
             league_id=match.league_id,
             status=match.status,
-            created_at=match.created_at,
+            as_played=as_played_instant(match),
             user_ids=singles_user_ids(match),
         )
     )
+
+
+def as_played_instant(match: Match) -> datetime:
+    """The match's as-played instant, which the pre-match snapshot anchors its
+    strict-``<`` cutoff on (ADR-0012 #951).
+
+    A completed match was *played into* at its ``completed_at`` — the stable axis
+    the rest of the rating timeline uses (rating rows are stamped
+    ``created_at == completed_at``), so the strict ``<`` cutoff excludes this
+    match's own row and its own completed record while including every prior. A
+    match not yet decided (pending/live/awaiting) is being walked into *now*, so
+    "going into this match" means the players' current standing.
+
+    NOT ``match.created_at``: that is the *creation* instant, which diverges from
+    the as-played instant whenever matches are created as a batch (a tournament
+    schedule, or a player queuing several) but completed later — a match's
+    ``created_at`` then predates its own participants' priors' ``completed_at``,
+    filtering every prior out and reporting both players as Unrated · 0."""
+    if match.status == MatchStatus.completed and match.completed_at is not None:
+        return match.completed_at
+    return datetime.now(UTC)

@@ -3012,21 +3012,25 @@ async def test_details_recent_form_excludes_the_current_match(
 async def test_details_recent_form_excludes_matches_after_this_one(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Viewing an older match shows form as it stood then: a match completed
-    before this one was created counts; one completed after it does not."""
+    """Viewing a COMPLETED match shows form as it stood at its as-played instant:
+    a match completed before it counts; one completed after it does not. The
+    cutoff is the viewed match's ``completed_at`` (ADR-0012 #951), so this holds
+    even though the later match completed before the *request* is served."""
     me = await start_session(api_client, db_session)
-    opp = await make_user(db_session, "after-rival")
     async with opponent_session(db_session, "after-third-party") as (
         other_client,
         other,
     ):
-        # A match I finished *before* the viewed match is created.
+        # A match I finished *before* the viewed match.
         earlier = await _play_match_to_completion(
             api_client, other_client, other.id, best_of=3, side_1_wins=True
         )
-        # The match we'll view (in progress, so it stays "current" in time).
-        current = await _create_match(api_client, opp.id, best_of=3)
-        # A match I finish *after* the viewed match was created.
+        # The match we'll view, played to completion — its completed_at is the
+        # anchor the snapshot freezes on.
+        current = await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        # A match I finish *after* the viewed match completed.
         later = await _play_match_to_completion(
             api_client, other_client, other.id, best_of=3, side_1_wins=False
         )
@@ -3362,6 +3366,95 @@ async def test_details_career_counts_are_per_player(
     assert forms[str(me.id)]["career_wins_before"] == 2
     assert forms[str(opp.id)]["career_matches_before"] == 1
     assert forms[str(opp.id)]["career_wins_before"] == 0
+
+
+async def test_details_pre_match_snapshot_anchors_on_completed_not_created(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The pre-match snapshot of a COMPLETED match anchors its cutoff on the
+    as-played instant (``completed_at``), not the creation instant (ADR-0012
+    #951).
+
+    Batch creation — a tournament schedule, or a player queuing several — creates
+    a match well before it is played, so its ``created_at`` can predate its own
+    participants' priors' ``completed_at``. Anchored on ``created_at`` the snapshot
+    filtered every one of those priors out and reported both players as
+    "Unrated · 0 career matches" on a match they walked into with real histories.
+    We reproduce that by backdating the current match's ``created_at`` to long
+    before its priors completed, leaving its ``completed_at`` (as-played) intact."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "as-played-opp") as (opp_client, opp):
+        # Two decided priors between the same pair build career + rating history.
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        # The match under view, also played to completion (its completed_at is
+        # the latest of the three).
+        current = await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+
+    # Simulate batch creation: the current match was *created* long before the
+    # priors finished. Its completed_at (the as-played anchor) is untouched, so a
+    # correct snapshot still sees the priors; the old created_at anchor would
+    # filter every prior out.
+    await db_session.execute(
+        update(Match)
+        .where(Match.id == uuid.UUID(current["id"]))
+        .values(created_at=datetime(2020, 1, 1, tzinfo=UTC))
+    )
+    await db_session.commit()
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    mine = forms[str(me.id)]
+    # Two priors count (the current match itself is excluded by the strict `<`
+    # on completed_at, since its own rating row / completed record sit at the
+    # anchor exactly).
+    assert mine["career_matches_before"] == 2
+    assert mine["career_wins_before"] == 2
+    assert mine["rating_before"] is not None
+    assert len(mine["rating_history"]) == 2
+    assert mine["rating_history"][-1] == mine["rating_before"]
+    # The head-to-head aggregates anchor on the same instant, so both priors
+    # count and the current meeting excludes itself.
+    assert detail["head_to_head"]["total_meetings"] == 2
+
+
+async def test_details_pre_match_snapshot_for_a_live_match_uses_current_standing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A not-yet-decided match is being walked into *now*, so "going into this
+    match" means the players' CURRENT standing — the snapshot anchors on the
+    current instant, not the (earlier) creation instant (ADR-0012 #951).
+
+    Created first, then left live while two priors are played to completion: the
+    priors complete *after* this match's ``created_at``, so the old created_at
+    anchor would exclude them and report Unrated · 0; anchoring on *now* counts
+    them. No timestamp surgery is needed — the natural ordering is the bug."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "live-standing-opp") as (opp_client, opp):
+        # The live match is created first, so its created_at precedes the priors.
+        current = await _create_match(api_client, opp.id, best_of=3)
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    assert detail["status"] != "completed"
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    mine = forms[str(me.id)]
+    # Current standing going into a live match: both priors count.
+    assert mine["career_matches_before"] == 2
+    assert mine["career_wins_before"] == 2
+    assert mine["rating_before"] is not None
+    assert len(mine["rating_history"]) == 2
 
 
 async def test_career_before_batches_every_user_into_one_statement(
@@ -3711,7 +3804,7 @@ async def test_view_extras_issues_a_pinned_number_of_statements(
             match_id=match.id,
             league_id=match.league_id,
             status=match.status,
-            created_at=match.created_at,
+            as_played=match.completed_at,
             user_ids=[me.id, opp.id],
         )
 

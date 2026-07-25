@@ -113,17 +113,22 @@ class MatchDetailsRepository:
         user_ids: list[uuid.UUID],
         match_id: uuid.UUID,
         league_id: uuid.UUID,
-        created_at: datetime,
+        before: datetime,
     ) -> list[PlayerForm]:
         """Each player's last few completed matches before this one, with the
-        rating + career record they carried into it."""
+        rating + career record they carried into it.
+
+        ``before`` is the match's *as-played* instant (its ``completed_at`` when
+        completed, else *now*) — see ``as_played_instant`` — NOT its
+        ``created_at``, which diverges from as-played time for batch-created
+        matches and filtered every prior out (ADR-0012 #951)."""
         if not user_ids:
             return []
 
         # Batched once for every player, ahead of the loop — one round-trip
         # each, not one per user (issue #195).
-        careers = await self.career_before(user_ids, created_at)
-        ratings = await self.pre_match_ratings(user_ids, league_id, created_at)
+        careers = await self.career_before(user_ids, before)
+        ratings = await self.pre_match_ratings(user_ids, league_id, before)
 
         result: list[PlayerForm] = []
         for user_id in user_ids:
@@ -131,7 +136,7 @@ class MatchDetailsRepository:
                 (
                     await self._db.execute(
                         participant_filter(
-                            history_base_query(match_id, before=created_at),
+                            history_base_query(match_id, before=before),
                             user_id,
                         ).limit(RECENT_FORM_LIMIT)
                     )
@@ -256,13 +261,19 @@ class MatchDetailsRepository:
         before: datetime,
     ) -> dict[uuid.UUID, CareerRecord]:
         """Every cited player's cross-league ``(matches, wins)`` completed strictly
-        before ``before`` (the current match's ``created_at``), in **one**
-        ``GROUP BY user_id`` round-trip rather than one query per user (issue #195).
+        before ``before`` (the current match's *as-played* instant — its
+        ``completed_at`` when completed, else *now*; see ``as_played_instant``), in
+        **one** ``GROUP BY user_id`` round-trip rather than one query per user
+        (issue #195).
 
-        The current match is excluded by the date filter alone: a completed match's
-        ``completed_at`` is always ``>=`` its own ``created_at``, so it can never
-        satisfy ``completed_at < created_at``. No separate ``id`` guard is needed
-        (issue #202).
+        The current match is excluded by the date filter alone: when this match is
+        completed, ``before`` IS its own ``completed_at``, and the strict ``<``
+        excludes ``completed_at < completed_at``; when it isn't completed it has no
+        ``completed_at`` and so matches no row anyway. No separate ``id`` guard is
+        needed (issue #202). Anchoring on ``completed_at`` rather than
+        ``created_at`` is what stops a batch-created match (``created_at`` before
+        its own participants' priors) from filtering every prior out and reporting
+        ``0 career matches`` (ADR-0012 #951).
 
         A player with no prior completed matches has **no row** in the grouped
         result; they are defaulted back in as a zero record, so every requested id
@@ -300,15 +311,19 @@ class MatchDetailsRepository:
         self,
         user_ids: list[uuid.UUID],
         match_id: uuid.UUID,
-        created_at: datetime,
+        before: datetime,
     ) -> HeadToHead | None:
         """The rivalry between this match's two singles players as it stood
-        going into it. ``None`` unless there are exactly two players."""
+        going into it. ``None`` unless there are exactly two players.
+
+        ``before`` is the match's *as-played* instant (its ``completed_at`` when
+        completed, else *now*) — see ``as_played_instant`` — NOT its
+        ``created_at`` (ADR-0012 #951)."""
         if len(user_ids) != 2:
             return None
         user_a, user_b = user_ids
         rows_query = participant_filter(
-            participant_filter(history_base_query(match_id, before=created_at), user_a),
+            participant_filter(history_base_query(match_id, before=before), user_a),
             user_b,
         ).options(selectinload(Match.match_settings))
         rows = (
@@ -362,7 +377,7 @@ class MatchDetailsRepository:
             .where(
                 Match.status == MatchStatus.completed,
                 Match.id != match_id,
-                Match.completed_at < created_at,
+                Match.completed_at < before,
                 a_player.user_id == user_a,
                 b_player.user_id == user_b,
                 a_side.id != b_side.id,
