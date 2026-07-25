@@ -92,4 +92,8 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **Parse untrusted data at every boundary** — see `.claude/rules/parse-at-boundaries.md`.
 
+**Verify the artifact under test is the one you changed** — see `.claude/rules/verify-the-artifact-under-test.md`.
+
+**Collect the garbage you create** — `land-the-plane` Step 9 runs `scripts/reap-worktrees.sh` (see its header for why).
+
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).

@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# pre-push: catch OpenAPI type drift before CI does.
+#
+# The tax this pays down: `web-client/src/api/schema.d.ts` and
+# `ios/Fortymm/Generated/Types.swift` are generated from the API's
+# `openapi.json`, and `.github/workflows/openapi-schema.yml` fails the build
+# when either drifts. Forgetting `mise run regen-api-types` after touching a
+# route — or even just a docstring, which becomes an OpenAPI `description` —
+# accounted for half of all PRs that ever went red. That is a ~15-minute round
+# trip (push, wait for CI, regen, push again) to learn something the local
+# machine can tell you in seconds.
+#
+# Runs ONLY when the commits being pushed touch `api/**` (or the iOS generator
+# config), so a web-only or docs-only push pays nothing.
+#
+# Escape hatches:
+#   SKIP_OPENAPI_CHECK=1 git push       # skip the whole hook
+#   SKIP_WEB_OPENAPI_CHECK=1 git push   # skip only the web half (schema.d.ts)
+#   SKIP_IOS_OPENAPI_CHECK=1 git push   # skip only the (slow) Swift half
+#   git push --no-verify                # skip every pre-push hook
+#
+# Enabled by `git config core.hooksPath .githooks` (scripts/install_tools.sh
+# does this for you). NOTE FOR WORKTREES: `core.hooksPath` set without
+# `--worktree` lands in the SHARED `.git/config`, so setting it from any one
+# worktree enables these hooks for the main checkout and every other worktree at
+# once — which is what we want here. The value is a RELATIVE path, and git
+# resolves a relative `core.hooksPath` against the top level of the *current*
+# working tree, so every worktree runs its own checked-out copy of this file
+# rather than the main checkout's.
+
+set -euo pipefail
+
+if [ "${SKIP_OPENAPI_CHECK:-}" = "1" ]; then
+  echo "pre-push: SKIP_OPENAPI_CHECK=1 — skipping the OpenAPI drift check." >&2
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# All-zeros sha (git's "this ref does not exist" sentinel). Written as a glob
+# test rather than `expr`/regex so it works the same on BSD and GNU userland,
+# and so it tolerates both the 40-char sha1 and 64-char sha256 forms.
+is_zero_sha() {
+  case "${1:-}" in
+    "") return 1 ;;
+    *[!0]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Paths whose contents can change the generated OpenAPI output. `api/**` covers
+# routes, pydantic schemas and docstrings; `ios/openapi/**` is the nullable
+# fixer + generator config, which shape Types.swift independently of the spec.
+#
+# The exclusions matter as much as the matches: this hook boots the API and (on
+# the iOS half) builds a Swift toolchain, so firing it for a change that cannot
+# possibly move the spec is exactly the friction it exists to remove. Markdown
+# under api/ (CLAUDE.md and friends) and the test suite are never part of the
+# served OpenAPI document. Migrations aren't either — the spec comes from the
+# pydantic models, not the schema.
+is_relevant() {
+  case "$1" in
+    *.md)                 return 1 ;;   # docs, incl. api/CLAUDE.md
+    api/tests/*)          return 1 ;;   # tests don't shape the spec
+    api/migrations/*)     return 1 ;;   # the spec comes from the models
+    api/*)                return 0 ;;
+    ios/openapi/*)        return 0 ;;
+    *)                    return 1 ;;
+  esac
+}
+
+# --- Work out what is actually being pushed -------------------------------
+#
+# git's pre-push protocol feeds us one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# A local sha of all zeros means the ref is being DELETED — nothing to verify.
+# A remote sha of all zeros means the remote has no such branch yet, so there is
+# no "since" commit to diff against; fall back to the merge-base with
+# origin/main, which is exactly the set of commits this push would add.
+
+relevant=0
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  if is_zero_sha "$local_sha"; then
+    continue  # branch deletion
+  fi
+
+  if is_zero_sha "${remote_sha:-}" || [ -z "${remote_sha:-}" ]; then
+    # New branch. If origin/main is unknown (fresh clone, unusual remote) the
+    # base stays empty and we fall back to inspecting the tip commit alone —
+    # fail toward checking rather than toward silently skipping.
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+  else
+    base="$remote_sha"
+  fi
+
+  if [ -n "$base" ]; then
+    files="$(git diff --name-only "$base" "$local_sha" 2>/dev/null || true)"
+    # Fail toward CHECKING, per the note above: an unresolvable base (force-push,
+    # rewritten remote, partial fetch) makes `git diff` error into an empty list,
+    # which would otherwise read as "nothing relevant changed" and skip silently.
+    if [ -z "$files" ] && [ -n "$base" ]; then
+      echo "pre-push: cannot diff against '$base' — checking anyway." >&2
+      relevant=1; break
+    fi
+  else
+    files="$(git show --pretty=format: --name-only "$local_sha" 2>/dev/null || true)"
+  fi
+
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if is_relevant "$f"; then
+      relevant=1
+      break
+    fi
+  done <<EOF
+$files
+EOF
+
+  # NB: an `if`, not `[ "$relevant" -eq 1 ] && break`. Not because the latter
+  # trips `set -e` — it doesn't; a failing non-final member of an `&&` list is
+  # exempt — but because the loop's own exit status would then become 1, which
+  # does matter when a loop is the last command of a function or an `&&` chain.
+  if [ "$relevant" -eq 1 ]; then
+    break
+  fi
+done
+
+if [ "$relevant" -ne 1 ]; then
+  exit 0
+fi
+
+echo "pre-push: this push touches api/ or ios/openapi/ — checking generated OpenAPI types..." >&2
+
+# --- Regenerate, reusing the same machinery as the mise tasks / CI ---------
+#
+# scripts/ensure-api-up.sh boots the API only if one isn't already listening and
+# hands back $API_URL plus $API_STARTED_PID (empty when it reused a running
+# server). Assign-then-eval through `tail -n1`: only the final stdout line is
+# the machine-readable handoff, and a bare `eval "$(cmd)"` would hide a failure
+# from `set -e`. Same convention as mise.toml's regen-api-types.
+API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+eval "$API_STATUS"
+TMP_SPEC=""
+# Registered before `mktemp` so a started-but-uncleaned server can't leak if
+# `mktemp` itself fails. Single-quoted on purpose: expands at trap time.
+trap 'rm -f "$TMP_SPEC"; [ -n "${API_STARTED_PID:-}" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
+
+# Plain string, not an array: macOS still ships bash 3.2, where `"${arr[@]}"` on
+# an EMPTY array is an unbound-variable error under `set -u`.
+drifted_files=""
+
+# Compare against HEAD, not the index: HEAD is what the push actually sends, so
+# a regenerated-but-only-staged file must still count as drift.
+has_drift() { ! git diff --quiet HEAD -- "$1"; }
+
+# --- web-client/src/api/schema.d.ts ---------------------------------------
+#
+# Degrade the same way the iOS half below does. Most worktrees have no
+# `web-client/node_modules` (it is not shared between worktrees), and a bare
+# `npm ci` here would silently write ~525 MB into every fresh worktree, inside
+# `git push`, on the most latency-sensitive step of the loop. A push must never
+# turn into a half-gigabyte install: warn, skip, and let CI's `verify` catch it.
+if [ "${SKIP_WEB_OPENAPI_CHECK:-}" = "1" ]; then
+  echo "pre-push: SKIP_WEB_OPENAPI_CHECK=1 — skipping the schema.d.ts check." >&2
+elif [ ! -x "$ROOT/web-client/node_modules/.bin/openapi-typescript" ]; then
+  echo "pre-push: WARNING — web-client/node_modules is missing, so the" >&2
+  echo "          schema.d.ts check is skipped rather than triggering a large" >&2
+  echo "          'npm ci' during a push. CI's 'verify' job still catches drift;" >&2
+  echo "          run 'npm ci' in web-client/ (or 'mise run regen-api-types')." >&2
+else
+  ( cd "$ROOT/web-client" && API_URL="$API_URL" npm run gen:api )
+  if has_drift web-client/src/api/schema.d.ts; then
+    drifted_files="$drifted_files web-client/src/api/schema.d.ts"
+  fi
+fi
+
+# --- ios/Fortymm/Generated/Types.swift ------------------------------------
+#
+# `swift run swift-openapi-generator` needs a Swift toolchain and, on a cold
+# cache, a multi-minute build. A machine without Swift (or someone who doesn't
+# want to pay for it right now) must never be blocked from pushing — warn and
+# move on. CI's `verify-ios` job is still the backstop.
+if [ "${SKIP_IOS_OPENAPI_CHECK:-}" = "1" ]; then
+  echo "pre-push: SKIP_IOS_OPENAPI_CHECK=1 — skipping the iOS Types.swift check." >&2
+elif ! command -v swift >/dev/null 2>&1 || ! swift --version >/dev/null 2>&1; then
+  echo "pre-push: WARNING — no working Swift toolchain; skipping the iOS" >&2
+  echo "          Types.swift check. CI's 'verify-ios' job still catches drift;" >&2
+  echo "          run 'mise run regen-ios-api-types' on a machine with Xcode." >&2
+else
+  TMP_SPEC="$(mktemp)"
+  curl -fs "$API_URL/openapi.json" -o "$TMP_SPEC"
+  # swift-openapi-generator silently DROPS `Optional[T]` fields encoded the way
+  # FastAPI emits OpenAPI 3.1 (`anyOf: [T, {type: null}]`); this rewrites them
+  # into the older `nullable: true` form it understands. Same step as CI.
+  python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_SPEC" "$TMP_SPEC"
+
+  cd "$ROOT/ios/Tools/OpenAPIGeneratorCLI"
+  swift run swift-openapi-generator generate "$TMP_SPEC" \
+    --config "$ROOT/ios/openapi/openapi-generator-config.yaml" \
+    --output-directory "$ROOT/ios/Fortymm/Generated"
+  cd "$ROOT"
+  if has_drift ios/Fortymm/Generated/Types.swift; then
+    drifted_files="$drifted_files ios/Fortymm/Generated/Types.swift"
+  fi
+fi
+
+if [ -z "$drifted_files" ]; then
+  echo "pre-push: generated OpenAPI types are up to date." >&2
+  exit 0
+fi
+
+# The regenerated files are left ON DISK on purpose: recovery is `git add` +
+# commit + push, with nothing to re-run.
+{
+  echo
+  echo "================================================================"
+  echo " PUSH BLOCKED — generated OpenAPI types are out of date."
+  echo "================================================================"
+  for f in $drifted_files; do
+    echo "  - $f"
+  done
+  echo
+  echo " They have already been regenerated in your working tree, so:"
+  echo
+  echo "     git add$drifted_files"
+  echo "     git commit --amend --no-edit    # or a fresh commit"
+  echo "     git push"
+  echo
+  echo " To regenerate by hand instead:"
+  echo "     mise run regen-api-types"
+  echo "     mise run regen-ios-api-types"
+  echo
+  echo " Skip just one half with SKIP_WEB_OPENAPI_CHECK=1 / SKIP_IOS_OPENAPI_CHECK=1."
+  echo
+  echo " If the diff is not yours (e.g. unrelated uncommitted work under api/),"
+  echo " bypass with:  SKIP_OPENAPI_CHECK=1 git push"
+  echo "================================================================"
+} >&2
+exit 1

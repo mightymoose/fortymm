@@ -66,6 +66,14 @@ export default defineConfig({
     },
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // Must stay STRICTLY GREATER than Testing Library's `asyncUtilTimeout`
+    // (5000, set in src/test/setup.ts). Left at vitest's 5000 default the two
+    // budgets are equal, so a slow `waitFor` and the test itself expire at the
+    // same instant and the failure surfaces as an undiagnosable
+    // "Test timed out in 5000ms" instead of Testing Library's "Unable to find
+    // <element>". Raising the outer bound fixes that for all ~410 `waitFor`
+    // call sites at once; only 4 pass a timeout of their own.
+    testTimeout: 10000,
     // Dates render in the reader's LOCAL zone (a match is played on a local day),
     // so an unpinned runner would date the same fixture differently on a laptop in
     // Chicago and on a CI box in UTC. Pin the suite to one zone — the one CI
