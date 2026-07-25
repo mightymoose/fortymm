@@ -50,6 +50,7 @@ from app.tournament_errors import (
     TournamentNotReadyToGoLiveError,
 )
 from app.tournament_materialization import materialize_live_draw
+from app.tournament_realtime import stage_tournament_entrant_hints
 
 # The lifecycle runs forward only, and exactly three transitions exist (ADR-0017):
 # ``draft`` → ``published`` (publish), ``published`` → ``live`` (go live), and
@@ -337,6 +338,12 @@ async def transition_tournament(
       for, and the missing solve is recovered by the 1-minute pin tick and the
       owner's Run-scheduler button, so failing the go-live would trade a self-healing
       gap for a hard error.
+    * On **every** edge, a ``dashboard.changed`` hint is staged for each active
+      entrant of each of the tournament's events
+      (:func:`app.tournament_realtime.stage_tournament_entrant_hints`) — going live
+      is what makes the dashboard's tournament panel appear, and archiving is what
+      takes it away. Staged, not published, so a refused/rolled-back transition
+      tells nobody.
 
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
@@ -369,6 +376,13 @@ async def transition_tournament(
         await materialize_live_draw(db, tournament)
         await request_solve(db, tournament.id, ScheduleSolveTrigger.go_live)
 
+    # The realtime audience of a lifecycle move: every active entrant of every
+    # event of this tournament. Going live is the write that makes the dashboard's
+    # tournament panel *appear at all* — a player who missed this hint would not
+    # learn their tournament had started until they navigated — and archiving is
+    # the one that takes it away again, so every edge hints, not just ``live``.
+    # Staged, not published: it is true only if the status write below commits.
+    await stage_tournament_entrant_hints(db, tournament.id)
     await db.commit()
     await db.refresh(tournament)
     return tournament

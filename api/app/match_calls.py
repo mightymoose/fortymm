@@ -60,7 +60,11 @@ best-effort external channels (push, email) are fanned out
 post-commit via a ``NotificationJob`` restricted to those channels. A crash
 before commit leaves no pin and no notification; a crash after commit leaves
 the pin *with* its durable in-app record — the fan-out is best-effort by the
-same contract every other push/email in the repo has.
+same contract every other push/email in the repo has. The same post-commit
+fan-out (:func:`enqueue_call_fanout`) also pushes each recipient a
+``dashboard.changed`` realtime hint, so a called player's dashboard shows their
+table without waiting for a navigation — see that function for why this is the
+one write site that publishes directly rather than staging on the session.
 
 **Exactly-once.** Both call paths re-check the due predicate — ``pinned_at IS
 NULL`` for the call, ``call_notified_count = 0`` for the notify-without-re-pin
@@ -135,6 +139,7 @@ from app.notifications.service import (
     enqueue_notification_job,
 )
 from app.notifications.taxonomy import NotificationChannel
+from app.realtime import EventKind, publish_event
 from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
@@ -503,11 +508,33 @@ async def call_due_fixtures(
 
 
 def enqueue_call_fanout(jobs: Sequence[NotificationJob]) -> None:
-    """Enqueue the post-commit push/email fan-out. Fire-and-forget: the pin and
-    its in-app record are already committed, so a Redis hiccup must not fail
-    the calling flow (``enqueue_notification_job``'s own contract)."""
+    """Enqueue the post-commit push/email fan-out **and** hint each recipient's
+    dashboard. Fire-and-forget in both directions: the pin and its in-app record
+    are already committed, so a Redis hiccup must not fail the calling flow
+    (``enqueue_notification_job``'s own contract, and ``publish_event``'s).
+
+    **Why this site publishes directly instead of staging.** Every other write
+    path reaches the publisher through ``app.realtime.stage_event``, because it
+    runs *inside* the writing transaction and a hint published before that
+    commit would make the client re-read pre-commit state. This one is the
+    exception the outbox docstring names: all three callers invoke it strictly
+    **after** ``await db.commit()`` (each carrying its own "Post-commit, by
+    design" comment) and hand it a plain list of jobs — there is no session here
+    to stage on, and the commit has already happened, so a direct
+    :func:`~app.realtime.publish_event` is both possible and correct.
+
+    **The audience is the fan-out's own recipient list**, not a re-derived
+    query: :func:`_record_message` produces exactly one job per entrant it told,
+    so ``job.user_id`` already *is* "the players named in this call" — including
+    the entrants whose push/email preferences are off (a job is built for them
+    too; only delivery is filtered downstream), which is right, because a
+    dashboard hint is not a notification channel. Deduped, since a batch may
+    tell the same person about two fixtures and a second hint would buy nothing.
+    """
     for job in jobs:
         enqueue_notification_job(job)
+    for user_id in dict.fromkeys(job.user_id for job in jobs):
+        publish_event(user_id, EventKind.dashboard_changed)
 
 
 # ----- broken-pin repair corrections -----------------------------------------

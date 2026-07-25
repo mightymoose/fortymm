@@ -37,6 +37,7 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.tournament_materialization import materialize_event
+from app.tournament_realtime import stage_event_entrant_hints
 
 
 async def on_match_completed(db: AsyncSession, match: Match) -> None:
@@ -48,6 +49,15 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
     → ``entry_b``**, the fixed materialization convention of #788), then re-runs the
     draw's ``advance()`` and materializes anything newly ready via
     :func:`~app.tournament_materialization.materialize_event`.
+
+    Every **active entrant of the event** — not merely the two who played — gets a
+    staged ``dashboard.changed`` hint, because the panel's standings are projected
+    from the whole pool, so a completion moves the position of players who were not
+    in it (:func:`app.tournament_realtime.stage_event_entrant_hints`). It is staged
+    rather than published for the same reason the function does not commit: the
+    caller owns the transaction boundary, and only a commit makes the advance true.
+    The early return above is what keeps an ordinary ladder match from hinting a
+    tournament audience it has none of.
 
     Runs in the caller's transaction under the match row lock; does **not** commit. The
     match's sides carry their ``won`` flags already — ``finalize_match`` stamped them
@@ -112,4 +122,12 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
         )
 
     await materialize_event(db, tournament, event)
+    # The advance moved everyone's panel in this event, not just the two who played
+    # it: the standings table the panel shows is projected from the event's whole
+    # pool (ADR-0788), so a third player's position can change without them
+    # touching a bat. Their participants-only hint (``finalize_match`` stages that
+    # one) would never reach them. Staged, not published — this function runs in
+    # the caller's transaction and deliberately does not commit, so publishing here
+    # would announce a completion that a later rollback un-did.
+    await stage_event_entrant_hints(db, [event.id])
     await request_solve(db, tournament.id, ScheduleSolveTrigger.match_completed)

@@ -51,6 +51,7 @@ from app.tournament_errors import (
     FixturePlacementFrozenError,
 )
 from app.tournament_queries import fixtures_by_event
+from app.tournament_realtime import stage_event_entrant_hints
 
 
 async def _load_fixture_for_placement(
@@ -150,7 +151,10 @@ async def place_fixture(
     :func:`app.match_calls.apply_manual_placement` on this open transaction (a
     full placement pins and, while live, notifies both entrants; anything less unpins),
     a ``settings_changed`` re-solve is queued (the director changed the solver's
-    inputs), the transaction commits, and the returned push/email fan-out is enqueued
+    inputs), a ``dashboard.changed`` hint is staged for the event's active entrants
+    (:func:`app.tournament_realtime.stage_event_entrant_hints` — an **unpin** fans out
+    to nobody, so the hint is the only thing that tells a player their promised time
+    is gone), the transaction commits, and the returned push/email fan-out is enqueued
     **post-commit** (best-effort — the pin and its in-app rows are already durable). A
     ``None`` return from ``request_solve`` (Redis down) is deliberately ignored: the
     placement is what the director asked for, and the missing solve self-heals via the
@@ -191,6 +195,13 @@ async def place_fixture(
     # no drawn-event gate, because a fixture in hand means a draw is cut by definition.
     # A ``None`` return (Redis down) deliberately costs the solve, never the placement.
     await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
+    # The placement changed a time and a table on the event's panels, so its active
+    # entrants are hinted — and this staging is NOT redundant with the call fan-out
+    # below. An **unpin** (clearing the table / the start) produces an empty fan-out
+    # and notifies nobody, so without this the one placement edit that removes a
+    # promised time from a player's panel would be the one edit that never told them.
+    # Staged on this transaction, so a refusal or a rollback hints nobody.
+    await stage_event_entrant_hints(db, [fixture.event_id])
     await db.commit()
     # Post-commit, by design: the pin and its in-app rows are durable; push/email
     # fan-out is best-effort (``app.match_calls``'s atomicity contract).
