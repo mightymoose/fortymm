@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo layout
 
-Monorepo with three deployable/test units:
+Monorepo with three deployable/test units — `api/` (FastAPI), `web-client/`
+(Vite/React SPA), `e2e/`. Each unit's stack and dependencies are in its own
+manifest. The one thing worth stating up front: **`e2e/` is the composed-stack
+Playwright suite and `web-client/e2e/` is the web-client-only one — both exist
+intentionally.**
 
-- `api/` — FastAPI service (Python 3.13). Async SQLAlchemy + Alembic against Postgres, RQ worker on Redis runs CP-SAT (`ortools`) solver jobs.
-- `web-client/` — Vite + React 19 + TypeScript SPA. TanStack Router (file-based, generated route tree) + TanStack Query, Tailwind 4, shadcn (`radix-nova` style, lucide icons), MSW for dev/test mocks.
-- `e2e/` — Root Playwright suite that exercises the composed stack (separate from `web-client/e2e/`, which is the web-client-only Playwright suite). Both exist intentionally.
-
-Toolchain pinned in `mise.toml` (Node 26.1.0, Python 3.13). Run `mise install` once.
+Toolchain pinned in `mise.toml`. Run `mise install` once.
 
 ## Domain-expert subagents — delegate layer-scoped work
 
@@ -49,29 +49,22 @@ silently runs an old set of skills/agents (they register at launch).
 
 ## Common commands
 
-API (`cd api`, after `python -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'`):
+API (`cd api`, after `python -m venv .venv && source .venv/bin/activate && pip
+install -e '.[dev]'`). The usual `uvicorn` / `alembic` / `pytest` / `mypy`
+invocations apply. The two that aren't guessable:
 
 ```bash
-uvicorn app.main:app --reload                  # dev server on :8000
 rq worker solver --url "$REDIS_URL"            # required for /v1/health to pass
-alembic upgrade head                           # apply migrations
-alembic revision --autogenerate -m "..."       # new migration (autogen reads app.models)
-pytest                                         # all tests; testcontainers spins ephemeral Postgres
-pytest tests/test_session.py::test_x           # single test
 TEST_DATABASE_URL=postgresql+asyncpg://... pytest   # skip testcontainers, use existing Postgres
-mypy                                           # type-check app/ (config in [tool.mypy], pyproject.toml)
 ```
 
-Web client (`cd web-client`):
+Docker is required for the default `pytest` run — testcontainers spins an
+ephemeral Postgres. `TEST_DATABASE_URL` is how you opt out.
 
-```bash
-npm run dev           # Vite on :5173 with MSW intercepts (DEV-only, see main.tsx)
-npm run build         # tsc -b && vite build
-npm run lint
-npm run test:run      # vitest, jsdom + MSW server
-npm run test -- src/components/user-menu.test.tsx   # single vitest file
-npm run test:e2e      # web-client Playwright (config spins its own dev server on :5174)
-```
+Web client (`cd web-client`) — the scripts are in `package.json`. Two things
+they don't tell you: `npm run dev` serves :5173 with **MSW intercepts active in
+DEV only** (see `src/main.tsx`), and `npm run test:e2e` spins its **own** dev
+server on :5174.
 
 Root e2e (`cd e2e`):
 
@@ -82,18 +75,12 @@ E2E_BASE_URL=http://localhost:8080 npm run test     # against an already-running
 
 Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on **:8080** proxies `/api/*` → api, `/` → web-client. Use this URL when you want the web app to talk to the real API instead of MSW.
 
-**UAT runs on Kubernetes (Helm + k3d).** UAT is the one prod-like stack that does *not* use docker-compose. `scripts/redeploy-uat.sh` (a.k.a. `mise run redeploy-uat`) provisions a single-node **k3d** cluster `fortymm-uat`, builds the api/web images (same `api/Dockerfile.dev` + `web-client/Dockerfile.uat`), `k3d image import`s them, syncs Secrets from the gitignored `.env` + `secrets/*.p8`, and `helm upgrade --install`s the chart at **`deploy/uat/`**. The chart reproduces the old compose topology (postgres, redis, api, worker, web-client, routing nginx); migrations + seeds run as a `post-install,post-upgrade` Helm hook **Job** (not in the api boot command). Routing nginx is a **NodePort** (30084); k3d maps host **:8084** → that NodePort, so host Caddy (still pointing at `127.0.0.1:8084`) fronts uat.fortymm.com unchanged. Needs `helm` + `k3d` (`brew install helm k3d`). Inspect with `KUBECONFIG=$(k3d kubeconfig write fortymm-uat) kubectl get pods -n fortymm-uat`.
+**Preview stacks — the map. Details and failure modes: `deploy/CLAUDE.md`.**
 
-**UAT is also on the tailnet.** The chart runs a `tailscale/tailscale` proxy (`deploy/uat/templates/tailscale.yaml`, `tailscale.enabled` in values, on by default) that fronts the routing nginx via `tailscale serve`, so UAT is reachable privately at **`https://fortymm-uat.<tailnet>.ts.net`** with auto-HTTPS — independent of the DDNS/router/Caddy chain (which still serves `uat.fortymm.com` unchanged; Tailscale is purely additive). It reads `TS_AUTHKEY` (a reusable, non-ephemeral key from the Tailscale admin console) straight from the `.env`-backed secret, so just add a `TS_AUTHKEY=tskey-...` line to `.env`; `redeploy-uat.sh` errors early if it's missing. The proxy persists its node identity in the `tailscale-state` Secret (survives restarts; no re-auth). Requires HTTPS certs + MagicDNS enabled in the tailnet. Set `tailscale.enabled=false` to skip it.
-
-Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only nginx published):
-- `docker compose -f docker-compose.qa.yml up -d --build` — `fortymm-qa`, nginx on **:8085**, local-only at http://127.0.0.1:8085. Same app shape as UAT, separate project/port/volumes. `down -v` to wipe its data. To run **multiple QA stacks at once**, parameterize per stack: `QA_ID=<id> QA_PORT=<port> QA_MAILPIT_PORT=<port>` override the project name, nginx host port (+`APP_BASE_URL`), and Mailpit port. `scripts/qa-up.sh [id]` picks a free port trio automatically and prints the assigned URL.
-
-**Preview-stack email.** The **QA** stack runs a `mailpit` service that captures *all* outbound email instead of relaying it through the real Postmark account in `.env`. Its api/worker `environment:` blocks override `SMTP_*` (`SMTP_HOST=mailpit`, `:1025`, no TLS, blank creds) so it can never send real mail — the worker's RQ `email` jobs (confirmation / magic-link sign-in / account-merge, see `api/app/email.py`) land in Mailpit. Read them at the Mailpit web UI: **QA → http://127.0.0.1:8087** (host-local only; not proxied by Caddy, since captured mail contains live sign-in links). QA also overrides `APP_BASE_URL` to `http://127.0.0.1:8085` so captured links are clickable. To verify a sign-in/confirmation flow on QA, trigger it in the UI then open the Mailpit UI to grab the link.
-
-**UAT sends real email.** Unlike QA, the UAT stack does *not* run Mailpit — it relays through the live Postmark account configured by `SMTP_*` in `.env`. Mail triggered on UAT lands in real inboxes.
-
-Workflow commands: `/land-the-plane` (ship the branch), `/qa-review` (adversarial "Quinn" QA pass in a subagent against the QA stack), `/strangle` (quartet extraction).
+| Stack | How | Where | Email |
+| --- | --- | --- | --- |
+| QA | `scripts/qa-up.sh [id]` (or `docker compose -f docker-compose.qa.yml`) | :8085 | captured in **Mailpit** :8087 — never sends real mail |
+| UAT | `mise run redeploy-uat` — Helm + **k3d**, *not* compose, chart at `deploy/uat/` | :8084, `uat.fortymm.com`, and `https://fortymm-uat.<tailnet>.ts.net` | **real Postmark** — lands in real inboxes |
 
 ## Cross-cutting invariants
 
@@ -103,10 +90,6 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **BFF endpoints — one per page.** Each page-level UI surface has a single backend endpoint that returns all the data it needs, pre-shaped for that page; joining, aggregation, and status-label mapping happen on the server, current-user-aware. Exception: independently-interactive widgets (typeaheads, infinite-scroll panels) keep their own endpoints. Rule of thumb: if the widget fetches in response to user input rather than on page load, it's its own endpoint.
 
-**Parse untrusted data at every boundary.** The parser is idiomatic to each surface: the API validates request/response bodies with **Pydantic** (`api/CLAUDE.md` — "type the I/O boundaries"); the iOS app decodes with **`Codable`** against generated `ios/Fortymm/Generated/Types.swift`; the **web client uses Zod** everywhere (`web-client/CLAUDE.md` — `## Boundaries` and `## Forms`).
+**Parse untrusted data at every boundary** — see `.claude/rules/parse-at-boundaries.md`.
 
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).
-
-## Conventions
-
-- Docker is required for the default API test run (testcontainers). Set `TEST_DATABASE_URL` to opt out.

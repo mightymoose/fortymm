@@ -8,23 +8,22 @@ invariants still apply.
 
 Native SwiftUI app. The `Fortymm.xcodeproj` is managed directly by Xcode — no
 xcodegen / Tuist / SPM-only setup. One app target (`Fortymm`), **no test target**
-(see Gotchas). Sources live in `Fortymm/`, organized by feature folder:
+(see Gotchas).
 
-- `Fortymm/FortymmApp.swift` — `@main` entry; injects the `AppDelegate` (APNs bridge) and renders `RootView` forced to dark mode.
-- `Fortymm/Navigation/` — `RootView` (session gate + deep-link cover), `MainTabView`, `DeepLink`, `LoadingView`.
-- `Fortymm/Session/` — `SessionStore` (the app's session lifecycle store) + `SessionModels`.
-- `Fortymm/Networking/` — `APIClient` (URLSession wrapper), `SessionTokenStore` (Keychain-backed actor), `KeychainStore`.
-- `Fortymm/MatchFlow/` — the match domain: `MatchAPI.swift` (DTOs), `MatchService.swift` (DTO→view-model + verbs), `MatchModels.swift` (view models), `ScoreEntryView`, `MatchDetailView`, `MatchFlowView`, `NewMatchView`, etc.
-- `Fortymm/Dashboard/`, `Fortymm/Matches/`, `Fortymm/Login/`, `Fortymm/Profile/` — one folder per page-level feature; each holds its views, its `*Store` and/or `*Service`, and its models.
-- `Fortymm/Components/` — reusable, ViewModel-free UI primitives (`FMButton`, `FMCard`, `FMBadge`, `FMAvatar`, `FMTextField`, …) and view modifiers.
-- `Fortymm/Tokens/` — design tokens: `Color+Tokens` (`FMColor`), `Typography` (`FMFont`, `FMSpace`).
-- `Fortymm/DesignSystem/` — `DesignSystemView`, a showcase of the FortyMM-branded component kit.
-- `Fortymm/Notifications/` — `PushNotificationManager` (APNs).
-- `Fortymm/Generated/Types.swift` — generated OpenAPI reference types (see Common commands).
-- `openapi/` — the generator config + `fix_openapi_nullable.py`.
-- `Tools/OpenAPIGeneratorCLI/` — standalone `Package.swift` that only pins `swift-openapi-generator` for `swift run`; never built as part of the app.
-- `fastlane/` — `Fastfile` (`build`, `beta` lanes), `Appfile`; secrets in the gitignored `fastlane/.env` + `.p8`.
-- `README.md` — first-time Xcode setup + signing.
+Sources live in `Fortymm/`, one folder per page-level feature (`Dashboard/`,
+`Matches/`, `Login/`, `Profile/`, `MatchFlow/`), each holding its views, its
+`*Store` and/or `*Service`, and its models — plus shared `Navigation/`,
+`Session/`, `Networking/`, `Components/` (ViewModel-free UI primitives),
+`Tokens/` (design tokens), and `Notifications/`. Browse the tree for specifics.
+
+Three things the tree won't tell you:
+
+- `Fortymm/Generated/Types.swift` is **generated** — see `## Cross-layer regen`.
+  `openapi/` holds the generator config + `fix_openapi_nullable.py`.
+- `Tools/OpenAPIGeneratorCLI/` is a standalone `Package.swift` that only pins
+  `swift-openapi-generator` for `swift run`. It is **never built as part of the
+  app**.
+- `fastlane/` secrets live in the gitignored `fastlane/.env` + `.p8`.
 
 ## Common commands
 

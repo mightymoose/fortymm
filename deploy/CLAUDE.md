@@ -1,10 +1,10 @@
 # CLAUDE.md — infra / deploy runbook
 
-Operational runbook for the fortymm infra surface. This is where the deploy
-topology gets *operated*, not re-explained: the root `CLAUDE.md` is the source
-of truth for the topology (UAT k3d/Helm chart, QA/dev/compose stacks, Mailpit,
-port map, `redeploy-uat.sh`, tailnet). Read the root's infra sections first,
-then use this file for the failure modes that bite in practice.
+Operational runbook for the fortymm infra surface, and the source of truth for
+the deploy topology — the UAT k3d/Helm chart, the QA/dev compose stacks,
+Mailpit, the port map, `redeploy-uat.sh`, and the tailnet. The root `CLAUDE.md`
+carries only the one-table summary. `## Topology` below is the detail;
+`## Operational failure modes` is what bites in practice.
 
 ## The surface
 
@@ -33,8 +33,18 @@ Infra has no single directory — it spans:
 | QA    | `scripts/qa-up.sh [id]` | :8085 (auto) | built artifacts, MSW off, **Mailpit :8087** captures all mail; multi-stack |
 | UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; sends REAL Postmark email |
 
-See the root `CLAUDE.md` for the full topology (Caddy/DDNS/tailnet chain, port
-table, Mailpit, secrets). Don't duplicate it here.
+## Topology
+
+**UAT runs on Kubernetes (Helm + k3d).** UAT is the one prod-like stack that does *not* use docker-compose. `scripts/redeploy-uat.sh` (a.k.a. `mise run redeploy-uat`) provisions a single-node **k3d** cluster `fortymm-uat`, builds the api/web images (same `api/Dockerfile.dev` + `web-client/Dockerfile.uat`), `k3d image import`s them, syncs Secrets from the gitignored `.env` + `secrets/*.p8`, and `helm upgrade --install`s the chart at **`deploy/uat/`**. The chart reproduces the old compose topology (postgres, redis, api, worker, web-client, routing nginx); migrations + seeds run as a `post-install,post-upgrade` Helm hook **Job** (not in the api boot command). Routing nginx is a **NodePort** (30084); k3d maps host **:8084** → that NodePort, so host Caddy (still pointing at `127.0.0.1:8084`) fronts uat.fortymm.com unchanged. Needs `helm` + `k3d` (`brew install helm k3d`). Inspect with `KUBECONFIG=$(k3d kubeconfig write fortymm-uat) kubectl get pods -n fortymm-uat`.
+
+**UAT is also on the tailnet.** The chart runs a `tailscale/tailscale` proxy (`deploy/uat/templates/tailscale.yaml`, `tailscale.enabled` in values, on by default) that fronts the routing nginx via `tailscale serve`, so UAT is reachable privately at **`https://fortymm-uat.<tailnet>.ts.net`** with auto-HTTPS — independent of the DDNS/router/Caddy chain (which still serves `uat.fortymm.com` unchanged; Tailscale is purely additive). It reads `TS_AUTHKEY` (a reusable, non-ephemeral key from the Tailscale admin console) straight from the `.env`-backed secret, so just add a `TS_AUTHKEY=tskey-...` line to `.env`; `redeploy-uat.sh` errors early if it's missing. The proxy persists its node identity in the `tailscale-state` Secret (survives restarts; no re-auth). Requires HTTPS certs + MagicDNS enabled in the tailnet. Set `tailscale.enabled=false` to skip it.
+
+Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only nginx published):
+- `docker compose -f docker-compose.qa.yml up -d --build` — `fortymm-qa`, nginx on **:8085**, local-only at http://127.0.0.1:8085. Same app shape as UAT, separate project/port/volumes. `down -v` to wipe its data. To run **multiple QA stacks at once**, parameterize per stack: `QA_ID=<id> QA_PORT=<port> QA_MAILPIT_PORT=<port>` override the project name, nginx host port (+`APP_BASE_URL`), and Mailpit port. `scripts/qa-up.sh [id]` picks a free port trio automatically and prints the assigned URL.
+
+**Preview-stack email.** The **QA** stack runs a `mailpit` service that captures *all* outbound email instead of relaying it through the real Postmark account in `.env`. Its api/worker `environment:` blocks override `SMTP_*` (`SMTP_HOST=mailpit`, `:1025`, no TLS, blank creds) so it can never send real mail — the worker's RQ `email` jobs (confirmation / magic-link sign-in / account-merge, see `api/app/email.py`) land in Mailpit. Read them at the Mailpit web UI: **QA → http://127.0.0.1:8087** (host-local only; not proxied by Caddy, since captured mail contains live sign-in links). QA also overrides `APP_BASE_URL` to `http://127.0.0.1:8085` so captured links are clickable. To verify a sign-in/confirmation flow on QA, trigger it in the UI then open the Mailpit UI to grab the link.
+
+**UAT sends real email.** Unlike QA, the UAT stack does *not* run Mailpit — it relays through the live Postmark account configured by `SMTP_*` in `.env`. Mail triggered on UAT lands in real inboxes.
 
 ## Common commands
 
@@ -160,6 +170,7 @@ unprompted.**
 
 ## Note on host-specific details
 
-The exact router/DDNS/Caddy/tailnet chain, precise port assignments, and secret
-locations live in the **operator's environment and the root `CLAUDE.md`**, not
-here. This runbook stays repo-general; don't hardcode host specifics into it.
+The exact router/DDNS/Caddy chain and secret *values* live in the **operator's
+environment**, not in any checked-in file. `## Topology` above documents the
+repo-general shape (chart, stacks, ports, mail routing); don't hardcode
+host-specific wiring or credentials into it.
