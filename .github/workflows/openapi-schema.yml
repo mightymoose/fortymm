@@ -151,8 +151,7 @@ jobs:
           key: ${{ runner.os }}-swift-6.1-RELEASE-ubuntu24.04
 
       - name: Install Swift toolchain
-        if: needs.changes.outputs.openapi == 'true'
-        if: steps.swift-cache.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.openapi == 'true' && steps.swift-cache.outputs.cache-hit != 'true'
         run: |
           # Not swift-actions/setup-swift: its Swiftly installer verifies a
           # GPG signature against a key the runner's keyring doesn't have,
