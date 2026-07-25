@@ -6721,6 +6721,249 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
     )
 
 
+# ----- single-elimination: the draw advances a winner into the next round (#785) ------
+# Round-robin knows every pairing at the cut, so its completion seam is honestly empty
+# (``test_completing_a_round_robin_match_materializes_nothing_new`` above pins that, and
+# ``test_going_live_materializes_the_whole_pool`` pins its whole-pool go-live). Single-
+# elim is the first draw type whose ``advance()`` does real work: a decided fixture
+# seats its winner **forward** into its successor's side, and a fixture made whole by
+# those fills materializes into a match in the SAME transaction (``materialize_event``
+# applies the plan's ``side_fills`` before its readiness pass). These drive that end to
+# end through the real go-live, call and score routes.
+
+
+def _se_payload(**overrides: Any) -> dict[str, Any]:
+    """A **single-elimination** event — un-pooled, so ``pools=[]`` (ADR-0785). Rated
+    best-of-3 by default so the completion flow's propose→accept is the exercised path;
+    ``predicates=[]`` because eligibility is not what these assert."""
+    return _event_payload(
+        **{
+            "draw_type": "single-elim",
+            "pools": [],
+            "predicates": [],
+            "match_settings": {"rated": True, "length_games": 3},
+            **overrides,
+        }
+    )
+
+
+async def test_a_single_elim_event_plays_through_to_a_champion(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A 4-entrant single-elim bracket, driven from go-live to a champion through the
+    real routes, proving the completion seam seats each winner forward and materializes
+    the fixture that becomes whole:
+
+    * **go-live** materializes both semifinals (both sides known at the cut) but not the
+      final (both sides TBD);
+    * completing **one** semifinal seats its winner onto the final's side but leaves the
+      final half-known — so no match is created yet;
+    * completing the **second** makes the final whole, and it materializes into a match
+      in that same transaction, seated **side 1 ← ``entry_a`` (SF1's winner), side 2 ←
+      ``entry_b`` (SF2's winner)**;
+    * completing the **final** writes its ``winner_entry_id`` — the champion, read from
+      the result, seated into no fresh match — and re-running the advance materializes
+      nothing (idempotence).
+
+    Standard seeding puts seed 1 v 4 in SF1 and seed 2 v 3 in SF2; the owner is seed 1
+    and wins throughout, so the final is 1 v 2 and seed 1 is champion.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "se-seed2") as (c2, u2),
+        opponent_session(db_session, "se-seed3") as (c3, u3),
+        opponent_session(db_session, "se-seed4") as (c4, u4),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        e1 = await _enter(
+            db_session,
+            event["id"],
+            owner,
+            seed=1,
+            created_at=base + timedelta(minutes=1),
+        )
+        e2 = await _enter(
+            db_session, event["id"], u2, seed=2, created_at=base + timedelta(minutes=2)
+        )
+        e3 = await _enter(
+            db_session, event["id"], u3, seed=3, created_at=base + timedelta(minutes=3)
+        )
+        e4 = await _enter(
+            db_session, event["id"], u4, seed=4, created_at=base + timedelta(minutes=4)
+        )
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+
+        clients = {e1.id: client, e2.id: c2, e3.id: c3, e4.id: c4}
+
+        # -- go-live: both semifinals materialize; the final does not (both sides TBD).
+        by_rp = {
+            (f.round, f.position): f
+            for f in await _fixture_rows(db_session, event["id"])
+        }
+        assert set(by_rp) == {(1, 1), (1, 2), (2, 1)}, (
+            "two round-1 semifinals feed one round-2 final"
+        )
+        sf1, sf2, final = by_rp[(1, 1)], by_rp[(1, 2)], by_rp[(2, 1)]
+        assert {sf1.entry_a_id, sf1.entry_b_id} == {e1.id, e4.id}, "SF1 is seed 1 v 4"
+        assert {sf2.entry_a_id, sf2.entry_b_id} == {e2.id, e3.id}, "SF2 is seed 2 v 3"
+        assert sf1.match_id is not None and sf2.match_id is not None, (
+            "both semifinals materialized at go-live"
+        )
+        assert final.entry_a_id is None and final.entry_b_id is None, (
+            "the final's sides are TBD until the semifinals decide them"
+        )
+        assert final.match_id is None
+        assert await _match_count(db_session) == 2, "only the two semifinals so far"
+
+        # Born pending (scheduled) — call them to a table before they can be scored.
+        await _call_fixtures(db_session, tournament_id, [sf1, sf2])
+
+        # -- SF1: seed 1 beats seed 4. The winner is seated onto the final's side a, but
+        #    the final is still half-known (side b TBD), so no match is created.
+        await _win_fixture_match(
+            sf1, clients_by_entry=clients, winner_entry_id=e1.id, rated=True
+        )
+        (final_after_sf1,) = [
+            f for f in await _fixture_rows(db_session, event["id"]) if f.round == 2
+        ]
+        assert final_after_sf1.entry_a_id == e1.id, (
+            "SF1's winner seats into the final's side a"
+        )
+        assert final_after_sf1.entry_b_id is None, (
+            "the final is not whole — SF2 is undecided"
+        )
+        assert final_after_sf1.match_id is None
+        assert await _match_count(db_session) == 2, (
+            "a half-filled final does not materialize"
+        )
+
+        # -- SF2: seed 2 beats seed 3. Now the final is whole and materializes at once.
+        await _win_fixture_match(
+            sf2, clients_by_entry=clients, winner_entry_id=e2.id, rated=True
+        )
+        (final_row,) = [
+            f for f in await _fixture_rows(db_session, event["id"]) if f.round == 2
+        ]
+        assert final_row.entry_a_id == e1.id and final_row.entry_b_id == e2.id, (
+            "both winners are seated: SF1 → side a, SF2 → side b"
+        )
+        assert final_row.match_id is not None, (
+            "the whole final materialized in the same transaction as SF2's completion"
+        )
+        assert await _match_count(db_session) == 3, (
+            "the final is the third and last match"
+        )
+
+        # Side 1 ← entry_a (seed 1), side 2 ← entry_b (seed 2) — the fixed convention.
+        final_match = await _load_match(db_session, final_row.match_id)
+        by_number = {side.side_number: side for side in final_match.sides}
+        assert [p.user_id for p in by_number[1].players] == [owner.id], (
+            "side 1 seats SF1's winner"
+        )
+        assert [p.user_id for p in by_number[2].players] == [u2.id], (
+            "side 2 seats SF2's winner"
+        )
+
+        # -- the final: seed 1 wins the event.
+        await _call_fixtures(db_session, tournament_id, [final_row])
+        await _win_fixture_match(
+            final_row, clients_by_entry=clients, winner_entry_id=e1.id, rated=True
+        )
+
+    (champion_fixture,) = [
+        f for f in await _fixture_rows(db_session, event["id"]) if f.round == 2
+    ]
+    assert champion_fixture.winner_entry_id == e1.id, "seed 1 is the champion"
+    assert await _match_count(db_session) == 3, (
+        "the champion is read from the final's result — the final has no successor to "
+        "seat, so no fresh match is created"
+    )
+
+    # -- idempotence: re-running the advance/materialize over the finished bracket
+    #    seats no duplicate side and proposes no duplicate match.
+    tournament = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    await materialize_live_draw(db_session, tournament)
+    await db_session.commit()
+    assert await _match_count(db_session) == 3, (
+        "a second advance over the finished bracket materializes nothing new"
+    )
+
+
+async def test_going_live_materializes_a_both_byes_round_two_fixture(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A bye-heavy single-elim (5 entrants in an 8-slot bracket) has one round-2 fixture
+    **both** of whose feeders were byes — a fully-known pairing at the cut — and it
+    materializes at go-live like any ordinary ready fixture, while the round-2 fixture
+    with one bye and one still-TBD feeder does not.
+
+    Five in an 8-bracket byes seeds 1, 2 and 3. Standard seeding leaves exactly one
+    round-1 match (seed 4 v 5) and two round-2 slots: seed 1 awaiting that match's
+    winner (half-known), and seed 3 v seed 2 (both byed straight in — whole)."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    entries = [
+        await _enter(
+            db_session,
+            event["id"],
+            owner,
+            seed=1,
+            created_at=base + timedelta(minutes=1),
+        )
+    ]
+    for seed in range(2, 6):
+        other = await make_user(db_session, f"se-bye-p{seed}")
+        entries.append(
+            await _enter(
+                db_session,
+                event["id"],
+                other,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+        )
+    e1, e2, e3, e4, e5 = entries
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    by_rp = {
+        (f.round, f.position): f for f in await _fixture_rows(db_session, event["id"])
+    }
+    assert set(by_rp) == {(1, 2), (2, 1), (2, 2), (3, 1)}, (
+        "three seeds byed leaves one round-1 match; then two round-2 slots and a final"
+    )
+    # The lone round-1 match seats the two un-byed seeds and materializes.
+    round_one = by_rp[(1, 2)]
+    assert {round_one.entry_a_id, round_one.entry_b_id} == {e4.id, e5.id}
+    assert round_one.match_id is not None, "the only real round-1 pairing materializes"
+    # Round-2 slot 1: one bye (seed 1) + one TBD feeder — half-known, so not ready.
+    half_known = by_rp[(2, 1)]
+    assert half_known.entry_a_id == e1.id and half_known.entry_b_id is None
+    assert half_known.match_id is None, "a half-known fixture does not materialize"
+    # Round-2 slot 2: BOTH feeders byed at the cut — whole, so it materializes.
+    both_byes = by_rp[(2, 2)]
+    assert {both_byes.entry_a_id, both_byes.entry_b_id} == {e2.id, e3.id}
+    assert both_byes.match_id is not None, (
+        "a round-2 fixture both of whose feeders were byes is whole at the cut and "
+        "materializes at go-live"
+    )
+    assert by_rp[(3, 1)].match_id is None, "the final is untouched"
+    assert await _match_count(db_session) == 2, (
+        "the one real round-1 match and the both-byes round-2 match"
+    )
+
+
 async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
