@@ -62,6 +62,17 @@ struct DashboardView: View {
             // Returning to the foreground may surface cross-device changes (a
             // match the other player just accepted) — refetch in place.
             .refetchOnForeground { Task { await store.load(force: true) } }
+            // …and while the dashboard is actually in front, don't wait to be
+            // returned to: hold the hint stream open and refetch the moment the
+            // server says this user's dashboard moved (the opponent accepted, a
+            // game score landed, the draw advanced). Same in-place `load(force:)`
+            // as every other trigger — the content on screen stays put and is
+            // swapped when the new payload arrives, so a push never blanks a
+            // dashboard the user is reading. The stream is torn down when the
+            // app backgrounds or another tab is selected.
+            .refetchOnRealtimeHint(whileSelected: isSelected) {
+                Task { await store.load(force: true) }
+            }
             // The signed-in identity just changed under us — an in-app sign-in /
             // account merge folded a new user into the session. The dashboard
             // payload (rating, opponent) is now for the wrong account; refetch so
