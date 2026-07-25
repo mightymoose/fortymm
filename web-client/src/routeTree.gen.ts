@@ -9,46 +9,42 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as AppRouteRouteImport } from './routes/_app/route'
-import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
-import { Route as AppAdminRouteImport } from './routes/_app/admin'
-import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
-import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
-import { Route as AppSettingsRouteImport } from './routes/_app/settings'
-import { Route as AppTournamentsRouteImport } from './routes/_app/tournaments'
+import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
+import { Route as AppRouteRouteImport } from './routes/_app/route'
+import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginIndexRouteImport } from './routes/login.index'
-import { Route as LoginSentRouteImport } from './routes/login.sent'
-import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
-import { Route as AppAdminIndexRouteImport } from './routes/_app/admin.index'
-import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
-import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
-import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
-import { Route as AppAdminScheduleSolvesRouteImport } from './routes/_app/admin.schedule-solves'
-import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
-import { Route as AppMatchesIndexRouteImport } from './routes/_app/matches/index'
-import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
-import { Route as AppNotificationsIndexRouteImport } from './routes/_app/notifications.index'
-import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
-import { Route as AppPlayersIndexRouteImport } from './routes/_app/players/index'
-import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$userId'
+import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
+import { Route as LoginSentRouteImport } from './routes/login.sent'
+import { Route as AppTournamentsRouteImport } from './routes/_app/tournaments'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
+import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
+import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppTournamentsIndexRouteImport } from './routes/_app/tournaments/index'
+import { Route as AppPlayersIndexRouteImport } from './routes/_app/players/index'
+import { Route as AppNotificationsIndexRouteImport } from './routes/_app/notifications.index'
+import { Route as AppMatchesIndexRouteImport } from './routes/_app/matches/index'
+import { Route as AppAdminIndexRouteImport } from './routes/_app/admin.index'
 import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/tournaments.$tournamentId'
+import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$userId'
+import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
+import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
+import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
+import { Route as AppAdminScheduleSolvesRouteImport } from './routes/_app/admin.schedule-solves'
+import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
+import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
+import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
 import { Route as AppPlayersUserIdMatchesRouteImport } from './routes/_app/players/$userId_.matches'
 import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/matches.$matchId.results.new'
-import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
+import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppRouteRoute = AppRouteRouteImport.update({
-  id: '/_app',
+const DesignSystemRoute = DesignSystemRouteImport.update({
+  id: '/design-system',
+  path: '/design-system',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
@@ -56,49 +52,18 @@ const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
   path: '/confirm-email',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DesignSystemRoute = DesignSystemRouteImport.update({
-  id: '/design-system',
-  path: '/design-system',
+const AppRouteRoute = AppRouteRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppAdminRoute = AppAdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppDashboardRoute = AppDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppNotificationsRoute = AppNotificationsRouteImport.update({
-  id: '/notifications',
-  path: '/notifications',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppTournamentsRoute = AppTournamentsRouteImport.update({
-  id: '/tournaments',
-  path: '/tournaments',
-  getParentRoute: () => AppRouteRoute,
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const LoginIndexRoute = LoginIndexRouteImport.update({
   id: '/login/',
   path: '/login/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginSentRoute = LoginSentRouteImport.update({
-  id: '/login/sent',
-  path: '/login/sent',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginVerifyingRoute = LoginVerifyingRouteImport.update({
-  id: '/login/verifying',
-  path: '/login/verifying',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginWelcomeRoute = LoginWelcomeRouteImport.update({
@@ -106,65 +71,39 @@ const LoginWelcomeRoute = LoginWelcomeRouteImport.update({
   path: '/login/welcome',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppAdminRoute,
+const LoginVerifyingRoute = LoginVerifyingRouteImport.update({
+  id: '/login/verifying',
+  path: '/login/verifying',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppAdminBroadcastRoute = AppAdminBroadcastRouteImport.update({
-  id: '/broadcast',
-  path: '/broadcast',
-  getParentRoute: () => AppAdminRoute,
+const LoginSentRoute = LoginSentRouteImport.update({
+  id: '/login/sent',
+  path: '/login/sent',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppAdminPermissionsRoute = AppAdminPermissionsRouteImport.update({
-  id: '/permissions',
-  path: '/permissions',
-  getParentRoute: () => AppAdminRoute,
-} as any)
-const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
-  id: '/roles',
-  path: '/roles',
-  getParentRoute: () => AppAdminRoute,
-} as any)
-const AppAdminScheduleSolvesRoute = AppAdminScheduleSolvesRouteImport.update({
-  id: '/schedule-solves',
-  path: '/schedule-solves',
-  getParentRoute: () => AppAdminRoute,
-} as any)
-const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => AppAdminRoute,
-} as any)
-const AppMatchesIndexRoute = AppMatchesIndexRouteImport.update({
-  id: '/matches/',
-  path: '/matches/',
+const AppTournamentsRoute = AppTournamentsRouteImport.update({
+  id: '/tournaments',
+  path: '/tournaments',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppMatchesNewRoute = AppMatchesNewRouteImport.update({
-  id: '/matches/new',
-  path: '/matches/new',
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppNotificationsRoute,
-} as any)
-const AppNotificationsSettingsRoute =
-  AppNotificationsSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AppNotificationsRoute,
-  } as any)
-const AppPlayersIndexRoute = AppPlayersIndexRouteImport.update({
-  id: '/players/',
-  path: '/players/',
+const AppNotificationsRoute = AppNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
-  id: '/players/$userId',
-  path: '/players/$userId',
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppTournamentsIndexRoute = AppTournamentsIndexRouteImport.update({
@@ -172,12 +111,73 @@ const AppTournamentsIndexRoute = AppTournamentsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppTournamentsRoute,
 } as any)
+const AppPlayersIndexRoute = AppPlayersIndexRouteImport.update({
+  id: '/players/',
+  path: '/players/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppNotificationsRoute,
+} as any)
+const AppMatchesIndexRoute = AppMatchesIndexRouteImport.update({
+  id: '/matches/',
+  path: '/matches/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppTournamentsTournamentIdRoute =
   AppTournamentsTournamentIdRouteImport.update({
     id: '/$tournamentId',
     path: '/$tournamentId',
     getParentRoute: () => AppTournamentsRoute,
   } as any)
+const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
+  id: '/players/$userId',
+  path: '/players/$userId',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsSettingsRoute =
+  AppNotificationsSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppNotificationsRoute,
+  } as any)
+const AppMatchesNewRoute = AppMatchesNewRouteImport.update({
+  id: '/matches/new',
+  path: '/matches/new',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminScheduleSolvesRoute = AppAdminScheduleSolvesRouteImport.update({
+  id: '/schedule-solves',
+  path: '/schedule-solves',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
+  id: '/roles',
+  path: '/roles',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminPermissionsRoute = AppAdminPermissionsRouteImport.update({
+  id: '/permissions',
+  path: '/permissions',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminBroadcastRoute = AppAdminBroadcastRouteImport.update({
+  id: '/broadcast',
+  path: '/broadcast',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppMatchesMatchIdIndexRoute = AppMatchesMatchIdIndexRouteImport.update({
   id: '/matches/$matchId/',
   path: '/matches/$matchId/',
@@ -194,16 +194,16 @@ const AppMatchesMatchIdResultsNewRoute =
     path: '/matches/$matchId/results/new',
     getParentRoute: () => AppRouteRoute,
   } as any)
-const AppMatchesMatchIdGamesGameNumberScoresEditRoute =
-  AppMatchesMatchIdGamesGameNumberScoresEditRouteImport.update({
-    id: '/matches/$matchId/games/$gameNumber/scores/edit',
-    path: '/matches/$matchId/games/$gameNumber/scores/edit',
-    getParentRoute: () => AppRouteRoute,
-  } as any)
 const AppMatchesMatchIdGamesGameNumberScoresNewRoute =
   AppMatchesMatchIdGamesGameNumberScoresNewRouteImport.update({
     id: '/matches/$matchId/games/$gameNumber/scores/new',
     path: '/matches/$matchId/games/$gameNumber/scores/new',
+    getParentRoute: () => AppRouteRoute,
+  } as any)
+const AppMatchesMatchIdGamesGameNumberScoresEditRoute =
+  AppMatchesMatchIdGamesGameNumberScoresEditRouteImport.update({
+    id: '/matches/$matchId/games/$gameNumber/scores/edit',
+    path: '/matches/$matchId/games/$gameNumber/scores/edit',
     getParentRoute: () => AppRouteRoute,
   } as any)
 
@@ -418,18 +418,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteRouteImport
+    '/design-system': {
+      id: '/design-system'
+      path: '/design-system'
+      fullPath: '/design-system'
+      preLoaderRoute: typeof DesignSystemRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/confirm-email': {
@@ -439,67 +432,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConfirmEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/design-system': {
-      id: '/design-system'
-      path: '/design-system'
-      fullPath: '/design-system'
-      preLoaderRoute: typeof DesignSystemRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/admin': {
-      id: '/_app/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AppAdminRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/dashboard': {
-      id: '/_app/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AppDashboardRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/notifications': {
-      id: '/_app/notifications'
-      path: '/notifications'
-      fullPath: '/notifications'
-      preLoaderRoute: typeof AppNotificationsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/tournaments': {
-      id: '/_app/tournaments'
-      path: '/tournaments'
-      fullPath: '/tournaments'
-      preLoaderRoute: typeof AppTournamentsRouteImport
-      parentRoute: typeof AppRouteRoute
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/login/': {
       id: '/login/'
       path: '/login'
       fullPath: '/login/'
       preLoaderRoute: typeof LoginIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login/sent': {
-      id: '/login/sent'
-      path: '/login/sent'
-      fullPath: '/login/sent'
-      preLoaderRoute: typeof LoginSentRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login/verifying': {
-      id: '/login/verifying'
-      path: '/login/verifying'
-      fullPath: '/login/verifying'
-      preLoaderRoute: typeof LoginVerifyingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login/welcome': {
@@ -509,88 +460,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginWelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/admin/': {
-      id: '/_app/admin/'
-      path: '/'
-      fullPath: '/admin/'
-      preLoaderRoute: typeof AppAdminIndexRouteImport
-      parentRoute: typeof AppAdminRoute
+    '/login/verifying': {
+      id: '/login/verifying'
+      path: '/login/verifying'
+      fullPath: '/login/verifying'
+      preLoaderRoute: typeof LoginVerifyingRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/admin/broadcast': {
-      id: '/_app/admin/broadcast'
-      path: '/broadcast'
-      fullPath: '/admin/broadcast'
-      preLoaderRoute: typeof AppAdminBroadcastRouteImport
-      parentRoute: typeof AppAdminRoute
+    '/login/sent': {
+      id: '/login/sent'
+      path: '/login/sent'
+      fullPath: '/login/sent'
+      preLoaderRoute: typeof LoginSentRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/admin/permissions': {
-      id: '/_app/admin/permissions'
-      path: '/permissions'
-      fullPath: '/admin/permissions'
-      preLoaderRoute: typeof AppAdminPermissionsRouteImport
-      parentRoute: typeof AppAdminRoute
-    }
-    '/_app/admin/roles': {
-      id: '/_app/admin/roles'
-      path: '/roles'
-      fullPath: '/admin/roles'
-      preLoaderRoute: typeof AppAdminRolesRouteImport
-      parentRoute: typeof AppAdminRoute
-    }
-    '/_app/admin/schedule-solves': {
-      id: '/_app/admin/schedule-solves'
-      path: '/schedule-solves'
-      fullPath: '/admin/schedule-solves'
-      preLoaderRoute: typeof AppAdminScheduleSolvesRouteImport
-      parentRoute: typeof AppAdminRoute
-    }
-    '/_app/admin/users': {
-      id: '/_app/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof AppAdminUsersRouteImport
-      parentRoute: typeof AppAdminRoute
-    }
-    '/_app/matches/': {
-      id: '/_app/matches/'
-      path: '/matches'
-      fullPath: '/matches/'
-      preLoaderRoute: typeof AppMatchesIndexRouteImport
+    '/_app/tournaments': {
+      id: '/_app/tournaments'
+      path: '/tournaments'
+      fullPath: '/tournaments'
+      preLoaderRoute: typeof AppTournamentsRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/_app/matches/new': {
-      id: '/_app/matches/new'
-      path: '/matches/new'
-      fullPath: '/matches/new'
-      preLoaderRoute: typeof AppMatchesNewRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/notifications/': {
-      id: '/_app/notifications/'
-      path: '/'
-      fullPath: '/notifications/'
-      preLoaderRoute: typeof AppNotificationsIndexRouteImport
-      parentRoute: typeof AppNotificationsRoute
-    }
-    '/_app/notifications/settings': {
-      id: '/_app/notifications/settings'
+    '/_app/settings': {
+      id: '/_app/settings'
       path: '/settings'
-      fullPath: '/notifications/settings'
-      preLoaderRoute: typeof AppNotificationsSettingsRouteImport
-      parentRoute: typeof AppNotificationsRoute
-    }
-    '/_app/players/': {
-      id: '/_app/players/'
-      path: '/players'
-      fullPath: '/players/'
-      preLoaderRoute: typeof AppPlayersIndexRouteImport
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/_app/players/$userId': {
-      id: '/_app/players/$userId'
-      path: '/players/$userId'
-      fullPath: '/players/$userId'
-      preLoaderRoute: typeof AppPlayersUserIdRouteImport
+    '/_app/notifications': {
+      id: '/_app/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppNotificationsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/tournaments/': {
@@ -600,12 +516,96 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTournamentsIndexRouteImport
       parentRoute: typeof AppTournamentsRoute
     }
+    '/_app/players/': {
+      id: '/_app/players/'
+      path: '/players'
+      fullPath: '/players/'
+      preLoaderRoute: typeof AppPlayersIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications/': {
+      id: '/_app/notifications/'
+      path: '/'
+      fullPath: '/notifications/'
+      preLoaderRoute: typeof AppNotificationsIndexRouteImport
+      parentRoute: typeof AppNotificationsRoute
+    }
+    '/_app/matches/': {
+      id: '/_app/matches/'
+      path: '/matches'
+      fullPath: '/matches/'
+      preLoaderRoute: typeof AppMatchesIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin/': {
+      id: '/_app/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AppAdminIndexRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/tournaments/$tournamentId': {
       id: '/_app/tournaments/$tournamentId'
       path: '/$tournamentId'
       fullPath: '/tournaments/$tournamentId'
       preLoaderRoute: typeof AppTournamentsTournamentIdRouteImport
       parentRoute: typeof AppTournamentsRoute
+    }
+    '/_app/players/$userId': {
+      id: '/_app/players/$userId'
+      path: '/players/$userId'
+      fullPath: '/players/$userId'
+      preLoaderRoute: typeof AppPlayersUserIdRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications/settings': {
+      id: '/_app/notifications/settings'
+      path: '/settings'
+      fullPath: '/notifications/settings'
+      preLoaderRoute: typeof AppNotificationsSettingsRouteImport
+      parentRoute: typeof AppNotificationsRoute
+    }
+    '/_app/matches/new': {
+      id: '/_app/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof AppMatchesNewRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin/users': {
+      id: '/_app/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AppAdminUsersRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/schedule-solves': {
+      id: '/_app/admin/schedule-solves'
+      path: '/schedule-solves'
+      fullPath: '/admin/schedule-solves'
+      preLoaderRoute: typeof AppAdminScheduleSolvesRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/roles': {
+      id: '/_app/admin/roles'
+      path: '/roles'
+      fullPath: '/admin/roles'
+      preLoaderRoute: typeof AppAdminRolesRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/permissions': {
+      id: '/_app/admin/permissions'
+      path: '/permissions'
+      fullPath: '/admin/permissions'
+      preLoaderRoute: typeof AppAdminPermissionsRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/broadcast': {
+      id: '/_app/admin/broadcast'
+      path: '/broadcast'
+      fullPath: '/admin/broadcast'
+      preLoaderRoute: typeof AppAdminBroadcastRouteImport
+      parentRoute: typeof AppAdminRoute
     }
     '/_app/matches/$matchId/': {
       id: '/_app/matches/$matchId/'
@@ -628,18 +628,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMatchesMatchIdResultsNewRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/_app/matches/$matchId/games/$gameNumber/scores/edit': {
-      id: '/_app/matches/$matchId/games/$gameNumber/scores/edit'
-      path: '/matches/$matchId/games/$gameNumber/scores/edit'
-      fullPath: '/matches/$matchId/games/$gameNumber/scores/edit'
-      preLoaderRoute: typeof AppMatchesMatchIdGamesGameNumberScoresEditRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
     '/_app/matches/$matchId/games/$gameNumber/scores/new': {
       id: '/_app/matches/$matchId/games/$gameNumber/scores/new'
       path: '/matches/$matchId/games/$gameNumber/scores/new'
       fullPath: '/matches/$matchId/games/$gameNumber/scores/new'
       preLoaderRoute: typeof AppMatchesMatchIdGamesGameNumberScoresNewRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/matches/$matchId/games/$gameNumber/scores/edit': {
+      id: '/_app/matches/$matchId/games/$gameNumber/scores/edit'
+      path: '/matches/$matchId/games/$gameNumber/scores/edit'
+      fullPath: '/matches/$matchId/games/$gameNumber/scores/edit'
+      preLoaderRoute: typeof AppMatchesMatchIdGamesGameNumberScoresEditRouteImport
       parentRoute: typeof AppRouteRoute
     }
   }
