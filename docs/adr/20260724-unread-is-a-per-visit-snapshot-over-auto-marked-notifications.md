@@ -74,10 +74,17 @@ Emitting a notification when a result is accepted, or when a rating changes, is 
 domain-event fan-out feature with its own design surface (what counts as a
 rating-change event, per-match vs digest, copy, read semantics). It is **out of
 scope** here. Until it exists, the `rating_change` category is hidden **client-side
-from both surfaces it renders on** — the filter pills and the preferences matrix —
-so users never see a pill or a channel toggle for a notification that cannot
-arrive. The category remains defined and seeded server-side; the follow-up feature
-un-hides it by flipping one predicate. A tracking issue carries the fan-out work.
+in the taxonomy and preferences query `select`s**, so every surface built from
+those lists drops it — the filter pills and the admin broadcast category picker
+(both render the taxonomy `types`), and the preferences matrix. Filtering at the
+query layer rather than at each render site is deliberate: it is one revert point
+that cannot miss a surface. The trade-off is that the admin broadcast picker also
+loses the category, so an admin cannot send a `rating_change` broadcast while the
+feature is descoped — which is the right call, since such a broadcast would land as
+an un-filterable, un-opt-out-able notification precisely because the user-facing
+pill and pref are gone. The category remains defined and seeded server-side; the
+follow-up feature un-hides it by emptying one list. A tracking issue (#1176)
+carries the fan-out work.
 
 ## Consequences
 
@@ -91,5 +98,6 @@ un-hides it by flipping one predicate. A tracking issue carries the fan-out work
 - **Hiding `rating_change` is a client filter over the server taxonomy**, not a
   taxonomy change. No schema churn, no regen; the follow-up feature reverts it in
   one place. If a `rating_change` notification somehow already exists in a feed, it
-  still renders in the row list — we only suppress the pill and the pref toggle,
-  which are the decorative-when-empty surfaces.
+  still renders in the row list — we only suppress the category *pickers* (the
+  filter pills, the preferences matrix, and the admin broadcast picker), which are
+  the decorative-when-empty surfaces. The feed itself is never filtered.

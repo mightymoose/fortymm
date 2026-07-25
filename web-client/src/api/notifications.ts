@@ -39,10 +39,15 @@ export const NOTIFICATION_TAXONOMY_QUERY_KEY = [
 
 // Categories that are defined + seeded server-side but that nothing ever emits
 // yet, so their filter pill and preferences toggle would be decorative and
-// misleading. We hide them CLIENT-SIDE from the two surfaces that render the
-// category taxonomy — the notifications filter pills and the preferences matrix —
-// without touching the server taxonomy. The follow-up fan-out feature (#1176)
-// starts emitting `rating_change` and un-hides it by emptying this list (#998).
+// misleading. We hide them CLIENT-SIDE in the taxonomy and preferences query
+// selects — so every surface built from those lists drops them: the notifications
+// filter pills and the admin broadcast category picker (both render the taxonomy
+// `types`), and the preferences matrix. Filtering at the query layer rather than
+// at each render site is deliberate — one revert point that can't miss a surface,
+// at the cost of also dropping the category from the admin broadcast picker (fine:
+// a Rating broadcast would be un-filterable and un-opt-out-able while the pill and
+// pref are gone). The server taxonomy is untouched. The follow-up fan-out feature
+// (#1176) starts emitting `rating_change` and un-hides it by emptying this list.
 export const HIDDEN_NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
   'rating_change',
 ]
@@ -244,9 +249,9 @@ export function notificationTaxonomyQueryOptions() {
         await api.GET('/v1/notification-taxonomy'),
       ),
     staleTime: Infinity,
-    // Drop hidden categories from the taxonomy so the filter pills (which map
-    // over `types`) never render one for a notification that can't arrive
-    // (#998). See HIDDEN_NOTIFICATION_CATEGORIES.
+    // Drop hidden categories from the taxonomy so neither the filter pills nor
+    // the admin broadcast category picker (both map over `types`) renders one for
+    // a notification that can't arrive (#998). See HIDDEN_NOTIFICATION_CATEGORIES.
     select: (taxonomy) => ({
       ...taxonomy,
       types: taxonomy.types.filter((type) => !isHiddenCategory(type.key)),
