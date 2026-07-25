@@ -1,7 +1,9 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, notFound, useNavigate } from '@tanstack/react-router'
+import { z } from 'zod'
 
-import { Button } from '@/components/ui/button'
 import { TournamentDetailPage } from '@/components/tournaments/tournament-detail-page'
+import { TournamentNotFound } from '@/components/tournaments/tournament-not-found'
+import { TournamentRouteError } from '@/components/tournaments/tournament-route-error'
 import {
   eventToCreateBody,
   eventToUpdateBody,
@@ -15,11 +17,43 @@ import {
 } from '@/components/tournaments/data/api'
 import { pageTitle } from '@/lib/page-title'
 
+/** The tournament id segment. The API types `tournament_id` as a `uuid.UUID`, so a
+ * non-uuid segment is a URL that names no resource — never a request to make. */
+const tournamentIdSchema = z.string().uuid()
+
 export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
+  // Validate the id at the route boundary, BEFORE any fetch (ADR-1001). A non-uuid
+  // segment (`new`, `abc`, `%20`) throws `notFound()` here, so it lands in
+  // `notFoundComponent` below rather than hitting the API and leaking a Pydantic
+  // "Input should be a valid UUID" string into the error boundary (#992, #1050,
+  // #1090). A router-thrown `notFound` from `params.parse` is tagged with this
+  // route's id, so it renders THIS route's `notFoundComponent`.
+  params: {
+    parse: (raw) => {
+      const parsed = tournamentIdSchema.safeParse(raw.tournamentId)
+      if (!parsed.success) throw notFound()
+      return { tournamentId: parsed.data }
+    },
+  },
   head: () => ({
     meta: [{ title: pageTitle('Tournament') }],
   }),
   component: TournamentDetailRoute,
+  // The two boundaries, and the split between them is the whole of ADR-1001.
+  // `notFoundComponent` owns the one status that is a designed outcome — a
+  // tournament that does not exist: the detail query's `queryFn` converts a 404
+  // into a router `notFound()`, `params.parse` throws one for a malformed id, and
+  // this is the boundary that catches both. `errorComponent` keeps everything that
+  // is genuinely an error — 5xx, network, a bad payload, a 403 (→ AccessDenied) —
+  // and stays retryable.
+  //
+  // Declaring `notFoundComponent` here is NOT optional and NOT a fallback to the
+  // router's `defaultNotFoundComponent`: a route with none of its own has no
+  // not-found boundary mounted at its match at all, so a render-thrown `notFound`
+  // would sail past every route to TanStack's generic "Something went wrong!"
+  // screen.
+  notFoundComponent: TournamentNotFound,
+  errorComponent: TournamentRouteError,
 })
 
 function TournamentDetailRoute() {
@@ -34,29 +68,16 @@ function TournamentDetailRoute() {
 
   const back = () => navigate({ to: '/tournaments' })
 
-  // First load: the query is pending and `tournament` is still undefined.
-  // Show a loading state rather than the not-found screen (which is only for a
-  // resolved 404).
-  if (isPending) {
+  // First load: the query is pending and `tournament` is still undefined — show a
+  // loading state. A resolved 404 no longer lands here at all: the detail query
+  // converts it to a router `notFound()`, which this route's `notFoundComponent`
+  // catches (ADR-1001), and any genuine error is thrown to `errorComponent`. So a
+  // settled, non-pending render always has a `tournament` (the `!tournament` guard
+  // below is a type narrowing for that unreachable case, not a UI state).
+  if (isPending || !tournament) {
     return (
       <div className="mx-auto flex max-w-[600px] items-center justify-center px-12 py-24 text-center">
         <p className="text-[14px] text-[color:var(--fg-3)]">Loading tournament…</p>
-      </div>
-    )
-  }
-
-  // `useTournament` resolves to `null` on a 404 (a 403 bubbles to the
-  // RbacBoundary instead); show the not-found screen only after loading settles.
-  if (!tournament) {
-    return (
-      <div className="mx-auto flex max-w-[600px] flex-col items-center gap-4 px-12 py-24 text-center">
-        <h1 className="text-[20px] font-semibold text-[color:var(--fg-1)]">
-          Tournament not found
-        </h1>
-        <p className="text-[14px] text-[color:var(--fg-3)]">
-          It may have been deleted, or the link is wrong.
-        </p>
-        <Button onClick={back}>Back to tournaments</Button>
       </div>
     )
   }

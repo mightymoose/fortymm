@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { isNotFound } from '@tanstack/react-router'
 import {
   act,
   render,
@@ -120,16 +121,36 @@ describe('useTournament', () => {
     expect(result.current.data).toMatchObject({ id: 't-1' })
   })
 
-  it('resolves to null (not an error) when the id 404s', async () => {
+  it('converts a 404 into a router notFound() — never a null, and never an ApiError (ADR-1001)', async () => {
+    // A missing tournament is a designed state, not an error value: the `queryFn`
+    // throws a router `notFound()`, which `throwOnError` re-throws to a boundary
+    // (the route's `notFoundComponent` in production). So it is the plain
+    // `{ isNotFound: true }` object, NOT an `ApiError`, and emphatically not the
+    // `null` the route used to have to model as "missing". A capturing boundary
+    // reads back what was actually thrown.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     mockTournamentDetailEndpoint(server, () =>
       HttpResponse.json({ detail: 'Tournament not found.' }, { status: 404 }),
     )
 
-    const { result } = renderHook(() => useTournament('missing'))
+    let caught: unknown
+    function Page() {
+      useTournament('missing')
+      return <p>loaded</p>
+    }
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <CaptureBoundary onCatch={(e) => (caught = e)}>
+          <Page />
+        </CaptureBoundary>
+      </QueryClientProvider>,
+    )
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data).toBeNull()
-    expect(result.current.isError).toBe(false)
+    await waitFor(() => expect(caught).toBeDefined())
+    expect(isNotFound(caught)).toBe(true)
+    expect(caught).not.toBeInstanceOf(ApiError)
   })
 })
 
@@ -1490,6 +1511,28 @@ class CatchBoundary extends Component<
 
   static getDerivedStateFromError() {
     return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? <p>the boundary caught it</p> : this.props.children
+  }
+}
+
+/** Like `CatchBoundary`, but hands the caught value to `onCatch` so a test can
+ * inspect *what* was thrown — a router `notFound()` (`{ isNotFound: true }`) is
+ * not an `Error`, so "did it throw a notFound or an ApiError" is a real question. */
+class CaptureBoundary extends Component<
+  { children: ReactNode; onCatch: (error: unknown) => void },
+  { failed: boolean }
+> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    this.props.onCatch(error)
   }
 
   render() {

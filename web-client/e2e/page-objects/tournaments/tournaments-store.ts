@@ -86,7 +86,12 @@ const UNREAD_COUNT: UnreadCountResponse = { unread_count: 0 }
  * rather than passing a stale shape into a green spec.
  */
 
-export const TOURNAMENT_ID = 'bay-area-open-2026'
+// A real **uuid**, not a slug: `tournament_id` is a `uuid.UUID` on the API, and
+// since ADR-1001 the detail route Zod-validates the segment as one at the boundary
+// (`tournaments.$tournamentId.tsx`) — a non-uuid URL throws `notFound()` before any
+// fetch. A slug here (the old `bay-area-open-2026`) would make every detail
+// navigation in this suite land on the not-found page instead of the tournament.
+export const TOURNAMENT_ID = 'b0a1e2a0-0000-4000-8000-000000000001'
 
 /** The events the specs drive, named so the specs never hard-code strings that
  * must agree with the seed below. */

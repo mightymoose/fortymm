@@ -12,6 +12,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import { notFound } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError, api, unwrap } from '@/api/client'
@@ -325,30 +326,57 @@ type TournamentDetail = {
 
 /** The detail query, shared by `useTournament` and `useTables` so both read one
  * cache entry from a single fetch — and one parse. It resolves to the mapped
- * `TournamentDetail` (or `null` on 404); each consumer selects its own projection. A
- * 403 bubbles to the `RbacBoundary`; any other error throws. */
+ * `TournamentDetail`; each consumer selects its own projection.
+ *
+ * **A 404 is converted to a router `notFound()` right here, in the `queryFn`**
+ * (ADR-1001: `docs/adr/1001-a-missing-resource-is-a-not-found-not-an-error.md`).
+ * A missing tournament is not an error — it is a designed state — so it never
+ * becomes an `ApiError` the error boundary sees. The throw lands in the detail
+ * route's `notFoundComponent`, not its `errorComponent`. Two obligations follow,
+ * both discharged on the route (`tournaments.$tournamentId.tsx`):
+ *
+ * - **the route must declare its own `notFoundComponent`.** A render-thrown
+ *   `notFound` with no boundary of its own escapes to TanStack's generic
+ *   "Something went wrong!" screen — `defaultNotFoundComponent` never sees it.
+ * - **it must not be retried.** A 404 fails identically every time, so a retry
+ *   only makes the user watch the skeleton longer before the not-found paints —
+ *   see `retry` below.
+ *
+ * A 403 (a permitted non-creator the server still gates) is NOT converted: it
+ * stays an `ApiError` and reaches the `RbacBoundary` the route wraps around
+ * itself. Any other error throws too. */
 function tournamentDetailQuery(id: string) {
   return queryOptions({
     queryKey: tournamentKey(id),
-    queryFn: async (): Promise<TournamentDetail | null> => {
-      const result = await api.GET('/v1/tournaments/{tournament_id}', {
-        params: { path: { tournament_id: id } },
-      })
-      // A 404 is an expected "doesn't exist" — resolve to null rather than
-      // throw, so the route renders its own not-found screen.
-      if (result.response?.status === 404) return null
-      const payload: TournamentDetailRead = unwrap('load tournament', result)
-      // The parse boundary: `apiToTournament` runs `parseFixtures` over every event's
-      // draw, so a malformed fixture throws HERE — inside the fetch — and is reported
-      // as a failed query rather than half-entering the app.
+    queryFn: async (): Promise<TournamentDetail> => {
+      let payload: TournamentDetailRead
+      try {
+        // The parse boundary: `apiToTournament` runs `parseFixtures` over every event's
+        // draw, so a malformed fixture throws HERE — inside the fetch — and is reported
+        // as a failed query rather than half-entering the app.
+        payload = unwrap(
+          'load tournament',
+          await api.GET('/v1/tournaments/{tournament_id}', {
+            params: { path: { tournament_id: id } },
+          }),
+        )
+      } catch (error) {
+        // The one status that is not an error. `notFound()` returns a plain object
+        // (`{ isNotFound: true }`), NOT an `Error` — anything that can catch it must
+        // tolerate a non-Error throw (the route's `RbacBoundary` narrows on
+        // `instanceof ApiError`, so it does).
+        if (error instanceof ApiError && error.status === 404) throw notFound()
+        throw error
+      }
       return {
         tournament: apiToTournament(payload),
         tables: payload.table_catalogue,
       }
     },
-    // Bubble everything except a 404 (which resolved to null above and never
-    // reaches here as an error) — but only while there is NOTHING on screen. A
-    // 403 on load still reaches the RbacBoundary.
+    // Throw on a first-load failure so it reaches a boundary — the converted 404
+    // lands in the route's `notFoundComponent`, everything else (5xx, a 403, a
+    // network blip, a malformed-draw parse) in its error boundary — but ONLY
+    // while there is nothing on screen.
     //
     // `throwOnError` fires on *background refetch* failures too, not just the
     // first load. Since the entry mutations now reconcile on settle (see below),
@@ -356,20 +384,29 @@ function tournamentDetailQuery(id: string) {
     // whole rendered tournament away — a network blip on Enter is a toast, not a
     // teardown. With data in hand we keep the last-good view and let the
     // mutation's own error toast carry the failure.
-    throwOnError: (error, query) =>
-      !(error instanceof ApiError && error.status === 404) &&
-      query.state.data === undefined,
-    retry: false,
+    throwOnError: (_error, query) => query.state.data === undefined,
+    // Decline to retry a terminal failure, retry a transient server one (ADR-1001).
+    // A converted 404 (a `notFound()`), any other 4xx (a 403 included), and a parse
+    // failure of an otherwise-OK payload all fail identically every time, so a retry
+    // only delays the boundary. A genuine 5xx may clear, so give it a couple of
+    // tries. Anything that is not an `ApiError` (a `notFound()`, a Zod parse throw)
+    // is terminal here and declined.
+    retry: (failureCount, error) => {
+      if (!(error instanceof ApiError) || error.status < 500) return false
+      return failureCount < 2
+    },
   })
 }
 
-/** A single tournament's detail, as a prototype `Tournament` — or `null` when the id
- * 404s (so the detail route can show its "not found" UI). A projection of the parsed
- * cache entry: the mapping already happened, in the `queryFn`. */
+/** A single tournament's detail, as a prototype `Tournament`. A projection of the
+ * parsed cache entry: the mapping already happened, in the `queryFn`. A 404 no
+ * longer resolves to `null` here — it is converted to a router `notFound()` in the
+ * `queryFn` (ADR-1001), which the detail route's `notFoundComponent` catches, so
+ * this never has to model "missing" as a value. */
 export function useTournament(id: string) {
   return useQuery({
     ...tournamentDetailQuery(id),
-    select: (data) => data?.tournament ?? null,
+    select: (data) => data.tournament,
   })
 }
 
@@ -380,7 +417,7 @@ export function useTournament(id: string) {
 export function useTables(id: string): TournamentTable[] {
   const { data } = useQuery({
     ...tournamentDetailQuery(id),
-    select: (data) => data?.tables ?? [],
+    select: (data) => data.tables,
   })
   return data ?? []
 }
