@@ -164,9 +164,9 @@ export function SolveLedgerPage({ page, tournamentId }: SolveLedgerPageProps) {
         total={data.total}
         pageSize={SOLVE_LEDGER_PAGE_SIZE}
         totalPages={totalPages}
-        // Inflected at the call site — the shared footer interpolates a fixed
-        // noun and never singularizes it itself (#1028).
-        noun={data.total === 1 ? 'run' : 'runs'}
+        // The shared footer inflects the noun to the count itself — a lone
+        // result reads "of 1 run", the rest "of N runs" (#1028).
+        noun={{ one: 'run', other: 'runs' }}
       />
     </div>
   )

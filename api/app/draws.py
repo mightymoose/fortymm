@@ -435,9 +435,12 @@ def _snake(
     # Asked of the dealt pools themselves, not of arithmetic on N and P: the refusal
     # should hold whatever the distribution does.
     if any(len(pool_members) < 2 for pool_members in members):
+        entrant_count = len(ordered_entrants)
+        entrant_noun = "entrant" if entrant_count == 1 else "entrants"
+        pool_noun = "pool" if pool_count == 1 else "pools"
         raise DegenerateDraw(
-            f"{len(ordered_entrants)} entrants across {pool_count} pool(s) would leave "
-            "a pool with fewer than 2 entrants, who would have nobody to play."
+            f"{entrant_count} {entrant_noun} across {pool_count} {pool_noun} would "
+            "leave a pool with fewer than 2 entrants, who would have nobody to play."
         )
 
     return [

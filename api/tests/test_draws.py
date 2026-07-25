@@ -410,28 +410,28 @@ class TestRoundRobinCut:
             pytest.param(
                 1,
                 1,
-                "1 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+                "1 entrant across 1 pool would leave a pool with fewer than 2 "
                 "entrants, who would have nobody to play.",
                 id="a-lone-entrant-has-nobody-to-play",
             ),
             pytest.param(
                 0,
                 1,
-                "0 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+                "0 entrants across 1 pool would leave a pool with fewer than 2 "
                 "entrants, who would have nobody to play.",
                 id="a-ghost-pool",
             ),
             pytest.param(
                 3,
                 2,
-                "3 entrants across 2 pool(s) would leave a pool with fewer than 2 "
+                "3 entrants across 2 pools would leave a pool with fewer than 2 "
                 "entrants, who would have nobody to play.",
                 id="the-snake-would-leave-pool-B-with-one",
             ),
             pytest.param(
                 5,
                 3,
-                "5 entrants across 3 pool(s) would leave a pool with fewer than 2 "
+                "5 entrants across 3 pools would leave a pool with fewer than 2 "
                 "entrants, who would have nobody to play.",
                 id="...and-pool-C-with-one",
             ),
@@ -447,6 +447,21 @@ class TestRoundRobinCut:
         # Both numbers, because either one of them is a thing the director can move:
         # cut fewer pools, or go and find another player.
         assert str(excinfo.value) == message
+
+    def test_the_refusal_inflects_its_count_nouns(self) -> None:
+        # Singular counts get singular nouns — never "1 entrants" and never the lazy
+        # "pool(s)" — so a one-entrant, one-pool refusal reads like a sentence.
+        with pytest.raises(DegenerateDraw) as singular:
+            RoundRobinStrategy().plan_initial(_config(1), _ordered(1))
+        singular_message = str(singular.value)
+        assert "1 entrant across 1 pool" in singular_message
+        assert "1 entrants" not in singular_message
+        assert "pool(s)" not in singular_message
+
+        # Plural counts stay plural.
+        with pytest.raises(DegenerateDraw) as plural:
+            RoundRobinStrategy().plan_initial(_config(2), _ordered(3))
+        assert "3 entrants across 2 pools" in str(plural.value)
 
     def test_a_draw_with_no_pools_is_refused(self) -> None:
         with pytest.raises(DegenerateDraw) as excinfo:

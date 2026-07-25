@@ -35,10 +35,14 @@ describe('MatchList', () => {
     // MatchListTable: the settled table renders (no aria-busy once loaded).
     expect(matchListPage.table.getTable()).not.toHaveAttribute('aria-busy')
 
-    // PaginationFooter: the range readout reflects the single match.
+    // PaginationFooter: the range readout reflects the single match, inflected
+    // to the singular. "of 1 match" is a substring of the ungrammatical "of 1
+    // matches", so also assert the plural is absent — otherwise this stays
+    // green against a regression back to a fixed plural.
     expect(matchListPage.footer.getInfo()).toHaveTextContent(
-      'Showing 1–1 of 1 matches',
+      'Showing 1–1 of 1 match',
     )
+    expect(matchListPage.footer.getInfo()).not.toHaveTextContent(/of 1 matches/)
   })
 
   it('renders the Attention tab and the action CTA for an attention row when deep-linked', async () => {

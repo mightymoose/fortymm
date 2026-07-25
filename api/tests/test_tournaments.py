@@ -4730,14 +4730,14 @@ async def test_cutting_a_singles_event_is_allowed(
         pytest.param(
             (POOL_A, POOL_B),
             3,
-            "3 entrants across 2 pool(s) would leave a pool with fewer than 2 "
+            "3 entrants across 2 pools would leave a pool with fewer than 2 "
             "entrants, who would have nobody to play.",
             id="a-pool-of-one",
         ),
         pytest.param(
             (POOL_A,),
             0,
-            "0 entrants across 1 pool(s) would leave a pool with fewer than 2 "
+            "0 entrants across 1 pool would leave a pool with fewer than 2 "
             "entrants, who would have nobody to play.",
             id="no-entrants-at-all",
         ),

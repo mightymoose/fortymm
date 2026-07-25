@@ -37,6 +37,25 @@ export const NOTIFICATION_TAXONOMY_QUERY_KEY = [
   'notification-taxonomy',
 ] as const
 
+// Categories that are defined + seeded server-side but that nothing ever emits
+// yet, so their filter pill and preferences toggle would be decorative and
+// misleading. We hide them CLIENT-SIDE in the taxonomy and preferences query
+// selects — so every surface built from those lists drops them: the notifications
+// filter pills and the admin broadcast category picker (both render the taxonomy
+// `types`), and the preferences matrix. Filtering at the query layer rather than
+// at each render site is deliberate — one revert point that can't miss a surface,
+// at the cost of also dropping the category from the admin broadcast picker (fine:
+// a Rating broadcast would be un-filterable and un-opt-out-able while the pill and
+// pref are gone). The server taxonomy is untouched. The follow-up fan-out feature
+// (#1176) starts emitting `rating_change` and un-hides it by emptying this list.
+export const HIDDEN_NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
+  'rating_change',
+]
+
+function isHiddenCategory(category: NotificationCategory): boolean {
+  return HIDDEN_NOTIFICATION_CATEGORIES.includes(category)
+}
+
 // The bell badge polls this lightweight count so a notification that arrives in
 // another tab/device surfaces without a manual refresh. We poll rather than
 // long-poll/WebSocket deliberately: the feed is low-frequency and per-user, so a
@@ -116,9 +135,15 @@ export function useMarkNotificationRead() {
  *
  * We optimistically clear those rows' `read_at` and drop the unread badge so the
  * count falls the instant a notification is seen — the debounce would otherwise
- * leave the badge stale for ~1s. On success we leave the optimistic state in
- * place (the background polls reconcile any drift); only a failed write rolls
- * back and re-syncs to server truth.
+ * leave the badge stale for ~1s. On success we reconcile *only* the cheap
+ * unread-count query against the server, so the badge converges to the true count
+ * even when the optimistic decrement was a no-op or wrong (the count query hadn't
+ * loaded, or the flushed ids weren't in the on-screen feed) — the failure mode of
+ * #1112, where the badge stuck stale until the 60s poll. We deliberately leave the
+ * full feed's optimistic state in place rather than invalidating it: re-fetching
+ * the whole feed on every debounced batch would thrash the list while scrolling,
+ * and the FEED_POLL reconciles any drift there. A failed write rolls the whole
+ * optimistic state back and re-syncs to server truth.
  */
 export function useMarkNotificationsRead() {
   const qc = useQueryClient()
@@ -157,10 +182,14 @@ export function useMarkNotificationsRead() {
       }
       return { prevFeed, prevCount }
     },
-    // On success the optimistic state is already correct and the background
-    // polls reconcile any drift, so we deliberately don't invalidate here —
-    // that would force two refetches per debounced batch while scrolling. Only
-    // a failed write needs to re-sync to server truth.
+    // Reconcile the badge to server truth by invalidating *only* the lightweight
+    // unread-count query (never the full feed — that would thrash the list on
+    // every debounced batch while scrolling). This makes the decrement reliable
+    // even when the optimistic pass couldn't do it: a mounted badge refetches the
+    // real count instead of sticking stale until the poll (#1112).
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: countKey })
+    },
     onError: (_err, _ids, context) => {
       if (context?.prevFeed) qc.setQueryData(feedKey, context.prevFeed)
       if (context?.prevCount) qc.setQueryData(countKey, context.prevCount)
@@ -192,6 +221,15 @@ export function notificationPreferencesQueryOptions() {
         'load notification preferences',
         await api.GET('/v1/notification-preferences'),
       ),
+    // Drop hidden categories from the matrix — its rows come from
+    // `categories`, a separate query from the taxonomy that feeds the pills, so
+    // it has to be filtered here too (#998). See HIDDEN_NOTIFICATION_CATEGORIES.
+    select: (prefs) => ({
+      ...prefs,
+      categories: prefs.categories.filter(
+        (row) => !isHiddenCategory(row.category),
+      ),
+    }),
   })
 }
 
@@ -211,6 +249,13 @@ export function notificationTaxonomyQueryOptions() {
         await api.GET('/v1/notification-taxonomy'),
       ),
     staleTime: Infinity,
+    // Drop hidden categories from the taxonomy so neither the filter pills nor
+    // the admin broadcast category picker (both map over `types`) renders one for
+    // a notification that can't arrive (#998). See HIDDEN_NOTIFICATION_CATEGORIES.
+    select: (taxonomy) => ({
+      ...taxonomy,
+      types: taxonomy.types.filter((type) => !isHiddenCategory(type.key)),
+    }),
   })
 }
 
