@@ -98,11 +98,19 @@ services:
     # idempotent (seed_rbac.py: additive; seed_leagues.py: upserts the
     # default league), so chaining them after migrations is safe on
     # every boot.
+    #
+    # --timeout-graceful-shutdown bounds the drain now that /v1/stream holds
+    # long-lived SSE connections. On SIGTERM uvicorn stops accepting and waits
+    # for open connections to close — and an SSE connection never closes on its
+    # own, so without the flag it waits forever and the supervisor hard-kills it
+    # (30s in k8s, 10s in compose) with the lifespan shutdown never running.
+    # Cutting streams on shutdown is correct: the events are self-healing
+    # invalidation hints, so clients reconnect onto a live process.
     command: >
       sh -c "alembic upgrade head &&
              python scripts/seed_rbac.py &&
              python scripts/seed_leagues.py &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5"
 
   worker:
     <<: *api-service

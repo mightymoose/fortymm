@@ -1,6 +1,7 @@
 import type { Page, Request as PWRequest, Route } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { matchDetails, sessionResponse } from '../../../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type Player = components['schemas']['PlayerRead']
 type MatchCreate = components['schemas']['MatchCreate']
@@ -101,6 +102,10 @@ export class MatchStore {
     const method = request.method()
     const path = new URL(request.url()).pathname.replace(/^\/api/, '')
 
+    // The realtime stream every authenticated page opens — parked, so the
+    // client stands down instead of reconnect-looping against the 404 below
+    // (`../../support/realtime`).
+    if (path === STREAM_PATH) return fulfillParkedStream(route)
     if (path === '/v1/session') {
       return this.json(route, 200, SESSION)
     }

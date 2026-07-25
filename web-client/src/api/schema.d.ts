@@ -1504,6 +1504,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream
+         * @description Live dashboard invalidation hints for the signed-in caller, over
+         *     Server-Sent Events.
+         *
+         *     Takes no parameters: the topic is always the caller's own user, resolved from
+         *     the session cookie. A client cannot subscribe to anything else.
+         *
+         *     The stream never carries domain data — only a hint that something the
+         *     caller's dashboard shows has changed, which the client answers by refetching
+         *     `GET /v1/dashboard` through its normal authenticated read. Frames are one
+         *     unnamed `message` stream (no `event:` field), so a client needs exactly one
+         *     parser; the kind lives in the JSON payload.
+         *
+         *     On connect the server sends a reconnection-delay directive, then a single
+         *     `resync` hint — a reconnecting client may have missed events while it was
+         *     away, and refetching once on connect is what makes that recoverable without a
+         *     replay log or a cursor. Live hints follow as they happen, coalesced over a
+         *     short window so a burst of writes is one refetch rather than many.
+         *
+         *     The connection is deliberately finite and ends on its own after
+         *     `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
+         *     re-runs authentication. A user may hold only a few concurrent streams (429
+         *     past that), and a process with no realtime backend answers 503 — in both
+         *     cases the dashboard simply falls back to its existing refetch-on-navigation
+         *     freshness.
+         */
+        get: operations["stream_v1_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -7196,6 +7239,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScheduleSolveListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_v1_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Validation Error */

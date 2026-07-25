@@ -1,6 +1,7 @@
 import type { Page, Route } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { sessionResponse } from '../../../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type PlayerDetail = components['schemas']['PlayerDetail']
 type PlayerSummary = components['schemas']['PlayerSummary']
@@ -371,6 +372,12 @@ export class PlayerStore {
     await page.route('**/api/v1/**', (route: Route) => {
       const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
       const search = new URL(route.request().url()).searchParams
+
+      // Answered before the tally: the shell's realtime stream is infrastructure
+      // every authenticated page opens, not a read this store's specs are
+      // narrating (`../../support/realtime`).
+      if (path === STREAM_PATH) return fulfillParkedStream(route)
+
       this.requests.push(path)
 
       if (path === '/v1/session') return json(route, this.session())

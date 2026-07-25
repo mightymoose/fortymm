@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: a worktree's `node_modules` is often a *symlink* to the
+# main checkout's, and `node_modules/` matches only a directory — which is how a
+# (self-referential, so ELOOP-on-every-command) symlink got committed once.
+node_modules
 test-results/
 playwright-report/
 blob-report/

@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
+import { stubRealtimeStream } from '../support/realtime';
 
 // The generated schema namespaces this one (two pydantic models share the name),
 // so `components['schemas']['MatchDetails']` does not exist — it silently
@@ -158,6 +159,7 @@ class MatchDetailsPage {
     /** The e2e suite runs with MSW disabled (see playwright.config.ts), so the
      * endpoints this page touches are mocked here via `page.route`. */
     async mock(match: MatchDetails) {
+        await stubRealtimeStream(this.page);
         await this.page.route('**/api/v1/session', (route) =>
             route.fulfill({
                 status: 200,

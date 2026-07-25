@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { SEED, ScoreEntryPage } from './page-objects/score-entry.page'
+import { stubRealtimeStream } from './support/realtime'
 
 type Score = { id: string; side_1_points: number; side_2_points: number }
 type Game = { id: string; game_number: number; score: Score | null }
@@ -192,6 +193,8 @@ async function installApiMocks(page: Page, seed: Seed): Promise<void> {
       contentType: 'application/json',
       body: JSON.stringify(body),
     }) as const
+
+  await stubRealtimeStream(page)
 
   // `id` is required on the wire (the user menu's "Your profile" link reads
   // it) — MSW is off here, so this stub is the only thing feeding the session.

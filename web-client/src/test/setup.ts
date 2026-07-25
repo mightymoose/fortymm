@@ -64,6 +64,22 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {}
 }
 
+// Neither jsdom nor Node 26 exposes EventSource, and MSW 2.15's `sse()` response
+// resolver INVARIANTS on the global in its constructor
+// (`msw/lib/core/sse.js:46`) — so a handler written with it throws at module
+// load, before any request is made. Nothing on the happy path needs a real one:
+// our realtime reader is `fetch` + `ReadableStream` (see
+// `api/realtime/connection.ts`), never `EventSource`. This exists purely so that
+// invariant can be satisfied.
+if (!('EventSource' in globalThis)) {
+  Object.defineProperty(globalThis, 'EventSource', {
+    configurable: true,
+    value: class {
+      close() {}
+    },
+  })
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()

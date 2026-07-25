@@ -19,6 +19,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app import db, queue
 from app.admin_schedule_solves import router as admin_schedule_solves_router
+from app.config import get_settings
 from app.dashboard import router as dashboard_router
 from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
@@ -27,6 +28,7 @@ from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
+from app.realtime import RealtimeBroker, init_broker, shutdown_broker
 from app.sessions import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -34,6 +36,7 @@ from app.sessions import (
     SESSION_COOKIE_NAME,
 )
 from app.sessions import router as sessions_router
+from app.stream import router as stream_router
 from app.tournaments import router as tournaments_router
 
 # Log on uvicorn's own error logger (not __name__): the app configures no
@@ -71,6 +74,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # the request proceeds; offline tooling (regen-api-types, ad-hoc
         # local runs) still needs /openapi.json and the unprotected routes.
         init_rate_limit_redis(connection)
+        # The realtime fan-in (ADR "the dashboard is kept fresh by pushed
+        # invalidation hints"): ONE pub/sub connection and ONE dispatch task per
+        # process, multiplexed across every open stream. It reuses the client
+        # above deliberately — ``client.pubsub()`` draws its own dedicated
+        # connection from that client's pool, which is what pub/sub needs, so a
+        # second client would buy nothing but another idle socket.
+        settings = get_settings()
+        realtime_broker = RealtimeBroker(
+            connection,
+            coalesce_delay=settings.realtime_coalesce_ms / 1000,
+            max_connections_per_user=settings.realtime_max_connections_per_user,
+        )
+        await realtime_broker.start()
+        init_broker(realtime_broker)
         forwarded_allow_ips = os.environ.get("FORWARDED_ALLOW_IPS")
         if forwarded_allow_ips:
             log.info("proxy trust: FORWARDED_ALLOW_IPS=%s", forwarded_allow_ips)
@@ -101,6 +118,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with contextlib.suppress(asyncio.CancelledError):
                 await pin_tick_task
     finally:
+        # Before ``connection.aclose()``: the broker's pub/sub connection comes
+        # out of this client's pool.
+        await shutdown_broker()
         shutdown_rate_limit_redis()
         await connection.aclose()
 
@@ -212,6 +232,7 @@ app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
 app.include_router(admin_schedule_solves_router)
+app.include_router(stream_router)
 
 # The MCP server (Streamable HTTP) at ``/mcp``. A mounted Starlette sub-app does
 # not contribute to the parent ``openapi.json``, so this endpoint is absent from

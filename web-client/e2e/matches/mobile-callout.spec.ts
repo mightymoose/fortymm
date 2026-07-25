@@ -1,6 +1,7 @@
 import { test, expect, Page, Locator } from '@playwright/test';
 import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
+import { stubRealtimeStream } from '../support/realtime';
 
 type MatchDetails = components['schemas']['MatchDetails'];
 type MatchNegotiation = components['schemas']['MatchNegotiation'];
@@ -71,6 +72,7 @@ class Harness {
     constructor(private readonly page: Page) {}
 
     async mock(match: MatchDetails) {
+        await stubRealtimeStream(this.page);
         await this.page.route('**/api/v1/session', (route) =>
             route.fulfill({
                 status: 200,

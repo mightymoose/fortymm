@@ -4,6 +4,7 @@ import {
     matchListRow,
     sessionResponse,
 } from '../../src/test/factories';
+import { fulfillParkedStream, STREAM_PATH } from '../support/realtime';
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } });
 
@@ -24,6 +25,9 @@ async function installListMock(page: Page) {
             /^\/api/,
             '',
         );
+        // The realtime stream is not JSON, so it cannot fall through to the
+        // `{}` below — see `../support/realtime`.
+        if (path === STREAM_PATH) return fulfillParkedStream(route);
         if (path === '/v1/session') {
             return route.fulfill({
                 status: 200,

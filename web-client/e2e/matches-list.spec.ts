@@ -4,6 +4,7 @@ import {
   matchListRow,
   sessionResponse,
 } from '../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
 const PAGE_SIZE = 25
@@ -39,6 +40,9 @@ async function installListMock(page: Page, rows = SEED) {
   await page.route('**/api/v1/**', (route: Route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api/, '')
+    // The realtime stream every authenticated page opens — parked, not 404'd,
+    // so the client doesn't reconnect-loop through the spec (`./support/realtime`).
+    if (path === STREAM_PATH) return fulfillParkedStream(route)
     if (path === '/v1/session') {
       return route.fulfill({
         status: 200,

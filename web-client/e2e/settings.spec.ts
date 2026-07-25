@@ -24,6 +24,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { sessionResponse } from '../src/test/factories'
+import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
 /** The server's maximum: 40 chars, matching `^[a-z0-9](?:[a-z0-9._-]{1,38}[a-z0-9])?$`.
  * This is the payload of the whole spec: with a short name the bug does not
@@ -47,6 +48,12 @@ async function withSession(page: Page, username: string) {
   )
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
+    // The realtime stream is not JSON, so it cannot fall through to the `[]`
+    // below — see `./support/realtime`.
+    if (path.endsWith(STREAM_PATH)) {
+      await fulfillParkedStream(route)
+      return
+    }
     if (path.endsWith('/v1/session')) {
       await route.fulfill({
         status: 200,
