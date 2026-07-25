@@ -84,10 +84,7 @@ export function NotificationsPage() {
 
   // Resolve the raw URL slug against the taxonomy now that it's loaded: an
   // unknown/stale slug degrades to All rather than rendering an empty filter.
-  const filter = normalizeNotificationFilter(
-    search.filter,
-    taxonomy.data.types.map((t) => t.key),
-  )
+  const filter = normalizeNotificationFilter(search.filter, taxonomy.data.types)
 
   return (
     <NotificationsView

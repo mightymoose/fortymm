@@ -31,12 +31,12 @@ export type NotificationsSearch = z.infer<typeof notificationsSearchSchema>
  */
 export function normalizeNotificationFilter(
   raw: string | undefined,
-  categoryKeys: readonly NotificationCategory[],
+  categories: readonly { key: NotificationCategory }[],
 ): NotificationFilter {
   if (raw === undefined || raw === 'all' || raw === 'unread') {
     return raw ?? 'all'
   }
-  return (categoryKeys as readonly string[]).includes(raw)
+  return categories.some((c) => c.key === raw)
     ? (raw as NotificationCategory)
     : 'all'
 }

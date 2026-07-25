@@ -54,9 +54,7 @@ export function useStickyUnread(
 
   // Setting a (non-null) empty set also blocks a re-snapshot for the rest of the
   // visit, so "Mark all read" stays emptied rather than re-capturing next render.
-  const forget = useCallback(() => {
-    setSnapshot((prev) => (prev != null && prev.size === 0 ? prev : EMPTY))
-  }, [])
+  const forget = useCallback(() => setSnapshot(EMPTY), [])
 
   return { pinned: pinned ?? EMPTY, forget }
 }
