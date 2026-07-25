@@ -1,6 +1,7 @@
 # ADR Format
 
-ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc.
+ADRs live in `docs/adr/` and are **date-prefixed**: `YYYYMMDD-slug.md` — e.g.
+`20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md`.
 
 Create the `docs/adr/` directory lazily — only when the first ADR is needed.
 
@@ -22,9 +23,27 @@ Only include these when they add genuine value. Most ADRs won't need them.
 - **Considered Options** — only when the rejected alternatives are worth remembering
 - **Consequences** — only when non-obvious downstream effects need to be called out
 
-## Numbering
+## Naming — date prefix, never a sequential number
 
-Scan `docs/adr/` for the highest existing number and increment by one.
+**`docs/adr/YYYYMMDD-slug.md`.** The date is the date the decision was made;
+the slug is lowercase words joined by hyphens, and should read as the decision
+itself ("a-null-player-cap-means-no-cap"), not as a topic.
+
+**Do not scan for "the highest number and increment".** That is what this repo
+used to say, and it produced ten duplicated prefixes — including four different
+`0008-*.md` files — because every worktree numbers off a `main` that has already
+moved on, and two agents working in parallel both pick the same "next" number.
+Issue numbers (`0783-`, `0915-`) collide the same way when one issue produces
+several ADRs. A calendar date is assigned by the world rather than raced for, so
+it cannot collide by construction; several ADRs may legitimately share one date,
+and the slug distinguishes them.
+
+The legacy `NNNN-` ADRs stay as they are — their numbers are cited from PR
+bodies and commit messages, so renaming them would break those links. Refer to
+any ADR by its **full filename**, not by a bare number.
+
+`scripts/check-adr-numbering.sh` enforces this on new files in CI (it only ever
+looks at ADRs a branch *adds*, so the legacy names are grandfathered).
 
 ## When to offer an ADR
 

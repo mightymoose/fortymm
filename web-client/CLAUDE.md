@@ -37,6 +37,97 @@ Reach for the `react-component` skill (component + page-object + factory + vites
 quartet) and the `fetching-data` skill (TanStack Query `queryOptions` factories)
 for the file-layout conventions — they're not otherwise written down here.
 
+### `throwOnError` also throws on a *background* refetch
+
+React Query v5 sets `status: 'error'` on a failed refetch **even when data is
+already cached** (the reducer's `error` case is unconditional), and
+`getHasError` (`react-query/errorBoundaryUtils`) throws during render whenever
+`isError && !isFetching && throwOnError`. So `throwOnError: true` does **not**
+mean "throw if the initial load fails" — it means "throw whenever the last fetch
+failed". The moment a *success* path invalidates a query, a transient GET blip
+after a write that actually **succeeded** replaces a working, rendered screen
+with the error boundary. That shipped: `invalidateMatchViews` added
+`invalidateQueries(matchQueryKey(...))` to the save path (#843), so every
+successful score save refetched the match — and a blip threw the user out
+mid-scoring.
+
+Where the screen has data worth keeping, predicate it instead:
+
+```ts
+throwOnError: (_error, query) => query.state.data === undefined
+```
+
+An initial load (no cached data) still throws, so the boundary renders its
+retry; a background failure leaves last-good data on screen and the next good
+refetch heals it. Live in `matchQueryOptions` (`src/api/matches.ts`) and
+`tournamentDetailQuery` (`src/components/tournaments/data/api.ts`, which also
+excludes an expected 404).
+
+**The test trap:** a background error changes neither `data` nor `isLoading`, so
+a tracked-props observer that reads only those never notifies — the component
+doesn't re-render, and the throw lands on the *next* render (in production,
+whatever else re-renders the screen, e.g. the save mutation settling). A test
+must force that render — `rerender(...)` after the failed refetch — or it passes
+just as happily against a bare `throwOnError: true`. See the #843 regression
+pair in `src/api/matches.test.ts` ("keeps last-good data…" / "throws to the
+boundary when the initial match load fails").
+
+Related: `invalidateQueries` defaults to `cancelRefetch: true`, but query-core's
+`Query.fetch` only cancels when `state.data !== undefined`. On a cold cache the
+second fetch **joins** the in-flight one, so a stale initial fetch can be the
+one that wins.
+
+### StrictMode latches a cleanup-only mounted ref
+
+The app root is wrapped in `<StrictMode>` (`src/main.tsx`), so effects fire
+mount → cleanup → remount. An is-mounted ref written cleanup-only
+(`useRef(true)` + `useEffect(() => () => { ref.current = false }, [])`) latches
+`false` on that first simulated unmount and **never recovers**, permanently
+disabling whatever it guards — e.g. the post-`await` `navigate()` in
+`useStartMatch` (`src/components/matches/match-setup/use-start-match.ts`), which
+silently stopped redirecting after a match was created.
+
+Both routine verifications passed while it was broken: `vite build` is a
+production build (no double-invoke), and the vitest harness used a plain
+`render` (no StrictMode). Only the e2e suite went red — on 10 new-match-flow
+specs. Hence:
+
+- **Any is-mounted ref sets `true` in the effect body**, not just `false` in
+  cleanup. Same rule for anything else a StrictMode remount has to re-arm.
+- **When a vitest harness exercises effect-lifecycle behaviour, wrap the render
+  in `<StrictMode>`** so the double-invoke is reproduced — see
+  `use-start-match.test.tsx`.
+- **Run `npm run test:e2e` even when you've reasoned "no schema change, no stubs
+  affected".** Note it only catches this **locally**: `playwright.config.ts`
+  serves `vite dev` locally but `vite preview` (production build, no
+  double-invoke) on CI.
+
+### The vitest timeout collision produces an opaque red
+
+`src/test/setup.ts` sets Testing Library's `asyncUtilTimeout: 5000`. Left at
+vitest's *default* `testTimeout` — also 5000 — a bare `await waitFor(...)` gets a
+wait budget equal to the whole test budget: when the async chain is slow both
+expire at the same instant and the test dies with `Test timed out in 5000ms`
+instead of Testing Library's diagnosable "Unable to find <element>" —
+intermittent red CI with zero actionable output.
+
+**`vite.config.ts` therefore sets `testTimeout: 10000`, and these two numbers
+must stay unequal.** Don't "tidy" them back to matching: the outer bound exists
+so the inner one can expire first and report *what* it was waiting for. This is
+the fix for all ~410 `waitFor` call sites at once — only 4 pass a bound of their
+own, so per-call discipline was never going to cover it.
+
+- A `waitFor` following a `fireEvent` may still want its own tighter bound, e.g.
+  `{ timeout: 2000 }`. (`fireEvent` returns synchronously without flushing
+  `act`, unlike `user.click`, so the whole async chain runs inside that window.)
+  Examples in `src/components/matches/score-entry.test.tsx`.
+- Reproduce flakes with `--no-file-parallelism`, repeatedly; warm runs hide it.
+- **Corollary: a 5000ms timeout is not a discriminating "red".** It can't tell
+  "the guard blocked the navigation" from "the harness never landed the
+  refetch", so a red built on one proves nothing. Discriminate by holding the
+  harness, handlers and fixtures byte-identical and varying only the thing under
+  test, or by probing the DOM at failure time.
+
 ## Conventions
 
 - Path alias: `@/*` → `src/*` (see `vite.config.ts`, `components.json`).

@@ -15,8 +15,8 @@ Infra has no single directory — it spans:
   optional tailscale proxy; migrate+seed as a `post-install,post-upgrade` hook Job).
 - `deploy/observability/` — umbrella chart (kube-prometheus-stack + loki-stack
   + tempo) in the `monitoring` namespace, tailnet-only.
-- `docker-compose.{dev,qa,e2e,uat}.yml` — compose stacks (UAT compose is a
-  documented fallback; the live UAT is k3d/Helm, above).
+- `docker-compose.{dev,qa,e2e}.yml` — the compose stacks. There is **no**
+  `docker-compose.uat.yml`: UAT is k3d/Helm only (the chart above).
 - `nginx/` — `dev.conf` (web upstream :5173) and `uat.conf` (web upstream :80);
   `uat.conf` is mounted by the QA compose stack. The k8s routing nginx does NOT
   read this file — it renders an **inline copy** in
@@ -120,9 +120,9 @@ unprompted.**
 - **Cause:** The compose nginx resolves `api:8000` / `web-client:80` to IPs
   **once at startup** and caches them; recreated containers get new IPs.
 - **Fix:** `docker compose -f docker-compose.<stack>.yml restart nginx`.
-- **Scope:** compose stacks only (dev / qa / compose-uat fallback). The **k3d
-  UAT is immune** — its nginx upstreams are Kubernetes Services, so this
-  specific stale-IP 502 doesn't apply there.
+- **Scope:** compose stacks only — **dev / qa / e2e**. The **k3d UAT is
+  immune** (and has no compose stack to restart): its nginx upstreams are
+  Kubernetes Services, so this specific stale-IP 502 doesn't apply there.
 
 ### QA `up --build` serves STALE code (two independent caches)
 

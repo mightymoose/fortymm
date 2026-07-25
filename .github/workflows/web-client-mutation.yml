@@ -1,19 +1,37 @@
 name: web-client-mutation
 
-# Mutation testing (StrykerJS) for the web client. Separate from the blocking
-# `web-client` workflow on purpose: mutation runs are slower, and the score is
-# advisory — `thresholds.break` is null in stryker.config.mjs, so this job
-# reports a score but never fails the build. Make it gating later by setting a
-# `break` threshold and dropping `continue-on-error`.
+# Mutation testing (StrykerJS) for the web client — NIGHTLY, not on PRs.
+#
+# Why it is off the PR critical path: the score is advisory (`thresholds.break`
+# is null in stryker.config.mjs, so Stryker exits 0 whatever the score) and the
+# job carried `continue-on-error: true`, so it could never fail a build — yet it
+# was the single most expensive thing in CI, ~47% of all PR wall-minutes
+# (median ~20 min, p90 ~86 min). On several PRs it was still running after the
+# PR had already merged, so its output was never even read. A check that cannot
+# gate a merge does not belong on the merge path.
+#
+# So it now runs once a night against the default branch, plus on demand via
+# workflow_dispatch (use that to get a score for a specific branch before you
+# merge it). There is deliberately NO push-to-main trigger: `schedule` already
+# covers main, and a per-push trigger would re-run an 80-minute job on every
+# merge for a number nobody reads between nightlies.
+#
+# It also no longer runs the changed-files variant (`test:mutation:changed`,
+# web-client/scripts/mutation-changed.ts) — that script diffs against a base
+# ref, and neither `schedule` nor `workflow_dispatch` has a `github.base_ref`.
+# The script stays for local use: `npm run test:mutation:changed -- origin/main`.
+#
+# Make it gating later by setting a `break` threshold in stryker.config.mjs and
+# moving it back onto `pull_request` — but only once it is fast enough to finish
+# before a PR merges.
 
 on:
-  # On PRs, mutate only the source files that changed vs. the base branch — fast
-  # and relevant. scripts/mutation-changed.sh diffs against the base, so we need
-  # full history + the base ref fetched (see fetch-depth + git fetch below).
-  pull_request:
-    paths:
-      - 'web-client/**'
-  # Manual full-suite run (mutates everything in stryker.config.mjs's `mutate`).
+  # 08:17 UTC ≈ 02:17/03:17 America/Chicago — off-peak for this project, and off
+  # the top of the hour, where GitHub's scheduler is most congested (a job
+  # queued at :00 can be delayed by many minutes).
+  schedule:
+    - cron: '17 8 * * *'
+  # On-demand full run against whatever ref you pick in the Actions UI.
   workflow_dispatch:
 
 defaults:
@@ -23,13 +41,14 @@ defaults:
 jobs:
   mutation:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # p90 of the historical runs is ~86 min; 120 bounds a runaway without
+    # tripping on a normal slow night. (The 6h default would burn a runner.)
+    timeout-minutes: 120
     steps:
+      # Shallow checkout is fine now: the full run mutates the `mutate` globs
+      # from stryker.config.mjs, so there is no diff against a base ref and no
+      # need for `fetch-depth: 0`.
       - uses: actions/checkout@v7
-        with:
-          # The changed-files diff needs the base branch and full history, not
-          # the default shallow checkout.
-          fetch-depth: 0
 
       - uses: actions/setup-node@v7
         with:
@@ -39,18 +58,11 @@ jobs:
 
       - run: npm ci
 
-      # PR: mutate only files changed vs. the base (skips cleanly with exit 0
-      # when no mutatable source changed). StrykerJS has no native "since" flag,
-      # so scripts/mutation-changed.sh computes the set with git and feeds it to
-      # `--mutate`.
-      - name: Run mutation tests (changed files)
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch origin "${{ github.base_ref }}" --depth=1
-          npm run test:mutation:changed -- "origin/${{ github.base_ref }}"
-
+      # Full run. `continue-on-error` is deliberately gone: off the merge path,
+      # a red run is informational rather than blocking, and swallowing the exit
+      # code would hide a genuinely broken harness (crash / OOM / bad config).
+      # A merely-low score still exits 0 while `thresholds.break` is null.
       - name: Run mutation tests (full)
-        if: github.event_name == 'workflow_dispatch'
         run: npm run test:mutation
 
       - name: Upload HTML report

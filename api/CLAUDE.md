@@ -49,6 +49,10 @@ the `db_session` fixture, which truncates all tables after each test.
 - **Models:** every `Mapped[datetime]` column must explicitly pass
   `DateTime(timezone=True)` to `mapped_column(...)`. Import `DateTime` from
   `sqlalchemy`. SQLAlchemy's default is naïve — do not rely on it.
+- **Test seeds too, not just columns.** `tournament_fixtures.scheduled_start` /
+  `pinned_at` are `timestamptz` (since #1152); a naïve `datetime` seeded by a test
+  reads back in the *session* timezone, so it passes on a Central-time dev box and
+  fails in UTC CI. Seed aware — `datetime.now(UTC)`, `tzinfo=UTC`.
 - Pydantic / response schemas are exempt unless they emit a naïve datetime.
 
 ## Table naming: `<singular_parent>_<plural_child>`
@@ -98,6 +102,50 @@ docstring, the generated types must be regenerated: `mise run regen-api-types`
 (`ios/Fortymm/Generated/Types.swift`), committed in the same change — the
 `openapi-schema` CI job fails on drift. (See the root `CLAUDE.md` for the full
 invariant.)
+
+## Testing gotchas
+
+**`pytest` never runs the migrations.** The `engine` fixture in `tests/conftest.py`
+builds the schema with `Base.metadata.create_all`; Alembic is never invoked. Models
+and migrations are two independent descriptions of the schema and only the models are
+under test — the whole suite goes green against a migration that is broken, missing a
+column, or would fail outright on a real database. That matters most here because of
+the edit-in-place rule above, which leaves every rewritten migration unverified. **Any
+change touching a migration must run `alembic upgrade head` against a fresh empty
+Postgres** and inspect the result (`\d+ <table>`, `information_schema`) for the
+column, its nullability and its FK. A green `pytest` is not evidence. (`alembic check`
+reports pre-existing drift on `users` / `roles` / `permissions` — the models say
+`unique=True, index=True` where the migrations create a `UniqueConstraint`. That noise
+is background, not a finding.)
+
+**A race test written the obvious way passes against a broken implementation.**
+`asyncio.Barrier` + `asyncio.gather` over two sessions both hitting the endpoint only
+reds when the scheduler happens to interleave the damning way: with the capacity
+`COUNT(*)` hoisted above the tournament row lock — a genuinely broken guard that lets
+two entrants take the same last slot — the gather-based version stayed green. **Stage
+the contention instead of hoping for it:** a gatekeeper session takes the row lock and
+holds it, both contenders are launched into the handler, the test asserts they *block*
+(`pytest.fail` if either finished — an unlocked read never waits), then the gatekeeper
+releases. Now a count above the lock necessarily reds. Copy the harness in
+`tests/test_tournament_entries.py` —
+`test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry`, plus
+`_hold_the_go_live_lock` beside it for the ADR-0017 go-live races. Why the lock is the
+whole enforcement: capacity is a count on one table compared against a column on
+another, so unlike the duplicate-entry partial unique index it *cannot* be a database
+constraint — nothing underneath catches a loser that slipped through.
+
+Concurrency is where the repo-wide "a test you have not seen fail is not evidence"
+corollary bites hardest — **run the falsification**: hoist the count above the lock,
+confirm the test reds *for the stated reason*, put it back. See
+`.claude/rules/verify-the-artifact-under-test.md`.
+
+**Some display strings are DB seed data, not app code.** Notification category and
+channel display names are seed rows: migration `0009` inserts them (`0015` adds
+`match_calls`), `tests/conftest.py` re-seeds them by hand
+(`NOTIFICATION_TYPE_LABELS` / `NOTIFICATION_CHANNEL_LABELS`, because `create_all`
+skips the migration), and `web-client/src/test/factories.ts` mirrors them for MSW.
+Three places that must change together — and a copy/wording sweep that greps `app/`
+finds none of them.
 
 ## Make illegal states unrepresentable
 

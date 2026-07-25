@@ -69,24 +69,95 @@ so launch **two** Chromes on two ports. Run this with
 `dangerouslyDisableSandbox: true` — the detached launch is what the sandbox
 otherwise blocks:
 
+**Never hardcode the CDP ports, and never pick them yourself.** Two QA passes
+running out of two worktrees at once used to land on the same 9222/9223 and
+silently drive each other's browser. Picking a different fixed "non-default" port
+is not a fix (the next run reads the same note and picks the same one), and
+neither is hashing a slug then probing for a free pair — that's check-then-act,
+so two runs starting in the same second still collide.
+
+**Let the kernel assign the port.** `--remote-debugging-port=0` binds an
+ephemeral port atomically; Chrome writes it to `DevToolsActivePort` in its
+profile dir. No race, no hash, no probe loop.
+
+**Write the ports and PIDs to a file, not to shell variables.** Each step below
+runs in its own Bash tool call and **shell state does not persist between them** —
+a `$CDP_POSTER` set here is empty by Step 4, which would degrade that step's
+`pkill -f "remote-debugging-port=$CDP_POSTER"` into a pattern matching *every*
+CDP Chrome on the machine, including a sibling worktree's mid-flow.
+
 ```bash
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-launch_cdp() {  # $1=port  $2=label
-  if curl -sf -o /dev/null "http://localhost:$1/json/version"; then
-    echo "$2: CDP already up on $1 — reusing"; return
+# Key everything to this run's stack. $QA_PROJECT comes from scripts/qa-up.sh;
+# fall back to the branch name. The profile dir is keyed the same way, so two
+# runs never share a cookie jar either.
+QA_SLUG="${QA_PROJECT:-fortymm-qa-$(git rev-parse --abbrev-ref HEAD)}"
+RUN_DIR=".qa-review/$QA_SLUG"; mkdir -p "$RUN_DIR"
+
+launch_cdp() {  # $1=label
+  local dir="/tmp/qa-chrome-$QA_SLUG-$1" port
+  # Reuse this run's own browser if it's still alive (a resumed session), but
+  # never adopt a stranger's: the port came from OUR profile dir.
+  if [ -s "$dir/DevToolsActivePort" ]; then
+    port="$(head -1 "$dir/DevToolsActivePort")"
+    if curl -sf -o /dev/null "http://localhost:$port/json/version"; then
+      echo "$1: reusing CDP on $port"; echo "$port" > "$RUN_DIR/$1.port"; return
+    fi
   fi
-  nohup "$CHROME" --remote-debugging-port="$1" \
-    --user-data-dir="/tmp/qa-chrome-$2" \
+  rm -f "$dir/DevToolsActivePort"
+  nohup "$CHROME" --remote-debugging-port=0 --user-data-dir="$dir" \
     --no-first-run --no-default-browser-check about:blank >/dev/null 2>&1 &
+  echo $! > "$RUN_DIR/$1.pid"
   disown
-  until curl -sf -o /dev/null "http://localhost:$1/json/version"; do sleep 1; done
-  echo "$2: CDP up on $1"
+  for _ in $(seq 1 60); do [ -s "$dir/DevToolsActivePort" ] && break; sleep 1; done
+  port="$(head -1 "$dir/DevToolsActivePort")"
+  echo "$port" > "$RUN_DIR/$1.port"
+  echo "$1: CDP up on $port (pid $(cat "$RUN_DIR/$1.pid"))"
 }
 
-launch_cdp 9222 poster
-launch_cdp 9223 opponent
+launch_cdp poster
+launch_cdp opponent
+echo "poster=$(cat "$RUN_DIR/poster.port")  opponent=$(cat "$RUN_DIR/opponent.port")"
 ```
+
+Steps 3 and 4 read `.qa-review/$QA_SLUG/{poster,opponent}.port` and `.pid` — read
+them fresh in each step rather than carrying a variable across tool calls.
+
+## 2b. Grant the QA user a role that can actually do anything
+
+The QA stack seeds roles but assigns them to **nobody**, and the default `User`
+role carries no permissions (`api/scripts/seed_rbac.py`). So a guest or freshly
+minted user 403s on every tournament write, and Quinn reports "can't create a
+tournament" as a bug on every single run. There is no HTTP endpoint to
+self-assign a role, so the sanctioned seam is the database — the same one
+`e2e/support/rbac-grant.ts` uses for the composed suite.
+
+After the stack is up, grant **"Beta tester"** (`tournament.view` / `.create` /
+`.enter`) to the user Quinn will drive. Substitute the username Quinn signs in as:
+
+`-v ON_ERROR_STOP=1` is not optional: without it `psql` does not reliably signal
+a SQL error in its exit status, so a renamed role or a reshaped `user_roles`
+would leave the grant silently unapplied — and Quinn would then report the
+resulting 403s as a product bug, which is the exact false positive this step
+exists to prevent. Check the exit code.
+
+```bash
+docker compose -p "$QA_PROJECT" -f docker-compose.qa.yml exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d fortymm -c "
+    INSERT INTO user_roles (user_id, role_id)
+    SELECT u.id, r.id FROM users u CROSS JOIN roles r
+    WHERE u.username = '<USERNAME>' AND r.name = 'Beta tester'
+      AND NOT EXISTS (SELECT 1 FROM user_roles ur
+                      WHERE ur.user_id = u.id AND ur.role_id = r.id);"
+```
+
+Idempotent, so re-running is safe. The user must exist first — grant *after*
+Quinn has signed in, or after seeding the account.
+
+**Keep one un-granted identity if the branch touches permission gating**: with
+every user granted, the "no permission" path becomes untestable. Say which
+identity holds which role when you brief Quinn.
 
 The launched Chrome is **headless** — Quinn drives it blind and reads the page
 via `snapshot` (the a11y tree), screenshotting only as bug evidence.
@@ -95,7 +166,8 @@ via `snapshot` (the a11y tree), screenshotting only as bug evidence.
 
 Use the Agent tool (general-purpose). Tell Quinn it has the `playwright-cli`
 skill available. Pass it the base URL, the absolute screenshots dir, the two CDP
-ports (poster 9222, opponent 9223), and the flows to exercise (derive these from
+ports (read them now with `cat .qa-review/$QA_SLUG/{poster,opponent}.port` and
+substitute the actual numbers — they differ every run), and the flows to exercise (derive these from
 what the user asked to QA; if they didn't say, give Quinn the app's primary
 flows — sign-in, create a match, enter scores). Give Quinn the identity and rules
 verbatim below as its prompt.
@@ -124,8 +196,8 @@ NON-NEGOTIABLE RULES
 BROWSER ACCESS — ATTACH, DON'T OPEN. Two headless Chromes are already running
 for you. Do NOT run `playwright-cli open` (the sandbox will kill it). Attach each
 named session to its CDP port instead:
-  playwright-cli -s=poster attach --cdp=http://localhost:9222
-  playwright-cli -s=opponent attach --cdp=http://localhost:9223
+  playwright-cli -s=poster attach --cdp=http://localhost:<CDP_POSTER>
+  playwright-cli -s=opponent attach --cdp=http://localhost:<CDP_OPPONENT>
 Every playwright-cli call must run with dangerouslyDisableSandbox: true. The
 browsers are headless, so use `snapshot` (the a11y tree) as your eyes and reserve
 screenshots for bug evidence. When finished, `detach` each session — do NOT
@@ -154,9 +226,26 @@ when there are bugs worth showing.
 Close the Chromes you launched in Step 2 — Quinn only detaches, so the processes
 are still running:
 
+Kill **this run's** browsers by PID. Do not `pkill -f remote-debugging-port=…`:
+this step runs in a fresh Bash call where any variable from Step 2 is empty, so
+the pattern would collapse to a prefix that matches a sibling worktree's Chrome
+too. Re-derive the slug and read the PIDs back from the file Step 2 wrote:
+
 ```bash
-pkill -f 'remote-debugging-port=9222'
-pkill -f 'remote-debugging-port=9223'
+QA_SLUG="${QA_PROJECT:-fortymm-qa-$(git rev-parse --abbrev-ref HEAD)}"
+RUN_DIR=".qa-review/$QA_SLUG"
+
+for label in poster opponent; do
+  pidfile="$RUN_DIR/$label.pid"
+  [ -f "$pidfile" ] || continue
+  pid="$(cat "$pidfile")"
+  kill "$pid" 2>/dev/null
+  # Wait for it to actually exit before removing the profile — Chrome writes on
+  # its way down, so an immediate `rm -rf` races it and leaves the dir behind.
+  for _ in $(seq 1 15); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  rm -rf "/tmp/qa-chrome-$QA_SLUG-$label"
+done
+rm -f "$RUN_DIR"/*.pid "$RUN_DIR"/*.port
 ```
 
 Tear down the stack unless the user wants it left up for their own poking. Use

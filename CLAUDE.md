@@ -92,4 +92,8 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **Parse untrusted data at every boundary** — see `.claude/rules/parse-at-boundaries.md`.
 
+**Verify the artifact under test is the one you changed** — see `.claude/rules/verify-the-artifact-under-test.md`. Stale bundles, cached images, live service workers and reused dev servers all fail *silently* green.
+
+**Collect the garbage you create.** `land-the-plane` Step 9 runs `scripts/reap-worktrees.sh` after a merge. Worktrees are never removed by `gh pr merge --delete-branch`, and left alone they accumulate into stale-checkout bugs (`/epic` resuming onto a squash-merged branch, ADR numbers computed off an old tree) long before they become a disk problem.
+
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).
