@@ -4635,17 +4635,16 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
 # ----- the draws this event cannot produce (422) ----------------------------
 
 
-@pytest.mark.parametrize(
-    "draw_type", ["single-elim", "double-elim", "rr-then-ko", "swiss"]
-)
+@pytest.mark.parametrize("draw_type", ["double-elim", "rr-then-ko", "swiss"])
 async def test_cutting_an_unimplemented_draw_type_is_422(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     draw_type: str,
 ) -> None:
-    """Only round-robin has a strategy today (ADR-0786). The other four are a designed
-    422 that NAMES the draw type — not a 500 from an unhandled exception, and not an
-    empty draw the director would have to notice was empty.
+    """Round-robin and single-elim have strategies today (ADR-0786, ADR-0785); these
+    three remain enum stubs — a designed 422 that NAMES the draw type, not a 500
+    from an unhandled exception, and not an empty draw the director would have to notice
+    was empty.
 
     422, because the request is well-formed and authorized: it is this event's *content*
     — the draw type it was configured with — that cannot become a draw. Nothing is
