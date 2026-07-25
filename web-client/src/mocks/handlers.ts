@@ -1690,6 +1690,37 @@ export const handlers = [
     )
   }),
 
+  // ----- geocode (preview pin) -------------------------------------------
+  // The "Preview location" lookup (`GET /v1/geocode`). Mirrors the server: a
+  // normal address resolves to deterministic coords + a `formatted` label, while
+  // the `__unresolvable__` sentinel (or an empty address) is the coded 422 both
+  // the preview and the create/edit write path answer a zero-result address with
+  // (`address_not_geocodable`). Deterministic per address, so the pin is stable
+  // across reloads and testable in vitest.
+  http.get('*/v1/geocode', async ({ request }) => {
+    await delay(200)
+    const address =
+      new URL(request.url).searchParams.get('address')?.trim() ?? ''
+    if (!address || address.includes('__unresolvable__')) {
+      return HttpResponse.json(
+        {
+          detail: {
+            code: 'address_not_geocodable',
+            message: 'We couldn’t locate that address.',
+          },
+        },
+        { status: 422 },
+      )
+    }
+    const seed = djb2(address)
+    // A small deterministic jitter around Berkeley, so `npm run dev` drops a pin
+    // near a plausible place rather than at (0, 0).
+    return HttpResponse.json({
+      latitude: 37.87 + (seed % 1000) / 100000,
+      longitude: -122.27 + ((seed >> 3) % 1000) / 100000,
+      formatted: address,
+    })
+  }),
   // ----- tournaments (admin) ---------------------------------------------
   // Dev-only handlers backed by `tournaments-store`. The seed includes rows
   // owned by the dev user (editable, with events + pools) and one owned by

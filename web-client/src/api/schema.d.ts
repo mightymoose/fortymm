@@ -1008,6 +1008,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/geocode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Geocode
+         * @description Resolve a free-text ``address`` string to coordinates for the web
+         *     "Preview location" pin, without writing anything.
+         *
+         *     Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+         *     on a user action — the previewer typing/blurring the venue fields — not on
+         *     page load, so it is not folded into a page endpoint. It resolves through the
+         *     same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+         *     geocodes with, so the pin the previewer sees matches the coordinates a
+         *     subsequent write would record.
+         *
+         *     Gated on ``tournament.create``: previewing a venue is part of composing a
+         *     tournament, so the same grant that lets a user create one lets them preview
+         *     its location — this is deliberately not a wide-open geocoding proxy.
+         *
+         *     A zero-result / unresolvable address is the same coded ``422`` the write path
+         *     answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+         *     preview and the write agree on the refusal. Any other geocoder failure
+         *     (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+         *     ``500`` handler.
+         */
+        get: operations["preview_geocode_v1_geocode_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tournaments/{tournament_id}": {
         parameters: {
             query?: never;
@@ -2273,6 +2311,29 @@ export interface components {
             local_label: string;
             /** Tz Abbrev */
             tz_abbrev: string;
+        };
+        /**
+         * GeocodePreview
+         * @description The result of the read-only address-preview lookup (``GET /v1/geocode``).
+         *
+         *     The coordinates a free-text address string resolves to, plus the provider's
+         *     canonical ``formatted`` label, so the web "Preview location" pin can drop a
+         *     marker (and echo the normalized address it matched) *before* the tournament
+         *     write. This is not stored — it is a live lookup through the same injected
+         *     :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+         *     the pin the previewer sees matches the coordinates a subsequent write records.
+         *
+         *     An address that resolves to zero candidates is a coded ``422`` at the boundary
+         *     carrying the same ``address_not_geocodable`` code the write path answers with —
+         *     never a coordinate-less preview.
+         */
+        GeocodePreview: {
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Formatted */
+            formatted: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -6709,6 +6770,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_geocode_v1_geocode_get: {
+        parameters: {
+            query: {
+                address: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeocodePreview"];
                 };
             };
             /** @description Validation Error */

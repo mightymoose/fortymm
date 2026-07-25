@@ -36,6 +36,7 @@ from app.schemas.schedule_preview import (
     PreviewRequest,
 )
 from app.schemas.tournament import (
+    GeocodePreview,
     ScheduleSolveRead,
     TournamentCreate,
     TournamentDetailRead,
@@ -363,6 +364,46 @@ async def create_tournament(
         tournament,
         created_by_username=current_user.username,
         current_user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/geocode",
+    response_model=GeocodePreview,
+    dependencies=[Depends(require_create)],
+)
+async def preview_geocode(
+    address: Annotated[str, Query(min_length=1)],
+    geocoder: Geocoder = Depends(get_geocoder),
+) -> GeocodePreview:
+    """Resolve a free-text ``address`` string to coordinates for the web
+    "Preview location" pin, without writing anything.
+
+    Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    on a user action — the previewer typing/blurring the venue fields — not on
+    page load, so it is not folded into a page endpoint. It resolves through the
+    same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    geocodes with, so the pin the previewer sees matches the coordinates a
+    subsequent write would record.
+
+    Gated on ``tournament.create``: previewing a venue is part of composing a
+    tournament, so the same grant that lets a user create one lets them preview
+    its location — this is deliberately not a wide-open geocoding proxy.
+
+    A zero-result / unresolvable address is the same coded ``422`` the write path
+    answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    preview and the write agree on the refusal. Any other geocoder failure
+    (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    ``500`` handler.
+    """
+    try:
+        result = await geocoder.geocode(address)
+    except AddressNotGeocodableError as exc:
+        raise _address_not_geocodable() from exc
+    return GeocodePreview(
+        latitude=result.latitude,
+        longitude=result.longitude,
+        formatted=result.formatted,
     )
 
 

@@ -67,6 +67,12 @@ const scoped = (container: Container) => ({
   queryVenueLine() {
     return container.queryByTestId('tournament-venue-line')
   },
+  /** The venue `LocationMap`'s text fallback — the branch rendered when no Google
+   * Maps key is configured (dev/CI/vitest all run keyless). Its text is the venue
+   * line. Absent when the tournament has no address. */
+  queryVenueMapFallback() {
+    return container.queryByTestId('location-map-fallback')
+  },
   ...eventsTabPage.within(container),
 })
 

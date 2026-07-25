@@ -228,6 +228,66 @@ async def test_create_with_unresolvable_address_is_422_and_creates_nothing(
     assert count == 0
 
 
+# ----- GET /v1/geocode address preview -------------------------------------
+
+
+async def test_geocode_preview_resolves_an_address(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The read-only preview endpoint resolves a free-text address string to the
+    coordinates + formatted label the injected ``FakeGeocoder`` deterministically
+    returns for it, so the web "Preview location" pin matches what a subsequent
+    write would record."""
+    client, _ = authed_client
+    query = "Berkeley TT Club, 2727 Milvia St, Berkeley, CA"
+
+    response = await client.get("/v1/geocode", params={"address": query})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Assert against the very ``FakeGeocoder`` the keyless test env resolves with,
+    # so the preview's coordinates cannot drift from the seam's output.
+    expected = await FakeGeocoder().geocode(query)
+    assert body == {
+        "latitude": expected.latitude,
+        "longitude": expected.longitude,
+        "formatted": expected.formatted,
+    }
+
+
+async def test_geocode_preview_unresolvable_address_is_the_coded_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """An address the geocoder cannot resolve is the same coded 422 the write path
+    answers — the machine-readable ``address_not_geocodable`` code (ADR-0968), so
+    the preview and the write agree on the refusal. Uses the deterministic
+    ``FakeGeocoder`` sentinel so the zero-result path is exercised with no
+    network."""
+    client, _ = authed_client
+
+    response = await client.get("/v1/geocode", params={"address": "__unresolvable__"})
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "address_not_geocodable"
+
+
+async def test_geocode_preview_requires_the_create_permission(
+    db_session: AsyncSession,
+):
+    """The preview is gated on ``tournament.create`` — the same grant that lets a
+    user compose a tournament lets them preview its venue. A bare guest session
+    with no tournament permissions is 403, exactly as the create route rejects
+    them; it is not a wide-open geocoding proxy."""
+    async with make_client() as client:
+        await start_session(client, db_session)
+
+        response = await client.get(
+            "/v1/geocode", params={"address": "Berkeley TT Club, Berkeley, CA"}
+        )
+
+        assert response.status_code == 403, response.text
+
+
 async def test_create_is_born_draft_from_the_column_default(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

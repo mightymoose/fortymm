@@ -19,6 +19,14 @@ COPY . .
 ARG VITE_FARO_COLLECTOR_URL=""
 ENV VITE_FARO_COLLECTOR_URL=$VITE_FARO_COLLECTOR_URL
 
+# Browser Google Maps JS API key, baked into the bundle at build time. OPTIONAL:
+# empty by default, so a keyless build still succeeds and produces a working
+# bundle — the map component reads import.meta.env.VITE_GOOGLE_MAPS_API_KEY and
+# degrades to a text fallback when it's unset. This is the *browser* key; the
+# server-side GOOGLE_GEOCODING_API_KEY is a separate runtime secret, not this.
+ARG VITE_GOOGLE_MAPS_API_KEY=""
+ENV VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY
+
 RUN npm run build
 
 FROM nginx:1.31-alpine

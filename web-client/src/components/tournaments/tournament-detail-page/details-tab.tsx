@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { PreviewLocation } from '@/components/maps/preview-location'
 
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
@@ -169,6 +170,11 @@ export const DetailsTab = ({
               {addressField('Postal', 'postal', 'font-mono')}
             </div>
             {addressField('Country', 'country')}
+            {/* Confirm the venue before saving: geocodes the typed address and
+                drops a pin. An editor-only affordance (ADR 0015 — hide mutating
+                affordances, never disable them) and display-only: it adds no
+                coordinates to the update payload (the server geocodes on save). */}
+            {canEdit && <PreviewLocation address={draft.address} />}
           </div>
         </Card>
       </div>

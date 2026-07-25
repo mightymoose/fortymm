@@ -550,6 +550,31 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/post(create_tournament_v1_tournaments_post)`.
     func createTournamentV1TournamentsPost(_ input: Operations.CreateTournamentV1TournamentsPost.Input) async throws -> Operations.CreateTournamentV1TournamentsPost.Output
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    func previewGeocodeV1GeocodeGet(_ input: Operations.PreviewGeocodeV1GeocodeGet.Input) async throws -> Operations.PreviewGeocodeV1GeocodeGet.Output
     /// Get Tournament
     ///
     /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}`.
@@ -1875,6 +1900,39 @@ extension APIProtocol {
         try await createTournamentV1TournamentsPost(Operations.CreateTournamentV1TournamentsPost.Input(
             headers: headers,
             body: body
+        ))
+    }
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    internal func previewGeocodeV1GeocodeGet(
+        query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query,
+        headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers = .init()
+    ) async throws -> Operations.PreviewGeocodeV1GeocodeGet.Output {
+        try await previewGeocodeV1GeocodeGet(Operations.PreviewGeocodeV1GeocodeGet.Input(
+            query: query,
+            headers: headers
         ))
     }
     /// Get Tournament
@@ -4321,6 +4379,68 @@ internal enum Components {
                 case instant
                 case localLabel = "local_label"
                 case tzAbbrev = "tz_abbrev"
+            }
+        }
+        /// The result of the read-only address-preview lookup (``GET /v1/geocode``).
+        ///
+        /// The coordinates a free-text address string resolves to, plus the provider's
+        /// canonical ``formatted`` label, so the web "Preview location" pin can drop a
+        /// marker (and echo the normalized address it matched) *before* the tournament
+        /// write. This is not stored — it is a live lookup through the same injected
+        /// :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+        /// the pin the previewer sees matches the coordinates a subsequent write records.
+        ///
+        /// An address that resolves to zero candidates is a coded ``422`` at the boundary
+        /// carrying the same ``address_not_geocodable`` code the write path answers with —
+        /// never a coordinate-less preview.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GeocodePreview`.
+        internal struct GeocodePreview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/latitude`.
+            internal var latitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/longitude`.
+            internal var longitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/formatted`.
+            internal var formatted: Swift.String
+            /// Creates a new `GeocodePreview`.
+            ///
+            /// - Parameters:
+            ///   - latitude:
+            ///   - longitude:
+            ///   - formatted:
+            internal init(
+                latitude: Swift.Double,
+                longitude: Swift.Double,
+                formatted: Swift.String
+            ) {
+                self.latitude = latitude
+                self.longitude = longitude
+                self.formatted = formatted
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case latitude
+                case longitude
+                case formatted
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.latitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .latitude
+                )
+                self.longitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .longitude
+                )
+                self.formatted = try container.decode(
+                    Swift.String.self,
+                    forKey: .formatted
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "latitude",
+                    "longitude",
+                    "formatted"
+                ])
             }
         }
         /// - Remark: Generated from `#/components/schemas/HTTPValidationError`.
@@ -21018,6 +21138,205 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.CreateTournamentV1TournamentsPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    internal enum PreviewGeocodeV1GeocodeGet {
+        internal static let id: Swift.String = "preview_geocode_v1_geocode_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/geocode/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/query/address`.
+                internal var address: Swift.String
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - address:
+                internal init(address: Swift.String) {
+                    self.address = address
+                }
+            }
+            internal var query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/geocode/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PreviewGeocodeV1GeocodeGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PreviewGeocodeV1GeocodeGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query,
+                headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.GeocodePreview)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.GeocodePreview {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.PreviewGeocodeV1GeocodeGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

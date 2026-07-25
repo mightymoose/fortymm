@@ -194,6 +194,27 @@ class Address(BaseModel):
     longitude: float
 
 
+class GeocodePreview(BaseModel):
+    """The result of the read-only address-preview lookup (``GET /v1/geocode``).
+
+    The coordinates a free-text address string resolves to, plus the provider's
+    canonical ``formatted`` label, so the web "Preview location" pin can drop a
+    marker (and echo the normalized address it matched) *before* the tournament
+    write. This is not stored — it is a live lookup through the same injected
+    :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+    the pin the previewer sees matches the coordinates a subsequent write records.
+
+    An address that resolves to zero candidates is a coded ``422`` at the boundary
+    carrying the same ``address_not_geocodable`` code the write path answers with —
+    never a coordinate-less preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    latitude: float
+    longitude: float
+    formatted: str
+
+
 def _is_iana_timezone(value: str) -> str:
     """Refuse a timezone that names no real IANA zone (422 at the boundary).
 

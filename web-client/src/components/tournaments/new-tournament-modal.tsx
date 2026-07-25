@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 import { Check, TriangleAlert } from 'lucide-react'
 
@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { PreviewLocation } from '@/components/maps/preview-location'
 
 import { emptyTournament } from './data/helpers'
 import {
@@ -117,8 +118,17 @@ export const NewTournamentModal = ({
   })
   const {
     register,
+    control,
     formState: { errors },
   } = form
+
+  // Live address values, so the "Preview location" pin geocodes exactly what the
+  // organizer has typed at click time. This form has no country field (the edit
+  // form does), so the previewer composes the five it holds.
+  const [venue, street, city, region, postal] = useWatch({
+    control,
+    name: ['venue', 'street', 'city', 'region', 'postal'],
+  })
 
   // Reset to a blank draft each time the dialog (re)opens — the modal stays
   // mounted, so without this a second open would show the prior attempt.
@@ -244,6 +254,11 @@ export const NewTournamentModal = ({
                 )}
               </Field>
             </div>
+
+            {/* Confirm the venue before saving: geocodes the typed address and
+                drops a pin. Display-only — it adds no coordinates to the create
+                payload (the server geocodes on save). */}
+            <PreviewLocation address={{ venue, street, city, region, postal }} />
           </div>
 
           {/* The refusal the form cannot pin to one box. An `Alert`, not a toast:
