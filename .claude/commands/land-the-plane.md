@@ -28,7 +28,11 @@ Run each suite the project ships. Use the project root as cwd. Run independent s
 - **Web client unit tests (vitest):** `cd web-client && npm run test:run`
 - **Web client lint + typecheck/build:** `cd web-client && npm run lint && npm run build` (the `build` script is `tsc -b && vite build` — it's the only typecheck.)
 - **Web client e2e (Playwright):** `cd web-client && npm run test:e2e`. Playwright defaults to port 5174 which collides with the dev compose web-client; set `PLAYWRIGHT_PORT` to a free port when the dev compose stack is up.
-- **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; ensure it's running first (or skip if not applicable to this branch's changes).
+- **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; it self-manages the stack, so just run it. It is the only **automated** coverage for the tournament create → go-live → play → crown lifecycle. A browser QA pass can reach those flows once it grants itself the Beta tester role (see `qa-review.md` §2b), but that is a hand-driven exploratory pass, not a regression gate — it proves the flow worked once, for one operator, on one stack.
+
+  **Never scope it out because "the branch didn't touch `e2e/`".** A web-client-only or api-only change absolutely can break it; that is precisely what it is for, and skipping it on that reasoning once already shipped a break that CI then caught, costing a full merge cycle. Run it whenever the branch touches **`api/`, `web-client/`, `ios/`, `e2e/`, `deploy/`, `nginx/`, or any `docker-compose*.yml`**.
+
+  The one case you may skip: a branch that touches **only** `*.md`, `docs/`, or `.claude/` — no application code, no stack config. Charging a cold docker stack build to a README edit buys nothing. Say explicitly that you skipped it and why.
 - **OpenAPI schema drift:** if `api/**` or `web-client/src/api/**` changed, run `mise run regen-api-types` then `git diff --exit-code web-client/src/api/schema.d.ts`. A non-empty diff means the committed schema is stale — commit the regenerated file.
 - **iOS app build (xcodebuild):** if `ios/**` changed, the compile is the gate (the app ships no XCTest target). Clean-build for the simulator **from the worktree's own `ios/` dir** (a worktree has its own checkout — building the main repo's `ios/` tests the wrong code): `rm -rf ios/build/sim && xcodebuild -project ios/Fortymm.xcodeproj -scheme Fortymm -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build/sim build`. The `rm -rf` matters — incremental builds report `BUILD SUCCEEDED` while serving a stale dylib. A non-`** BUILD SUCCEEDED **` result stops the workflow.
 
@@ -135,6 +139,21 @@ gh pr merge --squash --delete-branch
 ```
 
 Use `--squash` unless the user asked for a different merge strategy. If the merge is blocked (required checks still running, conflicts, branch protection), report exactly why and stop — do not override protections.
+
+Note: run from a worktree, `--delete-branch` prints `fatal: 'main' already used by worktree` **after the remote merge has already succeeded**. That is not a failed merge — verify with `gh pr view <n> --json state,mergedAt` before reacting, and clean up the branch by hand rather than retrying the merge.
+
+## Step 9 — Collect the garbage
+
+Only after the merge is confirmed. `--delete-branch` removes the *branch*; nothing has ever removed the *worktree*. Left alone this accumulates fast — it reached 311 worktrees and 82 GB, 77% of them on already-merged branches, and that sprawl is what causes `/epic` to resume into a stale checkout, ADR numbers to be computed against old trees, and QA stacks to OOM a host with no headroom.
+
+```bash
+scripts/reap-worktrees.sh            # dry run: what would go
+scripts/reap-worktrees.sh --force    # reap worktrees whose PR has merged
+```
+
+The script only ever removes a worktree whose PR is **merged** and which holds nothing that isn't already in `main` (no modified tracked files, no source-looking untracked files, no commits added after the merge); anything else it lists as REVIEW and leaves alone. It records branch/sha/path to `.claude/reaped-worktrees.tsv` first, so any reap can be undone with `git worktree add -b <branch> <path> <sha>`.
+
+You are standing in the worktree that was just merged, so the script will skip it as "current" — that one is the user's to remove after they've moved on. Report the counts; don't push past a REVIEW entry on the user's behalf.
 
 ## Reporting
 

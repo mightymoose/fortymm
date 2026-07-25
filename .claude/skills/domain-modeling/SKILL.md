@@ -16,8 +16,8 @@ Most repos have a single context:
 ├── CONTEXT.md
 ├── docs/
 │   └── adr/
-│       ├── 0001-event-sourced-orders.md
-│       └── 0002-postgres-for-write-model.md
+│       ├── 20260716-event-sourced-orders.md
+│       └── 20260718-postgres-for-write-model.md
 └── src/
 ```
 
