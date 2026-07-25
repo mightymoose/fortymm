@@ -7000,6 +7000,9 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         (read,) = await _events_of(client, tournament_id)
         partial = read["results"]
         assert partial is not None, "a cut round-robin event carries a results object"
+        assert partial["kind"] == "standings", (
+            "a round-robin event's results are the standings arm of the union"
+        )
         assert partial["complete"] is False
         assert partial["champion"] is None
         (pool,) = partial["pools"]
@@ -7025,6 +7028,7 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         (read,) = await _events_of(client, tournament_id)
 
     results = read["results"]
+    assert results["kind"] == "standings"
     assert results["complete"] is True
     assert results["champion"] == str(e1.id)
     (pool,) = results["pools"]
@@ -7033,6 +7037,98 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         (str(e2.id), 1, 2),
         (str(e3.id), 0, 3),
     ]
+
+
+async def test_the_detail_bff_surfaces_single_elim_finishes(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The tournament-detail BFF carries a single-elimination event's **finishes** — the
+    ``kind: "finishes"`` arm of the results union (ADR-0785), no longer raising as it
+    did while ``results_for`` had no single-elim strategy.
+
+    A 4-seed bracket played to a champion, seed 1 (the owner) winning throughout. The
+    two semifinal losers (seeds 3 and 4) **tie 3rd**, the final's loser (seed 2) is
+    runner-up, seed 1 is champion (position 1). Positions ``1, 2, 3, 3`` — no 4th,
+    because the format never ranks the two semifinal losers against each other."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "se-bff-2") as (c2, u2),
+        opponent_session(db_session, "se-bff-3") as (c3, u3),
+        opponent_session(db_session, "se-bff-4") as (c4, u4),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        e1 = await _enter(
+            db_session,
+            event["id"],
+            owner,
+            seed=1,
+            created_at=base + timedelta(minutes=1),
+        )
+        e2 = await _enter(
+            db_session, event["id"], u2, seed=2, created_at=base + timedelta(minutes=2)
+        )
+        e3 = await _enter(
+            db_session, event["id"], u3, seed=3, created_at=base + timedelta(minutes=3)
+        )
+        e4 = await _enter(
+            db_session, event["id"], u4, seed=4, created_at=base + timedelta(minutes=4)
+        )
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        clients = {e1.id: client, e2.id: c2, e3.id: c3, e4.id: c4}
+
+        by_rp = {
+            (f.round, f.position): f
+            for f in await _fixture_rows(db_session, event["id"])
+        }
+        sf1, sf2 = by_rp[(1, 1)], by_rp[(1, 2)]  # seed 1 v 4, seed 2 v 3
+
+        # Mid-bracket: one semifinal decided — a live, incomplete finishes block that
+        # places only the one eliminated entrant and crowns nobody.
+        await _call_fixtures(db_session, tournament_id, [sf1, sf2])
+        await _win_fixture_match(
+            sf1, clients_by_entry=clients, winner_entry_id=e1.id, rated=True
+        )
+        (read,) = await _events_of(client, tournament_id)
+        partial = read["results"]
+        assert partial is not None and partial["kind"] == "finishes"
+        assert partial["complete"] is False
+        assert partial["champion"] is None
+        assert {(row["entry_id"], row["position"]) for row in partial["finishes"]} == {
+            (str(e4.id), 3)
+        }, "only the decided semifinal's loser has a finish so far"
+
+        # Finish the bracket: seed 2 wins SF2, then seed 1 wins the final.
+        await _win_fixture_match(
+            sf2, clients_by_entry=clients, winner_entry_id=e2.id, rated=True
+        )
+        (final_row,) = [
+            f for f in await _fixture_rows(db_session, event["id"]) if f.round == 2
+        ]
+        await _call_fixtures(db_session, tournament_id, [final_row])
+        await _win_fixture_match(
+            final_row, clients_by_entry=clients, winner_entry_id=e1.id, rated=True
+        )
+        (read,) = await _events_of(client, tournament_id)
+
+    results = read["results"]
+    assert results["kind"] == "finishes"
+    assert results["complete"] is True
+    assert results["champion"] == str(e1.id)
+    assert {(row["entry_id"], row["position"]) for row in results["finishes"]} == {
+        (str(e1.id), 1),
+        (str(e2.id), 2),
+        (str(e3.id), 3),
+        (str(e4.id), 3),
+    }, "champion 1, runner-up 2, the two semifinal losers tied 3rd"
+    # The champion carries no elimination round; the runner-up lost the final (round 2).
+    by_entry = {row["entry_id"]: row for row in results["finishes"]}
+    assert by_entry[str(e1.id)]["eliminated_in_round"] is None
+    assert by_entry[str(e2.id)]["eliminated_in_round"] == 2
+    assert by_entry[str(e3.id)]["eliminated_in_round"] == 1
 
 
 async def test_an_uncut_event_carries_no_results(

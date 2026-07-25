@@ -61,6 +61,7 @@ from app.schemas.tournament import (
     Address,
     MatchSettings,
     Pool,
+    StandingsResultsRead,
     TournamentEntrantRead,
     TournamentFixtureRead,
     TournamentTable,
@@ -289,7 +290,11 @@ def _build_event(
     my_standing = None
     field_size = 0
     pool_complete = False
-    if results is not None:
+    # Only the round-robin **standings** shape has a per-pool table with the caller's
+    # row in it; a single-elim **finishes** block does not, so it falls through to the
+    # fixture-counted record below (``StandingsResultsRead`` narrows the results union —
+    # a new results shape is a type error here until it says whether it has a pool row).
+    if isinstance(results, StandingsResultsRead):
         for pool_standings in results.pools:
             if my_pool_id is not None and pool_standings.pool_id != my_pool_id:
                 continue
@@ -345,11 +350,11 @@ def _build_event(
         is_live=any(f.match_status is MatchStatus.in_progress for f in my_fixtures),
         # Taken from the standings row when there IS one, so the record agrees with
         # the table it sits beside; counted from the caller's own decided fixtures
-        # otherwise. The fallback is not decoration: ``event_results`` answers
-        # ``None`` for every draw type but round-robin (ADR-0788), so hard-coding a
-        # zero here would show ``0–0`` to every player of the first bracket event we
-        # ship, however many matches they had actually won — and nothing would fail
-        # to catch it.
+        # otherwise. The fallback is not decoration: a single-elim event's results are
+        # a **finishes** block with no per-pool standings row (ADR-0785), and
+        # ``event_results`` answers ``None`` for the still-unimplemented draw types, so
+        # hard-coding a zero here would show ``0–0`` to every player of a bracket event,
+        # however many matches they had actually won — and nothing would catch it.
         wins=my_standing.wins if my_standing is not None else record_wins,
         losses=my_standing.losses if my_standing is not None else record_losses,
         position=my_standing.rank if my_standing is not None else None,

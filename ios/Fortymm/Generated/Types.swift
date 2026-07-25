@@ -4062,50 +4062,98 @@ internal enum Components {
             case doubles = "doubles"
             case teams = "teams"
         }
-        /// A round-robin event's results (ADR-0788): a standings table per pool, whether the
-        /// whole event is decided, and its champion when there is one.
+        /// One entrant's **finish** in a single-elimination bracket (ADR-0785): its
+        /// finishing position and the round it was eliminated in.
         ///
-        /// It rides on the tournament-detail payload (one endpoint per page) and is **derived
-        /// live** from the fixtures' currently-completed matches — never a snapshot — so a
-        /// corrected or voided match re-orders the standings the instant it leaves
-        /// ``completed``.
+        /// The entrant is carried as an **id only**, exactly as a standings row and a fixture
+        /// are: the username behind ``entry_id`` is on the event's ``entrants`` list already,
+        /// keyed by that same id, so a client joins the two rather than reading a copy that
+        /// could drift.
         ///
-        /// ``champion`` is the leader of a **complete, single-pool** event — a pure
-        /// round-robin's winner. A multi-pool round-robin has no single champion without a
-        /// knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
-        /// ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
-        /// played.
+        /// ``position`` is 1-based and **shared by same-round losers** — the two semifinal
+        /// losers both carry ``3``, the four quarterfinal losers ``5`` — so it is deliberately
+        /// *not* distinct per row: single-elimination does not rank same-round losers against
+        /// each other. ``eliminated_in_round`` is the 1-based round the entrant lost in, and
+        /// ``null`` for the champion, never eliminated (their ``position`` is ``1``).
         ///
-        /// ``results`` on the event is ``null`` for an event that has **no draw** (nothing to
-        /// stand) or one whose draw type has no results strategy yet (only round-robin does
-        /// today) — an honest "no results here", not an empty table that would read as a played
-        /// event with nobody in it.
-        ///
-        /// - Remark: Generated from `#/components/schemas/EventResultsRead`.
-        internal struct EventResultsRead: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/EventResultsRead/pools`.
-            internal var pools: [Components.Schemas.PoolStandingsRead]
-            /// - Remark: Generated from `#/components/schemas/EventResultsRead/complete`.
-            internal var complete: Swift.Bool
-            /// - Remark: Generated from `#/components/schemas/EventResultsRead/champion`.
-            internal var champion: Swift.String?
-            /// Creates a new `EventResultsRead`.
+        /// - Remark: Generated from `#/components/schemas/FinishRowRead`.
+        internal struct FinishRowRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FinishRowRead/entry_id`.
+            internal var entryId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/FinishRowRead/position`.
+            internal var position: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/FinishRowRead/eliminated_in_round`.
+            internal var eliminatedInRound: Swift.Int?
+            /// Creates a new `FinishRowRead`.
             ///
             /// - Parameters:
-            ///   - pools:
+            ///   - entryId:
+            ///   - position:
+            ///   - eliminatedInRound:
+            internal init(
+                entryId: Swift.String,
+                position: Swift.Int,
+                eliminatedInRound: Swift.Int? = nil
+            ) {
+                self.entryId = entryId
+                self.position = position
+                self.eliminatedInRound = eliminatedInRound
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case entryId = "entry_id"
+                case position
+                case eliminatedInRound = "eliminated_in_round"
+            }
+        }
+        /// The **finishes** shape of an event's results (ADR-0785) — the single-elimination
+        /// arm of the ``results`` discriminated union, tagged ``kind: "finishes"``.
+        ///
+        /// A ranked list of :class:`FinishRowRead` (position ascending, ties sharing a
+        /// position), whether the whole bracket is decided, and its champion when there is one.
+        /// Like every results shape it is **derived live** from the fixtures' completed
+        /// matches, so a correction or void re-derives it (and can re-crown) with no snapshot.
+        ///
+        /// Only *placed* entrants appear in ``finishes``: every loser of a decided fixture,
+        /// plus the champion once the final is decided. An entrant still alive in a
+        /// partially-played bracket has no finish yet and is simply absent — a partial, live
+        /// result. ``champion`` is the final's winner (position 1) and ``null`` until the final
+        /// is decided.
+        ///
+        /// - Remark: Generated from `#/components/schemas/FinishesResultsRead`.
+        internal struct FinishesResultsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FinishesResultsRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case finishes = "finishes"
+            }
+            /// - Remark: Generated from `#/components/schemas/FinishesResultsRead/kind`.
+            internal var kind: Components.Schemas.FinishesResultsRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/FinishesResultsRead/finishes`.
+            internal var finishes: [Components.Schemas.FinishRowRead]
+            /// - Remark: Generated from `#/components/schemas/FinishesResultsRead/complete`.
+            internal var complete: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/FinishesResultsRead/champion`.
+            internal var champion: Swift.String?
+            /// Creates a new `FinishesResultsRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - finishes:
             ///   - complete:
             ///   - champion:
             internal init(
-                pools: [Components.Schemas.PoolStandingsRead],
+                kind: Components.Schemas.FinishesResultsRead.KindPayload? = nil,
+                finishes: [Components.Schemas.FinishRowRead],
                 complete: Swift.Bool,
                 champion: Swift.String? = nil
             ) {
-                self.pools = pools
+                self.kind = kind
+                self.finishes = finishes
                 self.complete = complete
                 self.champion = champion
             }
             internal enum CodingKeys: String, CodingKey {
-                case pools
+                case kind
+                case finishes
                 case complete
                 case champion
             }
@@ -8993,6 +9041,60 @@ internal enum Components {
                 case gameDifference = "game_difference"
             }
         }
+        /// The **standings** shape of an event's results (ADR-0788) — the round-robin arm
+        /// of the ``results`` discriminated union, tagged ``kind: "standings"``.
+        ///
+        /// A standings table per pool, whether the whole event is decided, and its champion
+        /// when there is one. It rides on the tournament-detail payload (one endpoint per page)
+        /// and is **derived live** from the fixtures' currently-completed matches — never a
+        /// snapshot — so a corrected or voided match re-orders the standings the instant it
+        /// leaves ``completed``.
+        ///
+        /// ``champion`` is the leader of a **complete, single-pool** event — a pure
+        /// round-robin's winner. A multi-pool round-robin has no single champion without a
+        /// knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+        /// ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
+        /// played.
+        ///
+        /// - Remark: Generated from `#/components/schemas/StandingsResultsRead`.
+        internal struct StandingsResultsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case standings = "standings"
+            }
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/kind`.
+            internal var kind: Components.Schemas.StandingsResultsRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/pools`.
+            internal var pools: [Components.Schemas.PoolStandingsRead]
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/complete`.
+            internal var complete: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/champion`.
+            internal var champion: Swift.String?
+            /// Creates a new `StandingsResultsRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - pools:
+            ///   - complete:
+            ///   - champion:
+            internal init(
+                kind: Components.Schemas.StandingsResultsRead.KindPayload? = nil,
+                pools: [Components.Schemas.PoolStandingsRead],
+                complete: Swift.Bool,
+                champion: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.pools = pools
+                self.complete = complete
+                self.champion = champion
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case pools
+                case complete
+                case champion
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Status`.
         internal enum Status: String, Codable, Hashable, Sendable, CaseIterable {
             case scheduled = "scheduled"
@@ -9614,21 +9716,40 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/fixtures`.
             internal var fixtures: [Components.Schemas.TournamentFixtureRead]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results`.
-            internal struct ResultsPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/value1`.
-                internal var value1: Components.Schemas.EventResultsRead
-                /// Creates a new `ResultsPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                internal init(value1: Components.Schemas.EventResultsRead) {
-                    self.value1 = value1
+            internal enum ResultsPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/FinishesResultsRead`.
+                case finishes(Components.Schemas.FinishesResultsRead)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/StandingsResultsRead`.
+                case standings(Components.Schemas.StandingsResultsRead)
+                internal enum CodingKeys: String, CodingKey {
+                    case kind
                 }
                 internal init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try .init(from: decoder)
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "finishes":
+                        self = .finishes(try .init(from: decoder))
+                    case "standings":
+                        self = .standings(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
                 }
                 internal func encode(to encoder: any Swift.Encoder) throws {
-                    try self.value1.encode(to: encoder)
+                    switch self {
+                    case let .finishes(value):
+                        try value.encode(to: encoder)
+                    case let .standings(value):
+                        try value.encode(to: encoder)
+                    }
                 }
             }
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results`.
