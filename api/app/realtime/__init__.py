@@ -19,7 +19,7 @@ from app.realtime.broker import (
 )
 from app.realtime.events import CHANNEL_PREFIX, EventKind, RealtimeEvent, user_channel
 from app.realtime.outbox import stage_event
-from app.realtime.publisher import publish_event
+from app.realtime.publisher import publish_event, publish_events
 
 __all__ = [
     "CHANNEL_PREFIX",
@@ -30,6 +30,7 @@ __all__ = [
     "get_broker",
     "init_broker",
     "publish_event",
+    "publish_events",
     "shutdown_broker",
     "stage_event",
     "user_channel",

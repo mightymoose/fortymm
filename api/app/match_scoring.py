@@ -42,6 +42,7 @@ from app.match_errors import (
     ScoreNotAllowedError,
 )
 from app.match_queries import match_eager_options
+from app.match_realtime import stage_match_participant_hints
 from app.match_serialization import (
     first_decider,
     games_payload_from_match,
@@ -50,7 +51,7 @@ from app.match_serialization import (
     score_view,
 )
 from app.models import Match, MatchGame, MatchGameScore, MatchStatus
-from app.result_acceptance import _games_to_win, _stage_participant_hints
+from app.result_acceptance import _games_to_win
 from app.schemas.match import MatchDetailsScore, MatchResultsGameWrite
 
 # ----- load + lock ---------------------------------------------------------
@@ -335,7 +336,7 @@ async def _enter_game_score_locked(
     # No query: ``match.sides`` → ``players`` come loaded on the read chain
     # ``load_match_for_write`` uses (``match_eager_options``), which is also how
     # its ``is_participant`` check runs synchronously.
-    _stage_participant_hints(db, match)
+    stage_match_participant_hints(db, match)
 
     try:
         await db.commit()
@@ -410,7 +411,7 @@ async def _update_game_score_locked(
     # Both participants' scoreboards changed — see ``_enter_game_score_locked``.
     # Staged only past the optimistic-concurrency guard: the branch above never
     # wrote a row, so it has nothing to hint about.
-    _stage_participant_hints(db, match)
+    stage_match_participant_hints(db, match)
 
     await db.commit()
 
@@ -443,7 +444,7 @@ async def _delete_game_score_locked(
     game.score = None
     # Clearing a score changes the board both participants are watching just as
     # much as writing one — see ``_enter_game_score_locked``.
-    _stage_participant_hints(db, match)
+    stage_match_participant_hints(db, match)
     await db.commit()
 
     return await _reload_match(db, match.id)

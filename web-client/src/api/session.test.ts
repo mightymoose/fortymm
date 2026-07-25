@@ -5,12 +5,20 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 
 import { server } from '@/mocks/server'
+import { closeRealtimeConnections } from './realtime/connection'
 import {
   SESSION_QUERY_KEY,
   readStorageLock,
   useConfirmEmail,
   useConsumeLoginToken,
+  useLogout,
 } from './session'
+
+// Stubbed wholesale: these tests are about WHEN the stream is closed relative
+// to the cache being cleared, and a real connection would need a real stream.
+vi.mock('./realtime/connection', () => ({
+  closeRealtimeConnections: vi.fn(),
+}))
 
 let queryClient: QueryClient
 
@@ -18,6 +26,7 @@ beforeEach(() => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+  vi.mocked(closeRealtimeConnections).mockReset()
 })
 
 afterEach(() => {
@@ -132,6 +141,52 @@ describe('useConfirmEmail', () => {
       (queryClient.getQueryData(SESSION_QUERY_KEY) as { merged: unknown })
         .merged,
     ).toBeNull()
+  })
+})
+
+describe('useLogout', () => {
+  /**
+   * ⚠️ The ordering assertion, on the path most exposed to it. Signing out is
+   * always done from inside `_app`, where `RealtimeProvider` has a live
+   * `/v1/stream`. `queryClient.clear()` is synchronous but the navigation that
+   * unmounts the provider is not, so a hint arriving in that gap would refetch
+   * the departing user's dashboard straight back into the cache that was just
+   * emptied — in front of whoever signs in next.
+   *
+   * Recorded as a LIST, not two `toHaveBeenCalled()`s: with the steps the wrong
+   * way round both spies are still satisfied and the bug still ships.
+   */
+  it('closes the realtime stream before clearing the query cache', async () => {
+    const calls: string[] = []
+    vi.mocked(closeRealtimeConnections).mockImplementation(() => {
+      calls.push('closeRealtime')
+    })
+    vi.spyOn(queryClient, 'clear').mockImplementation(() => {
+      calls.push('clearQueryCache')
+    })
+
+    const { result } = renderHook(() => useLogout(), {
+      wrapper: wrapperFor(queryClient),
+    })
+    result.current.mutate()
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(calls).toEqual(['closeRealtime', 'clearQueryCache'])
+  })
+
+  // The behaviour the ordering protects, end to end: nothing per-user survives.
+  it("drops the prior user's cached per-user data", async () => {
+    queryClient.setQueryData(['dashboard'], { stale: 'signed-in data' })
+
+    const { result } = renderHook(() => useLogout(), {
+      wrapper: wrapperFor(queryClient),
+    })
+    result.current.mutate()
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(queryClient.getQueryData(['dashboard'])).toBeUndefined()
   })
 })
 

@@ -1060,8 +1060,8 @@ export const handlers = [
   // browser would get `index.html` back from vite and reconnect-loop over it.
   //
   // Written by hand rather than with MSW's `sse()` helper on purpose: `sse()`
-  // needs a global `EventSource` (stubbed inertly in `src/test/setup.ts`) and
-  // buys nothing here — the frame is one literal string.
+  // invariants on a global `EventSource` that neither jsdom nor Node 26
+  // exposes, and it buys nothing here — the frame is one literal string.
   http.get('*/v1/stream', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {

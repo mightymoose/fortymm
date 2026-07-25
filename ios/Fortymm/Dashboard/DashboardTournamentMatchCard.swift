@@ -23,7 +23,7 @@ struct TournamentMatchCard: View {
         VStack(alignment: .leading, spacing: 0) {
             statusRow
 
-            TournamentOverline(text: "Games won · match score", size: 9)
+            DashOverline(text: "Games won · match score", size: 9)
                 .padding(.top, FMSpace.s4)
                 .padding(.bottom, 6)
             scoreRow(name: match.youName, games: match.yourGames, won: match.youWon)
@@ -184,7 +184,7 @@ struct TournamentGameChips: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                TournamentOverline(text: "Completed games", size: 9)
+                DashOverline(text: "Completed games", size: 9)
                     .padding(.bottom, 4)
                 Text(legend)
                     .font(FMFont.ui(FMFont.sm))

@@ -132,7 +132,6 @@ struct SSEFrameParser {
             // The spec appends value + U+000A; the trailing newline comes off at
             // dispatch, which is what joins multi-line data with a single "\n".
             block.data += value + "\n"
-            block.hasData = true
         case "event":
             block.event = String(value)
         case "retry":
@@ -150,10 +149,15 @@ struct SSEFrameParser {
         var frames: [SSEFrame] = []
         if let retry = block.retry { frames.append(.retry(milliseconds: retry)) }
         // A block with no `data:` at all (a lone `retry:`, or a block of
-        // comments) dispatches no event — that is the spec, and it is why
-        // `: ping` is invisible to the caller instead of arriving as an empty
-        // message.
-        if block.hasData {
+        // comments) dispatches no event — that is the spec ("If the data buffer
+        // is an empty string, … abort these steps"), and it is why `: ping` is
+        // invisible to the caller instead of arriving as an empty message.
+        //
+        // Emptiness is the whole test, because every `data:` line — including a
+        // bare `data:` with no value — appends at least the U+000A the spec
+        // mandates. So a block whose only line is `data:` has a non-empty buffer
+        // ("\n") and correctly dispatches an event with empty data.
+        if !block.data.isEmpty {
             var data = block.data
             if data.hasSuffix("\n") { data.removeLast() }
             frames.append(
@@ -177,10 +181,9 @@ struct SSEFrameParser {
 
     /// The fields accumulated since the last blank line.
     private struct Block {
+        /// The spec's "data buffer". Only ever appended to as `value + "\n"`, so
+        /// its emptiness *is* "this block had no `data:` line" — see `dispatch`.
         var data = ""
-        /// Distinct from `data.isEmpty`: a `data:` line with an empty value is
-        /// still an event, and a block of comments is still not one.
-        var hasData = false
         var event = ""
         var retry: Int?
     }

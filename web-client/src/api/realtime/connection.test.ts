@@ -81,17 +81,15 @@ function gatedSleep() {
   }
 }
 
-function open(overrides: Parameters<typeof openRealtimeConnection>[0]) {
-  return openRealtimeConnection(overrides)
-}
-
 afterEach(() => closeRealtimeConnections())
 
 describe('openRealtimeConnection', () => {
   it('decodes the hints the server pushes, in order', async () => {
     const wires = serveStream()
     const events: RealtimeEvent[] = []
-    const connection = open({ onEvent: (event) => events.push(event) })
+    const connection = openRealtimeConnection({
+      onEvent: (event) => events.push(event),
+    })
 
     await vi.waitFor(() => expect(wires).toHaveLength(1))
     wires[0].send('retry: 5000\n\n')
@@ -113,7 +111,7 @@ describe('openRealtimeConnection', () => {
     const wires = serveStream()
     const events: RealtimeEvent[] = []
     const gate = gatedSleep()
-    const connection = open({
+    const connection = openRealtimeConnection({
       onEvent: (event) => events.push(event),
       sleep: gate.sleep,
     })
@@ -137,7 +135,7 @@ describe('openRealtimeConnection', () => {
     const wires = serveStream()
     const events: RealtimeEvent[] = []
     const gate = gatedSleep()
-    const connection = open({
+    const connection = openRealtimeConnection({
       onEvent: (event) => events.push(event),
       sleep: gate.sleep,
       random: () => 0.5,
@@ -181,7 +179,7 @@ describe('openRealtimeConnection', () => {
       ),
     )
     const gate = gatedSleep()
-    const connection = open({
+    const connection = openRealtimeConnection({
       onEvent: () => {},
       sleep: gate.sleep,
       random: () => 0.5,
@@ -199,7 +197,7 @@ describe('openRealtimeConnection', () => {
   it('stops for good once closed, mid-backoff', async () => {
     const wires = serveStream()
     const gate = gatedSleep()
-    const connection = open({
+    const connection = openRealtimeConnection({
       onEvent: () => {},
       sleep: gate.sleep,
       now: () => 0,
@@ -217,12 +215,13 @@ describe('openRealtimeConnection', () => {
     expect(wires).toHaveLength(1)
   })
 
-  // `closeRealtimeConnections` is what the session-ended handler calls, from a
-  // callback that holds no reference to any connection.
+  // `closeRealtimeConnections` is what the identity-change sequence calls (the
+  // sign-out and the session-ended 401 alike), from a callback that holds no
+  // reference to any connection.
   it('closes every open connection from the module-level handle', async () => {
     const wires = serveStream()
-    const one = open({ onEvent: () => {} })
-    const two = open({ onEvent: () => {} })
+    const one = openRealtimeConnection({ onEvent: () => {} })
+    const two = openRealtimeConnection({ onEvent: () => {} })
 
     await vi.waitFor(() => expect(wires).toHaveLength(2))
     closeRealtimeConnections()

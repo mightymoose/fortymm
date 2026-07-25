@@ -63,7 +63,7 @@ struct DashboardTournamentPanel: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TournamentOverline(text: "Your tournament", color: FMColor.ball500)
+            DashOverline(text: "Your tournament", color: FMColor.ball500)
             HStack(alignment: .firstTextBaseline, spacing: FMSpace.s3) {
                 Text(view.name.uppercased())
                     .font(FMFont.display(26))
@@ -238,7 +238,7 @@ struct TournamentStatsStrip: View {
             // A third of a phone's width is narrower than "GROUP POSITION" at any
             // tracking, so the label WRAPS rather than truncating — an ellipsised
             // "GROUP POSI…" names nothing.
-            TournamentOverline(text: label, size: 9)
+            DashOverline(text: label, size: 9)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             value()
@@ -266,7 +266,7 @@ struct TournamentPathList: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                TournamentOverline(text: heading, size: 9)
+                DashOverline(text: heading, size: 9)
                     .padding(.bottom, subheading == nil ? FMSpace.s2 : 3)
                 if let subheading {
                     Text(subheading)
@@ -357,23 +357,6 @@ private struct TournamentPathRow: View {
 
     private var detailWeight: Font.Weight {
         row.state == .upcoming || row.state == .voided ? .regular : .bold
-    }
-}
-
-// MARK: - Shared bits
-
-/// The panel's small uppercase label. A sibling of `DashOverline` that takes a
-/// colour, which the panel needs for its accented "YOUR TOURNAMENT" eyebrow.
-struct TournamentOverline: View {
-    let text: String
-    var size: CGFloat = FMFont.xs
-    var color: Color = FMColor.fgMuted
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(FMFont.mono(size, weight: .medium))
-            .tracking(1.4)
-            .foregroundStyle(color)
     }
 }
 

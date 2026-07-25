@@ -46,6 +46,7 @@ from app.match_errors import (
     UndecidedBoardError,
 )
 from app.match_queries import match_eager_options
+from app.match_realtime import stage_match_participant_hints
 from app.match_scoring import (
     MatchLockUnavailable,  # re-exported for the router adapter
     _MatchWriteLoader,
@@ -60,7 +61,7 @@ from app.models import (
     MatchResult,
     MatchStatus,
 )
-from app.result_acceptance import _stage_participant_hints, finalize_match
+from app.result_acceptance import finalize_match
 from app.result_chain import standing_result
 from app.schemas.match import MatchResultsGameWrite
 
@@ -311,7 +312,7 @@ async def propose_result(
     #
     # No query: ``match.sides`` → ``players`` come loaded on
     # ``match_rating_eager_options()``.
-    _stage_participant_hints(db, match)
+    stage_match_participant_hints(db, match)
 
     try:
         await db.commit()

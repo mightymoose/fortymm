@@ -149,6 +149,16 @@ describe('readSseFrames', () => {
     expect(frames).toEqual([message('one\n\nthree')])
   })
 
+  it('dispatches an empty message for a block whose only line is a bare data:', async () => {
+    // The boundary between "no `data:` line at all" (dispatch nothing) and "a
+    // `data:` line carrying nothing" (dispatch an empty message). The first is
+    // an empty data buffer; the second is `'\n'`, because every `data:` appends
+    // its newline. `: ping\n\n` above is the other side of the same line.
+    const frames = await collect(streamOf('data:\n\n'))
+
+    expect(frames).toEqual([message('')])
+  })
+
   it('reads a lone \\r as a line terminator', async () => {
     const frames = await collect(streamOf('data: a\rdata: b\n\n'))
 

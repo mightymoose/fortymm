@@ -90,9 +90,14 @@ class PubSubFactory(Protocol):
 
 @dataclass
 class _Attachment:
-    """One attached stream's mailbox: coalesced pending kinds plus a doorbell."""
+    """One attached stream's mailbox: coalesced pending kinds plus a doorbell.
 
-    user_id: uuid.UUID
+    Keyed by ``channel``, not by user: the channel is what the fan-out matches
+    on, and carrying the user id alongside it would be the same fact stored
+    twice, in two fields free to disagree. :func:`user_channel` maps one to the
+    other wherever the user id is what's actually in hand.
+    """
+
     channel: str
     pending: set[EventKind] = field(default_factory=set)
     doorbell: asyncio.Event = field(default_factory=asyncio.Event)
@@ -219,21 +224,25 @@ class RealtimeBroker:
             raise RuntimeError("realtime broker is closed")
         channel = user_channel(user_id)
         async with self._lock:
-            attachments = self._attachments.setdefault(channel, [])
-            if len(attachments) >= self._max_connections_per_user:
-                if not attachments:
-                    del self._attachments[channel]
+            # Read, don't ``setdefault``: an entry installed before the cap
+            # check would have to be deleted again on the refusal path. A
+            # channel is only ever in the map with at least one attachment,
+            # so "present" is exactly "not the first attachment".
+            attachments = self._attachments.get(channel)
+            if len(attachments or ()) >= self._max_connections_per_user:
                 raise TooManyRealtimeConnections(
                     user_id, self._max_connections_per_user
                 )
-            attachment = _Attachment(user_id=user_id, channel=channel)
-            first = not attachments
-            attachments.append(attachment)
-            if first and self._pubsub is not None:
-                # Not first *and* pubsub is None means a reconnect is in
-                # flight; _connect re-subscribes everything in _attachments,
-                # so this channel is picked up there.
-                await self._pubsub.subscribe(channel)
+            attachment = _Attachment(channel=channel)
+            if attachments is not None:
+                attachments.append(attachment)
+            else:
+                self._attachments[channel] = [attachment]
+                if self._pubsub is not None:
+                    # pubsub is None means a reconnect is in flight; _connect
+                    # re-subscribes everything in _attachments, so this channel
+                    # is picked up there.
+                    await self._pubsub.subscribe(channel)
         return attachment
 
     async def _detach(self, attachment: _Attachment) -> None:

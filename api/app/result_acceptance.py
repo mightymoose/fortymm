@@ -52,6 +52,7 @@ from app.match_errors import (
     StandingResultConflictError,
     UndecidedBoardError,
 )
+from app.match_realtime import stage_match_participant_hints
 from app.models import (
     Match,
     MatchGameScore,
@@ -70,8 +71,6 @@ from app.ratings import (
     state_rating_value,
     validate_state,
 )
-from app.realtime.events import EventKind
-from app.realtime.outbox import stage_event
 from app.result_chain import standing_result
 from app.tournament_advancement import on_match_completed
 
@@ -419,28 +418,7 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
     await on_match_completed(db, match)
-    _stage_participant_hints(db, match)
-
-
-def _stage_participant_hints(db: AsyncSession, match: Match) -> None:
-    """Stage a ``dashboard.changed`` hint for each player on ``match``.
-
-    The affected set is exactly the participants: a completion clears their
-    "needs your attention" row and moves their rating, and it changes nothing on
-    anyone else's dashboard (ADR "realtime topics are per-user, and the server
-    resolves who is affected").
-
-    No query — ``match.sides`` → ``players`` are already loaded on every path
-    that reaches :func:`finalize_match` (``match_rating_eager_options`` for the
-    two router paths, ``retirement_jobs._eager_options`` for the sweep), which is
-    also why ``_set_side_won`` can iterate them synchronously two lines up.
-
-    Iterates the players rather than indexing ``players[0]``: a solo match's
-    sentinel side legitimately has none, and it simply contributes no hint.
-    """
-    for side in match.sides:
-        for player in side.players:
-            stage_event(db, player.user_id, EventKind.dashboard_changed)
+    stage_match_participant_hints(db, match)
 
 
 async def _reload_accepted_match(db: AsyncSession, match_id: uuid.UUID) -> Match:

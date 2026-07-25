@@ -157,12 +157,12 @@ def realtime_publisher_redis(realtime_redis_server, monkeypatch):
     ordinary write paths (result acceptance, match calls), so this is the same
     blanket the ``fake_*_queue`` fixtures provide for RQ.
 
-    One client, reused, rather than the fresh-per-call the real ``_connection``
-    does: constructing a ``FakeStrictRedis`` costs ~120ms (it builds a whole
-    command table), so per-call construction turns a 50-publish burst into six
-    seconds and quietly wrecks any timing-sensitive assertion built on top of
-    it. Real ``Redis.from_url`` is lazy and cheap, so nothing about the
-    production shape is being papered over here."""
+    Replacing ``_connection`` itself — rather than the client it memoizes —
+    is what keeps the fake per-test: production caches *inside* ``_connection``
+    (see its docstring), so patching over it bypasses the memo entirely and no
+    fake can outlive the test that installed it. One ``FakeStrictRedis`` per
+    test, reused across that test's publishes, because constructing one costs
+    ~120ms (it builds a whole command table)."""
     from app.realtime import publisher as realtime_publisher
 
     client = fakeredis.FakeStrictRedis(server=realtime_redis_server)

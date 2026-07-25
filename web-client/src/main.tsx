@@ -9,7 +9,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
 import { setSessionEndedHandler } from '@/api/client'
 import { closeRealtimeConnections } from '@/api/realtime/connection'
-import { handleSessionEnded } from '@/api/session-ended'
+import { handleIdentityChange } from '@/api/identity-change'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import { initFaro } from '@/observability/faro'
 import { routeTree } from './routeTree.gen'
@@ -49,11 +49,13 @@ declare module '@tanstack/react-router' {
 // signed-out case has none). Never let the next bootstrap silently mint a fresh
 // guest in the signed-out user's place.
 //
-// The sequence lives in `api/session-ended.ts`, where its ORDER is testable —
-// closing the realtime stream has to happen before the cache is cleared, and a
-// step order written inline here could only ever be checked by reading it.
+// The sequence lives in `api/identity-change.ts`, shared with the deliberate
+// sign-out path and with the sign-ins that can land on a different account,
+// where its ORDER is testable — closing the realtime stream has to happen
+// before the cache is cleared, and a step order written inline here could only
+// ever be checked by reading it.
 setSessionEndedHandler((info) =>
-  handleSessionEnded(
+  handleIdentityChange(
     {
       closeRealtime: closeRealtimeConnections,
       clearAppEntered,

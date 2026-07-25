@@ -9,7 +9,7 @@ seam, where "exactly once" is a count rather than an inference.
 
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
 from sqlalchemy import event, select
@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
 from app.models import User
-from app.realtime import EventKind, RealtimeBroker
+from app.realtime import EventKind, RealtimeBroker, user_channel
 from app.realtime import outbox as outbox_module
 from app.realtime import publisher as publisher_module
 from app.realtime.outbox import STAGED_HINTS_KEY, stage_event
@@ -34,20 +34,20 @@ def _name(stem: str) -> str:
 
 @pytest.fixture
 def published(monkeypatch: pytest.MonkeyPatch) -> Published:
-    """Record every publish the listener performs, in order.
+    """Record every hint the listener publishes, in order.
 
-    Patched at ``outbox.publish_event`` rather than at Redis so a test can count
-    publishes exactly: the point of the dedupe assertions is *how many* calls the
-    outbox makes, which a fan-in at the broker (which coalesces by design) cannot
-    tell apart.
+    Patched at ``outbox.publish_events`` rather than at Redis so a test can count
+    hints exactly: the point of the dedupe assertions is *how many* the outbox
+    emits, which a fan-in at the broker (which coalesces by design) cannot tell
+    apart.
     """
     calls: Published = []
 
-    def _record(user_id: uuid.UUID, kind: EventKind) -> bool:
-        calls.append((user_id, kind))
+    def _record(hints: Sequence[tuple[uuid.UUID, EventKind]]) -> bool:
+        calls.extend(hints)
         return True
 
-    monkeypatch.setattr(outbox_module, "publish_event", _record)
+    monkeypatch.setattr(outbox_module, "publish_events", _record)
     return calls
 
 
@@ -237,6 +237,50 @@ async def test_hints_are_scoped_to_the_session_they_were_staged_on(
         await other.rollback()
 
 
+# ----- (2b) and all of them in one round trip ------------------------------
+
+
+class _RecordingRedis:
+    """Just enough of ``redis.Redis`` to count round trips through a pipeline."""
+
+    def __init__(self) -> None:
+        self.channels: list[str] = []
+        self.round_trips = 0
+
+    def pipeline(self, transaction: bool = True) -> "_RecordingRedis":
+        return self
+
+    def publish(self, channel: str, message: str) -> None:
+        self.channels.append(channel)
+
+    def execute(self) -> list[object]:
+        self.round_trips += 1
+        return []
+
+
+async def test_a_whole_transactions_hints_go_out_in_one_round_trip(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 32-entrant go-live stages 32 hints, and this flush runs on the event-loop
+    thread inside ``await db.commit()``.
+
+    One blocking round trip per hint would be ~6ms of contiguous loop stall on a
+    single commit, so the count of round trips — not of ``PUBLISH`` commands — is
+    the property worth pinning.
+    """
+    redis = _RecordingRedis()
+    monkeypatch.setattr(publisher_module, "_connection", lambda: redis)
+
+    user_ids = [uuid.uuid4() for _ in range(32)]
+    for user_id in user_ids:
+        stage_event(db_session, user_id, EventKind.dashboard_changed)
+    db_session.add(User(username=_name("go-live")))
+    await db_session.commit()
+
+    assert redis.round_trips == 1
+    assert sorted(redis.channels) == sorted(user_channel(u) for u in user_ids)
+
+
 # ----- (3) failure is swallowed, the commit still stands -------------------
 
 
@@ -276,10 +320,10 @@ async def test_an_exception_from_the_publisher_cannot_escape_the_commit(
     landed, so anything escaping it would raise out of a write that already
     happened — the database committed, the caller told it failed."""
 
-    def _explode(user_id: uuid.UUID, kind: EventKind) -> bool:
-        raise RuntimeError("publisher blew up in a way publish_event does not catch")
+    def _explode(hints: Sequence[tuple[uuid.UUID, EventKind]]) -> bool:
+        raise RuntimeError("publisher blew up in a way publish_events does not catch")
 
-    monkeypatch.setattr(outbox_module, "publish_event", _explode)
+    monkeypatch.setattr(outbox_module, "publish_events", _explode)
 
     username = _name("survives-listener-blowup")
     stage_event(db_session, uuid.uuid4(), EventKind.dashboard_changed)

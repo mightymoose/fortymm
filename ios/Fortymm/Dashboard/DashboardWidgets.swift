@@ -4,15 +4,19 @@ import SwiftUI
 
 /// Small uppercase label used inside the dashboard cards. Mirrors the web
 /// `Overline` (no leading dot, unlike `FMEyebrow`).
+///
+/// `color` defaults to the muted tone every card label uses; the tournament
+/// panel overrides it for its accented "YOUR TOURNAMENT" eyebrow.
 struct DashOverline: View {
     let text: String
     var size: CGFloat = FMFont.xs
+    var color: Color = FMColor.fgMuted
 
     var body: some View {
         Text(text.uppercased())
             .font(FMFont.mono(size, weight: .medium))
             .tracking(1.4)
-            .foregroundStyle(FMColor.fgMuted)
+            .foregroundStyle(color)
     }
 }
 

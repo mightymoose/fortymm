@@ -89,8 +89,9 @@ export function openRealtimeConnection(
 /**
  * Close every open stream, synchronously.
  *
- * Called from the session-ended handler **before** the query cache is cleared
- * (`../session-ended`), and the ordering is load-bearing: `queryClient.clear()`
+ * Called from the identity-change sequence **before** the query cache is
+ * cleared (`../identity-change`) — by the deliberate sign-out as much as by the
+ * session-ended 401 — and the ordering is load-bearing: `queryClient.clear()`
  * is synchronous while the redirect that follows it is not, so a stream left
  * reading during that gap can answer a hint by repopulating the cache that was
  * just emptied — with the departed user's data, in front of whoever signs in
@@ -163,8 +164,8 @@ async function runLoop(
  * termination the *client's* own: on abort the pipe is aborted, the destination
  * errors, the read rejects, and the loop exits — whatever the transport
  * underneath decided to do. That matters beyond tests, because the ordering the
- * session-ended path depends on (`../session-ended`) is only worth anything if
- * closing is immediate.
+ * identity-change path depends on (`../identity-change`) is only worth anything
+ * if closing is immediate.
  */
 async function openStream(
   signal: AbortSignal,

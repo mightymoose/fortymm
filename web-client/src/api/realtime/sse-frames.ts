@@ -44,13 +44,12 @@ const LINE_END = /\r\n|\n|\r/
 
 interface Block {
   data: string
-  hasData: boolean
   event: string
   retry: number | undefined
 }
 
 function emptyBlock(): Block {
-  return { data: '', hasData: false, event: '', retry: undefined }
+  return { data: '', event: '', retry: undefined }
 }
 
 /**
@@ -71,9 +70,10 @@ function applyLine(block: Block, line: string): void {
   switch (field) {
     case 'data':
       // The spec appends value + U+000A; the trailing newline comes off at
-      // dispatch, which is what joins multi-line data with a single '\n'.
+      // dispatch, which is what joins multi-line data with a single '\n'. That
+      // mandatory newline is also why an empty `data` buffer is exactly "no
+      // `data:` line was seen" — see `dispatch`.
       block.data += value + '\n'
-      block.hasData = true
       break
     case 'event':
       block.event = value
@@ -93,9 +93,13 @@ function applyLine(block: Block, line: string): void {
 function* dispatch(block: Block): Generator<SseFrame> {
   if (block.retry !== undefined) yield { kind: 'retry', ms: block.retry }
   // A block with no `data:` at all (a lone `retry:`, or a block of comments)
-  // dispatches no event — that is the spec, and it is why `: ping` is invisible
-  // to the caller instead of arriving as an empty message.
-  if (!block.hasData) return
+  // dispatches no event — that is the spec ("If the data buffer is an empty
+  // string, set the data buffer and the event type buffer to the empty string
+  // and return"), and it is why `: ping` is invisible to the caller instead of
+  // arriving as an empty message. A bare `data:` is NOT this case: it appends
+  // its mandatory newline, so the buffer is `'\n'` and the empty message it
+  // means is dispatched.
+  if (block.data === '') return
   yield {
     kind: 'message',
     event: block.event === '' ? DEFAULT_EVENT_TYPE : block.event,
@@ -104,21 +108,22 @@ function* dispatch(block: Block): Generator<SseFrame> {
 }
 
 /**
- * Yield the complete lines available in `buffer`, returning what is left over.
+ * Split `buffer` into the complete lines available and whatever is left over.
  *
  * The subtlety: a `\r` at the very end of the buffer may be the first half of a
  * `\r\n` whose second half is in the next chunk, so it is held back rather than
  * treated as a terminator. Without that, a chunk boundary between `\r` and `\n`
  * manufactures a spurious blank line and dispatches half a frame.
  */
-function* takeLines(buffer: string): Generator<string, string> {
+function takeLines(buffer: string): { lines: string[]; rest: string } {
+  const lines: string[] = []
   let rest = buffer
   for (;;) {
     const match = LINE_END.exec(rest)
-    if (match === null) return rest
+    if (match === null) return { lines, rest }
     const at = match.index
-    if (rest[at] === '\r' && at === rest.length - 1) return rest
-    yield rest.slice(0, at)
+    if (rest[at] === '\r' && at === rest.length - 1) return { lines, rest }
+    lines.push(rest.slice(0, at))
     rest = rest.slice(at + match[0].length)
   }
 }
@@ -149,14 +154,9 @@ export async function* readSseFrames(
       if (done) return
       buffer += decoder.decode(value, { stream: true })
 
-      const lines = takeLines(buffer)
-      for (;;) {
-        const next = lines.next()
-        if (next.done === true) {
-          buffer = next.value
-          break
-        }
-        const line = next.value
+      const { lines, rest } = takeLines(buffer)
+      buffer = rest
+      for (const line of lines) {
         if (line === '') {
           yield* dispatch(block)
           block = emptyBlock()

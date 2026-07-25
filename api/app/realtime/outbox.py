@@ -59,7 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, SessionTransaction
 
 from app.realtime.events import EventKind
-from app.realtime.publisher import publish_event
+from app.realtime.publisher import Hint, publish_events
 
 log = logging.getLogger("uvicorn.error")
 
@@ -69,7 +69,9 @@ log = logging.getLogger("uvicorn.error")
 STAGED_HINTS_KEY = "app.realtime.staged_hints"
 
 #: One pending publish: the affected user and what kind of staleness they have.
-StagedHint = tuple[uuid.UUID, EventKind]
+#: The publisher's own type — what is staged here is exactly what is published,
+#: so there is no second definition to keep in step.
+StagedHint = Hint
 
 
 def _staged(info: MutableMapping[Any, Any]) -> set[StagedHint]:
@@ -110,10 +112,14 @@ def _publish_staged_hints(session: Session) -> None:
     Registered on ``Session`` (the sync class ``AsyncSession`` drives) because
     that is where SQLAlchemy's ORM events live; ``AsyncSession.info`` is the
     same dict, so what :func:`stage_event` wrote is what this reads.
+
+    The whole batch goes out in **one** pipelined round trip. This runs on the
+    event-loop thread inside ``await db.commit()``, so a per-hint publish would
+    make a 32-entrant go-live a 32-round-trip stall on that loop; the fan-out
+    the outbox exists to collect is exactly the fan-out worth batching.
     """
     try:
-        for user_id, kind in _take_staged(session):
-            publish_event(user_id, kind)
+        publish_events(_take_staged(session))
     except Exception:  # noqa: BLE001 -- post-COMMIT: an escape would fail an already-committed write
         log.exception("Failed to flush staged realtime hints after commit")
 
