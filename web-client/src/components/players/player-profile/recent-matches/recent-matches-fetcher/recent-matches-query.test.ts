@@ -69,6 +69,20 @@ describe('recentMatchesQuery', () => {
     ])
   })
 
+  it('caps the drawn rows at six, however long a bundle it is handed', () => {
+    // The six-row shape is the API's contract (`PROFILE_RECENT_MATCHES`), but the
+    // card owns its own drawing: hand the projection an over-long bundle — 25
+    // rows — and it must still yield exactly six, never a long table. Drop the
+    // `.slice` and this reds with 25.
+    const bundle = buildPlayerDetail({
+      matches: buildPlayerMatchList(
+        Array.from({ length: 25 }, () => buildPlayerMatchRow()),
+      ),
+    })
+
+    expect(selectRecentMatches(bundle).rows).toHaveLength(6)
+  })
+
   it('names the footer link with the all-inclusive total, not the decided count', async () => {
     // 24 wins + 11 losses = 35 decided, but 50 matches exist — the extra fifteen
     // are in play, voided or unrated. The link names *fifty* (ADR-0915: the two

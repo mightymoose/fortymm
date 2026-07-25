@@ -14,6 +14,14 @@ import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
  * Never a "+0" (ADR-0915). */
 export const NO_VALUE = '—'
 
+/**
+ * How many rows the overview card draws. The API already caps the bundle at six
+ * (`PROFILE_RECENT_MATCHES`), so this is normally a no-op — but the card owns its
+ * own shape: cap the projection here too, so a longer bundle from any code path
+ * can never silently turn the overview into a long table. The full history lives
+ * behind the "view all" link, on its own paginated surface. */
+export const RECENT_MATCHES_SHOWN = 6
+
 /** What the Opponent cell reads for a solo match — one with nobody on the other
  * side (ADR-0008). It is a name for an absence, not a player. */
 export const NO_OPPONENT = 'No opponent'
@@ -281,9 +289,13 @@ export const selectRecentMatches = (
   const total = player.match_total
   return {
     playerId: player.id,
-    // Straight through, unfiltered: the bundle already sent the six most recent,
-    // and every state in them belongs on the card.
-    rows: player.matches.items.map((row) => selectRow(row, timeZone)),
+    // Unfiltered — every state belongs on the card — but capped: the card draws
+    // the six most recent, no matter how long a bundle it is handed. The API
+    // already sends six; the slice makes that the card's own contract rather than
+    // a promise it merely trusts the server to keep.
+    rows: player.matches.items
+      .slice(0, RECENT_MATCHES_SHOWN)
+      .map((row) => selectRow(row, timeZone)),
     total,
     // "View all 1 match" reads wrong — "all" presupposes more than one — so the
     // lone-match case drops both the count and the "all".
