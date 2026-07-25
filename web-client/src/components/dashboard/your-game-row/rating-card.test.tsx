@@ -84,13 +84,53 @@ describe('RatingCard', () => {
     expect(ratingCardPage.queryPercentile(/FortyMM/)).toBeInTheDocument()
   })
 
-  it('shows just the league name when there is no percentile', () => {
+  it('shows just the league name when there is no percentile and no rank', () => {
     ratingCardPage.render({
-      rating: dashboardRating({ percentile: null, league_name: 'FortyMM' }),
+      rating: dashboardRating({
+        percentile: null,
+        rank: null,
+        population: null,
+        league_name: 'FortyMM',
+      }),
     })
 
     expect(ratingCardPage.queryPercentile('78%')).toBeNull()
     expect(ratingCardPage.queryPercentile('FortyMM')).toBeInTheDocument()
+  })
+
+  // #959. Below the percentile threshold the server suppresses the percentile
+  // and sends rank instead, so the card shows the honest "#N of M" — never the
+  // "Top 100%" that a last-place player used to see when `at_or_above == total`.
+  it('shows rank "#N of M" — not a percentile — when percentile is null but rank is set', () => {
+    ratingCardPage.render({
+      rating: dashboardRating({
+        percentile: null,
+        rank: 3,
+        population: 12,
+        league_name: 'FortyMM',
+      }),
+    })
+
+    expect(ratingCardPage.queryRank(/#3 of 12/)).toBeInTheDocument()
+    expect(ratingCardPage.queryRank(/FortyMM/)).toBeInTheDocument()
+    expect(ratingCardPage.queryPercentile(/Top/)).toBeNull()
+  })
+
+  it('shows the LAST-place player "#5 of 5" and never "Top 100%"', () => {
+    ratingCardPage.render({
+      rating: dashboardRating({
+        percentile: null,
+        rank: 5,
+        population: 5,
+        current: 1200,
+        league_name: 'FortyMM',
+      }),
+    })
+
+    expect(ratingCardPage.queryRank(/#5 of 5/)).toBeInTheDocument()
+    // The one percentile value that should never be shown.
+    expect(ratingCardPage.queryText('100%')).toBeNull()
+    expect(ratingCardPage.queryText(/Top 100%/)).toBeNull()
   })
 
   it('leads the stat tiles with the rounded peak', () => {

@@ -14,6 +14,12 @@ const scoped = (container: Container) => ({
   getBody(text: string | RegExp) {
     return container.getByText(text)
   },
+  /** The muted body line carrying `text`, or null when absent — for asserting a
+   * particular copy string is NOT shown (e.g. the old "not in a rated league"
+   * lie under an UNRATED player). */
+  queryBody(text: string | RegExp) {
+    return container.queryByText(text)
+  },
 })
 
 /**

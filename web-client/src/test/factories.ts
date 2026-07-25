@@ -340,13 +340,24 @@ export function dashboardRating(
   overrides: Partial<DashboardRating> = {},
 ): DashboardRating {
   return {
+    // The everyday case: a player with a rating. The `state` discriminator, not
+    // a `null` parent, is what tells the card which of four stories to tell
+    // (ADR 20260725) — the three non-rated arms have their own factories below.
+    state: 'RATED',
     league_id: nextId('lg'),
     league_name: 'FortyMM',
     strategy_key: 'glicko2',
     current: 1500,
     delta: 0,
     peak: 1500,
+    // `percentile` OR `rank`/`population`, never both: at/above the population
+    // threshold the server sends a percentile; below it, it sends rank so the
+    // card can show "#N of M" instead of a "Top 100%" that lies at the bottom of
+    // a small ladder (#959). Default carries neither, so the card shows just the
+    // league name — the same fallback the pre-`state` default had.
     percentile: null,
+    rank: null,
+    population: null,
     spark_data: [],
     streak: null,
     stats: [
@@ -355,6 +366,82 @@ export function dashboardRating(
     ],
     ...overrides,
   }
+}
+
+/**
+ * The rating block for a player who is **in a glicko2 (rated) league but has not
+ * finished a rated match yet** — the real state #915 introduced and #956 found
+ * `null` was lying about. Card copy: *"Unrated — finish a rated match to start
+ * your rating"*. The whole rating payload is null/empty; only the league context
+ * survives.
+ */
+export function unratedDashboardRating(
+  overrides: Partial<DashboardRating> = {},
+): DashboardRating {
+  return dashboardRating({
+    state: 'UNRATED',
+    strategy_key: 'glicko2',
+    current: null,
+    delta: null,
+    peak: null,
+    percentile: null,
+    rank: null,
+    population: null,
+    spark_data: [],
+    streak: null,
+    stats: [],
+    ...overrides,
+  })
+}
+
+/**
+ * The rating block for a player in a **manual-strategy league whose ratings
+ * haven't been imported yet**. Card copy: *"Ratings haven't been imported for
+ * this league yet"*. Names its league; carries no rating payload.
+ */
+export function awaitingImportDashboardRating(
+  overrides: Partial<DashboardRating> = {},
+): DashboardRating {
+  return dashboardRating({
+    state: 'AWAITING_IMPORT',
+    strategy_key: 'manual',
+    current: null,
+    delta: null,
+    peak: null,
+    percentile: null,
+    rank: null,
+    population: null,
+    spark_data: [],
+    streak: null,
+    stats: [],
+    ...overrides,
+  })
+}
+
+/**
+ * The rating block for a player **not in a rated league at all**. Card copy:
+ * *"Not in a rated league yet."* — the existing string, now shown only when it
+ * is actually true. No league, no strategy, no payload.
+ */
+export function notRatedLeagueDashboardRating(
+  overrides: Partial<DashboardRating> = {},
+): DashboardRating {
+  return dashboardRating({
+    state: 'NOT_RATED_LEAGUE',
+    league_id: null,
+    league_name: null,
+    strategy_key: null,
+    current: null,
+    delta: null,
+    peak: null,
+    percentile: null,
+    rank: null,
+    population: null,
+    spark_data: [],
+    streak: null,
+    stats: [],
+    ...overrides,
+  })
 }
 
 /**

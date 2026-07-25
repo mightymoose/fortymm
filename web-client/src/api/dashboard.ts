@@ -8,6 +8,8 @@ export type DashboardAttentionItem =
 export type DashboardRecentResult =
   components['schemas']['DashboardRecentResult']
 export type DashboardRating = components['schemas']['DashboardRating']
+export type DashboardRatingState =
+  components['schemas']['DashboardRatingState']
 export type DashboardStreak = components['schemas']['DashboardStreak']
 export type DashboardTournament = components['schemas']['DashboardTournament']
 export type DashboardTournamentEvent =

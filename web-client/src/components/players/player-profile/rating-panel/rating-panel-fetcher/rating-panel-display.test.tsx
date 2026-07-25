@@ -54,6 +54,18 @@ describe('RatingPanelDisplay', () => {
     )
   })
 
+  it('shows the percentile in the standing slot when the API sends one', () => {
+    ratingPanelDisplayPage.render({
+      standing: buildRatingPanelView({
+        stats: [buildStandingStatView({ label: 'Percentile', value: 'Top 2%' })],
+      }),
+    })
+
+    expect(ratingPanelDisplayPage.queryStat('Percentile')).toHaveTextContent(
+      'Top 2%',
+    )
+  })
+
   it('shows the peak rating', () => {
     ratingPanelDisplayPage.render({
       standing: buildRatingPanelView({

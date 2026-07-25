@@ -3215,25 +3215,36 @@ internal enum Components {
         }
         /// Per-league rating snapshot for the dashboard RatingCard.
         ///
-        /// Emitted only when the user has a rated row in an automatic-strategy league
-        /// (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+        /// ALWAYS emitted for a signed-in user — the parent is no longer ``| None``. The
+        /// ``state`` discriminator says which of four stories the card tells; only the
+        /// ``RATED`` arm carries the rating payload below (``current`` / ``delta`` /
+        /// ``peak`` / the rank-or-percentile line / ``spark_data`` / ``streak`` /
+        /// ``stats``). The three non-rated arms carry the league context they have
+        /// (``UNRATED`` / ``AWAITING_IMPORT`` name a league; ``NOT_RATED_LEAGUE`` has
+        /// none) and leave the payload fields null/empty (ADR 20260725).
         ///
         /// - Remark: Generated from `#/components/schemas/DashboardRating`.
         internal struct DashboardRating: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DashboardRating/state`.
+            internal var state: Components.Schemas.DashboardRatingState
             /// - Remark: Generated from `#/components/schemas/DashboardRating/league_id`.
-            internal var leagueId: Swift.String
+            internal var leagueId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/league_name`.
-            internal var leagueName: Swift.String
+            internal var leagueName: Swift.String?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/strategy_key`.
-            internal var strategyKey: Swift.String
+            internal var strategyKey: Swift.String?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/current`.
-            internal var current: Swift.Double
+            internal var current: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/delta`.
             internal var delta: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/peak`.
-            internal var peak: Swift.Double
+            internal var peak: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/percentile`.
             internal var percentile: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardRating/rank`.
+            internal var rank: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardRating/population`.
+            internal var population: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/spark_data`.
             internal var sparkData: [Swift.Double]
             /// - Remark: Generated from `#/components/schemas/DashboardRating/streak`.
@@ -3261,6 +3272,7 @@ internal enum Components {
             /// Creates a new `DashboardRating`.
             ///
             /// - Parameters:
+            ///   - state:
             ///   - leagueId:
             ///   - leagueName:
             ///   - strategyKey:
@@ -3268,21 +3280,27 @@ internal enum Components {
             ///   - delta:
             ///   - peak:
             ///   - percentile:
+            ///   - rank:
+            ///   - population:
             ///   - sparkData:
             ///   - streak:
             ///   - stats:
             internal init(
-                leagueId: Swift.String,
-                leagueName: Swift.String,
-                strategyKey: Swift.String,
-                current: Swift.Double,
+                state: Components.Schemas.DashboardRatingState,
+                leagueId: Swift.String? = nil,
+                leagueName: Swift.String? = nil,
+                strategyKey: Swift.String? = nil,
+                current: Swift.Double? = nil,
                 delta: Swift.Double? = nil,
-                peak: Swift.Double,
+                peak: Swift.Double? = nil,
                 percentile: Swift.Int? = nil,
+                rank: Swift.Int? = nil,
+                population: Swift.Int? = nil,
                 sparkData: [Swift.Double],
                 streak: Components.Schemas.DashboardRating.StreakPayload? = nil,
                 stats: [Components.Schemas.DashboardRatingStat]
             ) {
+                self.state = state
                 self.leagueId = leagueId
                 self.leagueName = leagueName
                 self.strategyKey = strategyKey
@@ -3290,11 +3308,14 @@ internal enum Components {
                 self.delta = delta
                 self.peak = peak
                 self.percentile = percentile
+                self.rank = rank
+                self.population = population
                 self.sparkData = sparkData
                 self.streak = streak
                 self.stats = stats
             }
             internal enum CodingKeys: String, CodingKey {
+                case state
                 case leagueId = "league_id"
                 case leagueName = "league_name"
                 case strategyKey = "strategy_key"
@@ -3302,6 +3323,8 @@ internal enum Components {
                 case delta
                 case peak
                 case percentile
+                case rank
+                case population
                 case sparkData = "spark_data"
                 case streak
                 case stats
@@ -3335,6 +3358,23 @@ internal enum Components {
                 case label
                 case value
             }
+        }
+        /// WHICH rating story the card tells — server-authoritative, because it is the
+        /// API that knows which of the four situations obtains, not the client guessing
+        /// from a ``null`` (ADR 20260725).
+        ///
+        /// A bare ``rating: None`` used to collapse three distinct non-rated facts into one
+        /// signal, and the client rendered a single string — *"Not in a rated league
+        /// yet."* — that was a lie for the player who IS in a rated league but has not
+        /// finished a rated match. The state names the situation so the client can say the
+        /// true thing per arm.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DashboardRatingState`.
+        internal enum DashboardRatingState: String, Codable, Hashable, Sendable, CaseIterable {
+            case rated = "RATED"
+            case unrated = "UNRATED"
+            case awaitingImport = "AWAITING_IMPORT"
+            case notRatedLeague = "NOT_RATED_LEAGUE"
         }
         /// - Remark: Generated from `#/components/schemas/DashboardRecentResult`.
         internal struct DashboardRecentResult: Codable, Hashable, Sendable {
@@ -3418,25 +3458,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/DashboardResponse/recent_results`.
             internal var recentResults: [Components.Schemas.DashboardRecentResult]
             /// - Remark: Generated from `#/components/schemas/DashboardResponse/rating`.
-            internal struct RatingPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/DashboardResponse/rating/value1`.
-                internal var value1: Components.Schemas.DashboardRating
-                /// Creates a new `RatingPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                internal init(value1: Components.Schemas.DashboardRating) {
-                    self.value1 = value1
-                }
-                internal init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try .init(from: decoder)
-                }
-                internal func encode(to encoder: any Swift.Encoder) throws {
-                    try self.value1.encode(to: encoder)
-                }
-            }
-            /// - Remark: Generated from `#/components/schemas/DashboardResponse/rating`.
-            internal var rating: Components.Schemas.DashboardResponse.RatingPayload?
+            internal var rating: Components.Schemas.DashboardRating
             /// - Remark: Generated from `#/components/schemas/DashboardResponse/completed_match_count`.
             internal var completedMatchCount: Swift.Int
             /// - Remark: Generated from `#/components/schemas/DashboardResponse/tournaments`.
@@ -3456,7 +3478,7 @@ internal enum Components {
                 attentionTotalCount: Swift.Int,
                 waitingCount: Swift.Int,
                 recentResults: [Components.Schemas.DashboardRecentResult],
-                rating: Components.Schemas.DashboardResponse.RatingPayload? = nil,
+                rating: Components.Schemas.DashboardRating,
                 completedMatchCount: Swift.Int,
                 tournaments: [Components.Schemas.DashboardTournament]? = nil
             ) {

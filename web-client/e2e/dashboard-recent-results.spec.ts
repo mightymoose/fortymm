@@ -15,7 +15,10 @@
  */
 import { expect, test, type Page, type Route } from '@playwright/test'
 import type { components } from '../src/api/schema'
-import { sessionResponse } from '../src/test/factories'
+import {
+  sessionResponse,
+  unratedDashboardRating,
+} from '../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
@@ -33,7 +36,9 @@ const DASHBOARD = {
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,
-  rating: null,
+  // Rating block is always present now; this spec is about the recent-results
+  // card, so any valid non-RATED shape does (ADR 20260725).
+  rating: unratedDashboardRating(),
   completed_match_count: 3,
   recent_results: [
     {

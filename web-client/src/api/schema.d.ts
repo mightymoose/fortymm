@@ -1819,27 +1819,34 @@ export interface components {
          * DashboardRating
          * @description Per-league rating snapshot for the dashboard RatingCard.
          *
-         *     Emitted only when the user has a rated row in an automatic-strategy league
-         *     (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+         *     ALWAYS emitted for a signed-in user — the parent is no longer ``| None``. The
+         *     ``state`` discriminator says which of four stories the card tells; only the
+         *     ``RATED`` arm carries the rating payload below (``current`` / ``delta`` /
+         *     ``peak`` / the rank-or-percentile line / ``spark_data`` / ``streak`` /
+         *     ``stats``). The three non-rated arms carry the league context they have
+         *     (``UNRATED`` / ``AWAITING_IMPORT`` name a league; ``NOT_RATED_LEAGUE`` has
+         *     none) and leave the payload fields null/empty (ADR 20260725).
          */
         DashboardRating: {
-            /**
-             * League Id
-             * Format: uuid
-             */
-            league_id: string;
+            state: components["schemas"]["DashboardRatingState"];
+            /** League Id */
+            league_id: string | null;
             /** League Name */
-            league_name: string;
+            league_name: string | null;
             /** Strategy Key */
-            strategy_key: string;
+            strategy_key: string | null;
             /** Current */
-            current: number;
+            current: number | null;
             /** Delta */
             delta: number | null;
             /** Peak */
-            peak: number;
+            peak: number | null;
             /** Percentile */
             percentile: number | null;
+            /** Rank */
+            rank: number | null;
+            /** Population */
+            population: number | null;
             /** Spark Data */
             spark_data: number[];
             streak: components["schemas"]["DashboardStreak"] | null;
@@ -1860,6 +1867,20 @@ export interface components {
             /** Value */
             value: string;
         };
+        /**
+         * DashboardRatingState
+         * @description WHICH rating story the card tells — server-authoritative, because it is the
+         *     API that knows which of the four situations obtains, not the client guessing
+         *     from a ``null`` (ADR 20260725).
+         *
+         *     A bare ``rating: None`` used to collapse three distinct non-rated facts into one
+         *     signal, and the client rendered a single string — *"Not in a rated league
+         *     yet."* — that was a lie for the player who IS in a rated league but has not
+         *     finished a rated match. The state names the situation so the client can say the
+         *     true thing per arm.
+         * @enum {string}
+         */
+        DashboardRatingState: "RATED" | "UNRATED" | "AWAITING_IMPORT" | "NOT_RATED_LEAGUE";
         /** DashboardRecentResult */
         DashboardRecentResult: {
             /**
@@ -1892,7 +1913,7 @@ export interface components {
             waiting_count: number;
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];
-            rating?: components["schemas"]["DashboardRating"] | null;
+            rating: components["schemas"]["DashboardRating"];
             /** Completed Match Count */
             completed_match_count: number;
             /**

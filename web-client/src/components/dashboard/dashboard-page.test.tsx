@@ -18,7 +18,9 @@ import {
   dashboardRecentResult,
   dashboardResponse,
   establishedDashboardRating,
+  notRatedLeagueDashboardRating,
   sessionResponse,
+  unratedDashboardRating,
 } from '@/test/factories'
 import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
 import { DashboardPage } from './dashboard-page'
@@ -320,7 +322,10 @@ describe('DashboardPage', () => {
         // At least one completed match keeps this on the normal dashboard
         // path (see the "first-match" describe block below).
         HttpResponse.json(
-          dashboardResponse({ rating: null, completed_match_count: 1 }),
+          dashboardResponse({
+            rating: notRatedLeagueDashboardRating(),
+            completed_match_count: 1,
+          }),
         ),
       ),
     )
@@ -341,7 +346,9 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
         HttpResponse.json(
           dashboardResponse({
             completed_match_count: 0,
-            rating: null,
+            // First-match hero renders regardless of the rating block; a
+            // glicko2-unrated shape stands in for "joined, no rated match yet".
+            rating: unratedDashboardRating(),
             recent_results: [],
             attention: [],
             attention_total_count: 0,
@@ -369,8 +376,8 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
     // player's own profile, the roster, their leagues card and the opponent
     // picker all — correctly — said Unrated. Joining a league seeds
     // `rating_value = 1500` on session-mint, before a ball is hit; that seed is
-    // the strategy's prior, not a rating anyone earned, and the API now sends
-    // `rating: null` here (CONTEXT.md § Rating).
+    // the strategy's prior, not a rating anyone earned, and the API now sends an
+    // UNRATED rating block (no `current`) here, not that prior (ADR 20260725).
     //
     // The assertion is on the *shape*, not on the literal 1500: any run of 3-4
     // digits is rating-shaped, so re-hardcoding 1600 — or quoting a league's
@@ -380,7 +387,9 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
         HttpResponse.json(
           dashboardResponse({
             completed_match_count: 0,
-            rating: null,
+            // First-match hero renders regardless of the rating block; a
+            // glicko2-unrated shape stands in for "joined, no rated match yet".
+            rating: unratedDashboardRating(),
             recent_results: [],
             attention: [],
             attention_total_count: 0,
@@ -404,7 +413,9 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
         HttpResponse.json(
           dashboardResponse({
             completed_match_count: 0,
-            rating: null,
+            // First-match hero renders regardless of the rating block; a
+            // glicko2-unrated shape stands in for "joined, no rated match yet".
+            rating: unratedDashboardRating(),
             recent_results: [],
             attention: [
               dashboardAttentionItem({
@@ -435,7 +446,9 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
         HttpResponse.json(
           dashboardResponse({
             completed_match_count: 0,
-            rating: null,
+            // First-match hero renders regardless of the rating block; a
+            // glicko2-unrated shape stands in for "joined, no rated match yet".
+            rating: unratedDashboardRating(),
             recent_results: [],
             attention: [],
             attention_total_count: 0,
@@ -463,7 +476,9 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
         HttpResponse.json(
           dashboardResponse({
             completed_match_count: 0,
-            rating: null,
+            // First-match hero renders regardless of the rating block; a
+            // glicko2-unrated shape stands in for "joined, no rated match yet".
+            rating: unratedDashboardRating(),
             recent_results: [],
             attention: [],
             attention_total_count: 0,
@@ -520,7 +535,10 @@ describe('DashboardPage · guest persistence banner', () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
-          dashboardResponse({ completed_match_count: 1, rating: null }),
+          dashboardResponse({
+            completed_match_count: 1,
+            rating: notRatedLeagueDashboardRating(),
+          }),
         ),
       ),
     )
@@ -535,7 +553,10 @@ describe('DashboardPage · guest persistence banner', () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
-          dashboardResponse({ completed_match_count: 0, rating: null }),
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: unratedDashboardRating(),
+          }),
         ),
       ),
     )

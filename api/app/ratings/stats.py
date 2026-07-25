@@ -59,13 +59,15 @@ STREAK_SCAN_LIMIT = 100
 # guess — the *principle* (withhold it while the league is too small) is what is
 # settled, so move it freely.
 #
-# Applied in `player_standing` and not inside `league_percentile` itself, so it is
-# the PROFILE's editorial policy about when a percentile is worth printing — not
-# part of the helper's arithmetic. The dashboard's card, the helper's other caller,
-# renders one from the first rated match; whether it should adopt this floor too is
-# a product question, and keeping the floor out of the shared helper is what leaves
-# it answerable. (What the two callers DO now share is the population itself —
-# `is_rated_member()` — which is arithmetic, not policy.)
+# Applied in `league_percentile_if_ranked` and not inside `league_percentile`
+# itself, so the floor is the editorial policy about when a percentile is worth
+# printing — not part of the base helper's arithmetic. Both surfaces that render a
+# standing (the dashboard's card and the profile's hero) read the switch through
+# that one helper, so below the floor they agree on showing RANK ("#N of M")
+# instead of a percentile, and a future move of the provisional 50 moves them
+# together (ADR 20260725). What the callers also share is the population itself —
+# `is_rated_member()`, via `league_rated_population` — which is arithmetic, not
+# policy.
 PERCENTILE_MIN_RATED_PLAYERS = 50
 
 
@@ -221,6 +223,64 @@ async def league_percentile(
     return max(1, round(int(at_or_above) / int(total) * 100))
 
 
+async def league_rank(
+    db: AsyncSession, league_id: uuid.UUID, user_id: uuid.UUID
+) -> int | None:
+    """The user's 1-based position on the league's rating ladder, or ``None`` when
+    they are not a rated member of it.
+
+    STANDARD COMPETITION RANKING (SQL ``RANK()``) over the SAME population
+    ``league_rated_population`` counts and ``league_percentile`` compares against —
+    ``is_rated_member()`` — so the ``#N`` and the ``of M`` beside it are two reads of
+    one ladder, never two WHERE clauses that agree by luck. Ties share a rank; an
+    unrated (seed-only) or tombstoned row is not on the ladder and answers ``None``.
+
+    A single-player read (the dashboard card), so it ranks the whole league and
+    picks out one row, unlike ``_load_player_ranks`` which does a batch for the
+    roster — the window and its predicate are deliberately the same.
+    """
+    ranked = (
+        select(
+            UserLeagueRating.user_id.label("user_id"),
+            func.rank()
+            .over(order_by=UserLeagueRating.rating_value.desc())
+            .label("rank"),
+        ).where(
+            UserLeagueRating.league_id == league_id,
+            is_rated_member(),
+        )
+    ).subquery()
+    rank = (
+        await db.execute(select(ranked.c.rank).where(ranked.c.user_id == user_id))
+    ).scalar_one_or_none()
+    return None if rank is None else int(rank)
+
+
+async def league_percentile_if_ranked(
+    db: AsyncSession,
+    league_id: uuid.UUID,
+    my_rating: float,
+    population: int,
+) -> int | None:
+    """The league percentile — but ONLY once the ladder is big enough for "Top N%"
+    to be a statement rather than a flourish (``PERCENTILE_MIN_RATED_PLAYERS``).
+
+    Below the threshold both the dashboard's rating card and the profile hero render
+    RANK ("#N of M") instead, so this returns ``None`` and the caller shows the rank.
+    THE shared rank-vs-percentile decision (ADR 20260725): the dashboard used to call
+    ``league_percentile`` unconditionally and printed "Top 100%" to the lowest-rated
+    player of a small league (#959). Both surfaces read the switch here so a future
+    move of the provisional 50 moves them together.
+
+    ``population`` is passed in — each caller already counts it
+    (``league_rated_population``) alongside the rank it renders next to the
+    percentile — so the threshold reads that count rather than issuing its own.
+    """
+    if population < PERCENTILE_MIN_RATED_PLAYERS:
+        return None
+    return await league_percentile(db, league_id, my_rating)
+
+
 async def completed_results(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -336,6 +396,14 @@ async def player_standing(
     unrated player (never finished a rated match) has no rank, and so no peak, no
     ladder position and no percentile: reporting a peak of 1500 for them would
     present the seed rating as an achievement they earned.
+
+    Below ``PERCENTILE_MIN_RATED_PLAYERS`` the ``percentile`` is withheld and the
+    hero renders RANK ("#N of M", ``summary.rank`` out of ``rank_of``) instead —
+    the same rank-vs-percentile switch the dashboard makes, so the two surfaces
+    cannot disagree. That switch is ``league_percentile_if_ranked``: the shared
+    helper reads the threshold once (ADR 20260725), so this no longer applies the
+    floor inline. ``rank`` and ``rank_of`` are populated for any rated player at
+    any league size, so the below-threshold hero shows "#N of M", never a blank.
     """
     rating = summary.rating
     population = await league_rated_population(db, league_id)
@@ -346,9 +414,9 @@ async def player_standing(
         else await league_peak_rating(db, user_id, league_id, rating)
     )
     percentile = (
-        await league_percentile(db, league_id, rating)
-        if rating is not None and population >= PERCENTILE_MIN_RATED_PLAYERS
-        else None
+        None
+        if rating is None
+        else await league_percentile_if_ranked(db, league_id, rating, population)
     )
     return _Standing(
         peak=peak,
@@ -406,7 +474,9 @@ async def player_confidence(
     ).scalar_one_or_none()
     if row is None or row.rating_value is None:
         return None
-    state = parse_rating_state(row.rating_strategy.key, row.rating_state)
+    state = parse_rating_state(
+        row.rating_strategy.key, row.rating_state, row.rating_value
+    )
     if not isinstance(state, Glicko2State):
         return None
     low, high = rating_interval(state.rating, state.rd)

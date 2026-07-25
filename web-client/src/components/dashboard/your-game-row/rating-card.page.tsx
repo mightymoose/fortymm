@@ -32,6 +32,12 @@ const scoped = (container: Container) => ({
   queryPercentile(text: string | RegExp) {
     return container.queryByText(text)
   },
+  /** The rank line shown below the percentile threshold ("#N of M"). Pass a
+   * regex — the line reads "#N of M in <league>" as one span, so an exact string
+   * won't match the whole node. Null when rank isn't shown. */
+  queryRank(text: RegExp) {
+    return container.queryByText(text)
+  },
   /** A stat tile resolved by its label (e.g. "Peak", "RD"); null when absent. */
   queryStatLabel(label: string) {
     return container.queryByText(label)

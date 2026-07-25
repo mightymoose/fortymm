@@ -3,6 +3,7 @@ import { HttpResponse } from 'msw'
 import {
   buildJustRatedPlayerDetail,
   buildPlayerDetail,
+  buildRankedPlayerDetail,
   buildUnratedPlayerDetail,
 } from '@/mocks/factories/players/player-detail.factory'
 import { waitForElementToBeRemoved } from '@/test/utilities'
@@ -28,6 +29,43 @@ describe('RatingPanelFetcher', () => {
     )
     expect(ratingPanelFetcherPage.queryStat('Peak')).toHaveTextContent('1712')
     expect(ratingPanelFetcherPage.getChips()).toHaveLength(10)
+  })
+
+  it('renders RANK for a sub-threshold-league profile — the ladder is too small for a percentile', async () => {
+    // Below `PERCENTILE_MIN_RATED_PLAYERS` the API withholds the percentile and
+    // sends rank+rank_of; the hero shows "#N of M" in the standing slot, honest at
+    // the very bottom of a small ladder where "Top 100%" was a lie (#959, ADR
+    // 20260725). This is the default fixture's shape — a 42-strong ladder.
+    ratingPanelFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildPlayerDetail({ rank: 49, rank_of: 49, percentile: null }),
+      ),
+    )
+
+    ratingPanelFetcherPage.render()
+
+    await waitForElementToBeRemoved(ratingPanelFetcherPage.queryLoading())
+    expect(ratingPanelFetcherPage.queryStat('Rank')).toHaveTextContent(
+      '#49 of 49',
+    )
+    expect(ratingPanelFetcherPage.queryStat('Percentile')).toBeNull()
+  })
+
+  it('renders the PERCENTILE for an at-or-above-threshold profile, and drops the rank line so it reads like the dashboard', async () => {
+    // Past the threshold the percentile means something: the hero prints "Top 2%"
+    // and the rank line steps aside. The two surfaces now agree — rank below,
+    // percentile above (ADR 20260725).
+    ratingPanelFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(buildRankedPlayerDetail()),
+    )
+
+    ratingPanelFetcherPage.render()
+
+    await waitForElementToBeRemoved(ratingPanelFetcherPage.queryLoading())
+    expect(ratingPanelFetcherPage.queryStat('Percentile')).toHaveTextContent(
+      'Top 2%',
+    )
+    expect(ratingPanelFetcherPage.queryStat('Rank')).toBeNull()
   })
 
   it('shows an unrated player as Unrated, with no rank', async () => {

@@ -81,7 +81,13 @@ export function DashboardPage() {
       {showGuestPersistBanner && data && (
         <GuestPersistBanner
           matchCount={data.completed_match_count}
-          rating={data.rating ? Math.round(data.rating.current) : null}
+          // The rating block is always present now, but only the RATED arm
+          // carries a `current`; drop the rating fragment when it's null.
+          rating={
+            data.rating.current !== null
+              ? Math.round(data.rating.current)
+              : null
+          }
         />
       )}
       <PageTitle

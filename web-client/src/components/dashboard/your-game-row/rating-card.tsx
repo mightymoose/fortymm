@@ -14,7 +14,13 @@ export interface RatingCardProps {
 }
 
 export const RatingCard = ({ rating }: RatingCardProps) => {
-  const { current, delta, peak, percentile, spark_data, streak, stats } = rating
+  const { delta, percentile, rank, population, spark_data, streak, stats } =
+    rating
+  // The RATED arm always carries these; the `?? 0` only satisfies the type,
+  // which is nullable across all four states (YourGameRow renders this card for
+  // RATED only, ADR 20260725).
+  const current = rating.current ?? 0
+  const peak = rating.peak ?? 0
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
   // freshly-rated case still shows a level baseline.
   const sparkPoints =
@@ -69,6 +75,17 @@ export const RatingCard = ({ rating }: RatingCardProps) => {
               Top{' '}
               <Mono size={11} color={C.chalk300}>
                 {percentile}%
+              </Mono>{' '}
+              in {rating.league_name}
+            </span>
+          ) : rank !== null && population !== null ? (
+            // Below the percentile threshold the server suppresses percentile
+            // and sends rank instead: "#N of M" is honest at any position and
+            // league size, where "Top 100%" for the last-place player was a
+            // compliment-shaped lie (#959, ADR 20260725).
+            <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
+              <Mono size={11} color={C.chalk300}>
+                {`#${rank} of ${population}`}
               </Mono>{' '}
               in {rating.league_name}
             </span>

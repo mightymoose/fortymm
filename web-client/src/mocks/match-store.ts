@@ -859,15 +859,16 @@ export function projectRecentResult(seed: SeedMatch): DashboardRecentResult | nu
  * `user_league_ratings`, so the wired RatingCard renders against the same
  * shape MSW and prod return.
  *
- * **`null` when no rated match has been finished** (#950). This mock used to
- * hand every caller a card starting at `MOCK_BASE_RATING` — current 1500, peak
- * 1500, a one-point sparkline — for a user who had played nothing, which is a
- * shape the API does not send and never did claim to: joining a league seeds
- * `rating_value` as the strategy's *prior*, and `DashboardResponse.rating` is
- * `null` for a player who has never finished a rated match (`CONTEXT.md` §
- * *Rating*). A mock that models a rating the server withholds is how a 1500 on a
- * brand-new dashboard survived the entire suite; it now models the withholding. */
-export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
+ * **The `UNRATED` state when no rated match has been finished** (#950, #956).
+ * This mock used to hand every caller a card starting at `MOCK_BASE_RATING` —
+ * current 1500, peak 1500, a one-point sparkline — for a user who had played
+ * nothing, which is a shape the API does not send: joining a league seeds
+ * `rating_value` as the strategy's *prior*. It then returned a bare `null`,
+ * which conflated three distinct facts. Now the block is always present and
+ * carries a `state` discriminator: a glicko2 player who hasn't finished a rated
+ * match is `UNRATED` (in a rated league, no rating yet), not `null`
+ * (ADR 20260725). */
+export function projectRating(seeds: SeedMatch[]): DashboardRating {
   const completed = seeds
     .filter(
       (s): s is SeedMatch & { completed_at: string } =>
@@ -878,9 +879,26 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
     )
     .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
 
-  // Never finished a rated match ⇒ no rating, and so no rating card at all —
-  // not a card seeded at the strategy's prior.
-  if (completed.length === 0) return null
+  // Never finished a rated match ⇒ UNRATED, not a card seeded at the strategy's
+  // prior and not a bare `null`: the player IS in a glicko2 league, they just
+  // have no rating yet, and the card says exactly that (ADR 20260725).
+  if (completed.length === 0) {
+    return {
+      state: 'UNRATED',
+      league_id: MOCK_DEFAULT_LEAGUE.id,
+      league_name: MOCK_DEFAULT_LEAGUE.name,
+      strategy_key: 'glicko2',
+      current: null,
+      delta: null,
+      peak: null,
+      percentile: null,
+      rank: null,
+      population: null,
+      spark_data: [],
+      streak: null,
+      stats: [],
+    }
+  }
 
   // The same timeline every other surface reads, so the dashboard card, the
   // dashboard's Δ column and the match-detail card cannot disagree about what a
@@ -916,6 +934,7 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
   const gamesPlayed = completed.length
   const rd = Math.max(80, 350 - gamesPlayed * 18)
   return {
+    state: 'RATED',
     league_id: MOCK_DEFAULT_LEAGUE.id,
     league_name: MOCK_DEFAULT_LEAGUE.name,
     strategy_key: 'glicko2',
@@ -925,8 +944,11 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
     // Unconditional now: the zero-match case returned above, and a rated player
     // has a ladder position. (This ternary used to be the one place that noticed
     // an unplayed player had no business holding a percentile — #382 — while the
-    // other four figures printed the prior anyway.)
+    // other four figures printed the prior anyway.) The seeded roster clears the
+    // percentile threshold, so this shows a percentile rather than "#N of M".
     percentile: 72,
+    rank: null,
+    population: null,
     spark_data: sparkData,
     streak: projectStreak(seeds),
     stats: [

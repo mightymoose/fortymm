@@ -43,9 +43,12 @@ export type RatingPanelView = {
    * fallen from the 1500 their league-join seeded — they simply have no delta
    * (#952). */
   delta: RatingDeltaView | null
-  /** Rank, peak and percentile, in that order — each present only when the
-   * player has it. An unrated player has none of them: no rating, no rank
-   * (CONTEXT.md § *Rank*). */
+  /** Peak, then one standing line — rank OR percentile, never both (ADR
+   * 20260725). At or above the percentile threshold the standing line is the
+   * percentile ("Top N%"); below it, where the API withholds the percentile, it
+   * is the rank ("#N of M") in the same slot, so the profile and the dashboard
+   * agree. Each present only when the player has it — an unrated player has none:
+   * no rating, no rank (CONTEXT.md § *Rank*). */
   stats: StandingStatView[]
   /** `null` for a player with no decided matches at all. Independent of the
    * rating: form counts decided matches, rated or not. */
@@ -93,19 +96,25 @@ const selectDelta = (
 
 const selectStats = (player: PlayerDetail): StandingStatView[] => {
   const stats: StandingStatView[] = []
-  // Rank is always reported *out of the rated population* — "#3 of 42", never a
-  // naked "#3", which in a twelve-player league flatters. Both halves or
-  // neither.
-  if (player.rank != null && player.rank_of != null) {
-    stats.push({ label: 'Rank', value: `#${player.rank} of ${player.rank_of}` })
-  }
   if (player.peak != null) {
     stats.push({ label: 'Peak', value: formatRating(player.peak) })
   }
-  // The API withholds the percentile while the league is too small for it to
-  // mean anything, so its presence — not a threshold here — is the signal.
+  // The standing line — rank OR percentile, never both, so the profile and the
+  // dashboard say the same thing (ADR 20260725). The API withholds `percentile`
+  // while the league is too small for "Top N%" to mean anything and populates
+  // `rank`/`rank_of` instead; its presence — not a threshold here — is the switch:
+  //
+  // - AT OR ABOVE the threshold the percentile is present and takes the slot;
+  // - BELOW it the percentile is null, so the hero reads RANK ("#3 of 42") in the
+  //   same slot — honest at any position and league size, where "Top 100%" for the
+  //   last-place player of a small ladder was a compliment-shaped lie (#959).
+  //
+  // Rank is always reported *out of the rated population* — "#3 of 42", never a
+  // naked "#3", which in a twelve-player league flatters: both halves or neither.
   if (player.percentile != null) {
     stats.push({ label: 'Percentile', value: `Top ${player.percentile}%` })
+  } else if (player.rank != null && player.rank_of != null) {
+    stats.push({ label: 'Rank', value: `#${player.rank} of ${player.rank_of}` })
   }
   return stats
 }

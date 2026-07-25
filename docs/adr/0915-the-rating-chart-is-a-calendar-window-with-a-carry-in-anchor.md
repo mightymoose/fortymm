@@ -61,3 +61,29 @@ first paint still costs one request. It is therefore also the one card that owns
 its own error state — a failed range flip renders "Couldn't load that range · Try
 again" inside the card and leaves the rest of the painted page alone, rather than
 throwing to the route boundary the way a bundle failure does.
+
+## Amendment (2026-07-25, #957): the domain zooms to fit a collapsed span
+
+The calendar axis has a sharp edge the original decision did not address. When a
+player's entire history falls within a tiny fraction of the selected range — a
+brand-new player after one evening of matches — every point shares almost the same
+`x`, and the series collapses to a **1px vertical spike hard against the right
+edge**, ~99% of the plot empty. It is the *honest* rendering of a calendar axis
+over one instant, and it is unusable — and it is exactly the shape a new player
+sees, which is exactly when they are most likely to look.
+
+The fix keeps the calendar axis (this ADR's choice stands) and adds a
+degenerate-case rule: **when the data's own span is a small fraction of the
+selected range, the x-domain zooms to the data's span** (padded out to a
+minimum-span floor) instead of running window-start → now. An evening's six matches
+then fan out across the plot on a real time axis, rather than compressing to a
+sub-pixel line. The range tab becomes "show me *at most* this window, zoomed to
+fit" rather than "stretch the data across the whole window".
+
+The one case the zoom cannot rescue is genuinely identical timestamps (every point
+at the same instant). There the minimum-span floor fans them out; if that is still
+degenerate, the card degrades to a **"N matches today"** label rather than drawing
+a spike. This is the match-indexed axis's one advantage (it needs no anchor and
+degrades gracefully on sparse data) recovered *without* reintroducing it — the
+axis never silently switches its meaning from time to sequence, which is the thing
+this ADR rejected the sequence axis to avoid.

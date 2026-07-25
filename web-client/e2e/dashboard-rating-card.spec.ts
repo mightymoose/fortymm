@@ -39,6 +39,7 @@ const ESTABLISHED_DASHBOARD = {
   waiting_count: 0,
   completed_match_count: 1,
   rating: {
+    state: 'RATED',
     league_id: '44444444-4444-4444-8444-444444444444',
     league_name: 'FortyMM',
     strategy_key: 'glicko2',
@@ -46,6 +47,8 @@ const ESTABLISHED_DASHBOARD = {
     delta: null,
     peak: 1268,
     percentile: 22,
+    rank: null,
+    population: null,
     spark_data: [1268],
     streak: { kind: 'L', n: 1 },
     stats: [
