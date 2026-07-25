@@ -30,8 +30,8 @@ closes before the first byte.
 inside an SSE generator surfaces *after* the 200 and its headers are on the wire;
 FastAPI's SSE producer runs it in an anyio task group, so an ``HTTPException``
 there is an unhandled ``ExceptionGroup``, not a 401. Every way this route can say
-no — auth, the per-user connection cap, realtime being unavailable — therefore
-resolves in a dependency, before a byte is sent.
+no — auth, realtime being unavailable — therefore resolves in a dependency,
+before a byte is sent.
 
 **The lifetime bound scopes to the wait, not the whole body.** ``asyncio.timeout``
 cancels the *task* that entered it, and the task iterating this generator spends
@@ -65,7 +65,6 @@ from app.realtime import (
     EventKind,
     RealtimeBroker,
     RealtimeEvent,
-    TooManyRealtimeConnections,
     get_broker,
 )
 from app.sessions import SESSION_COOKIE_NAME, get_current_user
@@ -154,10 +153,17 @@ async def get_stream_events(
     A *yield* dependency on purpose — the opposite call from the session above.
     The broker attachment is exactly the thing that should live as long as the
     stream, and the request exit stack is what guarantees it is detached when
-    the client goes away, however it goes away.
+    the client goes away, however it goes away — the ``http.disconnect`` a
+    navigating tab produces unwinds this stack within a second, which is what
+    keeps a user's slots from accumulating as they move around the app.
 
-    Both refusals happen in ``__aenter__``, before the response starts, so they
-    are real status codes rather than a truncated ``text/event-stream``.
+    The one refusal left — realtime being unavailable — happens in
+    ``__aenter__``, before the response starts, so it is a real status code
+    rather than a truncated ``text/event-stream``. The per-user cap used to
+    refuse here too; it now displaces the caller's own oldest stream instead
+    (``RealtimeBroker._attach``), because the slot it was refusing over may be
+    held by a client that is *gone but still connected* — suspended, frozen,
+    asleep — which no amount of disconnect detection can see.
     """
     if broker is None:
         raise HTTPException(
@@ -165,17 +171,8 @@ async def get_stream_events(
             detail="Realtime updates are unavailable. Please retry.",
             headers={"Retry-After": str(REALTIME_UNAVAILABLE_RETRY_AFTER_SECONDS)},
         )
-    try:
-        async with broker.subscribe(user_id=principal.user_id) as events:
-            yield events
-    except TooManyRealtimeConnections as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                f"You already have {exc.limit} live update connections open. "
-                "Close a tab and try again."
-            ),
-        ) from exc
+    async with broker.subscribe(user_id=principal.user_id) as events:
+        yield events
 
 
 async def _stream_rate_limit_key(request: Request) -> str:
@@ -203,10 +200,13 @@ async def _stream_ip_rate_limit_key(request: Request) -> str:
 # Connect limiting, two-tier like the schedule-preview limiters. This is the
 # **soft** limit: ``RedisRateLimiter`` falls open when Redis is unpublished or
 # errors mid-call, so the hard ceiling on what one user can pin in a process
-# stays the broker's in-process per-user connection cap (``REALTIME_MAX_
-# CONNECTIONS_PER_USER``, a 429 from ``get_stream_events``). What these buy is a
-# bound on *connect churn* — a client stuck in a reconnect loop, or a script
-# opening and dropping streams — which the concurrency cap alone does not see.
+# stays the broker's in-process per-user connection cap
+# (``REALTIME_MAX_CONNECTIONS_PER_USER``), which holds by *displacing* that
+# user's oldest stream rather than by refusing the new one. What these limiters
+# buy is the other bound, the one the concurrency cap cannot see: *connect
+# churn* — a client stuck in a reconnect loop, a script opening and dropping
+# streams, or a user running more tabs than the cap, whose displaced streams
+# reconnect in rotation.
 #
 # The budget is sized against the worst *legitimate* burst, not the steady state:
 # a stream lives 15 minutes, so four healthy tabs connect ~4 times per quarter
@@ -270,10 +270,10 @@ async def stream(
 
     The connection is deliberately finite and ends on its own after
     `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
-    re-runs authentication. A user may hold only a few concurrent streams (429
-    past that), and a process with no realtime backend answers 503 — in both
-    cases the dashboard simply falls back to its existing refetch-on-navigation
-    freshness.
+    re-runs authentication. A user may hold only a few concurrent streams: past
+    that, opening a new one ends their oldest, which that client answers with its
+    ordinary reconnect. A process with no realtime backend answers 503, and the
+    dashboard simply falls back to its existing refetch-on-navigation freshness.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + get_settings().realtime_max_stream_seconds

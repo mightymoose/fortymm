@@ -1533,10 +1533,10 @@ export interface paths {
          *
          *     The connection is deliberately finite and ends on its own after
          *     `REALTIME_MAX_STREAM_SECONDS`; `EventSource` reconnects for free, which
-         *     re-runs authentication. A user may hold only a few concurrent streams (429
-         *     past that), and a process with no realtime backend answers 503 — in both
-         *     cases the dashboard simply falls back to its existing refetch-on-navigation
-         *     freshness.
+         *     re-runs authentication. A user may hold only a few concurrent streams: past
+         *     that, opening a new one ends their oldest, which that client answers with its
+         *     ordinary reconnect. A process with no realtime backend answers 503, and the
+         *     dashboard simply falls back to its existing refetch-on-navigation freshness.
          */
         get: operations["stream_v1_stream_get"];
         put?: never;

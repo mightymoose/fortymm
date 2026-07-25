@@ -68,9 +68,14 @@ class Settings(BaseSettings):
     #: is on the other end of any more.
     realtime_max_stream_seconds: int = 900
 
-    #: Concurrent streams one user may hold. Past this the route 429s rather
-    #: than attaching, so a tab-hoarding (or looping) client cannot pin an
-    #: unbounded number of attachments in a process. Four is "a few tabs".
+    #: Concurrent streams one user may hold, so a tab-hoarding (or looping)
+    #: client cannot pin an unbounded number of attachments in a process. Four
+    #: is "a few tabs". Past this, attaching **displaces** that user's oldest
+    #: stream rather than refusing the new one: the slot being competed for may
+    #: belong to a client that is gone but still connected (a suspended app, a
+    #: frozen tab, a sleeping laptop), which the server cannot detect, and
+    #: refusing would leave the live newcomer silently deaf until the old
+    #: stream's ``realtime_max_stream_seconds`` finally expired.
     realtime_max_connections_per_user: int = 4
 
     #: Base of the SSE ``retry:`` hint sent to the client, in milliseconds —

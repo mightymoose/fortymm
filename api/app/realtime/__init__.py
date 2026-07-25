@@ -12,7 +12,6 @@ Importing this package registers the outbox's SQLAlchemy ``after_commit`` /
 
 from app.realtime.broker import (
     RealtimeBroker,
-    TooManyRealtimeConnections,
     get_broker,
     init_broker,
     shutdown_broker,
@@ -26,7 +25,6 @@ __all__ = [
     "EventKind",
     "RealtimeBroker",
     "RealtimeEvent",
-    "TooManyRealtimeConnections",
     "get_broker",
     "init_broker",
     "publish_event",

@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.sql.base import ExecutableOption
 
@@ -44,7 +45,7 @@ from app.realtime import EventKind, RealtimeBroker
 from app.result_chain import standing_result
 from app.result_proposal import propose_result
 from app.schemas.match import MatchResultsGameWrite
-from tests._helpers import make_user
+from tests._helpers import make_user, start_session
 from tests._realtime import watch_hints
 
 DASHBOARD = [EventKind.dashboard_changed]
@@ -316,3 +317,87 @@ async def test_deleting_a_game_score_hints_both_players(
     assert hints[cast.creator_id] == DASHBOARD
     assert hints[cast.opponent_id] == DASHBOARD
     assert hints[cast.bystander_id] == []
+
+
+# ----- creating ------------------------------------------------------------
+
+
+async def test_creating_a_match_hints_both_participants(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    """Match creation is the *first* thing that puts a row in someone's "needs
+    your attention" panel, and it went unhinted: the opponent's dashboard sat
+    there showing nothing until they happened to navigate, while a reload showed
+    the row had been there all along.
+
+    Driven over HTTP rather than through the service, because this is the seam
+    the bug lived in — the fan-out map covered every later write on a match and
+    skipped the one that creates it. The uninvolved third user is signed in and
+    connected, and is hinted exactly zero times.
+    """
+    creator = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, _name("created-opponent"))
+    bystander = await make_user(db_session, _name("created-bystander"))
+
+    async with watch_hints(
+        realtime_broker, creator.id, opponent.id, bystander.id
+    ) as watch:
+        response = await api_client.post(
+            "/v1/matches",
+            json={
+                "opponent_user_id": str(opponent.id),
+                "best_of": 5,
+                "rated": True,
+            },
+        )
+        hints = await watch.collect()
+
+    assert response.status_code == 201
+    assert hints[creator.id] == DASHBOARD
+    assert hints[opponent.id] == DASHBOARD
+    assert hints[bystander.id] == []
+
+
+async def test_creating_a_solo_match_hints_only_its_creator(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    """A solo match's side 2 is a player-less sentinel, so it contributes no
+    hint — the staging iterates the players it has rather than indexing
+    ``players[0]``."""
+    creator = await start_session(api_client, db_session)
+    bystander = await make_user(db_session, _name("solo-bystander"))
+
+    async with watch_hints(realtime_broker, creator.id, bystander.id) as watch:
+        response = await api_client.post(
+            "/v1/matches", json={"best_of": 3, "rated": False}
+        )
+        hints = await watch.collect()
+
+    assert response.status_code == 201
+    assert hints[creator.id] == DASHBOARD
+    assert hints[bystander.id] == []
+
+
+async def test_a_refused_match_creation_hints_nobody(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    """The staging sits before the commit, so a creation that never happens
+    tells nobody it did — the outbox's ``after_soft_rollback`` discard, seen from
+    the route. A rated match with no registered opponent is refused by the
+    service before anything is written."""
+    creator = await start_session(api_client, db_session)
+
+    async with watch_hints(realtime_broker, creator.id) as watch:
+        response = await api_client.post(
+            "/v1/matches", json={"best_of": 5, "rated": True}
+        )
+        hints = await watch.collect()
+
+    assert response.status_code == 422
+    assert hints[creator.id] == []

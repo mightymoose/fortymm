@@ -298,31 +298,6 @@ async def test_a_dead_session_cookie_is_refused_before_the_stream_opens(
     assert realtime_broker.attached_channels == frozenset()
 
 
-async def test_exceeding_the_per_user_connection_cap_is_a_429(
-    api_client: AsyncClient, db_session: AsyncSession, realtime_broker: RealtimeBroker
-) -> None:
-    """The broker's per-user cap surfaces as a 429 the caller can read, not as a
-    stream that opens and dies.
-
-    The cap is held by attaching directly to the broker rather than by opening
-    real streams — four live SSE responses through ``ASGITransport`` would never
-    return. And the request itself is bounded, because a cap that stops firing
-    turns *this* request into the fifth such stream.
-    """
-    user = await start_session(api_client, db_session)
-
-    async with AsyncExitStack() as stack:
-        for _ in range(DEFAULT_MAX_CONNECTIONS_PER_USER):
-            await stack.enter_async_context(realtime_broker.subscribe(user_id=user.id))
-
-        response = await refuse_stream(
-            api_client, because="the broker's per-user connection cap"
-        )
-
-    assert response.status_code == 429
-    assert str(DEFAULT_MAX_CONNECTIONS_PER_USER) in response.json()["detail"]
-
-
 async def test_stream_is_503_when_the_process_has_no_broker(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -695,3 +670,83 @@ async def test_the_stream_opens_one_session_and_closes_it_before_the_first_frame
 
     # The attachment is released when the client hangs up.
     assert realtime_broker.attached_channels == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# the per-user cap: a slot is released by a hang-up, and taken back by a
+# newcomer when it is not
+
+
+async def test_repeated_connect_and_hang_up_never_accumulates_attachments(
+    api_client: AsyncClient, db_session: AsyncSession, realtime_broker: RealtimeBroker
+) -> None:
+    """A user moving around the app must not accumulate slots.
+
+    This is the QA report's shape — ``/dashboard`` → ``/matches`` → … six times
+    over, each navigation opening a stream and the previous one going away — run
+    through the real ASGI app, twice as many times as the cap allows. The
+    hang-up is the *disconnect* path (``http.disconnect``, what Starlette gets
+    from the server when a socket closes), not a polite generator close.
+
+    It passes on both sides of the eviction change, and that is the finding it
+    records: the disconnect path was never where slots leaked. Measured the same
+    way against the QA stack — four streams, clients hard-killed, a fifth connect
+    succeeds about a second later. What does hold a slot is a client that stops
+    reading *without* closing (a suspended app, a frozen tab), which no
+    disconnect detection can see and which the test below is about.
+    """
+    await start_session(api_client, db_session)
+    cookie = api_client.cookies[SESSION_COOKIE_NAME]
+
+    for _ in range(DEFAULT_MAX_CONNECTIONS_PER_USER * 2):
+        driven = await drive_stream(cookie, take=2, timeline=[])
+        assert driven.status == 200
+        # Released by the time the request has finished unwinding — not "soon",
+        # not at the 900s lifetime.
+        assert realtime_broker.attached_channels == frozenset()
+
+
+async def test_a_connect_at_the_cap_displaces_the_oldest_instead_of_429ing(
+    api_client: AsyncClient, db_session: AsyncSession, realtime_broker: RealtimeBroker
+) -> None:
+    """A user at the cap still gets a live stream.
+
+    The four slots are held by attachments that never end on their own — the
+    stand-in for the case the server cannot detect: a client whose socket is open
+    and still ACKing but whose process is suspended, frozen or asleep. Refusing
+    the newcomer over one of those left a *live* client silently non-live for up
+    to the full stream lifetime, with no banner and no stale indicator, which is
+    what QA saw. So the newcomer connects and the oldest is displaced instead.
+
+    Held by attaching directly to the broker rather than by opening four real
+    streams: four live SSE responses through ``ASGITransport`` would never
+    return. The connect itself goes through the real ASGI app, because the 429
+    it used to take came from the route's dependency graph.
+    """
+    user = await start_session(api_client, db_session)
+    cookie = api_client.cookies[SESSION_COOKIE_NAME]
+
+    async with AsyncExitStack() as stack:
+        held = [
+            await stack.enter_async_context(realtime_broker.subscribe(user_id=user.id))
+            for _ in range(DEFAULT_MAX_CONNECTIONS_PER_USER)
+        ]
+        assert realtime_broker.attachment_count(user.id) == (
+            DEFAULT_MAX_CONNECTIONS_PER_USER
+        )
+
+        driven = await drive_stream(cookie, take=2, timeline=[])
+
+        # It streamed — a real 200 with the documented preamble, not a refusal.
+        assert driven.status == 200
+        assert driven.headers["content-type"] == "text/event-stream; charset=utf-8"
+        assert driven.frames[1].startswith(b'data: {"v":1,"kind":"resync"')
+
+        # The oldest held stream is the one that ended, and the cap still holds:
+        # the newcomer took its slot rather than adding a fifth.
+        with pytest.raises(StopAsyncIteration):
+            async with asyncio.timeout(STREAM_TIMEOUT_S):
+                await anext(held[0])
+        assert realtime_broker.attachment_count(user.id) == (
+            DEFAULT_MAX_CONNECTIONS_PER_USER - 1
+        )

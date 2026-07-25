@@ -31,6 +31,8 @@ subscription set from one task while another sits in ``get_message()`` is the
 classic corruption bug in this design. The dispatcher therefore polls under the
 same :class:`asyncio.Lock` that guards attach/detach, with a short poll timeout
 so a subscribe waits milliseconds rather than for traffic.
+
+**The per-user cap evicts, it does not refuse.** See :meth:`RealtimeBroker._attach`.
 """
 
 import asyncio
@@ -60,22 +62,6 @@ RECONNECT_DELAY_S = 1.0
 
 DEFAULT_COALESCE_DELAY_S = 0.25
 DEFAULT_MAX_CONNECTIONS_PER_USER = 4
-
-
-class TooManyRealtimeConnections(Exception):
-    """A user asked for more concurrent streams than the per-user cap allows.
-
-    Typed rather than an ``HTTPException`` so the broker stays HTTP-free; the
-    route translates it into a 429.
-    """
-
-    def __init__(self, user_id: uuid.UUID, limit: int) -> None:
-        super().__init__(
-            f"user {user_id} already holds {limit} realtime connections "
-            f"(REALTIME_MAX_CONNECTIONS_PER_USER={limit})"
-        )
-        self.user_id = user_id
-        self.limit = limit
 
 
 class PubSubFactory(Protocol):
@@ -200,6 +186,15 @@ class RealtimeBroker:
         """Channels currently ref-counted by at least one attached stream."""
         return frozenset(self._attachments)
 
+    def attachment_count(self, user_id: uuid.UUID) -> int:
+        """How many streams ``user_id`` currently holds in this process.
+
+        The quantity the per-user cap bounds, exposed so that "the cap held" is
+        assertable without reaching into ``_attachments`` — and so an operator
+        can ask the question in a console.
+        """
+        return len(self._attachments.get(user_channel(user_id), ()))
+
     # -- subscription ------------------------------------------------------
 
     @asynccontextmanager
@@ -208,9 +203,10 @@ class RealtimeBroker:
     ) -> AsyncIterator[AsyncIterator[RealtimeEvent]]:
         """Attach a stream for ``user_id`` and yield its coalesced hint iterator.
 
-        Raises :class:`TooManyRealtimeConnections` when the caller is already at
-        the per-user cap. The channel is subscribed on the first attachment for
-        this user and unsubscribed when the last one leaves.
+        Always succeeds: a caller already at the per-user cap displaces their own
+        oldest stream rather than being turned away (see :meth:`_attach`). The
+        channel is subscribed on the first attachment for this user and
+        unsubscribed when the last one leaves.
         """
         attachment = await self._attach(user_id)
         events = self._iterate(attachment)
@@ -228,21 +224,58 @@ class RealtimeBroker:
                 await events.aclose()
 
     async def _attach(self, user_id: uuid.UUID) -> _Attachment:
+        """Attach a stream, displacing this user's oldest one if they're at the cap.
+
+        **Why the cap evicts instead of refusing.** A slot is released the moment
+        the client's socket closes — a tab navigating away, a reload, a killed
+        process are all detected within a second, because Starlette hands the
+        response an ``http.disconnect`` and the request's exit stack unwinds
+        through :meth:`subscribe`'s ``finally`` (measured against the QA stack:
+        four streams, hard-killed clients, a fifth connect succeeds ~1s later).
+        What is *not* detectable is a client that stops reading without closing:
+        an app the OS suspended on backgrounding, a frozen/discarded browser tab,
+        a laptop that slept, a NAT that dropped the flow. Its socket stays open
+        and its kernel keeps ACKing, so no write fails and no disconnect arrives
+        — the server has nothing to observe. Measured the same way: four
+        connected-but-silent clients held all four slots for the whole 120s of
+        the probe (and would have held them to the 900s lifetime), and the fifth
+        connect took a 429 that the client could only retry into.
+
+        That is the shape of the bug worth fixing: the *refusal* turned an
+        undetectable stale slot into a live client that is silently deaf — it
+        retries, gets 429, and shows no sign of not being live. Evicting instead
+        makes the stale slot self-healing on the very next connect, and picks the
+        right victim by default: the newest stream is the tab the user is looking
+        at, the oldest is the likeliest ghost.
+
+        The bound itself is unchanged — a user still holds at most
+        ``max_connections_per_user`` attachments; the cap only chooses *who
+        leaves* rather than turning the newcomer away. Eviction frees the slot
+        synchronously here, independent of whether the doomed connection can
+        still be flushed to its client. What bounds a user who genuinely runs
+        more tabs than the cap is not this number but the connect rate limiters
+        on the route, plus each client's own escalating backoff after a
+        short-lived connection: they rotate slowly rather than hammering.
+
+        An evicted stream ends exactly the way the 15-minute lifetime ends one —
+        flagged and woken, so its iterator returns and its client reconnects.
+        Its later :meth:`_detach` is then a no-op, since it is already out of the
+        list.
+        """
         if self._closed:
             raise RuntimeError("realtime broker is closed")
         channel = user_channel(user_id)
         async with self._lock:
-            # Read, don't ``setdefault``: an entry installed before the cap
-            # check would have to be deleted again on the refusal path. A
-            # channel is only ever in the map with at least one attachment,
-            # so "present" is exactly "not the first attachment".
+            # Read, don't ``setdefault``: a channel is only ever in the map with
+            # at least one attachment, so "present" is exactly "not the first
+            # attachment" — which is also what decides whether to SUBSCRIBE.
             attachments = self._attachments.get(channel)
-            if len(attachments or ()) >= self._max_connections_per_user:
-                raise TooManyRealtimeConnections(
-                    user_id, self._max_connections_per_user
-                )
             attachment = _Attachment(channel=channel)
             if attachments is not None:
+                # ``while``, not ``if``: the cap can be lowered under a process
+                # that already holds more than the new number.
+                while len(attachments) >= self._max_connections_per_user:
+                    self._evict(attachments.pop(0))
                 attachments.append(attachment)
             else:
                 self._attachments[channel] = [attachment]
@@ -253,6 +286,18 @@ class RealtimeBroker:
                     await self._pubsub.subscribe(channel)
         return attachment
 
+    def _evict(self, attachment: _Attachment) -> None:
+        """End a displaced stream. Caller holds the lock and has already removed
+        it from its channel's list, so the slot is free before this returns.
+
+        Synchronous, and deliberately so: it must not await anything while the
+        lock is held, and there is nothing to await — flagging and ringing the
+        doorbell is the whole of ending a stream. The evicted client's own
+        request teardown then runs :meth:`_detach`, which finds it already gone.
+        """
+        attachment.detached = True
+        attachment.doorbell.set()
+
     async def _detach(self, attachment: _Attachment) -> None:
         async with self._lock:
             attachments = self._attachments.get(attachment.channel)
@@ -260,6 +305,10 @@ class RealtimeBroker:
                 return
             attachment.detached = True
             attachment.doorbell.set()
+            # ``ValueError`` is the ordinary path for an attachment that was
+            # *evicted* (``_attach``): it is already out of the list, and the
+            # entry now belongs to whoever displaced it — so the early return
+            # below must not unsubscribe the channel out from under them.
             with contextlib.suppress(ValueError):
                 attachments.remove(attachment)
             if attachments:

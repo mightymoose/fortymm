@@ -30,6 +30,7 @@ from app.match_errors import (
     SelfMatchError,
 )
 from app.match_queries import match_eager_options
+from app.match_realtime import stage_match_participant_hints
 from app.models import (
     Match,
     MatchSettings,
@@ -50,10 +51,17 @@ def _add_side(match: Match, side_number: int, player: User | None) -> None:
 
     Wiring up the ``match`` relationship on both the side and the side-player
     is what populates their (non-null, denormalized) ``match_id`` columns on
-    flush."""
+    flush.
+
+    ``players`` is **assigned**, not appended to, so the empty case is an
+    assignment too. A collection that Python never touched is *unloaded*, and
+    once the flush in :func:`create_match` has made the side persistent,
+    iterating it emits a lazy ``SELECT`` — from synchronous code, which on an
+    async session is a ``MissingGreenlet`` rather than a query. The sentinel side
+    is exactly that case, and ``stage_match_participant_hints`` iterates every
+    side's players."""
     side = MatchSide(match=match, side_number=side_number)
-    if player is not None:
-        side.players.append(MatchSidePlayer(match=match, user=player))
+    side.players = [MatchSidePlayer(match=match, user=player)] if player else []
 
 
 async def _load_created_match(db: AsyncSession, match_id: uuid.UUID) -> Match:
@@ -88,6 +96,10 @@ async def create_match(
     player-less sentinel side and is always unrated), enforces the
     rated-needs-registered-opponent rule, builds both sides, commits, and
     reloads. Binds to the default league when ``league_id`` is omitted.
+
+    Stages a ``dashboard.changed`` hint for both participants (the solo case
+    contributes one), so the opponent's "needs your attention" row appears
+    without waiting for their next navigation.
 
     Raises :class:`SelfMatchError` when the opponent is the creator,
     :class:`OpponentNotFoundError` when the opponent id resolves to no live
@@ -139,6 +151,17 @@ async def create_match(
     # the FE can deep-link to any 1..best_of without us guessing.
 
     db.add(match)
+    # Flush before staging, not after: ``stage_match_participant_hints`` reads
+    # ``side.players[*].user_id``, and until the INSERT runs those columns are
+    # ``None`` — the relationship was wired by object (``user=player``), so the
+    # id only exists once the flush has populated it. Staging a ``None`` user id
+    # would publish onto a channel nobody can subscribe to, silently.
+    await db.flush()
+    # Inside the transaction, before the commit that decides whether any of this
+    # happened (``app.realtime.outbox``). Creation is the *first* thing that puts
+    # a row in the opponent's "needs your attention" panel, so it owes both
+    # participants a hint exactly as the later writes on this match do.
+    stage_match_participant_hints(db, match)
     await db.commit()
 
     return await _load_created_match(db, match.id)

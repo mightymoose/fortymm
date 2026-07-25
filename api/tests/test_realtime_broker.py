@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import fakeredis
@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.realtime import publisher as publisher_module
-from app.realtime.broker import RealtimeBroker, TooManyRealtimeConnections
+from app.realtime.broker import RealtimeBroker
 from app.realtime.events import EventKind, RealtimeEvent, user_channel
 from app.realtime.publisher import publish_event
 
@@ -272,19 +272,119 @@ async def test_two_streams_for_one_user_subscribe_once(async_fake: Any) -> None:
         assert len(redis.pubsubs) == 1
 
 
-async def test_per_user_connection_cap_raises(async_fake: Any) -> None:
+async def _ended(events: AsyncIterator[RealtimeEvent]) -> bool:
+    """Whether ``events`` has finished, without hanging if it hasn't.
+
+    An evicted stream ends by being woken with its ``detached`` flag set, so
+    ``anext`` returns immediately either way — but only bounded, because the
+    regression this guards *is* a stream that never ends.
+    """
+    try:
+        async with asyncio.timeout(WAIT_TIMEOUT_S):
+            await anext(events)
+    except StopAsyncIteration:
+        return True
+    except TimeoutError:
+        raise AssertionError(
+            f"the stream was still open {WAIT_TIMEOUT_S}s after it should have "
+            "been displaced"
+        ) from None
+    return False
+
+
+async def test_a_stream_over_the_cap_displaces_the_users_oldest_one(
+    async_fake: Any,
+) -> None:
+    """The cap chooses who leaves; it does not turn the newcomer away.
+
+    The slot being competed for may be held by a client that is **gone but still
+    connected** — an app the OS suspended, a frozen tab, a sleeping laptop.
+    Nothing in a socket that is open and still ACKing says so, so refusing the
+    new connection leaves a live client silently deaf for up to the full stream
+    lifetime (measured against the QA stack: four connected-but-silent clients
+    held all four slots for 120s, and the fifth connect took a 429 it could only
+    retry into). Displacing the oldest makes that slot self-healing on the very
+    next connect.
+    """
     user_id = uuid.uuid4()
     async with running_broker(async_fake, max_connections_per_user=2) as broker:
-        async with broker.subscribe(user_id=user_id):
-            async with broker.subscribe(user_id=user_id):
-                with pytest.raises(TooManyRealtimeConnections) as excinfo:
-                    async with broker.subscribe(user_id=user_id):
-                        pass
-                assert excinfo.value.limit == 2
-                assert excinfo.value.user_id == user_id
-            # Detaching frees a slot, so the cap is concurrency, not a quota.
+        async with (
+            broker.subscribe(user_id=user_id) as oldest,
+            broker.subscribe(user_id=user_id) as second,
+        ):
+            # The third attaches rather than raising...
+            async with broker.subscribe(user_id=user_id) as newest:
+                # ...the oldest is the one that ends...
+                assert await _ended(oldest)
+                # ...the cap still holds: two attachments, not three.
+                assert broker.attachment_count(user_id) == 2
+
+                # ...and the survivors are genuinely live afterwards: the
+                # eviction must not have taken the channel's subscription (or
+                # the doorbell) with it.
+                second_stream, newest_stream = Collector(second), Collector(newest)
+                await asyncio.sleep(QUIET_S)
+                publish_event(user_id, EventKind.dashboard_changed)
+                await second_stream.wait_for_count(1)
+                await newest_stream.wait_for_count(1)
+                await second_stream.aclose()
+                await newest_stream.aclose()
+
+
+async def test_an_evicted_streams_own_teardown_leaves_the_survivors_subscribed(
+    async_fake: Any,
+) -> None:
+    """The displaced connection still unwinds its own ``subscribe`` block, some
+    scheduler ticks later. That detach must be a no-op: its slot already belongs
+    to whoever displaced it, so unsubscribing the channel there would take the
+    survivor's delivery down with it — the silent-drop failure, arrived at from
+    the other end."""
+    user_id = uuid.uuid4()
+    channel = user_channel(user_id)
+    redis = RecordingRedis(async_fake)
+    async with running_broker(redis, max_connections_per_user=1) as broker:
+        await wait_until(lambda: bool(redis.pubsubs))
+        pubsub = redis.pubsubs[0]
+
+        async with AsyncExitStack() as survivors:
+            async with AsyncExitStack() as doomed:
+                evicted = await doomed.enter_async_context(
+                    broker.subscribe(user_id=user_id)
+                )
+                await wait_until(lambda: pubsub.subscribed == [channel])
+                survivor = await survivors.enter_async_context(
+                    broker.subscribe(user_id=user_id)
+                )
+                assert await _ended(evicted)
+            # The evicted stream's own teardown has now run.
+
+            await asyncio.sleep(QUIET_S)
+            assert pubsub.unsubscribed == []
+            assert broker.attachment_count(user_id) == 1
+
+            stream = Collector(survivor)
+            publish_event(user_id, EventKind.dashboard_changed)
+            await stream.wait_for_count(1)
+            await stream.aclose()
+
+
+async def test_the_cap_is_concurrency_not_a_quota(async_fake: Any) -> None:
+    """Leaving frees a slot, so a user who closes a tab and opens another
+    displaces nothing."""
+    user_id = uuid.uuid4()
+    async with running_broker(async_fake, max_connections_per_user=2) as broker:
+        async with broker.subscribe(user_id=user_id) as first:
             async with broker.subscribe(user_id=user_id):
                 pass
+            async with broker.subscribe(user_id=user_id):
+                pass
+            async with broker.subscribe(user_id=user_id):
+                pass
+            # The long-lived first stream was never displaced by any of them.
+            stream = Collector(first)
+            publish_event(user_id, EventKind.dashboard_changed)
+            await stream.wait_for_count(1)
+            await stream.aclose()
 
 
 # --- proves 3: coalescing -------------------------------------------------
