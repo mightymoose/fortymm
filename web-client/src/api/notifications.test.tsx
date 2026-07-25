@@ -10,6 +10,7 @@ import {
   type NotificationFeed,
   type UnreadCount,
   useMarkNotificationsRead,
+  useUnreadCount,
 } from './notifications'
 
 const feedKey = [...NOTIFICATIONS_QUERY_KEY, 'feed']
@@ -88,6 +89,46 @@ describe('useMarkNotificationsRead', () => {
       expect(feed?.unread_count).toBe(1)
       expect(queryClient.getQueryData<UnreadCount>(countKey)?.unread_count).toBe(1)
     })
+  })
+
+  it('reconciles the badge to server truth when the optimistic decrement is a no-op', async () => {
+    // #1112: the debounced batch flushes ids that aren't in the on-screen feed
+    // (e.g. rows already scrolled past / not held in this cache), so the
+    // optimistic pass finds newlyRead == 0 and cannot drop the badge. The badge
+    // must still converge to the server's true count promptly — not stick stale
+    // until the 60s poll. The server reports 2 unread until the batch read lands,
+    // then 1; only a post-success reconcile of the count query surfaces that.
+    let read = false
+    server.use(
+      http.post('*/v1/notifications/read', () => {
+        read = true
+        return HttpResponse.json({ marked: 1 })
+      }),
+      http.get('*/v1/notifications/unread-count', () =>
+        HttpResponse.json({ unread_count: read ? 1 : 2 }),
+      ),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        badge: useUnreadCount(),
+        markRead: useMarkNotificationsRead(),
+      }),
+      { wrapper },
+    )
+
+    // The mounted badge settles on the initial server truth (2).
+    await waitFor(() =>
+      expect(result.current.badge.data?.unread_count).toBe(2),
+    )
+
+    // Flush a batch whose ids aren't in the feed: the optimistic decrement is a
+    // no-op, so without a reconcile the badge would stay at 2 until the poll.
+    result.current.markRead.mutate(['not-in-feed'])
+
+    await waitFor(() =>
+      expect(result.current.badge.data?.unread_count).toBe(1),
+    )
   })
 
   it('rolls the count back to server truth when the batch request fails', async () => {

@@ -1,60 +1,62 @@
 import { useCallback, useState } from 'react'
+import type { NotificationItem } from '@/api/notifications'
 
 const EMPTY: ReadonlySet<string> = new Set()
 
 export interface StickyUnread {
-  /** Ids to keep visible on the Unread filter; empty while the filter is off. */
+  /** Ids to keep visible on the Unread filter for this visit — the rows that
+   * were unread the moment you arrived, even after auto-mark flips them. */
   pinned: ReadonlySet<string>
-  /** Record a row the view just auto-marked-read so it stays put (#762). */
-  remember: (id: string) => void
   /** Drop the whole snapshot — e.g. an explicit "Mark all read" should empty
    * the list rather than leave the just-read rows pinned. */
   forget: () => void
 }
 
 /**
- * Keeps the rows a user is *actively reading* from vanishing out from under
- * them on the Unread filter.
+ * "Unread" is a per-visit snapshot, not a live `read_at IS NULL` query.
  *
  * Rows auto-mark-read after a moment on screen (`use-auto-mark-read`), and the
  * optimistic cache write flips their `read_at` in the very feed this page
- * renders. A naive `read_at == null` filter would then drop each row the instant
- * it's read, emptying the Unread list mid-read even though the user never
- * dismissed anything (#762). The view reports each row it auto-marks via
- * `remember`; those ids stay pinned (they merely lose the unread emphasis) until
- * the filter is left or the snapshot is explicitly `forget`-ten.
+ * renders. On the default **All** filter that happens on arrival, before the
+ * user ever clicks Unread — so a naive `read_at == null` filter is empty by the
+ * time they get there (#996). Gating the snapshot on the Unread filter being
+ * active (the original #762 mechanism) didn't help: nothing was captured while
+ * the user sat on All.
  *
- * Pinning only what this view auto-read — rather than every row that happens to
- * be unread — is deliberate: a bulk "Mark all read" (`forget`) or a row read on
- * another tab/device is not something the user is mid-reading here, so it drops
- * off the Unread filter as expected instead of lingering.
+ * So we snapshot on **arrival** instead, regardless of the landing filter: the
+ * first render where the feed has resolved, we pin exactly the ids that are
+ * unread right then. Those rows stay visible under Unread for the whole visit
+ * even after auto-mark reads them — "new since you got here." Rows already read
+ * on arrival, or created/read on another device mid-visit, are not in the
+ * snapshot and correctly don't appear.
  *
- * `active` is the Unread filter being on. Entering or leaving it starts a fresh
- * snapshot, so re-entering shows only rows read during this visit.
+ * The snapshot is per mount: a fresh visit (remount) or a reload re-snapshots,
+ * and leaving then returning takes a new one. An explicit bulk "Mark all read"
+ * (`forget`) clears it so the Unread list actually empties.
  */
-export function useStickyUnread(active: boolean): StickyUnread {
-  const [pinned, setPinned] = useState<ReadonlySet<string>>(EMPTY)
-  const [wasActive, setWasActive] = useState(active)
+export function useStickyUnread(
+  items: readonly NotificationItem[] | undefined,
+): StickyUnread {
+  // `null` means no snapshot taken yet this visit; a set (possibly empty) means
+  // it has been captured and must not be recomputed.
+  const [snapshot, setSnapshot] = useState<ReadonlySet<string> | null>(null)
 
-  // Reset on any enter/leave of the filter (state-adjustment during render, the
-  // React-recommended alternative to a setState-in-effect). Use the cleared set
-  // for this render too, not just the next one.
-  let current = pinned
-  if (wasActive !== active) {
-    setWasActive(active)
-    if (pinned.size > 0) {
-      current = EMPTY
-      setPinned(EMPTY)
-    }
+  // Snapshot on arrival: the first render where the feed has resolved. This is a
+  // state-adjustment during render (the React-recommended alternative to a
+  // setState-in-effect) — use the fresh set for this render too, not just next.
+  let pinned = snapshot
+  if (snapshot === null && items !== undefined) {
+    pinned = new Set(
+      items.filter((item) => item.read_at == null).map((item) => item.id),
+    )
+    setSnapshot(pinned)
   }
 
-  const remember = useCallback((id: string) => {
-    setPinned((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
-  }, [])
-
+  // Setting a (non-null) empty set also blocks a re-snapshot for the rest of the
+  // visit, so "Mark all read" stays emptied rather than re-capturing next render.
   const forget = useCallback(() => {
-    setPinned((prev) => (prev.size === 0 ? prev : EMPTY))
+    setSnapshot((prev) => (prev != null && prev.size === 0 ? prev : EMPTY))
   }, [])
 
-  return { pinned: active ? current : EMPTY, remember, forget }
+  return { pinned: pinned ?? EMPTY, forget }
 }
