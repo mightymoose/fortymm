@@ -50,7 +50,10 @@ from app.match_queries import (
     match_eager_options,
     participant_filter,
 )
-from app.match_result_notifications import notify_result_posted
+from app.match_result_notifications import (
+    notify_result_accepted,
+    notify_result_posted,
+)
 from app.match_scoring import (
     MatchLockUnavailable,
     enter_game_score,
@@ -856,6 +859,7 @@ async def accept_match_result(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
     match_service: MatchService = Depends(get_match_service),
+    notifications: NotificationService = Depends(get_notification_service),
 ) -> MatchDetails:
     """Accept a standing proposal — the second verb of the negotiation. The
     opposing side ratifies the proposing side's board; the match completes,
@@ -899,6 +903,27 @@ async def accept_match_result(
         raise HTTPException(
             status_code=409, detail="The posted games no longer decide this match."
         ) from exc
+
+    # Close the loop for the poster. The propose side told the *opponent* to
+    # review; now that they've accepted, tell the *poster* their result is
+    # final — otherwise their inbox stays empty on a completed match. The poster
+    # is the accepted result's submitter, never the accepting current user.
+    # Best-effort and post-commit — mirrors the propose handler's guard, so a
+    # delivery-side failure can never turn the 201 into a 500; the session is
+    # rolled back so teardown is clean even when the in-app persist was at fault.
+    poster_id = next(
+        (r.submitted_by_user_id for r in reloaded.results if r.id == result_id),
+        None,
+    )
+    if poster_id is not None:
+        try:
+            await notify_result_accepted(notifications, reloaded, poster_id)
+        except Exception:
+            await db.rollback()
+            log.exception(
+                "Failed to record result-accepted notification",
+                extra={"match_id": str(match_id)},
+            )
 
     extras = await view_extras(match_service, reloaded)
     return serialize_details(reloaded, current_user.id, extras)

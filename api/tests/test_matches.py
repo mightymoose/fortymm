@@ -4316,6 +4316,7 @@ async def test_concurrent_accept_and_counter_serialize(
                 actor = (
                     await session.execute(select(User).where(User.id == me_id))
                 ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
                 try:
                     await accept_match_result(
                         match_id,
@@ -4323,6 +4324,7 @@ async def test_concurrent_accept_and_counter_serialize(
                         actor,
                         session,
                         get_match_service(session),
+                        notifications,
                     )
                     return "ok-accept"
                 except HTTPException as exc:
@@ -4589,6 +4591,56 @@ async def test_unrated_result_enqueues_no_confirmation(
         assert response.status_code == 201
 
     assert enqueued_notification_jobs(fake_notifications_queue) == []
+
+
+async def test_accepting_result_notifies_the_poster(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """Accepting a standing proposal closes the loop for the poster: the side
+    that proposed the now-final result gets an in-app notice that their result
+    was accepted (category ``result_confirm``), addressed to them and not the
+    acceptor, and framed with the accepting opponent's name + the final score.
+
+    This is the gap chore 7a fills — before it, accepting completed the match
+    and settled ratings but the poster's inbox stayed empty; only the opponent
+    (asked to confirm) was ever told anything. Removing the
+    ``notify_result_accepted`` call in ``accept_match_result`` reds the
+    ``accept_jobs`` assertion below."""
+    me = await start_session(api_client, db_session)
+    me.username = "poster"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        # The propose step notifies only the opponent (asked to confirm); the
+        # poster's inbox is still empty at this point.
+        proposed_jobs = enqueued_notification_jobs(fake_notifications_queue)
+        assert [job.user_id for job in proposed_jobs] == [opp.id]
+
+        await accept_standing_result(opp_client, match["id"])
+
+    # The accept step adds the result-accepted notice — to the poster, never the
+    # accepting opponent.
+    accept_jobs = [
+        job
+        for job in enqueued_notification_jobs(fake_notifications_queue)
+        if job.collapse_id == f"result-accepted:{match['id']}"
+    ]
+    assert [job.user_id for job in accept_jobs] == [me.id]
+    job = accept_jobs[0]
+    assert job.category.value == "result_confirm"
+    assert job.title == "Your result was accepted"
+    assert job.link == f"/matches/{match['id']}"
+    assert "rival accepted your reported result" in job.body
+    # Final score is oriented poster-first (poster won 11–4, 11–4).
+    assert "11–4" in job.body
+    # No stale propose action group: the match is final, nothing to accept or
+    # counter, so this fans out as a plain notice (no APNs action category).
+    assert job.push_category is None
 
 
 # ----- voiding a match (#750, ADR 0013) -----------------------------------
