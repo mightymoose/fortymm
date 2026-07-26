@@ -1,4 +1,5 @@
 import type { DashboardRating } from '@/api/dashboard'
+import { formatRankOfPopulation } from '@/lib/rating'
 import { Overline } from '@/components/overline'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
 
@@ -85,7 +86,7 @@ export const RatingCard = ({ rating }: RatingCardProps) => {
             // compliment-shaped lie (#959, ADR 20260725).
             <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
               <Mono size={11} color={C.chalk300}>
-                {`#${rank} of ${population}`}
+                {formatRankOfPopulation(rank, population)}
               </Mono>{' '}
               in {rating.league_name}
             </span>

@@ -1,6 +1,7 @@
 import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import {
   formatRating,
+  formatRankOfPopulation,
   formatRatingDelta,
   formatRatingDeltaAria,
 } from '@/lib/rating'
@@ -114,7 +115,10 @@ const selectStats = (player: PlayerDetail): StandingStatView[] => {
   if (player.percentile != null) {
     stats.push({ label: 'Percentile', value: `Top ${player.percentile}%` })
   } else if (player.rank != null && player.rank_of != null) {
-    stats.push({ label: 'Rank', value: `#${player.rank} of ${player.rank_of}` })
+    stats.push({
+      label: 'Rank',
+      value: formatRankOfPopulation(player.rank, player.rank_of),
+    })
   }
   return stats
 }

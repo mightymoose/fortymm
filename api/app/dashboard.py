@@ -414,19 +414,25 @@ def _non_rated_card(
     )
 
 
-async def _resolve_user_league(db: AsyncSession, user_id: uuid.UUID) -> League | None:
-    """The league whose story a NON-rated user's card tells — the default league
-    they belong to, else the oldest one they belong to, else ``None``.
+async def _pick_user_rating_row(
+    db: AsyncSession, user_id: uuid.UUID, *, rated_only: bool
+) -> UserLeagueRating | None:
+    """The user's headline ``UserLeagueRating`` row — their default league's, else
+    the oldest league they belong to, else ``None``. Eager-loads the league and its
+    strategy so callers read ``is_automatic`` without an extra round trip.
 
-    Unlike ``_resolve_user_rating`` this is NOT gated on ``is_rated_member()``: every
-    member seeds a ``UserLeagueRating`` row on join whether or not anything has moved
-    it, and it is precisely the unrated members this resolves for. Eager-loads the
-    strategy so the caller can read ``is_automatic`` (UNRATED vs AWAITING_IMPORT)
-    without another round trip.
+    ``rated_only`` gates both reads on ``is_rated_member()``. The rated card resolver
+    passes ``True`` so "no row" and "a row holding nothing but the seed the league
+    handed them on join" both answer ``None`` (no card); without the gate the
+    default-league branch always hits — every user is seeded there the moment their
+    session is minted — and the oldest-league fallback is dead code. The non-rated
+    resolver passes ``False``, because every member seeds a row on join whether or
+    not anything has moved it, and it is precisely those unrated members it resolves.
     """
     options = (
         selectinload(UserLeagueRating.league).selectinload(League.rating_strategy),
     )
+    gate = (is_rated_member(),) if rated_only else ()
     default = (
         await db.execute(
             select(UserLeagueRating)
@@ -434,49 +440,7 @@ async def _resolve_user_league(db: AsyncSession, user_id: uuid.UUID) -> League |
             .where(
                 UserLeagueRating.user_id == user_id,
                 League.is_default.is_(True),
-            )
-            .options(*options)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if default is not None:
-        return default.league
-    row = (
-        await db.execute(
-            select(UserLeagueRating)
-            .where(UserLeagueRating.user_id == user_id)
-            .options(*options)
-            .order_by(UserLeagueRating.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return None if row is None else row.league
-
-
-async def _resolve_user_rating(
-    db: AsyncSession, user_id: uuid.UUID
-) -> UserLeagueRating | None:
-    # The default league's rating first; failing that, the oldest league the user
-    # is actually rated in, so a player who only plays on a side ladder still gets
-    # a card — for THAT ladder. Eager-load the league and strategy so the caller
-    # can read is_automatic without an extra round trip.
-    #
-    # Both reads are gated on ``is_rated_member()``, so "no row" and "a row holding
-    # nothing but the seed the league handed them on join" answer the same way:
-    # ``None``, and no card. Without it the default-league branch always hits — every
-    # user is seeded there the moment their session is minted — and the fallback
-    # below was dead code for everyone.
-    options = (
-        selectinload(UserLeagueRating.league).selectinload(League.rating_strategy),
-    )
-    default = (
-        await db.execute(
-            select(UserLeagueRating)
-            .join(League, League.id == UserLeagueRating.league_id)
-            .where(
-                UserLeagueRating.user_id == user_id,
-                League.is_default.is_(True),
-                is_rated_member(),
+                *gate,
             )
             .options(*options)
             .limit(1)
@@ -489,13 +453,31 @@ async def _resolve_user_rating(
             select(UserLeagueRating)
             .where(
                 UserLeagueRating.user_id == user_id,
-                is_rated_member(),
+                *gate,
             )
             .options(*options)
             .order_by(UserLeagueRating.created_at.asc())
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def _resolve_user_league(db: AsyncSession, user_id: uuid.UUID) -> League | None:
+    """The league whose story a NON-rated user's card tells — ungated by
+    ``is_rated_member()`` (the unrated members are exactly who it resolves for; see
+    ``_pick_user_rating_row``)."""
+    row = await _pick_user_rating_row(db, user_id, rated_only=False)
+    return None if row is None else row.league
+
+
+async def _resolve_user_rating(
+    db: AsyncSession, user_id: uuid.UUID
+) -> UserLeagueRating | None:
+    """The user's headline rated card row, gated on ``is_rated_member()`` (see
+    ``_pick_user_rating_row``): the default league's rating first, else the oldest
+    league they are actually rated in, so a side-ladder-only player still gets a
+    card for THAT ladder."""
+    return await _pick_user_rating_row(db, user_id, rated_only=True)
 
 
 async def _spark(

@@ -398,12 +398,17 @@ function xDomain(
   windowStart: number,
   pointTimes: number[],
 ): XDomain {
-  const fullMin = Math.min(windowStart, ...pointTimes)
-  const full: XDomain = { xMin: fullMin, xMax: now, collapsed: false }
+  // `Math.min(...[])` is `Infinity`, so on an empty series `fullMin` falls back
+  // to `windowStart` and the early return below fires before `minPoint` is used.
+  const minPoint = Math.min(...pointTimes)
+  const full: XDomain = {
+    xMin: Math.min(windowStart, minPoint),
+    xMax: now,
+    collapsed: false,
+  }
 
   if (window.anchor || pointTimes.length === 0) return full
 
-  const minPoint = Math.min(...pointTimes)
   const reach = now - minPoint
   const rangeSpan = RANGE_DAYS[range] * DAY_MS
   if (reach >= COLLAPSE_RANGE_FRACTION * rangeSpan) return full

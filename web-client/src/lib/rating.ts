@@ -71,3 +71,11 @@ export function emptyRatingDeltaAria(
     ? RATING_DELTA_EMPTY_ARIA.noChange
     : RATING_DELTA_EMPTY_ARIA.undecided
 }
+
+/** The rank line — "#3 of 42": the player's 1-based position out of the rated
+ * population it's drawn from. Always both halves, never a naked "#3" (which in a
+ * twelve-player league flatters). Shared by the dashboard rating card and the
+ * profile standing so the format cannot drift (#959, ADR 20260725). */
+export function formatRankOfPopulation(rank: number, rankOf: number): string {
+  return `#${rank} of ${rankOf}`
+}
