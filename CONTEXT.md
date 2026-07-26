@@ -442,8 +442,8 @@ is the schedule's concern).
 **Results**:
 How an event turned out, computed for display — a concept **universal across draw
 types but shaped differently by each**: a round-robin's results are its
-**standings**; a single-elimination's (later) are its final placement and
-**champion**. Computed **live from the fixtures' completed matches**, so a
+**standings**; a single-elimination's are its **finishes** (and its
+**champion**). Computed **live from the fixtures' completed matches**, so a
 **correction** or **voided match** is reflected at once — never stored, never a
 snapshot. An event is **complete** when every fixture is **decided**; only then
 are its results final. Each draw type computes its own results shape; the display
@@ -461,9 +461,25 @@ _Avoid_: ranking (a **rank** is a league rating position; standings live inside 
 pool), league table, points diff (points are not modelled — the finest
 granularity is a **game**, so it is *game* difference).
 
+**Finish**:
+The single-elimination **shape** of an event's **results**: each entrant's
+**finishing position** in the bracket, derived from the **round it was
+eliminated in** — champion (1st), runner-up (2nd, the final's loser), then the
+semifinal losers (tied 3rd), the quarterfinal losers (tied 5th), and so on.
+Same-round losers **tie**: single-elimination genuinely does not rank them
+against each other, so a shared position is honest, not a missing tiebreak.
+Computed **live from completed fixtures**, like all **results**. On the wire the
+results block is a discriminated union tagged by shape — `standings` for a
+round-robin, `finishes` for a single-elimination.
+_Avoid_: **placement** (that is a **match**'s spot in the **schedule** — table
+and time — an unrelated concept; a finish is an *entrant*'s standing in the
+bracket), standings (the round-robin shape), rank (a league rating position),
+seed (a seed is an *input* to the draw; a finish is its *outcome*).
+
 **Champion**:
 The entrant atop a **complete** event's **results** — for a round-robin, first in
-the **standings**. **Derived, never stored**: a **correction** can re-crown, so
+the **standings**; for a single-elimination, the undefeated entrant, first in the
+**finishes**. **Derived, never stored**: a **correction** can re-crown, so
 the champion is always read from the current results.
 _Avoid_: winner (a **winner** is one side of one match; the champion is the whole
 event's), first place.
@@ -495,7 +511,9 @@ match). Its constraints (table belongs to the pool, time inside the window, no t
 player double-booked) are **not invariants** and never hard-block: a pool's tables and
 window even stay editable under a standing draw, stranding placements a later edit
 outranges. They are judged as **flags derived on read**, never silently rewritten.
-_Avoid_: schedule slot, booking, appointment, start time (it is a *predicted* start).
+_Avoid_: schedule slot, booking, appointment, start time (it is a *predicted* start),
+finish (a **Finish** is an *entrant*'s finishing position in a bracket's **results** —
+an outcome, not a schedule cell).
 
 **Pinned / free** (scheduler-era):
 Once the **scheduler** exists, a **placement** is **free** — the solver may move it —

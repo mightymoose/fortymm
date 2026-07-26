@@ -357,6 +357,142 @@ class RoundRobinStrategy:
         return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
 
 
+@dataclass(frozen=True, slots=True)
+class SingleElimStrategy:
+    """Single-elimination: one bracket, lose once and you are out (ADR-0785).
+
+    The cut pads the field to the next power of two ``B`` and lays the seeds into the
+    bracket by the **standard recursive seeding** (:func:`_seed_slots`), so the top seed
+    can only meet the second in the final, the 3/4 seeds in the semifinals, and so on.
+    The ``B − N`` byes fall on the top ``B − N`` seeds for free — a round-1 slot paired
+    against a phantom seat past ``N``.
+
+    A **bye is absence** (ADR-0786), never a ``NULL`` side: a byed seed has *no* round-1
+    fixture and is seated directly onto its round-2 side at cut time. Every later round
+    is emitted up front with its sides ``None`` (TBD), except a side a bye already makes
+    known — so three round-2 shapes exist at the cut: both feeders played (``NULL``),
+    one bye + one feeder (one side pre-filled), and both feeders byes (a fully-known
+    fixture that materializes at go-live like any other).
+
+    This is the first strategy whose :meth:`advance` does real work. Round-robin knows
+    every pairing at the cut; single-elim does not, so a decided fixture seats a winner
+    **forward** into its successor slot, one result at a time. It stays idempotent — a
+    side already filled is not re-filled — so re-running it after every result is safe.
+    """
+
+    def plan_initial(
+        self, config: DrawConfig, ordered_entrants: Sequence[OrderedEntrant]
+    ) -> list[PlannedFixture]:
+        entrants = list(ordered_entrants)
+        size = len(entrants)
+        if size < 2:
+            # Mirrors round-robin's per-pool floor: a bracket of one has no fixtures and
+            # is not a competition. The message is director-facing copy (the endpoint's
+            # ``_draw_refusal`` passes a ``DegenerateDraw``'s message through),
+            # so it names the fix, not the internals.
+            raise DegenerateDraw(
+                "A single-elimination draw needs at least 2 entrants — a bracket of "
+                "one has nobody to play."
+            )
+        seed_entry = {entrant.position: entrant.entry_id for entrant in entrants}
+
+        # ``bracket`` = smallest power of two ≥ N; ``rounds`` = its depth (log2).
+        bracket = 1
+        while bracket < size:
+            bracket <<= 1
+        rounds = bracket.bit_length() - 1
+        slots = _seed_slots(bracket)
+
+        fixtures: list[PlannedFixture] = []
+        # A byed seed is seated straight onto its round-2 side here, keyed
+        # ``(round-2 position, side)`` — the round-2 fixtures are emitted below with
+        # exactly these sides pre-filled and the rest left TBD.
+        seated_by_bye: dict[tuple[int, Side], EntryId] = {}
+
+        for pair_index in range(bracket // 2):
+            # ``position`` is the **full-bracket** slot index, 1-based, *not* a
+            # contiguous 1..k renumbering of the surviving matches: it is what makes the
+            # successor arithmetic (:func:`_successor`, ``ceil(position / 2)``) feed the
+            # right round-2 fixture, and a byed seed is placed by the *same* arithmetic,
+            # so the two agree. A round-1 slot that is a bye simply leaves a gap here.
+            position = pair_index + 1
+            first, second = slots[2 * pair_index], slots[2 * pair_index + 1]
+            top, bottom = min(first, second), max(first, second)
+            if bottom <= size:
+                # Two real seeds: a genuine round-1 match. Top seat = ``entry_a`` for
+                # readability only — the successor side is decided by ``position``, not
+                # by which seed is ``a``.
+                fixtures.append(
+                    PlannedFixture(
+                        pool_id=None,
+                        round=1,
+                        position=position,
+                        entry_a_id=seed_entry[top],
+                        entry_b_id=seed_entry[bottom],
+                    )
+                )
+            else:
+                # One phantom (``bottom`` > N; two phantoms cannot happen when
+                # ``bracket`` is the smallest power of two ≥ N). The real ``top`` seed
+                # byes straight into round 2.
+                _, successor_position, side = _successor(1, position)
+                seated_by_bye[(successor_position, side)] = seed_entry[top]
+
+        if rounds >= 2:
+            for position in range(1, bracket // 4 + 1):
+                fixtures.append(
+                    PlannedFixture(
+                        pool_id=None,
+                        round=2,
+                        position=position,
+                        entry_a_id=seated_by_bye.get((position, Side.a)),
+                        entry_b_id=seated_by_bye.get((position, Side.b)),
+                    )
+                )
+        for round_number in range(3, rounds + 1):
+            for position in range(1, (bracket >> round_number) + 1):
+                fixtures.append(
+                    PlannedFixture(pool_id=None, round=round_number, position=position)
+                )
+        return fixtures
+
+    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
+        """Seat every decided fixture's winner into its successor slot, plus report the
+        fixtures now ready to materialize.
+
+        Idempotent: it seats only sides that are still empty, so re-running it over a
+        state its own last plan was applied to fills nothing. The final round has no
+        successor — its winner is the **champion**, read through the results, never
+        seated anywhere — which falls out for free: its computed successor
+        ``(round, position)`` names no persisted fixture, so nothing is filled.
+        """
+        by_round_position = {(f.round, f.position): f for f in fixtures}
+        side_fills: list[SideFill] = []
+        for fixture in fixtures:
+            if fixture.winner_entry_id is None:
+                continue
+            successor_round, successor_position, side = _successor(
+                fixture.round, fixture.position
+            )
+            successor = by_round_position.get((successor_round, successor_position))
+            if successor is None:
+                continue  # the final has no successor — its winner is the champion
+            already = successor.entry_a_id if side is Side.a else successor.entry_b_id
+            if already is not None:
+                continue  # already seated — the source of idempotence
+            side_fills.append(
+                SideFill(
+                    fixture_id=successor.fixture_id,
+                    side=side,
+                    entry_id=fixture.winner_entry_id,
+                )
+            )
+        return AdvancePlan(
+            side_fills=tuple(side_fills),
+            ready_fixture_ids=ready_fixtures(fixtures),
+        )
+
+
 def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     """The fixtures that should now become matches: **both sides known**, no match yet,
     not already decided.
@@ -401,12 +537,9 @@ def strategy_for(draw_type: DrawType) -> DrawStrategy:
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinStrategy()
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
+        case DrawType.single_elim:
+            return SingleElimStrategy()
+        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
             raise UnsupportedDrawType(draw_type)
 
 
@@ -486,3 +619,51 @@ def _circle_method(pool_id: PoolId, members: Sequence[EntryId]) -> list[PlannedF
         circle = [circle[0], circle[-1], *circle[1:-1]]
 
     return fixtures
+
+
+def _seed_slots(bracket_size: int) -> list[int]:
+    """The **standard single-elimination seeding order** for a bracket of
+    ``bracket_size`` slots (a power of two): the 1-based seed positions laid out
+    top-to-bottom, so pairing the adjacent slots — (1st, 2nd), (3rd, 4th), … — gives
+    round 1, and the top two seeds can only meet in the final.
+
+    Built by the classic recursion ``[1, 2] → [1, 4, 3, 2] → [1, 8, 5, 4, 3, 6, 7, 2]
+    → …`` (ADR-0785): each round doubles the field, replacing every slot ``s`` with the
+    pair ``(s, total − s)`` whose members sum to ``total = 2·len + 1`` — the invariant
+    that keeps every seed as far as possible from its nearest rival. The pair is written
+    strong-first on even indices and strong-second on odd, which threads the sequence
+    into the familiar ``1, 8, 5, 4, …`` bracket order rather than a mirror of it (so the
+    quarter- and half-groupings match a printed bracket, e.g. a 16-slot bracket's
+    round-1 seatings are 1-16, 8-9, 5-12, 4-13, 3-14, 6-11, 7-10, 2-15).
+
+    A pure function of seed *positions* — it never sees an entry id — so it is
+    unit-tested on its own and reused wherever a bracket shape is needed.
+    """
+    slots = [1]
+    while len(slots) < bracket_size:
+        total = 2 * len(slots) + 1
+        expanded: list[int] = []
+        for index, seed in enumerate(slots):
+            pair = (seed, total - seed) if index % 2 == 0 else (total - seed, seed)
+            expanded.extend(pair)
+        slots = expanded
+    return slots
+
+
+def _successor(round_number: int, position: int) -> tuple[int, int, Side]:
+    """Where the winner of the fixture at ``(round_number, position)`` goes: the next
+    round, slot ``ceil(position / 2)``, and side ``a`` for odd ``position`` else ``b``.
+
+    The whole of single-elimination's topology, kept as *arithmetic on the coordinates*
+    rather than a stored ``next_slot_id`` (ADR-0786): the two fixtures at positions
+    ``2k − 1`` and ``2k`` feed the two sides of the single fixture at position ``k`` one
+    round on. Both the cut (seating a byed seed onto round 2) and
+    :meth:`SingleElimStrategy.advance` (seating a winner forward) go through this one
+    function, which keeps a byed seed and a played feeder landing on the two sides of
+    the same successor.
+    """
+    return (
+        round_number + 1,
+        (position + 1) // 2,
+        Side.a if position % 2 == 1 else Side.b,
+    )

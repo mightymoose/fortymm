@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import strategy_for
+from app.draws import Side, SideFill, ready_fixtures, strategy_for
 from app.models import (
     Match,
     MatchSettings,
@@ -82,12 +82,14 @@ async def materialize_event(
     (``app.tournament_advancement``, #789), which re-runs it after every result so a
     fixture made ready by a decided one becomes a match at once.
 
-    It consumes only ``ready_fixture_ids``, never ``advance()``'s ``side_fills``. For
-    round-robin — the only strategy today — the plan carries no side-fills at all (every
-    pairing is known at the cut), so there is nothing to drop. Applying the side-fills a
-    *future* strategy would emit (single-elim seating a winner into the next round,
-    #785) is that strategy's slice to add here; it is deferred with the strategy it
-    belongs to.
+    It applies ``advance()``'s ``side_fills`` **before** deciding readiness, then
+    recomputes readiness (via ``app.draws.ready_fixtures`` — the same helper
+    ``advance()`` reports in ``ready_fixture_ids``) over the now-filled state so a
+    fixture the fills just made whole (single-elim seating a decided fixture's winner
+    onto its successor, #785) is materialized into a match in the **same** transaction.
+    For round-robin — the only other strategy today — the plan carries no side-fills at
+    all (every pairing is known at the cut), so that step is a no-op and its behaviour
+    is byte-identical.
     """
     fixtures = (
         (
@@ -103,16 +105,32 @@ async def materialize_event(
         # this is unreachable on that path (every event has a current draw). Guarding it
         # keeps the function honest for a future caller that has no such precondition.
         return
-    plan = strategy_for(event.draw_type).advance([fixture_state(f) for f in fixtures])
-    ready = set(plan.ready_fixture_ids)
-    ready_fixtures = [f for f in fixtures if f.id in ready]
-    if not ready_fixtures:
+    strategy = strategy_for(event.draw_type)
+    plan = strategy.advance([fixture_state(f) for f in fixtures])
+    # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
+    # fixture made whole by them seats its match in this same transaction. A fill only
+    # ever seats a still-empty side (``advance()`` never plans one over a filled side,
+    # and ``_apply_side_fill``'s guard makes a re-application a no-op), which is what
+    # keeps the whole advance idempotent; round-robin plans no fills, so this loop does
+    # nothing and its materialization is unchanged.
+    fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
+    for fill in plan.side_fills:
+        _apply_side_fill(fixtures_by_id[fill.fixture_id], fill)
+    # Readiness is decided by ``ready_fixtures`` — the shared helper ``advance()``
+    # itself returns as ``ready_fixture_ids``, not a hand-rolled "both sides known?" —
+    # now over the just-filled state, so the one definition of readiness is honoured and
+    # a fixture the fills completed is seen ready here. Fills only add sides (never a
+    # match or a winner), so this recomputed ready set is a superset of the first
+    # plan's and needs no second side-fill pass beyond the loop above.
+    ready = set(ready_fixtures([fixture_state(f) for f in fixtures]))
+    ready_fixture_rows = [f for f in fixtures if f.id in ready]
+    if not ready_fixture_rows:
         return
 
-    entry_users = await _entry_user_ids(db, ready_fixtures)
+    entry_users = await _entry_user_ids(db, ready_fixture_rows)
     settings = EventMatchSettings.model_validate(event.match_settings)
     built: list[tuple[TournamentFixture, Match]] = []
-    for fixture in ready_fixtures:
+    for fixture in ready_fixture_rows:
         # A ready fixture always has both sides known (that is what "ready" means); the
         # guard narrows the Optional for the type checker and can never actually skip a
         # fixture ``advance()`` reported ready.
@@ -157,6 +175,24 @@ async def _entry_user_ids(
         )
     ).all()
     return {entry_id: user_id for entry_id, user_id in rows}
+
+
+def _apply_side_fill(fixture: TournamentFixture, fill: SideFill) -> None:
+    """Seat ``fill``'s entry onto the named side of ``fixture`` — but only if that side
+    is still empty.
+
+    The empty-side guard is what keeps re-running the advance a no-op: ``advance()``
+    never plans a fill over a side it can already see filled, so a fill that finds one
+    filled is a re-application of a plan already applied and must not overwrite it
+    (least of all with a *different* entry). Side ``a`` ↔ ``entry_a_id`` and side ``b``
+    ↔ ``entry_b_id`` — the same fixed convention the match's side 1 ← ``entry_a`` /
+    side 2 ← ``entry_b`` seating reads back to map a winner to its entry (#788/#789).
+    """
+    if fill.side is Side.a:
+        if fixture.entry_a_id is None:
+            fixture.entry_a_id = fill.entry_id
+    elif fixture.entry_b_id is None:
+        fixture.entry_b_id = fill.entry_id
 
 
 def _build_match(

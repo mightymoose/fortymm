@@ -29,17 +29,19 @@ honestly-noted simplification, ADR).
 
 **Draw coverage is round-robin only; every other type is refused loud (ADR).**
 Every event's draw is planned by :func:`app.draws.strategy_for` — the single
-source of truth production's own ``cut_draw`` uses — with no special-casing:
+source of truth production's own ``cut_draw`` uses:
 
 * **round-robin** — the whole draw is planned;
-* **every other draw type** (single-/double-elim, swiss, **and rr-then-ko**) —
-  :func:`app.draws.strategy_for` raises :class:`~app.draws.UnsupportedDrawType`
-  (they are enum stubs — production genuinely cannot draw them), and the builder
-  lets it propagate: the whole preview is refused loud rather than producing a
-  partial, misleading snapshot. A preview must run the *same* engine as
-  production, so it cannot invent a pool-stage draw for a type production can't
-  cut. (When ``draws.py`` grows an rr-then-ko strategy, this builder covers it
-  for free, with no change here.)
+* **every other draw type** — refused loud with
+  :class:`~app.draws.UnsupportedDrawType`, so the whole preview fails rather than
+  producing a partial, misleading snapshot. double-elim / swiss / rr-then-ko are
+  enum stubs :func:`app.draws.strategy_for` still refuses outright; single-elim now
+  *has* a draw strategy (#785) — its bracket can be cut — but the table scheduler is
+  pool-based and cannot place a pool-less bracket yet, so this builder gates it
+  explicitly (an exhaustive ``match`` on ``DrawType`` that plans only round-robin)
+  and refuses it the same way. A preview must run the *same* engine as production and
+  cannot invent a schedule for a format the solver cannot place. (When single-elim
+  scheduling lands, that gate is where it opens up.)
 
 The per-event :class:`EventFieldSummary` (the count used) is returned alongside
 the snapshot so :mod:`app.schedule_preview_solve` composes the preview's
@@ -52,14 +54,16 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import assert_never
 
 from app.draws import (
     EntryId,
     OrderedEntrant,
     PlannedFixture,
+    UnsupportedDrawType,
     strategy_for,
 )
-from app.models.tournament import Tournament, TournamentEvent
+from app.models.tournament import DrawType, Tournament, TournamentEvent
 from app.scheduling import (
     EventId,
     EventSettings,
@@ -237,12 +241,27 @@ def build_preview_snapshot(
             for offset in range(field_size)
         ]
         next_entrant += field_size
-        # The real draw, dispatched exactly as production's ``cut_draw`` does —
-        # round-robin plans its whole draw; every other type (elim, swiss,
-        # rr-then-ko) raises ``UnsupportedDrawType``, which propagates.
-        fixtures = strategy_for(event.draw_type).plan_initial(
-            draw_config(event), ordered_entrants
-        )
+        # The real draw, dispatched exactly as production's ``cut_draw`` does. The table
+        # scheduler is round-robin-only (ADR): single-elim now *has* a draw strategy
+        # (#785) — its bracket can be cut — but a pool-less bracket has no windows to
+        # solve over yet, so the preview refuses every non-round-robin type loud, the
+        # same ``UnsupportedDrawType`` it raised before single-elim had one, rather
+        # than invent a grid the solver cannot place. (double-elim / swiss / rr-then-ko
+        # still raise from ``strategy_for`` itself.)
+        match event.draw_type:
+            case DrawType.round_robin:
+                fixtures = strategy_for(event.draw_type).plan_initial(
+                    draw_config(event), ordered_entrants
+                )
+            case (
+                DrawType.single_elim
+                | DrawType.double_elim
+                | DrawType.rr_then_ko
+                | DrawType.swiss
+            ):
+                raise UnsupportedDrawType(event.draw_type)
+            case _:
+                assert_never(event.draw_type)
         plans.append(
             _EventPlan(
                 event=event,

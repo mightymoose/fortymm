@@ -22,7 +22,7 @@
 // All of it is a pure function of one event, so it is unit-tested (`./standings.test.ts`)
 // rather than asserted through a DOM.
 
-import { WITHDRAWN_LABEL } from './draw'
+import { nameByEntryId, nameOf } from './entrant-names'
 import type { StandingRow, TournamentEvent } from './types'
 
 /** One standings line, ready to render: the server's row, plus the entrant's name joined
@@ -56,12 +56,6 @@ export interface StandingsView {
   champion: string | null
 }
 
-/** Join one entry id to a display name. An id the event no longer lists is a withdrawal
- * (`WITHDRAWN_LABEL`, shared with `./draw`) — never a blank, and never the raw id. */
-function nameOf(entryId: string, byId: Map<string, string>): string {
-  return byId.get(entryId) ?? WITHDRAWN_LABEL
-}
-
 /**
  * An event's results, shaped for the reader — or `null` when the event has none (an uncut
  * or non-round-robin event; `results` is `null` on the wire, and this returns `null`
@@ -75,9 +69,12 @@ function nameOf(entryId: string, byId: Map<string, string>): string {
  */
 export function eventStandings(event: TournamentEvent): StandingsView | null {
   const results = event.results
-  if (results === null) return null
+  // Only the `standings` arm of the results union stands here (ADR-0785). `null` (no
+  // results) and the `finishes` arm (single-elimination — a placement list, `./finishes`)
+  // both render nothing off this view-model.
+  if (results === null || results.kind !== 'standings') return null
 
-  const nameByEntryId = new Map(event.entrants.map((e) => [e.id, e.username]))
+  const names = nameByEntryId(event)
   const poolNameById = new Map(event.pools.map((p) => [p.id, p.name]))
 
   const pools = results.pools.map(
@@ -90,7 +87,7 @@ export function eventStandings(event: TournamentEvent): StandingsView | null {
       rows: pool.rows.map(
         (row): StandingLine => ({
           ...row,
-          name: nameOf(row.entryId, nameByEntryId),
+          name: nameOf(row.entryId, names),
         }),
       ),
       complete: pool.complete,
@@ -101,6 +98,6 @@ export function eventStandings(event: TournamentEvent): StandingsView | null {
     pools,
     complete: results.complete,
     champion:
-      results.champion === null ? null : nameOf(results.champion, nameByEntryId),
+      results.champion === null ? null : nameOf(results.champion, names),
   }
 }

@@ -14,13 +14,17 @@ it reads out.
 
 Like ``app.draws`` this module is **pure**: it holds no session, issues no query, and
 imports no SQLAlchemy construct. Its whole input is small frozen value objects
-(:class:`MatchOutcome`, grouped into :class:`PoolInput`) that the persistence layer
-projects from the fixtures' **currently-completed** matches — so nothing here is a
-snapshot, and a corrected or voided match re-orders the standings the instant it leaves
-``completed``, with no bookkeeping to keep in step (ADR-0788, "everything derives from
-the live matches").
+(:class:`MatchOutcome`, grouped into :class:`PoolInput` for a round-robin or
+:class:`BracketFixture` for a single-elim bracket) that the persistence layer projects
+from the fixtures' **currently-completed** matches — so nothing here is a snapshot, and
+a corrected or voided match re-derives the results the instant it leaves ``completed``,
+with no bookkeeping to keep in step (ADR-0788, "everything derives from the matches").
 
-This slice implements only :class:`RoundRobinResults`.
+Two arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
+table per pool, and :class:`SingleElimResults` (ADR-0785), whose shape is the bracket's
+**finishes** — each entrant's finishing position by the round it was eliminated in. The
+two shapes cross the wire as a discriminated union tagged by ``kind`` (ADR-0785); here
+they are simply two different value objects returned by two ``tabulate`` methods.
 """
 
 from __future__ import annotations
@@ -72,6 +76,18 @@ class MatchOutcome:
             self.entry_a_id
             if self.entry_a_games > self.entry_b_games
             else self.entry_b_id
+        )
+
+    @property
+    def loser_entry_id(self) -> EntryId:
+        """The other side of :attr:`winner_entry_id` — whichever entry took fewer
+        games. A decided match has no tie (odd best-of), so the lower count is always
+        the loser; single-elim's finishes read a fixture's loser straight off this,
+        since losing is exactly what places you (ADR-0785)."""
+        return (
+            self.entry_b_id
+            if self.entry_a_games > self.entry_b_games
+            else self.entry_a_id
         )
 
 
@@ -144,6 +160,58 @@ class EventResults:
     champion: EntryId | None
 
 
+@dataclass(frozen=True, slots=True)
+class BracketFixture:
+    """One single-elimination fixture as the **finishes** need to see it: its round and,
+    when its match is decided, that outcome.
+
+    An *undecided* fixture still appears (``outcome is None``) — its ``round`` is what
+    fixes the bracket's **depth**, the final round from which every finishing position
+    is measured, before anybody has reached it. Byes are not represented at all: a bye
+    is the *absence* of a fixture (ADR-0786), and it needs no representation here — a
+    byed entrant still loses (or wins) in some real later-round fixture, which places
+    them. ``round`` is 1-based; the largest round across the bracket is its final.
+    """
+
+    round: int
+    outcome: MatchOutcome | None
+
+
+@dataclass(frozen=True, slots=True)
+class FinishRow:
+    """One entrant's **finish**: its finishing position and the round it was eliminated
+    in (``None`` for the champion, who was never eliminated).
+
+    ``position`` is 1-based and is **shared by same-round losers** — the two semifinal
+    losers both carry ``3`` — so it is deliberately *not* distinct per row: single-elim
+    genuinely does not rank same-round losers against each other, and inventing a
+    tiebreak (seed, game-difference) would fabricate an order the format never produced
+    (ADR-0785).
+    """
+
+    entry_id: EntryId
+    position: int
+    eliminated_in_round: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class BracketFinishes:
+    """A single-elimination event's results: its entrants' :class:`FinishRow`\\ s ranked
+    by position, whether the whole bracket is decided, and its champion when there is
+    one.
+
+    Only *placed* entrants appear in ``finishes`` — every loser of a decided fixture,
+    plus the champion once the final is decided. An entrant still alive in a
+    partially-played bracket has no finish yet and is simply absent (a partial result,
+    live like the standings). ``champion`` is the final's winner — finish position ``1``
+    — and ``None`` until the final is decided.
+    """
+
+    finishes: tuple[FinishRow, ...]
+    complete: bool
+    champion: EntryId | None
+
+
 @dataclass(slots=True)
 class _Stat:
     """A mutable per-entry accumulator — private to the tabulation, never returned."""
@@ -170,7 +238,7 @@ _TIEBREAKERS: tuple[Callable[[_Stat], int], ...] = (
 )
 
 
-def results_for(draw_type: DrawType) -> RoundRobinResults:
+def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
     """The results strategy for this draw type.
 
     An exhaustive ``match`` with **no catch-all**, exactly as
@@ -180,18 +248,20 @@ def results_for(draw_type: DrawType) -> RoundRobinResults:
     unimplemented. The formats without a strategy yet raise
     :class:`UnsupportedResultsType` — a catchable domain error, not a 500.
 
-    Only round-robin has one today, so the return type is concrete; a second draw type
-    lands its own strategy and widens this the way ``strategy_for`` already is.
+    The return type is a **union tagged by shape** (ADR-0785): round-robin's
+    :class:`RoundRobinResults` reads out a **standings** table, single-elim's
+    :class:`SingleElimResults` reads out the bracket's **finishes**. A caller narrows
+    the union (an exhaustive ``match`` over the two concrete strategies) to call the
+    right ``tabulate`` — so a third strategy is a type error at every call site until
+    handled. A further draw type lands its own strategy and widens this the way
+    ``strategy_for`` already is.
     """
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinResults()
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
+        case DrawType.single_elim:
+            return SingleElimResults()
+        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
             raise UnsupportedResultsType(draw_type)
 
 
@@ -222,6 +292,66 @@ class RoundRobinResults:
         if complete and len(standings) == 1 and standings[0].rows:
             champion = standings[0].rows[0].entry_id
         return EventResults(pools=standings, complete=complete, champion=champion)
+
+
+@dataclass(frozen=True, slots=True)
+class SingleElimResults:
+    """A single-elimination event's results: the bracket's **finishes** (ADR-0785).
+
+    Each entrant's finishing position is derived **live** from the completed fixtures by
+    the round it was eliminated in — a fixture's loser is placed by that round, the
+    final's winner is the champion (position 1). Positions come out
+    ``1, 2, 3, 3, 5, 5, 5, 5, …``: the final's loser is runner-up (2), the two semifinal
+    losers **tie 3rd**, the four quarterfinal losers **tie 5th**, and so on — a loser
+    eliminated ``k`` rounds before the final places ``2ᵏ + 1``, shared by all ``2ᵏ``
+    losers of that round. Nothing is snapshotted, so a correction or void that
+    un-completes a fixture drops its loser's finish (and can re-crown) on the next
+    read — the same live-derivation property :class:`RoundRobinResults` has.
+    """
+
+    def tabulate(self, fixtures: Sequence[BracketFixture]) -> BracketFinishes:
+        if not fixtures:
+            # No fixtures = uncut/empty bracket: no depth to measure from, no finishes.
+            return BracketFinishes(finishes=(), complete=False, champion=None)
+        final_round = max(fixture.round for fixture in fixtures)
+        decided = 0
+        champion: EntryId | None = None
+        rows: list[FinishRow] = []
+        for fixture in fixtures:
+            outcome = fixture.outcome
+            if outcome is None:
+                continue
+            decided += 1
+            # The loser is placed by the round they lost in; same-round losers share it.
+            rows.append(
+                FinishRow(
+                    entry_id=outcome.loser_entry_id,
+                    position=2 ** (final_round - fixture.round) + 1,
+                    eliminated_in_round=fixture.round,
+                )
+            )
+            if fixture.round == final_round:
+                # The final's winner is the champion — read from the result, position 1,
+                # never eliminated. There is exactly one final fixture, so this is set
+                # at most once.
+                champion = outcome.winner_entry_id
+        if champion is not None:
+            rows.append(
+                FinishRow(entry_id=champion, position=1, eliminated_in_round=None)
+            )
+        # Ranked by position; the entry id is the final *list*-order tiebreak so tied
+        # rows come out deterministically — without conferring an order on the tie
+        # itself (the shared ``position`` is what the reader sees).
+        rows.sort(key=lambda row: (row.position, _entry_id_order(row.entry_id)))
+        # Complete once every fixture is decided — which is exactly when the final is,
+        # so ``champion`` is non-None precisely then. A voided (never-completed) fixture
+        # holds the bracket incomplete, honestly: its winner was never seated forward,
+        # so the bracket genuinely has not resolved.
+        return BracketFinishes(
+            finishes=tuple(rows),
+            complete=decided == len(fixtures),
+            champion=champion,
+        )
 
 
 def _pool_standings(pool: PoolInput) -> PoolStandings:
@@ -312,4 +442,10 @@ def _scalar_key(stat: _Stat) -> tuple[int, ...]:
 
 
 def _entry_order(stat: _Stat) -> int:
-    return int.from_bytes(stat.entry_id.bytes, "big")
+    return _entry_id_order(stat.entry_id)
+
+
+def _entry_id_order(entry_id: EntryId) -> int:
+    """A total, deterministic order over entry ids — the final list-order tiebreak both
+    shapes fall back to so equal rows never come out in a nondeterministic order."""
+    return int.from_bytes(entry_id.bytes, "big")

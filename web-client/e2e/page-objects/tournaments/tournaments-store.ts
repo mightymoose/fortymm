@@ -29,7 +29,7 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
-type EventResultsRead = components['schemas']['EventResultsRead']
+type StandingsResultsRead = components['schemas']['StandingsResultsRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
  * generated schema's, not a re-typed union of four strings. */
@@ -275,7 +275,7 @@ const PLAY_FIELD = 5
  * The row entry ids are the JOURNEY event's own (`entry-1`, `entry-2`), so the FE's join to
  * a username lands — a table of raw ids would render, and prove nothing. Built through the
  * generated-schema-typed factory, so a change to the results contract reds this file. */
-const JOURNEY_RESULTS: EventResultsRead = buildEventResultsRead({
+const JOURNEY_RESULTS: StandingsResultsRead = buildEventResultsRead({
   complete: true,
   champion: 'entry-1',
   pools: [

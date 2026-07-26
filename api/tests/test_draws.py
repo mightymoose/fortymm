@@ -26,6 +26,9 @@ from app.draws import (
     PlannedFixture,
     PoolId,
     RoundRobinStrategy,
+    Side,
+    SideFill,
+    SingleElimStrategy,
     UnsupportedDrawType,
     order_entrants,
     ready_fixtures,
@@ -195,10 +198,14 @@ class TestStrategyRegistry:
     def test_round_robin_resolves_to_the_round_robin_strategy(self) -> None:
         assert isinstance(strategy_for(DrawType.round_robin), RoundRobinStrategy)
 
+    def test_single_elim_resolves_to_the_single_elim_strategy(self) -> None:
+        # The second implemented arm (ADR-0785): single-elim is no longer in the raising
+        # branch below.
+        assert isinstance(strategy_for(DrawType.single_elim), SingleElimStrategy)
+
     @pytest.mark.parametrize(
         "draw_type",
         [
-            DrawType.single_elim,
             DrawType.double_elim,
             DrawType.rr_then_ko,
             DrawType.swiss,
@@ -658,3 +665,341 @@ class TestReadyFixtures:
         assert RoundRobinStrategy().advance(fixtures) == AdvancePlan(
             side_fills=(), ready_fixture_ids=(ready.fixture_id,)
         )
+
+
+def _single_elim_round_one(
+    fixtures: list[PlannedFixture],
+) -> dict[int, frozenset[int]]:
+    """Round-1 matches as ``position → the pair of seeds``. Every round-1 fixture seats
+    two known seeds (a bye never makes a round-1 row), so both sides are non-``None``
+    here."""
+    return {
+        f.position: frozenset({_seed_of(f.entry_a_id), _seed_of(f.entry_b_id)})
+        for f in fixtures
+        if f.round == 1
+    }
+
+
+def _single_elim_round_two_prefills(
+    fixtures: list[PlannedFixture],
+) -> dict[tuple[int, str], int]:
+    """The round-2 sides a bye seated at cut time: ``(position, "a"/"b") → seed``. A
+    ``None`` side is TBD and left out — so this is exactly the byed seeds and where they
+    sit."""
+    prefills: dict[tuple[int, str], int] = {}
+    for f in fixtures:
+        if f.round != 2:
+            continue
+        if f.entry_a_id is not None:
+            prefills[(f.position, "a")] = _seed_of(f.entry_a_id)
+        if f.entry_b_id is not None:
+            prefills[(f.position, "b")] = _seed_of(f.entry_b_id)
+    return prefills
+
+
+# The bracket each K must cut, spelled out by hand (never recomputed, so a broken
+# seeding cannot agree with a broken expectation): the round-1 seed pairings by
+# position, the byed seeds and the round-2 side each lands on, and the per-round
+# fixture counts. The seeding is the standard recursive table
+# ``[1,2] → [1,4,3,2] → [1,8,5,4,3,6,7,2] → …`` (ADR-0785); byes fall on the top
+# ``B − N`` seeds.
+SINGLE_ELIM_MATRIX: list[
+    tuple[
+        int,
+        dict[int, frozenset[int]],
+        dict[tuple[int, str], int],
+        dict[int, int],
+    ]
+] = [
+    # K, round-1 pairings, round-2 bye seatings, per-round counts
+    (2, {1: frozenset({1, 2})}, {}, {1: 1}),
+    (3, {2: frozenset({2, 3})}, {(1, "a"): 1}, {1: 1, 2: 1}),
+    (4, {1: frozenset({1, 4}), 2: frozenset({2, 3})}, {}, {1: 2, 2: 1}),
+    (
+        5,
+        {2: frozenset({4, 5})},
+        # Seeds 1, 2, 3 bye; seed 1 into semifinal 1, and seeds 3 & 2 fill BOTH sides of
+        # semifinal 2 — a both-byes fixture that is fully known at the cut.
+        {(1, "a"): 1, (2, "a"): 3, (2, "b"): 2},
+        {1: 1, 2: 2, 3: 1},
+    ),
+    (
+        8,
+        {
+            1: frozenset({1, 8}),
+            2: frozenset({4, 5}),
+            3: frozenset({3, 6}),
+            4: frozenset({2, 7}),
+        },
+        {},
+        {1: 4, 2: 2, 3: 1},
+    ),
+    (
+        16,
+        {
+            1: frozenset({1, 16}),
+            2: frozenset({8, 9}),
+            3: frozenset({5, 12}),
+            4: frozenset({4, 13}),
+            5: frozenset({3, 14}),
+            6: frozenset({6, 11}),
+            7: frozenset({7, 10}),
+            8: frozenset({2, 15}),
+        },
+        {},
+        {1: 8, 2: 4, 3: 2, 4: 1},
+    ),
+]
+SINGLE_ELIM_IDS = [f"K={k}" for k, _, _, _ in SINGLE_ELIM_MATRIX]
+
+
+class TestSingleElimCut:
+    @pytest.mark.parametrize(
+        ("k", "round_one", "prefills", "counts"),
+        SINGLE_ELIM_MATRIX,
+        ids=SINGLE_ELIM_IDS,
+    )
+    def test_round_one_pairings_are_the_standard_seeding(
+        self,
+        k: int,
+        round_one: dict[int, frozenset[int]],
+        prefills: dict[tuple[int, str], int],
+        counts: dict[int, int],
+    ) -> None:
+        # Un-pooled: single-elim ignores ``pool_ids`` and every fixture carries a
+        # ``None`` pool ref.
+        fixtures = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k))
+
+        assert all(f.pool_id is None for f in fixtures)
+        assert _single_elim_round_one(fixtures) == round_one
+
+    @pytest.mark.parametrize(
+        ("k", "round_one", "prefills", "counts"),
+        SINGLE_ELIM_MATRIX,
+        ids=SINGLE_ELIM_IDS,
+    )
+    def test_byes_fall_on_the_top_seeds_and_seat_into_round_two(
+        self,
+        k: int,
+        round_one: dict[int, frozenset[int]],
+        prefills: dict[tuple[int, str], int],
+        counts: dict[int, int],
+    ) -> None:
+        fixtures = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k))
+
+        assert _single_elim_round_two_prefills(fixtures) == prefills
+        # A bye is absence, never a NULL round-1 side: the byed seeds are exactly the
+        # top ``B − N`` seeds, and they appear nowhere in round 1.
+        byed = set(prefills.values())
+        round_one_seeds = {s for pair in round_one.values() for s in pair}
+        assert byed.isdisjoint(round_one_seeds)
+        if byed:
+            assert byed == set(range(1, len(byed) + 1))  # the *top* seeds
+
+    @pytest.mark.parametrize(
+        ("k", "round_one", "prefills", "counts"),
+        SINGLE_ELIM_MATRIX,
+        ids=SINGLE_ELIM_IDS,
+    )
+    def test_per_round_fixture_counts(
+        self,
+        k: int,
+        round_one: dict[int, frozenset[int]],
+        prefills: dict[tuple[int, str], int],
+        counts: dict[int, int],
+    ) -> None:
+        fixtures = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k))
+
+        assert Counter(f.round for f in fixtures) == Counter(counts)
+        # ADR-0786: a 5-entrant single-elim persists 4 rows.
+        assert len(fixtures) == sum(counts.values())
+
+    @pytest.mark.parametrize(
+        ("k", "round_one", "prefills", "counts"),
+        SINGLE_ELIM_MATRIX,
+        ids=SINGLE_ELIM_IDS,
+    )
+    def test_the_top_two_seeds_can_only_meet_in_the_final(
+        self,
+        k: int,
+        round_one: dict[int, frozenset[int]],
+        prefills: dict[tuple[int, str], int],
+        counts: dict[int, int],
+    ) -> None:
+        # The defining property of a correct bracket: seeds 1 and 2 start in opposite
+        # halves, so their successor chains only converge at the final. Walk each seed's
+        # entry point (round-1 match or round-2 bye) up via ``ceil(position / 2)`` and
+        # confirm they share no fixture until the last round.
+        fixtures = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k))
+        final_round = max(f.round for f in fixtures)
+
+        path_one = _successor_path(fixtures, seed=1, final_round=final_round)
+        path_two = _successor_path(fixtures, seed=2, final_round=final_round)
+        shared = set(path_one) & set(path_two)
+        assert shared == {(final_round, 1)}, (
+            f"seeds 1 and 2 share {shared}, not just the final, for K={k}"
+        )
+
+    def test_the_five_entrant_both_byes_semifinal_is_fully_known(self) -> None:
+        # The three round-2 shapes at the cut, on one bracket: a played-feeder side that
+        # is TBD, a bye-filled side, and a semifinal with both sides byes — which
+        # is emitted fully known and will materialize at go-live like any other fixture.
+        fixtures = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(5))
+        by_rp = {(f.round, f.position): f for f in fixtures}
+
+        semi_with_a_feeder = by_rp[(2, 1)]
+        assert _seed_of(semi_with_a_feeder.entry_a_id) == 1  # bye
+        assert semi_with_a_feeder.entry_b_id is None  # TBD — the seed 4 v 5 winner
+
+        both_byes = by_rp[(2, 2)]
+        assert both_byes.entry_a_id is not None and both_byes.entry_b_id is not None
+        assert {_seed_of(both_byes.entry_a_id), _seed_of(both_byes.entry_b_id)} == {
+            2,
+            3,
+        }
+
+    def test_the_same_input_cuts_the_same_bracket_twice(self) -> None:
+        strategy = SingleElimStrategy()
+
+        assert strategy.plan_initial(
+            DrawConfig(), _ordered(11)
+        ) == strategy.plan_initial(DrawConfig(), _ordered(11))
+
+    @pytest.mark.parametrize("k", [1, 0], ids=["one-entrant", "no-entrants"])
+    def test_a_bracket_of_fewer_than_two_is_refused(self, k: int) -> None:
+        with pytest.raises(DegenerateDraw) as excinfo:
+            SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k))
+
+        assert isinstance(excinfo.value, DrawError)
+        assert str(excinfo.value) == (
+            "A single-elimination draw needs at least 2 entrants — a bracket of "
+            "one has nobody to play."
+        )
+
+
+def _successor_path(
+    fixtures: list[PlannedFixture], *, seed: int, final_round: int
+) -> list[tuple[int, int]]:
+    """The ``(round, position)`` coordinates a seed passes through if it wins out, from
+    its entry point (round-1 match, or the round-2 slot it byes onto) up to the final —
+    following the same ``ceil(position / 2)`` topology :func:`app.draws._successor`
+    encodes."""
+    entry_id = _entry_id(seed)
+    start: tuple[int, int] | None = None
+    for f in fixtures:
+        if f.entry_a_id == entry_id or f.entry_b_id == entry_id:
+            start = (f.round, f.position)
+            break
+    assert start is not None
+    round_number, position = start
+    path = [start]
+    while round_number < final_round:
+        round_number, position = round_number + 1, (position + 1) // 2
+        path.append((round_number, position))
+    return path
+
+
+class TestSingleElimAdvance:
+    def _persisted_bracket(self, k: int) -> list[FixtureState]:
+        return _persisted(SingleElimStrategy().plan_initial(DrawConfig(), _ordered(k)))
+
+    def _decide(
+        self,
+        fixtures: list[FixtureState],
+        *,
+        round: int,
+        position: int,
+        winner: EntryId,
+    ) -> list[FixtureState]:
+        """The same state with the fixture at ``(round, position)`` marked decided —
+        what the completion seam does before it re-runs ``advance``."""
+        return [
+            dataclasses.replace(f, winner_entry_id=winner)
+            if (f.round, f.position) == (round, position)
+            else f
+            for f in fixtures
+        ]
+
+    def test_an_odd_position_winner_seats_into_the_successors_a_side(self) -> None:
+        fixtures = self._persisted_bracket(8)
+        by_rp = {(f.round, f.position): f for f in fixtures}
+        winner = by_rp[(1, 1)].entry_a_id
+        assert winner is not None
+
+        plan = SingleElimStrategy().advance(
+            self._decide(fixtures, round=1, position=1, winner=winner)
+        )
+
+        # position 1 is odd → side a of round 2, position ceil(1/2) = 1.
+        assert plan.side_fills == (
+            SideFill(fixture_id=by_rp[(2, 1)].fixture_id, side=Side.a, entry_id=winner),
+        )
+
+    def test_an_even_position_winner_seats_into_the_successors_b_side(self) -> None:
+        fixtures = self._persisted_bracket(8)
+        by_rp = {(f.round, f.position): f for f in fixtures}
+        winner = by_rp[(1, 2)].entry_b_id
+        assert winner is not None
+
+        plan = SingleElimStrategy().advance(
+            self._decide(fixtures, round=1, position=2, winner=winner)
+        )
+
+        # position 2 is even → side b of round 2, position ceil(2/2) = 1.
+        assert plan.side_fills == (
+            SideFill(fixture_id=by_rp[(2, 1)].fixture_id, side=Side.b, entry_id=winner),
+        )
+
+    def test_advance_is_idempotent_once_the_seat_is_applied(self) -> None:
+        # THE idempotence claim: decide a fixture, apply the side-fill its advance
+        # proposed, feed the result back — the second advance seats nothing.
+        fixtures = self._persisted_bracket(8)
+        by_rp = {(f.round, f.position): f for f in fixtures}
+        winner = by_rp[(1, 1)].entry_a_id
+        assert winner is not None
+
+        decided = self._decide(fixtures, round=1, position=1, winner=winner)
+        applied = [
+            dataclasses.replace(f, entry_a_id=winner)
+            if (f.round, f.position) == (2, 1)
+            else f
+            for f in decided
+        ]
+
+        assert SingleElimStrategy().advance(applied).side_fills == ()
+
+    def test_a_champion_is_seated_nowhere_the_final_has_no_successor(self) -> None:
+        # A decided final must not seat its winner into a non-existent round after
+        # it — the champion is read through the results, never seated.
+        fixtures = self._persisted_bracket(4)
+        by_rp = {(f.round, f.position): f for f in fixtures}
+        # Fill the final's sides (as go-live would) and crown one side.
+        champion = _entry_id(1)
+        final = by_rp[(2, 1)]
+        decided_final = dataclasses.replace(
+            final,
+            entry_a_id=_entry_id(1),
+            entry_b_id=_entry_id(2),
+            winner_entry_id=champion,
+        )
+        state = [decided_final if f is final else f for f in fixtures]
+
+        assert SingleElimStrategy().advance(state).side_fills == ()
+
+    def test_a_freshly_cut_bracket_is_ready_exactly_where_both_sides_are_known(
+        self,
+    ) -> None:
+        # At the cut nothing is decided, so nothing is seated; readiness is exactly the
+        # fixtures whose sides are already known — the round-1 match and the both-byes
+        # semifinal — never the half-filled or wholly-TBD ones.
+        fixtures = self._persisted_bracket(5)
+        by_rp = {(f.round, f.position): f for f in fixtures}
+
+        plan = SingleElimStrategy().advance(fixtures)
+
+        assert plan.side_fills == ()
+        ready = set(plan.ready_fixture_ids)
+        assert by_rp[(1, 2)].fixture_id in ready  # the seed 4 v 5 match
+        assert by_rp[(2, 2)].fixture_id in ready  # both-byes semifinal, fully known
+        assert by_rp[(2, 1)].fixture_id not in ready  # one side still TBD
+        assert by_rp[(3, 1)].fixture_id not in ready  # final, both sides TBD

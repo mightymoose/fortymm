@@ -2148,29 +2148,56 @@ export interface components {
          */
         EventFormat: "singles" | "doubles" | "teams";
         /**
-         * EventResultsRead
-         * @description A round-robin event's results (ADR-0788): a standings table per pool, whether the
-         *     whole event is decided, and its champion when there is one.
+         * FinishRowRead
+         * @description One entrant's **finish** in a single-elimination bracket (ADR-0785): its
+         *     finishing position and the round it was eliminated in.
          *
-         *     It rides on the tournament-detail payload (one endpoint per page) and is **derived
-         *     live** from the fixtures' currently-completed matches — never a snapshot — so a
-         *     corrected or voided match re-orders the standings the instant it leaves
-         *     ``completed``.
+         *     The entrant is carried as an **id only**, exactly as a standings row and a fixture
+         *     are: the username behind ``entry_id`` is on the event's ``entrants`` list already,
+         *     keyed by that same id, so a client joins the two rather than reading a copy that
+         *     could drift.
          *
-         *     ``champion`` is the leader of a **complete, single-pool** event — a pure
-         *     round-robin's winner. A multi-pool round-robin has no single champion without a
-         *     knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
-         *     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
-         *     played.
-         *
-         *     ``results`` on the event is ``null`` for an event that has **no draw** (nothing to
-         *     stand) or one whose draw type has no results strategy yet (only round-robin does
-         *     today) — an honest "no results here", not an empty table that would read as a played
-         *     event with nobody in it.
+         *     ``position`` is 1-based and **shared by same-round losers** — the two semifinal
+         *     losers both carry ``3``, the four quarterfinal losers ``5`` — so it is deliberately
+         *     *not* distinct per row: single-elimination does not rank same-round losers against
+         *     each other. ``eliminated_in_round`` is the 1-based round the entrant lost in, and
+         *     ``null`` for the champion, never eliminated (their ``position`` is ``1``).
          */
-        EventResultsRead: {
-            /** Pools */
-            pools: components["schemas"]["PoolStandingsRead"][];
+        FinishRowRead: {
+            /**
+             * Entry Id
+             * Format: uuid
+             */
+            entry_id: string;
+            /** Position */
+            position: number;
+            /** Eliminated In Round */
+            eliminated_in_round: number | null;
+        };
+        /**
+         * FinishesResultsRead
+         * @description The **finishes** shape of an event's results (ADR-0785) — the single-elimination
+         *     arm of the ``results`` discriminated union, tagged ``kind: "finishes"``.
+         *
+         *     A ranked list of :class:`FinishRowRead` (position ascending, ties sharing a
+         *     position), whether the whole bracket is decided, and its champion when there is one.
+         *     Like every results shape it is **derived live** from the fixtures' completed
+         *     matches, so a correction or void re-derives it (and can re-crown) with no snapshot.
+         *
+         *     Only *placed* entrants appear in ``finishes``: every loser of a decided fixture,
+         *     plus the champion once the final is decided. An entrant still alive in a
+         *     partially-played bracket has no finish yet and is simply absent — a partial, live
+         *     result. ``champion`` is the final's winner (position 1) and ``null`` until the final
+         *     is decided.
+         */
+        FinishesResultsRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "finishes";
+            /** Finishes */
+            finishes: components["schemas"]["FinishRowRead"][];
             /** Complete */
             complete: boolean;
             /** Champion */
@@ -4126,6 +4153,36 @@ export interface components {
             readonly game_difference: number;
         };
         /**
+         * StandingsResultsRead
+         * @description The **standings** shape of an event's results (ADR-0788) — the round-robin arm
+         *     of the ``results`` discriminated union, tagged ``kind: "standings"``.
+         *
+         *     A standings table per pool, whether the whole event is decided, and its champion
+         *     when there is one. It rides on the tournament-detail payload (one endpoint per page)
+         *     and is **derived live** from the fixtures' currently-completed matches — never a
+         *     snapshot — so a corrected or voided match re-orders the standings the instant it
+         *     leaves ``completed``.
+         *
+         *     ``champion`` is the leader of a **complete, single-pool** event — a pure
+         *     round-robin's winner. A multi-pool round-robin has no single champion without a
+         *     knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+         *     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
+         *     played.
+         */
+        StandingsResultsRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "standings";
+            /** Pools */
+            pools: components["schemas"]["PoolStandingsRead"][];
+            /** Complete */
+            complete: boolean;
+            /** Champion */
+            champion: string | null;
+        };
+        /**
          * Status
          * @enum {string}
          */
@@ -4377,7 +4434,8 @@ export interface components {
             entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
-            results: components["schemas"]["EventResultsRead"] | null;
+            /** Results */
+            results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"]) | null;
             /**
              * Entered
              * @description The registration count. Derived — there is no stored counter (ADR-0016).

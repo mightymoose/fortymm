@@ -7,7 +7,9 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
-type EventResultsRead = components['schemas']['EventResultsRead']
+type StandingsResultsRead = components['schemas']['StandingsResultsRead']
+type FinishesResultsRead = components['schemas']['FinishesResultsRead']
+type FinishRowRead = components['schemas']['FinishRowRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
@@ -478,15 +480,45 @@ export function buildPoolStandingsRead(
   }
 }
 
-/** A wire event's results (`EventResultsRead`, ADR-0788): one complete single pool with a
- * champion (`entry-1`, who won it). Single-pool so `champion` is meaningful — a multi-pool
- * event has no single champion without a knockout stage yet (pass extra `pools` +
- * `champion: null` for that). */
+/** A wire event's `standings` results (`StandingsResultsRead`, ADR-0788): the round-robin arm
+ * of the results union, tagged `kind: "standings"` — one complete single pool with a champion
+ * (`entry-1`, who won it). Single-pool so `champion` is meaningful — a multi-pool event has no
+ * single champion without a knockout stage yet (pass extra `pools` + `champion: null` for
+ * that). */
 export function buildEventResultsRead(
-  overrides: Partial<EventResultsRead> = {},
-): EventResultsRead {
+  overrides: Partial<StandingsResultsRead> = {},
+): StandingsResultsRead {
   return {
+    kind: 'standings',
     pools: [buildPoolStandingsRead()],
+    complete: true,
+    champion: 'entry-1',
+    ...overrides,
+  }
+}
+
+/** A wire event's `finishes` results (`FinishesResultsRead`, ADR-0785): the single-elimination
+ * arm of the results union, tagged `kind: "finishes"` — a decided four-entrant bracket's
+ * placement list, `entry-1` champion (1st), `entry-2` runner-up (2nd), and the two semifinal
+ * losers `entry-3`/`entry-4` **tied 3rd**. Pass `finishes` with only the placed entrants +
+ * `complete: false` / `champion: null` for a live, partially-played bracket. */
+export function buildFinishesResultsRead(
+  overrides: Partial<FinishesResultsRead> = {},
+): FinishesResultsRead {
+  const finish = (o: Partial<FinishRowRead>): FinishRowRead => ({
+    entry_id: 'entry-1',
+    position: 1,
+    eliminated_in_round: null,
+    ...o,
+  })
+  return {
+    kind: 'finishes',
+    finishes: [
+      finish({ entry_id: 'entry-1', position: 1, eliminated_in_round: null }),
+      finish({ entry_id: 'entry-2', position: 2, eliminated_in_round: 2 }),
+      finish({ entry_id: 'entry-3', position: 3, eliminated_in_round: 1 }),
+      finish({ entry_id: 'entry-4', position: 3, eliminated_in_round: 1 }),
+    ],
     complete: true,
     champion: 'entry-1',
     ...overrides,

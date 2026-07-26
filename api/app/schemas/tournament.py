@@ -805,29 +805,81 @@ class PoolStandingsRead(BaseModel):
     complete: bool
 
 
-class EventResultsRead(BaseModel):
-    """A round-robin event's results (ADR-0788): a standings table per pool, whether the
-    whole event is decided, and its champion when there is one.
+class StandingsResultsRead(BaseModel):
+    """The **standings** shape of an event's results (ADR-0788) — the round-robin arm
+    of the ``results`` discriminated union, tagged ``kind: "standings"``.
 
-    It rides on the tournament-detail payload (one endpoint per page) and is **derived
-    live** from the fixtures' currently-completed matches — never a snapshot — so a
-    corrected or voided match re-orders the standings the instant it leaves
-    ``completed``.
+    A standings table per pool, whether the whole event is decided, and its champion
+    when there is one. It rides on the tournament-detail payload (one endpoint per page)
+    and is **derived live** from the fixtures' currently-completed matches — never a
+    snapshot — so a corrected or voided match re-orders the standings the instant it
+    leaves ``completed``.
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
     knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
-    played.
+    played."""
 
-    ``results`` on the event is ``null`` for an event that has **no draw** (nothing to
-    stand) or one whose draw type has no results strategy yet (only round-robin does
-    today) — an honest "no results here", not an empty table that would read as a played
-    event with nobody in it."""
-
+    # The tag that discriminates the ``results`` union on the wire (ADR-0785): a client
+    # switches on ``kind`` — a ``standings`` table here vs. a ``finishes`` list —
+    # rather than sniffing which fields are present.
+    kind: Literal["standings"] = "standings"
     pools: list[PoolStandingsRead]
     complete: bool
     champion: uuid.UUID | None
+
+
+class FinishRowRead(BaseModel):
+    """One entrant's **finish** in a single-elimination bracket (ADR-0785): its
+    finishing position and the round it was eliminated in.
+
+    The entrant is carried as an **id only**, exactly as a standings row and a fixture
+    are: the username behind ``entry_id`` is on the event's ``entrants`` list already,
+    keyed by that same id, so a client joins the two rather than reading a copy that
+    could drift.
+
+    ``position`` is 1-based and **shared by same-round losers** — the two semifinal
+    losers both carry ``3``, the four quarterfinal losers ``5`` — so it is deliberately
+    *not* distinct per row: single-elimination does not rank same-round losers against
+    each other. ``eliminated_in_round`` is the 1-based round the entrant lost in, and
+    ``null`` for the champion, never eliminated (their ``position`` is ``1``)."""
+
+    entry_id: uuid.UUID
+    position: int
+    eliminated_in_round: int | None
+
+
+class FinishesResultsRead(BaseModel):
+    """The **finishes** shape of an event's results (ADR-0785) — the single-elimination
+    arm of the ``results`` discriminated union, tagged ``kind: "finishes"``.
+
+    A ranked list of :class:`FinishRowRead` (position ascending, ties sharing a
+    position), whether the whole bracket is decided, and its champion when there is one.
+    Like every results shape it is **derived live** from the fixtures' completed
+    matches, so a correction or void re-derives it (and can re-crown) with no snapshot.
+
+    Only *placed* entrants appear in ``finishes``: every loser of a decided fixture,
+    plus the champion once the final is decided. An entrant still alive in a
+    partially-played bracket has no finish yet and is simply absent — a partial, live
+    result. ``champion`` is the final's winner (position 1) and ``null`` until the final
+    is decided."""
+
+    kind: Literal["finishes"] = "finishes"
+    finishes: list[FinishRowRead]
+    complete: bool
+    champion: uuid.UUID | None
+
+
+# An event's results cross the wire as a **discriminated union tagged by shape**
+# (ADR-0785): a round-robin reads out ``standings``, a single-elim reads out
+# ``finishes``. Coercing finishes into the standings row shape was rejected — a bracket
+# has no wins/game-difference columns, so every such row would carry meaningless
+# nullable fields, the tri-state smell ``api/CLAUDE.md`` warns against. Each shape is
+# its own model; the client switches on ``kind``.
+EventResultsRead = Annotated[
+    StandingsResultsRead | FinishesResultsRead, Field(discriminator="kind")
+]
 
 
 class TournamentEventRead(BaseModel):
@@ -888,13 +940,15 @@ class TournamentEventRead(BaseModel):
     # event ever created (cutting is an explicit act, ADR-0786), so it answers ``[]``
     # and the client renders "no draw yet" from a list it can iterate either way.
     fixtures: list[TournamentFixtureRead]
-    # The event's RESULTS: its per-pool standings, event-complete flag and champion
-    # (ADR-0788), derived live from the fixtures' completed matches — the standings fill
-    # in as results land and a champion appears when the last one does. ``null`` for an
-    # event with no draw cut (nothing to stand) or one whose draw type has no results
-    # strategy yet — only round-robin does today. It rides on this same payload for the
-    # same one-endpoint-per-page reason ``fixtures`` does: the standings table is part
-    # of the tournament-detail page, not a second round-trip.
+    # The event's RESULTS: a discriminated union tagged by shape (ADR-0785), derived
+    # live from the fixtures' completed matches — ``kind: "standings"`` (a per-pool
+    # table, ADR-0788) for a round-robin, ``kind: "finishes"`` (a ranked placement list)
+    # for a single-elimination bracket. Either fills in as results land and crowns a
+    # champion when the last one does. ``null`` for an event with no draw cut (nothing
+    # to stand) or one whose draw type has no results strategy yet — round-robin and
+    # single-elim have one today. It rides on this same payload for the same
+    # one-endpoint-per-page reason ``fixtures`` does: results are part of the
+    # tournament-detail page, not a second round-trip.
     results: EventResultsRead | None
 
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property

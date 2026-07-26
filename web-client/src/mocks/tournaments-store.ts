@@ -315,6 +315,7 @@ function seed(): StoredTournament[] {
           // (`p-u1200-a/b`), so the name and pool joins land; the rows are in finishing
           // order, which the client renders untouched.
           results: {
+            kind: 'standings',
             complete: false,
             champion: null,
             pools: [

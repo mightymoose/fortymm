@@ -25,16 +25,28 @@ from app.models import (
     Tournament,
     TournamentEvent,
 )
-from app.results import EventResults, MatchOutcome, PoolInput, results_for
+from app.results import (
+    BracketFinishes,
+    BracketFixture,
+    EventResults,
+    MatchOutcome,
+    PoolInput,
+    RoundRobinResults,
+    SingleElimResults,
+    results_for,
+)
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
     EventEntryRatingIneligible,
     EventEntryState,
     EventResultsRead,
+    FinishesResultsRead,
+    FinishRowRead,
     PoolStandingsRead,
     ScheduleSolveRead,
     StandingRowRead,
+    StandingsResultsRead,
     TournamentDetailRead,
     TournamentEntrantRead,
     TournamentEventRead,
@@ -62,8 +74,9 @@ from app.tournament_queries import (
 # (``app.dashboard_tournaments``) stands the caller in the very same standings the
 # tournament page shows — two projections of one table is the one way the panel could
 # tell a player they are 2nd on one screen and 3rd on another. Everything else
-# (``_tournament_fields``, ``_entry_state``, ``_serialize_results``) is a
-# module-internal helper and stays private.
+# (``_tournament_fields``, ``_entry_state``, the per-shape ``_serialize_standings`` /
+# ``_serialize_finishes`` and their input projections) is a module-internal helper and
+# stays private.
 __all__ = [
     "event_results",
     "serialize",
@@ -188,39 +201,57 @@ def event_results(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> EventResultsRead | None:
-    """The event's results (ADR-0788), projected from its fixtures' completed matches,
-    or ``None`` when there are none to compute.
+    """The event's results, projected from its fixtures' completed matches, or ``None``
+    when there are none to compute — a **discriminated union tagged by shape**
+    (ADR-0785): ``kind: "standings"`` for a round-robin (ADR-0788), ``kind: "finishes"``
+    for a single-elimination bracket.
 
     ``None`` in two cases, both meaning "no results here" rather than an empty table: a
     draw type with no results strategy yet (``results_for`` raises for it — only
-    round-robin has one today), and an event whose draw has not been cut (no fixtures to
-    stand). Everything else is a real :class:`EventResultsRead`, whose standings are
-    empty of *decided* rows but full of *seated* ones while the pool is still played.
+    round-robin and single-elim have one today), and an event whose draw has not been
+    cut (no fixtures to stand). Everything else is a real results block, whose table is
+    empty of *decided* rows but full of *seated* ones while the event is still played.
 
     The projection is the fixed materialization convention read backwards (#788): side 1
     is ``entry_a`` and side 2 is ``entry_b``, so the ``(side_1, side_2)`` game counts
     are the ``(entry_a, entry_b)`` game counts, and the winner is whichever took more
     games — derived from the live match, never from the fixture's written-back
-    ``winner_entry_id`` (which no round-robin read reads, for correction-safety)."""
+    ``winner_entry_id`` (which no read reads, for correction-safety)."""
     match e.draw_type:
-        case DrawType.round_robin:
-            pass  # the projection below is round-robin-shaped
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
-            # No results projection for these yet (``results_for`` has no strategy for
-            # them either). Spelled as a checked dispatch with an ``assert_never``
-            # catch-all rather than a bare ``is not round_robin``, so a new ``DrawType``
-            # is a type error here until its projection is written — the same guarantee
+        case DrawType.round_robin | DrawType.single_elim:
+            pass  # has a results strategy; the dispatch on ``strategy`` below shapes it
+        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
+            # No results strategy for these yet (``results_for`` raises for them too).
+            # Spelled as a checked dispatch with an ``assert_never`` catch-all rather
+            # than a bare ``in (...)``, so a new ``DrawType`` is a type error here until
+            # its projection is written — the same guarantee
             # ``strategy_for``/``results_for`` give (ADR-0788).
             return None
         case _:
             assert_never(e.draw_type)
     if not fixtures:
         return None
+    # ``results_for`` returns the union of the two implemented strategies; narrow it
+    # with an exhaustive ``match`` so each shape builds its own input and serializes its
+    # own way, and a third strategy is a type error here until it declares both.
+    strategy = results_for(e.draw_type)
+    match strategy:
+        case RoundRobinResults():
+            return _serialize_standings(
+                strategy.tabulate(_pool_inputs(fixtures, game_counts))
+            )
+        case SingleElimResults():
+            return _serialize_finishes(
+                strategy.tabulate(_bracket_fixtures(fixtures, game_counts))
+            )
+        case _:
+            assert_never(strategy)
+
+
+def _pool_inputs(
+    fixtures: list[TournamentFixtureRead],
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> list[PoolInput]:
     by_pool: dict[str, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
         # A round-robin fixture is always pooled; a NULL pool would be a different draw
@@ -238,22 +269,9 @@ def event_results(
         }
         outcomes: list[MatchOutcome] = []
         for f in pool_fixtures:
-            if (
-                f.match_status is not MatchStatus.completed
-                or f.match_id is None
-                or f.entry_a_id is None
-                or f.entry_b_id is None
-            ):
-                continue
-            side_1_games, side_2_games = game_counts[f.match_id]
-            outcomes.append(
-                MatchOutcome(
-                    entry_a_id=EntryId(f.entry_a_id),
-                    entry_b_id=EntryId(f.entry_b_id),
-                    entry_a_games=side_1_games,
-                    entry_b_games=side_2_games,
-                )
-            )
+            outcome = _fixture_outcome(f, game_counts)
+            if outcome is not None:
+                outcomes.append(outcome)
         pool_inputs.append(
             PoolInput(
                 pool_id=PoolId(pool_id),
@@ -271,11 +289,51 @@ def event_results(
                 outcomes=tuple(outcomes),
             )
         )
-    return _serialize_results(results_for(e.draw_type).tabulate(pool_inputs))
+    return pool_inputs
 
 
-def _serialize_results(results: EventResults) -> EventResultsRead:
-    return EventResultsRead(
+def _bracket_fixtures(
+    fixtures: list[TournamentFixtureRead],
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> list[BracketFixture]:
+    """Every single-elim fixture as a :class:`BracketFixture` — its round (which fixes
+    the bracket depth the finishes are measured from) and, when its match is completed,
+    the outcome. An undecided or not-yet-materialized fixture carries ``outcome=None``;
+    byes are already absent (no fixture emitted for them, ADR-0786), so nothing to
+    skip."""
+    return [
+        BracketFixture(round=f.round, outcome=_fixture_outcome(f, game_counts))
+        for f in fixtures
+    ]
+
+
+def _fixture_outcome(
+    f: TournamentFixtureRead,
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> MatchOutcome | None:
+    """A fixture's completed-match outcome, or ``None`` if it has no decided match yet.
+
+    The one place both shapes read a fixture's result, so they cannot disagree on what
+    "decided" means or which side is which: side 1 ← ``entry_a``, side 2 ← ``entry_b``
+    (#788), so the ``(side_1, side_2)`` counts are ``(entry_a, entry_b)``'s."""
+    if (
+        f.match_status is not MatchStatus.completed
+        or f.match_id is None
+        or f.entry_a_id is None
+        or f.entry_b_id is None
+    ):
+        return None
+    side_1_games, side_2_games = game_counts[f.match_id]
+    return MatchOutcome(
+        entry_a_id=EntryId(f.entry_a_id),
+        entry_b_id=EntryId(f.entry_b_id),
+        entry_a_games=side_1_games,
+        entry_b_games=side_2_games,
+    )
+
+
+def _serialize_standings(results: EventResults) -> StandingsResultsRead:
+    return StandingsResultsRead(
         pools=[
             PoolStandingsRead(
                 pool_id=pool.pool_id,
@@ -294,6 +352,21 @@ def _serialize_results(results: EventResults) -> EventResultsRead:
                 complete=pool.complete,
             )
             for pool in results.pools
+        ],
+        complete=results.complete,
+        champion=results.champion,
+    )
+
+
+def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
+    return FinishesResultsRead(
+        finishes=[
+            FinishRowRead(
+                entry_id=row.entry_id,
+                position=row.position,
+                eliminated_in_round=row.eliminated_in_round,
+            )
+            for row in results.finishes
         ],
         complete=results.complete,
         champion=results.champion,
@@ -349,10 +422,11 @@ def serialize_event(
             "entrants": entrants,
             "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
             "fixtures": fixtures,
-            # The standings, projected here from the fixtures' completed matches plus
-            # the page's one batched game load — ``None`` for an uncut or
-            # non-round-robin event (ADR-0788). Computed in the serializer, not fetched
-            # per event, for the same reason ``fixtures`` is: no read may become an N+1.
+            # The results, projected here from the fixtures' completed matches plus
+            # the page's one batched game load — standings for a round-robin, finishes
+            # for a single-elim bracket, ``None`` for an uncut or not-yet-implemented
+            # draw type (ADR-0788/0785). Computed in the serializer, not fetched per
+            # event, for the same reason ``fixtures`` is: no read may become an N+1.
             #
             # ``game_counts is None`` is the tournaments *list*'s signal to skip the
             # projection entirely: its cards render no standings (only event and table

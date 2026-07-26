@@ -183,6 +183,45 @@ async def test_owner_cut_creates_and_persists_fixtures(
     )
 
 
+# ----- the owner cuts a single-elim event: an un-pooled bracket is persisted -
+
+
+async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The second implemented draw type (ADR-0785): cutting a single-elim event no
+    longer raises ``UnsupportedDrawType`` — it persists a seeded bracket. Un-pooled, so
+    every fixture's ``pool_id`` is ``NULL``, and unlike a round-robin cut the later
+    rounds are TBD (``NULL`` sides), filled by ``advance()`` as results land."""
+    owner = await make_user(db_session, "owner-se-cut")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    # A single-elim event has no pools; the strategy ignores ``pool_ids`` regardless.
+    event = await _make_event(
+        db_session, tournament, draw_type=DrawType.single_elim, pools=[]
+    )
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 5, prefix="se")
+    await db_session.refresh(owner)
+
+    result = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+
+    # 5 entrants → an 8-slot bracket: 1 round-1 match, 2 semifinals, 1 final = 4 rows
+    # (ADR-0786's "a 5-entrant single-elim persists 4 rows").
+    assert len(result) == 4
+    rows = await _fixture_rows(db_session, event_id)
+    assert {f.id for f in result} == {r.id for r in rows}
+    # Un-pooled, one fixture in the final round, and nothing played yet.
+    assert all(r.pool_id is None for r in rows)
+    assert sorted(r.round for r in rows) == [1, 2, 2, 3]
+    assert all(r.winner_entry_id is None and r.match_id is None for r in rows)
+    # Byes are absence and later rounds are TBD: unlike round-robin, not every fixture
+    # seats two known entrants at the cut.
+    assert any(r.entry_a_id is None or r.entry_b_id is None for r in rows)
+
+
 # ----- a re-cut on a drawn-but-unplayed event replaces wholesale -------------
 
 

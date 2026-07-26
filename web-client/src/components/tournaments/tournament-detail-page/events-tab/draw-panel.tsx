@@ -8,9 +8,9 @@ import { useCutDraw, useUncutDraw } from '../../data/api'
 import { drawRefusalNotice, drawState, type DrawNotice } from '../../data/draw'
 import type { TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
+import { Bracket } from './draw-panel/bracket'
 import { PoolDraw } from './draw-panel/pool-draw'
-import { RoundList } from './draw-panel/round-list'
-import { StandingsPanel } from './draw-panel/standings/standings-panel'
+import { ResultsPanel } from './draw-panel/results-panel'
 
 export interface DrawPanelProps {
   tournamentId: string
@@ -167,14 +167,15 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
 
       <DrawBody state={state} canEdit={canEdit} />
 
-      {/* The results (ADR-0788): pool standings, and the champion once the event is
-          decided. Dropped in unconditionally — it renders NOTHING for an event with no
-          results (`event.results === null`: uncut, or a non-round-robin draw type), which
-          is the designed data state, so there is no branch to keep in sync here. It sits
-          below the fixtures because a director reads the pairings first and the table they
-          fill in second; it is live BFF data, so it updates on the same refetch the rest
-          of the card does, with no wiring of its own. */}
-      <StandingsPanel event={event} />
+      {/* The results (ADR-0788, ADR-0785): pool **standings** for a round-robin, a
+          **finishes** placement list for a single-elimination bracket — `ResultsPanel`
+          switches on the results `kind`. Dropped in unconditionally — it renders NOTHING for
+          an event with no results (`event.results === null`: uncut, or a draw type with no
+          results strategy yet), which is the designed data state, so there is no branch to
+          keep in sync here. It sits below the fixtures because a director reads the pairings
+          first and the table/placements they fill in second; it is live BFF data, so it
+          updates on the same refetch the rest of the card does, with no wiring of its own. */}
+      <ResultsPanel event={event} />
     </section>
   )
 }
@@ -212,23 +213,21 @@ const DrawBody = ({
           {state.pools.map((pool) => (
             <PoolDraw key={pool.id} pool={pool} />
           ))}
-          {/* Fixtures belonging to no pool — a knockout stage. Nothing can cut one
-              today (round-robin is the only generator), but a fixture the panel cannot
-              place must be SHOWN rather than silently dropped; the bracket that will
-              render them properly is #785. */}
+          {/* Fixtures belonging to no pool — a single-elim bracket (or the KO stage of an
+              rr-then-ko). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
+              replaces the flat `RoundList` here; pools above keep `RoundList`. Shown both
+              pre-live (the director reviews the seeded round-1 pairings and byes) and
+              live. */}
           {state.unpooled.length > 0 && (
             <section
               data-testid="draw-unpooled"
-              aria-label="Fixtures outside the pools"
+              aria-label="Bracket"
               className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
             >
               <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
-                Fixtures outside the pools
+                Bracket
               </h4>
-              <RoundList
-                rounds={state.unpooled}
-                groupName="the unpooled fixtures"
-              />
+              <Bracket rounds={state.unpooled} />
             </section>
           )}
         </div>

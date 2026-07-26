@@ -1,10 +1,11 @@
-"""Pure tests for the round-robin results strategy (ADR-0788).
+"""Pure tests for the results strategies (ADR-0788 round-robin, ADR-0785 single-elim).
 
-No database: ``app.results`` is pure, so every rule about how a pool stands is exercised
-against literal :class:`~app.results.MatchOutcome` / :class:`~app.results.PoolInput`
-value objects — the same shape the BFF projects from completed matches. The ordering is
-hand-computed in each test's docstring so a green assertion means the *table* is right,
-not merely that some deterministic order came out.
+No database: ``app.results`` is pure, so every rule about how a pool stands or a bracket
+finishes is exercised against literal :class:`~app.results.MatchOutcome` /
+:class:`~app.results.PoolInput` / :class:`~app.results.BracketFixture` value objects —
+the same shape the BFF projects from completed matches. The ordering/placement is
+hand-computed in each test's docstring so a green assertion means the *table* (or the
+*finishes*) is right, not merely that some deterministic order came out.
 """
 
 import uuid
@@ -14,9 +15,11 @@ import pytest
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
 from app.results import (
+    BracketFixture,
     MatchOutcome,
     PoolInput,
     RoundRobinResults,
+    SingleElimResults,
     UnsupportedResultsType,
     results_for,
 )
@@ -67,10 +70,13 @@ def test_results_for_returns_the_round_robin_strategy() -> None:
     assert isinstance(results_for(DrawType.round_robin), RoundRobinResults)
 
 
+def test_results_for_returns_the_single_elim_strategy() -> None:
+    assert isinstance(results_for(DrawType.single_elim), SingleElimResults)
+
+
 @pytest.mark.parametrize(
     "draw_type",
     [
-        DrawType.single_elim,
         DrawType.double_elim,
         DrawType.rr_then_ko,
         DrawType.swiss,
@@ -249,3 +255,155 @@ def test_a_corrected_result_re_orders_the_standings() -> None:
 
     after = _single_pool(entrants, fixture_count=1, outcomes=[_outcome(A, B, 0, 2)])
     assert RoundRobinResults().tabulate([after]).champion == B
+
+
+# ----- single-elimination finishes (ADR-0785) --------------------------------
+
+
+def _bracket_match(
+    round_number: int, winner: EntryId, loser: EntryId
+) -> BracketFixture:
+    """A decided bracket fixture: ``winner`` took 2 games, ``loser`` 0 (a decisive
+    board), in the given round. Only the round and who-lost matter to the finishes; the
+    games merely decide the winner off the same :class:`MatchOutcome` the pools use."""
+    return BracketFixture(
+        round=round_number,
+        outcome=MatchOutcome(
+            entry_a_id=winner,
+            entry_b_id=loser,
+            entry_a_games=2,
+            entry_b_games=0,
+        ),
+    )
+
+
+def _bracket_tbd(round_number: int) -> BracketFixture:
+    """An as-yet-undecided fixture — no match completed. It still fixes the bracket's
+    depth (its round) so the finishes measure positions from the real final round even
+    before that fixture is played."""
+    return BracketFixture(round=round_number, outcome=None)
+
+
+def test_an_eight_entrant_bracket_places_every_round() -> None:
+    """A full 8-seed bracket, top seed winning throughout (3 rounds — QF, SF, final):
+
+    * QF (round 1): 1 beats 8, 4 beats 5, 3 beats 6, 2 beats 7 → losers 8,5,6,7 out;
+    * SF (round 2): 1 beats 4, 2 beats 3 → losers 4,3 out;
+    * final (round 3): 1 beats 2 → 2 is runner-up, 1 is champion.
+
+    Finishes place by the round eliminated in, same-round losers **tied**: champion 1,
+    runner-up 2, the two semifinal losers tied **3**, the four quarterfinal losers tied
+    **5** — no 4th and no 6th/7th/8th, because the format never ranked them."""
+    s = [_eid(n) for n in range(1, 9)]  # s[0]..s[7] are seeds 1..8
+    s1, s2, s3, s4, s5, s6, s7, s8 = s
+    fixtures = [
+        _bracket_match(1, s1, s8),
+        _bracket_match(1, s4, s5),
+        _bracket_match(1, s3, s6),
+        _bracket_match(1, s2, s7),
+        _bracket_match(2, s1, s4),
+        _bracket_match(2, s2, s3),
+        _bracket_match(3, s1, s2),
+    ]
+    results = SingleElimResults().tabulate(fixtures)
+
+    assert results.complete is True
+    assert results.champion == s1
+    positions = {row.entry_id: row.position for row in results.finishes}
+    assert positions == {
+        s1: 1,
+        s2: 2,
+        s3: 3,
+        s4: 3,
+        s5: 5,
+        s6: 5,
+        s7: 5,
+        s8: 5,
+    }
+    # The champion was never eliminated; every loser carries the round they lost in.
+    rounds = {row.entry_id: row.eliminated_in_round for row in results.finishes}
+    assert rounds == {
+        s1: None,
+        s2: 3,
+        s3: 2,
+        s4: 2,
+        s5: 1,
+        s6: 1,
+        s7: 1,
+        s8: 1,
+    }
+    # Ranked by position ascending — ties adjacent, never interleaved.
+    assert [row.position for row in results.finishes] == [1, 2, 3, 3, 5, 5, 5, 5]
+
+
+def test_a_partial_eight_entrant_bracket_places_only_the_eliminated() -> None:
+    """Mid-bracket: all four quarterfinals decided and one semifinal, the other
+    semifinal and the final still to play. The final fixture already exists (TBD), so it
+    still fixes the depth at 3 rounds — the QF losers place **5th**, the one decided SF
+    loser **3rd**.
+
+    Nobody still alive (the two finalists-to-be and the undecided semifinalist) has a
+    finish yet, and there is no champion until the final is played."""
+    s = [_eid(n) for n in range(1, 9)]
+    s1, s2, s3, s4, s5, s6, s7, s8 = s
+    fixtures = [
+        _bracket_match(1, s1, s8),
+        _bracket_match(1, s4, s5),
+        _bracket_match(1, s3, s6),
+        _bracket_match(1, s2, s7),
+        _bracket_match(2, s1, s4),  # one semifinal decided
+        _bracket_tbd(2),  # the other semifinal — still to play
+        _bracket_tbd(3),  # the final — still to play
+    ]
+    results = SingleElimResults().tabulate(fixtures)
+
+    assert results.complete is False
+    assert results.champion is None
+    positions = {row.entry_id: row.position for row in results.finishes}
+    assert positions == {
+        s4: 3,  # the decided semifinal's loser
+        s5: 5,
+        s6: 5,
+        s7: 5,
+        s8: 5,
+    }, "only eliminated entrants have a finish; the still-alive ones are absent"
+
+
+def test_a_two_entrant_bracket_is_champion_and_runner_up() -> None:
+    """The smallest bracket — one final (round 1 is the final): the winner is champion
+    (1), the loser runner-up (2). No semifinal or quarterfinal positions exist."""
+    final = _bracket_match(1, A, B)
+    results = SingleElimResults().tabulate([final])
+
+    assert results.complete is True
+    assert results.champion == A
+    assert {row.entry_id: row.position for row in results.finishes} == {A: 1, B: 2}
+    assert {row.entry_id: row.eliminated_in_round for row in results.finishes} == {
+        A: None,
+        B: 1,
+    }
+
+
+def test_an_unplayed_bracket_has_no_finishes_and_no_champion() -> None:
+    """A cut-but-unplayed 4-seed bracket (two semifinals and a final, all TBD): the
+    depth is known but nobody has been eliminated, so there are no finishes and no
+    champion — the bracket's live, partial state before its first result."""
+    fixtures = [_bracket_tbd(1), _bracket_tbd(1), _bracket_tbd(2)]
+    results = SingleElimResults().tabulate(fixtures)
+
+    assert results.finishes == ()
+    assert results.complete is False
+    assert results.champion is None
+
+
+def test_a_corrected_final_re_crowns_the_champion() -> None:
+    """Nothing is snapshotted (ADR-0785), so a correction is just a re-tabulation. A
+    beats B in the final → A champion, B runner-up; correct the final to B beating A and
+    re-tabulate → B champion, A runner-up. The finishes follow the live result."""
+    before = SingleElimResults().tabulate([_bracket_match(1, A, B)])
+    assert before.champion == A
+    assert {row.entry_id: row.position for row in before.finishes} == {A: 1, B: 2}
+
+    after = SingleElimResults().tabulate([_bracket_match(1, B, A)])
+    assert after.champion == B
+    assert {row.entry_id: row.position for row in after.finishes} == {B: 1, A: 2}
