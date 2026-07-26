@@ -1,8 +1,10 @@
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { server } from '@/mocks/server'
 import { screen, waitFor } from '@/test/utilities'
 
 import { newTournamentModalPage } from './new-tournament-modal.page'
@@ -305,6 +307,27 @@ describe('NewTournamentModal', () => {
     )
     expect(newTournamentModalPage.queryPreviewError()).toBeNull()
     expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  it('hints, and fires no geocode, when Preview is clicked with the venue blank', async () => {
+    // The write surface renders the shared affordance, so the empty-form
+    // short-circuit has to hold here too: no request, a neutral hint, and none
+    // of the destructive "we couldn't locate that address" alert.
+    let geocodeCalls = 0
+    server.use(
+      http.get('*/v1/geocode', () => {
+        geocodeCalls += 1
+        return new HttpResponse(null, { status: 500 })
+      }),
+    )
+    newTournamentModalPage.render()
+
+    await userEvent.click(newTournamentModalPage.getPreviewButton())
+
+    expect(await newTournamentModalPage.findPreviewHint()).toBeVisible()
+    expect(geocodeCalls).toBe(0)
+    expect(newTournamentModalPage.queryPreviewPin()).toBeNull()
+    expect(newTournamentModalPage.queryPreviewError()).toBeNull()
   })
 
   it('surfaces an inline error and no pin for an unresolvable address', async () => {

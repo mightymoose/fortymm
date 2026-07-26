@@ -94,6 +94,10 @@ const UNREAD_COUNT: UnreadCountResponse = { unread_count: 0 }
 // navigation in this suite land on the not-found page instead of the tournament.
 export const TOURNAMENT_ID = 'b0a1e2a0-0000-4000-8000-000000000001'
 
+/** Type this into a venue box to make the geocode stub answer the coded 409 the
+ * real provider produces for an address with zero candidates. */
+export const UNRESOLVABLE_ADDRESS = '__unresolvable__'
+
 /** The events the specs drive, named so the specs never hard-code strings that
  * must agree with the seed below. */
 export const EVENT = {
@@ -1107,6 +1111,29 @@ export class TournamentsStore {
     // `unhandled` (`../../support/realtime`).
     if (path === STREAM_PATH) {
       return fulfillParkedStream(route)
+    }
+
+    // The "Preview location" lookup. Mirrors the server: a resolvable address
+    // gets coordinates plus a canonical label, an unresolvable one gets the coded
+    // 409 (`address_not_geocodable`) the write path also answers with. An EMPTY
+    // `address` is not modelled because the endpoint's `min_length` means it can
+    // never legitimately be sent — the client short-circuits before the request,
+    // and `requests` is what a spec asserts that on.
+    if (method === 'GET' && path === '/v1/geocode') {
+      const address = new URL(request.url()).searchParams.get('address') ?? ''
+      if (address.includes(UNRESOLVABLE_ADDRESS)) {
+        return json(route, 409, {
+          detail: {
+            code: 'address_not_geocodable',
+            message: 'We couldn’t locate that address.',
+          },
+        })
+      }
+      return json(route, 200, {
+        latitude: 37.8715,
+        longitude: -122.273,
+        formatted: address,
+      })
     }
 
     // Writes wait on the gate (reads never do) — see `holdWrites`.

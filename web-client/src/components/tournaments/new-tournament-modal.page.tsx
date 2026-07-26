@@ -50,6 +50,14 @@ const scoped = (container: Container) => ({
   findPreviewError() {
     return container.findByTestId('preview-location-error')
   },
+  /** The preview's neutral "add a venue address" hint, shown when every venue
+   * field is blank; else null. Distinct from `queryPreviewError`. */
+  queryPreviewHint() {
+    return container.queryByTestId('preview-location-hint')
+  },
+  findPreviewHint() {
+    return container.findByTestId('preview-location-hint')
+  },
 })
 
 /**

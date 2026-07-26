@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MapPin, MapPinOff } from 'lucide-react'
+import { Info, MapPin, MapPinOff } from 'lucide-react'
 
 import {
   type GeocodePreview,
@@ -48,12 +48,20 @@ function composeAddress(address: PreviewAddress): string {
 /** `idle` → the button, no pin. `pending` → the in-flight state that always
  * resolves (never a permanent spinner). `located` → a `LocationMap` pin at the
  * geocoded coords. `not_found` → the inline "we couldn't locate that address"
- * note, and no pin. */
+ * note, and no pin. `no_address` → the neutral "add a venue address" hint, and
+ * no pin.
+ *
+ * `no_address` is deliberately its OWN state rather than a reuse of
+ * `not_found`: they say different things (one is "nothing to look up yet", the
+ * other is "we looked and found nothing"), they are styled differently (neutral
+ * vs destructive), and keeping them apart is what stops a later edit quietly
+ * collapsing an empty form into an accusation of a bad address. */
 type PreviewState =
   | { status: 'idle' }
   | { status: 'pending' }
   | { status: 'located'; preview: GeocodePreview }
   | { status: 'not_found' }
+  | { status: 'no_address' }
 
 /**
  * The shared "Preview location" affordance on both tournament write surfaces (the
@@ -68,14 +76,30 @@ type PreviewState =
  * that address") with no pin — the coded `409` both this endpoint and the write
  * path answer with. Any other failure is a toast, so a real address is never
  * blamed for a server outage.
+ *
+ * With every venue field blank there is nothing to look up, so the click is
+ * answered locally with a neutral hint and NO request: the endpoint's
+ * `min_length` on `address` would 422, which used to flash "Locating…" and then
+ * silently revert to the button. A tournament with no venue is a first-class,
+ * valid state (the organizer hasn't booked one yet, or is withholding a home
+ * address), so this is not a failure and must not borrow the destructive alert.
  */
 export const PreviewLocation = ({ address }: PreviewLocationProps) => {
   const [state, setState] = useState<PreviewState>({ status: 'idle' })
 
   const preview = async () => {
+    const composed = composeAddress(address)
+    // Short-circuit BEFORE the fetch. The server's minimum-length rule is
+    // correct and stays as it is — we simply stop sending a request that is
+    // guaranteed to fail.
+    if (!composed) {
+      setState({ status: 'no_address' })
+      return
+    }
+
     setState({ status: 'pending' })
     try {
-      const result = await previewGeocode(composeAddress(address))
+      const result = await previewGeocode(composed)
       setState({ status: 'located', preview: result })
     } catch (error) {
       // The coded "zero candidates" 409 is the one failure told inline — the
@@ -127,6 +151,17 @@ export const PreviewLocation = ({ address }: PreviewLocationProps) => {
           <AlertTitle>We couldn&rsquo;t locate that address</AlertTitle>
           <AlertDescription>
             Check the venue details and try again. Nothing was saved.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {state.status === 'no_address' && (
+        // The neutral design-system Alert, NOT the destructive one: no venue is
+        // a valid tournament, so nothing here went wrong.
+        <Alert data-testid="preview-location-hint" className="max-w-md">
+          <Info />
+          <AlertDescription>
+            Add a venue address to preview its location.
           </AlertDescription>
         </Alert>
       )}

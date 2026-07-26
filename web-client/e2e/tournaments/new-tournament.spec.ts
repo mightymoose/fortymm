@@ -24,6 +24,7 @@
 import { expect, test } from '@playwright/test'
 
 import { TournamentsListPage } from '../page-objects/tournaments/tournaments-list.page'
+import { UNRESOLVABLE_ADDRESS } from '../page-objects/tournaments/tournaments-store'
 import { expectAxeClean } from '../support/axe'
 
 /** The dialog's messages, hard-coded test-side (as the editor spec's are): importing
@@ -171,6 +172,60 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     )
     await expect(pom.dialog).toBeVisible()
     await expect(pom.nameInput).toHaveValue('Spring Open 2026')
+  })
+
+  /**
+   * "Preview location" with the venue boxes empty used to flash "Locating…", take
+   * a **422** off the endpoint's own `min_length` on `address`, and then revert to
+   * the button saying nothing at all.
+   *
+   * Only a browser can prove the half that matters: that **no request leaves**. A
+   * component test can be satisfied by a re-labelled error; the store here tallies
+   * every call the app really makes through the real fetch stack, with MSW off.
+   * The second half of the test then geocodes for real, so the tally is a live
+   * observation and not a counter that never moves.
+   */
+  test('previewing an empty venue hints — with no request, and never the red alert', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+    const geocodes = () =>
+      store.requests.filter((r) => r.path === '/v1/geocode').length
+
+    await pom.openWithName('Spring Open 2026')
+    await pom.previewLocationButton.click()
+
+    // Answered locally and at once: the neutral hint, no pin, and NOT the
+    // destructive "we couldn't locate that address" alert — a tournament with no
+    // venue is valid, so nothing here failed.
+    await expect(pom.previewLocationHint).toBeVisible()
+    await expect(pom.previewLocationHint).toContainText(
+      'Add a venue address to preview its location.',
+    )
+    await expect(pom.previewLocationError).toHaveCount(0)
+    await expect(page.getByTestId('location-map-fallback')).toHaveCount(0)
+    await expect(page.locator('body')).not.toContainText('Locating…')
+    // ⚠️ THE assertion: nothing was sent.
+    expect(geocodes()).toBe(0)
+
+    // New markup in a portalled dialog, whose contrast jsdom cannot see — and a
+    // muted "low-key" hint is exactly the kind that fails AA if hand-tinted.
+    await expectAxeClean(page, 'new tournament — the empty-venue preview hint', {
+      exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
+    })
+
+    // Now the genuine zero-results address: the request DOES go, and the red alert
+    // — not the hint — is what answers it.
+    await pom.venueInput.fill(UNRESOLVABLE_ADDRESS)
+    await pom.previewLocationButton.click()
+
+    await expect(pom.previewLocationError).toBeVisible()
+    await expect(pom.previewLocationHint).toHaveCount(0)
+    expect(geocodes()).toBe(1)
+
+    // Neither preview saved anything, and nothing fell through the stub.
+    expect(store.countOf('POST')).toBe(0)
+    expect(store.unhandled).toEqual([])
   })
 
   test('creates a tournament and closes on success', async ({ page }) => {
