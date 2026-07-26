@@ -51,8 +51,8 @@ config:
   #
   # Operator fills these two from the Auth0 tenant (empty = MCP auth
   # unconfigured; the api still boots but every MCP request 401s):
-  AUTH0_DOMAIN: ""        # e.g. fortymm.us.auth0.com — the JWT issuer
-  AUTH0_AUDIENCE: ""      # Auth0 API identifier for the MCP Resource Server (token `aud`)
+  AUTH0_DOMAIN: "dev-ohl5xjusly2vsah6.us.auth0.com"        # e.g. fortymm.us.auth0.com — the JWT issuer
+  AUTH0_AUDIENCE: "https://uat.fortymm.com/api/mcp/"      # Auth0 API identifier for the MCP Resource Server (token `aud`)
   # Deployment-derived public URLs (the MCP server is public at
   # uat.fortymm.com/api/mcp behind nginx that strips /api — metadata must
   # reflect the public origin, not the internal mount):
