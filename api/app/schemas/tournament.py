@@ -204,9 +204,9 @@ class GeocodePreview(BaseModel):
     :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
     the pin the previewer sees matches the coordinates a subsequent write records.
 
-    An address that resolves to zero candidates is a coded ``422`` at the boundary
-    carrying the same ``address_not_geocodable`` code the write path answers with —
-    never a coordinate-less preview."""
+    An address that resolves to zero candidates is a coded ``409`` carrying the same
+    ``address_not_geocodable`` code the write path answers with — never a
+    coordinate-less preview."""
 
     model_config = ConfigDict(extra="forbid")
 

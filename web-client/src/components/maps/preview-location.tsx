@@ -65,7 +65,7 @@ type PreviewState =
  * It is display-only confirmation: it adds NO coordinates to the create/edit
  * submit payload (the server geocodes on save; the write shape stays
  * coordinate-free). An unresolvable address surfaces inline ("we couldn't locate
- * that address") with no pin — the coded `422` both this endpoint and the write
+ * that address") with no pin — the coded `409` both this endpoint and the write
  * path answer with. Any other failure is a toast, so a real address is never
  * blamed for a server outage.
  */
@@ -78,10 +78,11 @@ export const PreviewLocation = ({ address }: PreviewLocationProps) => {
       const result = await previewGeocode(composeAddress(address))
       setState({ status: 'located', preview: result })
     } catch (error) {
-      // The coded "zero candidates" 422 is the one failure told inline — the
+      // The coded "zero candidates" 409 is the one failure told inline — the
       // organizer's address didn't resolve. Everything else (a 5xx, an outage, a
-      // 403) is not about their address, so it toasts and the button returns to
-      // idle rather than accusing a good address of being unlocatable.
+      // 403, or another 409 whose code is not `address_not_geocodable`) is not
+      // about their address, so it toasts and the button returns to idle rather
+      // than accusing a good address of being unlocatable.
       if (isAddressNotGeocodable(error)) {
         setState({ status: 'not_found' })
         return

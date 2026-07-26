@@ -566,7 +566,7 @@ internal protocol APIProtocol: Sendable {
     /// tournament, so the same grant that lets a user create one lets them preview
     /// its location — this is deliberately not a wide-open geocoding proxy.
     ///
-    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
     /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
     /// preview and the write agree on the refusal. Any other geocoder failure
     /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
@@ -1918,7 +1918,7 @@ extension APIProtocol {
     /// tournament, so the same grant that lets a user create one lets them preview
     /// its location — this is deliberately not a wide-open geocoding proxy.
     ///
-    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
     /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
     /// preview and the write agree on the refusal. Any other geocoder failure
     /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
@@ -2713,6 +2713,63 @@ internal enum Components {
                     "region",
                     "postal",
                     "country"
+                ])
+            }
+        }
+        /// The ``409`` response body for a venue address that resolved to zero geocoding
+        /// candidates — the coded-refusal convention of ADR-0968, mirroring the entry
+        /// endpoint's ``{"code", "message"}`` shape.
+        ///
+        /// ``code`` is the stable contract a client switches on — always
+        /// :data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried as the field's default so the one
+        /// constant is the single source of the string (no fork) and the concrete value
+        /// still surfaces in the generated OpenAPI. ``message`` is fallback prose for a
+        /// client without copy for the code, or a person.
+        ///
+        /// Modeled (rather than a hand-rolled ``dict`` detail) so the create/edit/preview
+        /// routes' ``responses={409: {"model": AddressNotGeocodable}}`` describes the body
+        /// the generated web + iOS types actually receive — instead of the refusal riding on
+        /// FastAPI's reserved ``422``, whose auto-generated ``HTTPValidationError`` schema
+        /// says ``detail`` is an **array** and so cannot decode this object body (ADR-0968).
+        /// Pure Pydantic, kept beside the code/message it carries; the FastAPI
+        /// ``HTTPException`` that wraps it lives in the router adapter (``app.tournaments``),
+        /// so this module stays FastAPI-free.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable`.
+        internal struct AddressNotGeocodable: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable/code`.
+            internal var code: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable/message`.
+            internal var message: Swift.String
+            /// Creates a new `AddressNotGeocodable`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - message:
+            internal init(
+                code: Swift.String? = nil,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.message = message
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case message
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "message"
                 ])
             }
         }
@@ -4390,9 +4447,9 @@ internal enum Components {
         /// :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
         /// the pin the previewer sees matches the coordinates a subsequent write records.
         ///
-        /// An address that resolves to zero candidates is a coded ``422`` at the boundary
-        /// carrying the same ``address_not_geocodable`` code the write path answers with —
-        /// never a coordinate-less preview.
+        /// An address that resolves to zero candidates is a coded ``409`` carrying the same
+        /// ``address_not_geocodable`` code the write path answers with — never a
+        /// coordinate-less preview.
         ///
         /// - Remark: Generated from `#/components/schemas/GeocodePreview`.
         internal struct GeocodePreview: Codable, Hashable, Sendable {
@@ -21099,6 +21156,57 @@ internal enum Operations {
                     }
                 }
             }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateTournamentV1TournamentsPost.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateTournamentV1TournamentsPost.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/post(create_tournament_v1_tournaments_post)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.CreateTournamentV1TournamentsPost.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.CreateTournamentV1TournamentsPost.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
             internal struct UnprocessableContent: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/422/content`.
                 internal enum Body: Sendable, Hashable {
@@ -21197,7 +21305,7 @@ internal enum Operations {
     /// tournament, so the same grant that lets a user create one lets them preview
     /// its location — this is deliberately not a wide-open geocoding proxy.
     ///
-    /// A zero-result / unresolvable address is the same coded ``422`` the write path
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
     /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
     /// preview and the write agree on the refusal. Any other geocoder failure
     /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
@@ -21293,6 +21401,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }
@@ -21660,6 +21819,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/PATCH/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/PATCH/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/patch(update_tournament_v1_tournaments__tournament_id__patch)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }

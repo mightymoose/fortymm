@@ -1003,11 +1003,11 @@ def _map_tournament_write_tool_error(
 def _map_address_not_geocodable_tool_error(
     exc: AddressNotGeocodableError,
 ) -> ToolError:
-    """Adapt an unresolvable venue address (ADR "an unresolvable address is a 422 at the
-    boundary") to a ``ToolError`` that NAMES the machine-readable code the HTTP surface
-    answers with, then hands the agent the address it could not resolve.
+    """Adapt an unresolvable venue address (ADR-0968's coded-refusal convention) to a
+    ``ToolError`` that NAMES the machine-readable code the HTTP surface answers with,
+    then hands the agent the address it could not resolve.
 
-    The HTTP create/edit adapters answer this with the coded 422
+    The HTTP create/edit adapters answer this with the coded 409
     ``{"detail": {"code": ADDRESS_NOT_GEOCODABLE_CODE, ...}}``; an agent reads prose, so
     the code rides in the prose (``[address_not_geocodable]``, exactly as the coded
     entry refusals do) and the verb's own message — which address failed — follows, so

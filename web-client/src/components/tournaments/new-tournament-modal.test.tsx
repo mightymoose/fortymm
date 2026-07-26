@@ -310,7 +310,7 @@ describe('NewTournamentModal', () => {
   it('surfaces an inline error and no pin for an unresolvable address', async () => {
     newTournamentModalPage.render()
 
-    // The `__unresolvable__` sentinel drives the mock's coded 422 — the same
+    // The `__unresolvable__` sentinel drives the mock's coded 409 — the same
     // refusal the write path answers a zero-result address with.
     await userEvent.type(
       screen.getByLabelText('Venue name'),

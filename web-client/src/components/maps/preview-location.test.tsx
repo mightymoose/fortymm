@@ -33,7 +33,7 @@ describe('PreviewLocation', () => {
   })
 
   it('surfaces the inline error and NO pin for an unresolvable address', async () => {
-    // The `__unresolvable__` sentinel drives the mock's coded 422
+    // The `__unresolvable__` sentinel drives the mock's coded 409
     // (`address_not_geocodable`) — the same refusal the write path answers with.
     previewLocationPage.render({
       address: {

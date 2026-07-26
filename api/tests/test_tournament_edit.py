@@ -17,7 +17,12 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.geocoding import AddressNotGeocodableError, FakeGeocoder, compose_address
+from app.geocoding import (
+    AddressNotGeocodableError,
+    FakeGeocoder,
+    GeocodeResult,
+    compose_address,
+)
 from app.models import (
     League,
     LeagueVisibility,
@@ -46,6 +51,25 @@ from tests._helpers import make_user
 # (the same one ``get_geocoder`` hands out with no ``GOOGLE_GEOCODING_API_KEY``). A
 # service-layer test builds it directly, exactly as it constructs the raw session.
 _GEOCODER = FakeGeocoder()
+
+
+class _CountingGeocoder:
+    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
+    the deterministic ``FakeGeocoder`` so results stay stable.
+
+    Lets a test assert the edit verb geocodes **only** when the address text actually
+    changes — a name-only edit, or one that resubmits the identical address, must never
+    pay for a geocode (and, in production, must never hold the row lock across the
+    network call). Structurally satisfies the ``Geocoder`` protocol, so it is injected
+    exactly where the real geocoder would be."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = FakeGeocoder()
+
+    async def geocode(self, address: str) -> GeocodeResult:
+        self.calls += 1
+        return await self._inner.geocode(address)
 
 
 async def _geocoded(address: dict[str, str]) -> dict[str, object]:
@@ -247,6 +271,110 @@ async def test_unresolvable_new_address_raises_and_writes_nothing(
     ).scalar_one()
     assert row.name == "Bay Area Open 2026"
     assert row.address == _stored_address()
+
+
+# ----- geocode ONLY when the address text actually changes -------------------
+
+
+async def test_name_only_edit_does_not_geocode(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A patch that carries no address geocodes nothing — the stored address and its
+    coordinates are left untouched, and the geocoder is never called."""
+    owner = await make_user(db_session, "owner-name-only")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(name="Renamed, Same Venue"),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 0
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.name == "Renamed, Same Venue"
+    # The stored address — coordinates included — did not move.
+    assert row.address == _stored_address()
+
+
+async def test_resubmitting_the_identical_address_does_not_geocode(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Resubmitting the SAME six address text fields (as the web client does on every
+    edit) geocodes nothing — the six stored text fields are unchanged, so the stored
+    coordinates are preserved rather than recomputed. Only the other edited field moves.
+    """
+    owner = await make_user(db_session, "owner-same-address")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        # The address is byte-for-byte the stored one; only the name changes.
+        updates=TournamentUpdate(
+            name="Bay Area Major",
+            address=AddressInput(**_address()),
+        ),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 0
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.name == "Bay Area Major"
+    # The stored coordinates were kept, not re-derived (the seed's coordinates are NOT
+    # the ``FakeGeocoder`` output for this address, so a stray re-geocode would show).
+    assert row.address == _stored_address()
+
+
+async def test_changed_address_geocodes_exactly_once(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A genuinely different address IS geocoded — exactly once — and the stored
+    coordinates are the ones the geocoder resolved, beside the new six text fields."""
+    owner = await make_user(db_session, "owner-new-address")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    new_address = {**_address(), "venue": "Palo Alto Community Center"}
+    result = await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(address=AddressInput(**new_address)),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 1
+    # The new venue's six text fields plus the coordinates the geocoder resolved.
+    assert result.address == await _geocoded(new_address)
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.address == await _geocoded(new_address)
 
 
 # ----- non-owner is refused with a domain exception -------------------------

@@ -15,22 +15,27 @@ building it: :func:`~app.geocoding.compose_address` is kept generic precisely so
 seam does not import the tournament schema.
 
 A zero-result lookup raises :class:`~app.geocoding.AddressNotGeocodableError`, which
-these verbs let propagate to their transport adapter — the HTTP handler and the MCP
-tool each map it to a ``422`` carrying the machine-readable
-:data:`ADDRESS_NOT_GEOCODABLE_CODE` (ADR-0968's coded-refusal convention). Every other
-geocoder failure (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to
-the ``500`` handler — it is not caught here.
+these verbs let propagate to their transport adapter — the HTTP handler maps it to a
+coded ``409`` (:class:`AddressNotGeocodable`) and the MCP tool to a ``ToolError``, both
+carrying the machine-readable :data:`ADDRESS_NOT_GEOCODABLE_CODE` (ADR-0968's
+coded-refusal convention). It is a ``409``, not a ``422``: FastAPI reserves ``422`` for
+its own ``HTTPValidationError`` (a ``detail`` **array**), so a hand-rolled ``422``
+object body collides with the shape the generated clients expect there (ADR-0968). Every
+other geocoder failure (:class:`~app.geocoding.GeocoderError`) is unexpected and
+propagates to the ``500`` handler — it is not caught here.
 """
+
+from pydantic import BaseModel, ConfigDict
 
 from app.geocoding import Geocoder, compose_address
 from app.schemas.tournament import Address, AddressInput
 
 #: The stable machine-readable code a client (and the MCP agent) switches on when a
-#: venue address cannot be geocoded (ADR "an unresolvable address is a 422 at the
-#: boundary"). The HTTP adapter puts it in the coded ``{"detail": {"code", "message"}}``
-#: body and the MCP adapter names it in the ``ToolError`` prose, so both surfaces carry
-#: the same word for the same refusal. Defined here, FastAPI-free, so both adapters
-#: share one source and cannot drift.
+#: venue address cannot be geocoded (ADR-0968's coded-refusal convention). The HTTP
+#: adapter puts it in the coded ``409`` ``{"detail": {"code", "message"}}`` body and the
+#: MCP adapter names it in the ``ToolError`` prose, so both surfaces carry the same word
+#: for the same refusal. Defined here, FastAPI-free, so both adapters share one source
+#: and cannot drift.
 ADDRESS_NOT_GEOCODABLE_CODE = "address_not_geocodable"
 
 #: The human sentence paired with :data:`ADDRESS_NOT_GEOCODABLE_CODE` — the fallback a
@@ -40,6 +45,32 @@ ADDRESS_NOT_GEOCODABLE_MESSAGE = (
     "We couldn't locate that address. Check the venue, street, city, region, postal "
     "code and country, then try again."
 )
+
+
+class AddressNotGeocodable(BaseModel):
+    """The ``409`` response body for a venue address that resolved to zero geocoding
+    candidates — the coded-refusal convention of ADR-0968, mirroring the entry
+    endpoint's ``{"code", "message"}`` shape.
+
+    ``code`` is the stable contract a client switches on — always
+    :data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried as the field's default so the one
+    constant is the single source of the string (no fork) and the concrete value
+    still surfaces in the generated OpenAPI. ``message`` is fallback prose for a
+    client without copy for the code, or a person.
+
+    Modeled (rather than a hand-rolled ``dict`` detail) so the create/edit/preview
+    routes' ``responses={409: {"model": AddressNotGeocodable}}`` describes the body
+    the generated web + iOS types actually receive — instead of the refusal riding on
+    FastAPI's reserved ``422``, whose auto-generated ``HTTPValidationError`` schema
+    says ``detail`` is an **array** and so cannot decode this object body (ADR-0968).
+    Pure Pydantic, kept beside the code/message it carries; the FastAPI
+    ``HTTPException`` that wraps it lives in the router adapter (``app.tournaments``),
+    so this module stays FastAPI-free."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = ADDRESS_NOT_GEOCODABLE_CODE
+    message: str
 
 
 async def geocode_address(geocoder: Geocoder, address: AddressInput) -> Address:
@@ -53,7 +84,7 @@ async def geocode_address(geocoder: Geocoder, address: AddressInput) -> Address:
     entered).
 
     Raises :class:`~app.geocoding.AddressNotGeocodableError` when the address resolves
-    to zero candidates; the caller maps it to a coded ``422``. Any other geocoder
+    to zero candidates; the caller maps it to a coded ``409``. Any other geocoder
     failure propagates.
     """
     # ``AddressInput`` holds exactly ``compose_address``'s six keyword params, and

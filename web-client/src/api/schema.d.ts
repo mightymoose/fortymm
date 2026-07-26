@@ -1031,7 +1031,7 @@ export interface paths {
          *     tournament, so the same grant that lets a user create one lets them preview
          *     its location — this is deliberately not a wide-open geocoding proxy.
          *
-         *     A zero-result / unresolvable address is the same coded ``422`` the write path
+         *     A zero-result / unresolvable address is the same coded ``409`` the write path
          *     answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
          *     preview and the write agree on the refusal. Any other geocoder failure
          *     (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
@@ -1680,6 +1680,36 @@ export interface components {
             country: string;
         };
         /**
+         * AddressNotGeocodable
+         * @description The ``409`` response body for a venue address that resolved to zero geocoding
+         *     candidates — the coded-refusal convention of ADR-0968, mirroring the entry
+         *     endpoint's ``{"code", "message"}`` shape.
+         *
+         *     ``code`` is the stable contract a client switches on — always
+         *     :data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried as the field's default so the one
+         *     constant is the single source of the string (no fork) and the concrete value
+         *     still surfaces in the generated OpenAPI. ``message`` is fallback prose for a
+         *     client without copy for the code, or a person.
+         *
+         *     Modeled (rather than a hand-rolled ``dict`` detail) so the create/edit/preview
+         *     routes' ``responses={409: {"model": AddressNotGeocodable}}`` describes the body
+         *     the generated web + iOS types actually receive — instead of the refusal riding on
+         *     FastAPI's reserved ``422``, whose auto-generated ``HTTPValidationError`` schema
+         *     says ``detail`` is an **array** and so cannot decode this object body (ADR-0968).
+         *     Pure Pydantic, kept beside the code/message it carries; the FastAPI
+         *     ``HTTPException`` that wraps it lives in the router adapter (``app.tournaments``),
+         *     so this module stays FastAPI-free.
+         */
+        AddressNotGeocodable: {
+            /**
+             * Code
+             * @default address_not_geocodable
+             */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
          * AdminScheduleSolveListResponse
          * @description Paginated `/v1/admin/schedule-solves` response backing the Administration
          *     area's solve-ledger page.
@@ -2323,9 +2353,9 @@ export interface components {
          *     :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
          *     the pin the previewer sees matches the coordinates a subsequent write records.
          *
-         *     An address that resolves to zero candidates is a coded ``422`` at the boundary
-         *     carrying the same ``address_not_geocodable`` code the write path answers with —
-         *     never a coordinate-less preview.
+         *     An address that resolves to zero candidates is a coded ``409`` carrying the same
+         *     ``address_not_geocodable`` code the write path answers with — never a
+         *     coordinate-less preview.
          */
         GeocodePreview: {
             /** Latitude */
@@ -6772,6 +6802,15 @@ export interface operations {
                     "application/json": components["schemas"]["TournamentRead"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -6803,6 +6842,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeocodePreview"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
                 };
             };
             /** @description Validation Error */
@@ -6904,6 +6952,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
                 };
             };
             /** @description Validation Error */

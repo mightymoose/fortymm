@@ -203,13 +203,14 @@ async def test_create_tournament_returns_201(
     assert body["created_by_user_id"] == str(user.id)
 
 
-async def test_create_with_unresolvable_address_is_422_and_creates_nothing(
+async def test_create_with_unresolvable_address_is_409_and_creates_nothing(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ):
-    """A venue address the geocoder cannot resolve is a coded 422 at the boundary, and
-    the write is atomic — no coordinate-less row is created (ADR "an unresolvable
-    address is a 422 at the boundary").
+    """A venue address the geocoder cannot resolve is a coded 409 refusal, and the write
+    is atomic — no coordinate-less row is created. It is a 409, not a 422: FastAPI
+    reserves 422 for its own ``HTTPValidationError`` (a ``detail`` array), so this coded
+    object body rides on 409 instead (ADR-0968).
 
     Uses the deterministic ``FakeGeocoder`` sentinel (``__unresolvable__``) so the
     zero-result path is exercised with no network. The body carries the machine-readable
@@ -219,7 +220,7 @@ async def test_create_with_unresolvable_address_is_422_and_creates_nothing(
     bad = {**_address(), "venue": "__unresolvable__"}
     response = await client.post("/v1/tournaments", json=_create_payload(address=bad))
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "address_not_geocodable"
     # A 422 that had already written a row would be a 422 in name only.
     count = (
@@ -255,10 +256,10 @@ async def test_geocode_preview_resolves_an_address(
     }
 
 
-async def test_geocode_preview_unresolvable_address_is_the_coded_422(
+async def test_geocode_preview_unresolvable_address_is_the_coded_409(
     authed_client: tuple[AsyncClient, User],
 ):
-    """An address the geocoder cannot resolve is the same coded 422 the write path
+    """An address the geocoder cannot resolve is the same coded 409 the write path
     answers — the machine-readable ``address_not_geocodable`` code (ADR-0968), so
     the preview and the write agree on the refusal. Uses the deterministic
     ``FakeGeocoder`` sentinel so the zero-result path is exercised with no
@@ -267,7 +268,7 @@ async def test_geocode_preview_unresolvable_address_is_the_coded_422(
 
     response = await client.get("/v1/geocode", params={"address": "__unresolvable__"})
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "address_not_geocodable"
 
 
@@ -407,14 +408,14 @@ async def test_patch_by_creator_updates_fields(
     assert body["status"] == "draft"
 
 
-async def test_patch_with_unresolvable_address_is_422_and_leaves_the_address(
+async def test_patch_with_unresolvable_address_is_409_and_leaves_the_address(
     authed_client: tuple[AsyncClient, User],
 ):
     """Editing the venue to an address the geocoder cannot resolve is the same coded
-    422 the create path answers, and the edit is atomic — the stored address (and its
+    409 the create path answers, and the edit is atomic — the stored address (and its
     coordinates) is left unchanged.
 
-    Re-reads the address afterwards rather than trusting the 422: a handler that wrote
+    Re-reads the address afterwards rather than trusting the 409: a handler that wrote
     the coordinate-less address and *then* failed would pass a status-code-only
     assertion.
     """
@@ -427,7 +428,7 @@ async def test_patch_with_unresolvable_address_is_422_and_leaves_the_address(
         f"/v1/tournaments/{created['id']}", json={"address": bad}
     )
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "address_not_geocodable"
     # The stored address did not move — including its coordinates.
     read_back = (await client.get(f"/v1/tournaments/{created['id']}")).json()

@@ -88,8 +88,8 @@ from app.tournament_events import create_event as create_event_core
 from app.tournament_events import delete_event as delete_event_core
 from app.tournament_events import update_event as update_event_core
 from app.tournament_geocoding import (
-    ADDRESS_NOT_GEOCODABLE_CODE,
     ADDRESS_NOT_GEOCODABLE_MESSAGE,
+    AddressNotGeocodable,
 )
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
@@ -171,26 +171,33 @@ router = APIRouter(prefix="/v1")
 
 
 def _address_not_geocodable() -> HTTPException:
-    """The 422 for a venue address that resolved to zero candidates (ADR "an
-    unresolvable address is a 422 at the boundary").
+    """The coded ``409`` for a venue address that resolved to zero candidates.
 
     A coded refusal, following the entry endpoint's ``entry_refused`` precedent
     (ADR-0968): the machine-readable ``code`` is the contract a client switches on, the
     ``message`` is fallback prose. The ``create``/``update`` verbs raise the
     transport-neutral ``AddressNotGeocodableError``; this adapter turns it into the
     ``{"detail": {"code": ..., "message": ...}}`` body — the same word
-    (:data:`ADDRESS_NOT_GEOCODABLE_CODE`) the MCP tool names in its ``ToolError``, so a
-    client holds one copy table whichever surface refused it. The address is
-    unresolvable in any state the tournament could be in, so it is a boundary 422, not a
-    state 409."""
+    (:data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried on the :class:`AddressNotGeocodable`
+    model) the MCP tool names in its ``ToolError``, so a client holds one copy table
+    whichever surface refused it.
+
+    A ``409``, deliberately **not** a ``422``: FastAPI reserves ``422`` for its own
+    ``HTTPValidationError``, whose ``detail`` is an **array**, so a hand-rolled ``422``
+    object body drifts the generated ``schema.d.ts``/``Types.swift`` to a shape these
+    endpoints never return — and the strict-Codable iOS client cannot decode the real
+    object body (ADR-0968 rejects "one status, two body shapes" and uses coded ``409``).
+    The body is modeled (:class:`AddressNotGeocodable`) and declared on each route's
+    ``responses={409: ...}`` so the generated clients describe exactly what is sent."""
     return HTTPException(
-        # A bare ``422``, as the other tournament 422s here send (the
-        # ``status.HTTP_422_*`` alias is deprecated in the pinned Starlette).
-        status_code=422,
-        detail={
-            "code": ADDRESS_NOT_GEOCODABLE_CODE,
-            "message": ADDRESS_NOT_GEOCODABLE_MESSAGE,
-        },
+        status_code=409,
+        # ``AddressNotGeocodable`` carries the code (its default) + message;
+        # ``.model_dump`` gives the ``{"code", "message"}`` object FastAPI nests under
+        # ``detail`` — the same ``{"detail": {"code", "message"}}`` envelope the entry
+        # endpoint's coded refusals send (``entry_refused`` / ``_score_conflict``).
+        detail=AddressNotGeocodable(
+            message=ADDRESS_NOT_GEOCODABLE_MESSAGE
+        ).model_dump(),
     )
 
 
@@ -325,6 +332,7 @@ async def list_tournaments(
     response_model=TournamentRead,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_create)],
+    responses={409: {"model": AddressNotGeocodable}},
 )
 async def create_tournament(
     payload: TournamentCreate,
@@ -335,11 +343,11 @@ async def create_tournament(
     # Thin adapter over the transport-neutral ``create_tournament`` verb: it owns
     # the STRICT (FastAPI-free) league resolution, the on-write geocode and the write,
     # and signals each refusal with a domain exception. This handler maps each back to
-    # the exact status + body it produced before, plus the new geocode-failure 422:
+    # the exact status + body it produced before, plus the geocode-failure 409:
     #
     #   LeagueNotFoundError         -> 404 "League not found."
     #   NoDefaultLeagueError        -> 500 "No default league configured."
-    #   AddressNotGeocodableError   -> 422 coded ``address_not_geocodable`` refusal
+    #   AddressNotGeocodableError   -> 409 coded ``address_not_geocodable`` refusal
     try:
         tournament = await create_tournament_core(
             db, actor=current_user, payload=payload, geocoder=geocoder
@@ -349,9 +357,9 @@ async def create_tournament(
         # never a silent fall back to the default (ADR-0783).
         raise HTTPException(status_code=404, detail="League not found.") from exc
     except AddressNotGeocodableError as exc:
-        # The venue address resolved to zero candidates: a coded 422 at the boundary,
-        # never a coordinate-less write (the columns are NOT NULL). The verb geocodes
-        # before ``db.add``, so nothing was written.
+        # The venue address resolved to zero candidates: a coded 409 refusal, never a
+        # coordinate-less write (the columns are NOT NULL). The verb geocodes before
+        # ``db.add``, so nothing was written.
         raise _address_not_geocodable() from exc
     except NoDefaultLeagueError as exc:
         # An omitted league binds the default, so a deployment with no default is a
@@ -370,6 +378,7 @@ async def create_tournament(
     "/geocode",
     response_model=GeocodePreview,
     dependencies=[Depends(require_create)],
+    responses={409: {"model": AddressNotGeocodable}},
 )
 async def preview_geocode(
     address: Annotated[str, Query(min_length=1)],
@@ -389,7 +398,7 @@ async def preview_geocode(
     tournament, so the same grant that lets a user create one lets them preview
     its location — this is deliberately not a wide-open geocoding proxy.
 
-    A zero-result / unresolvable address is the same coded ``422`` the write path
+    A zero-result / unresolvable address is the same coded ``409`` the write path
     answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
     preview and the write agree on the refusal. Any other geocoder failure
     (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
@@ -446,7 +455,11 @@ async def get_tournament(
     )
 
 
-@router.patch("/tournaments/{tournament_id}", response_model=TournamentRead)
+@router.patch(
+    "/tournaments/{tournament_id}",
+    response_model=TournamentRead,
+    responses={409: {"model": AddressNotGeocodable}},
+)
 async def update_tournament(
     tournament_id: uuid.UUID,
     payload: TournamentUpdate,
@@ -456,16 +469,16 @@ async def update_tournament(
 ) -> TournamentRead:
     # Thin adapter over the transport-neutral ``edit_tournament`` verb: it owns the
     # load-lock, the owner gate, the league state-rule, the STRICT league lookup, the
-    # on-write geocode of a changed address, the partial apply and the table-catalogue →
-    # re-solve trigger, and signals each refusal with a domain exception. This handler
-    # maps each back to the exact status + body it produced before, plus the new
-    # geocode-failure 422:
+    # before-lock geocode of a changed address, the partial apply and the
+    # table-catalogue → re-solve trigger, and signals each refusal with a domain
+    # exception. This handler maps each back to the exact status + body it produced
+    # before, plus the geocode-failure 409:
     #
     #   TournamentNotFoundError    -> 404 "Tournament not found."
     #   NotTournamentOwnerError    -> 403 "You can only modify tournaments you created."
     #   LeagueNotEditableError     -> 409 "This tournament is {status}; its league …"
     #   LeagueNotFoundError        -> 404 "League not found."
-    #   AddressNotGeocodableError  -> 422 coded ``address_not_geocodable`` refusal
+    #   AddressNotGeocodableError  -> 409 coded ``address_not_geocodable`` refusal
     try:
         tournament = await edit_tournament(
             db,
@@ -483,9 +496,9 @@ async def update_tournament(
         # for a ``league_id`` that names none is this adapter's alone.
         raise HTTPException(status_code=404, detail="League not found.") from exc
     except AddressNotGeocodableError as exc:
-        # A changed venue address resolved to zero candidates: the same coded 422 the
-        # create path answers. The verb geocodes before any ``setattr``/commit, so the
-        # edit wrote nothing.
+        # A changed venue address resolved to zero candidates: the same coded 409 the
+        # create path answers. The verb geocodes before the lock and before any
+        # ``setattr``/commit, so the edit wrote nothing.
         raise _address_not_geocodable() from exc
     # The owner is the current user, so the username and can_edit are known.
     return serialize(

@@ -382,7 +382,13 @@ export function tournamentsListQuery(nearMe?: TournamentsNearMe) {
       )
       return rows.map(apiToTournament)
     },
-    throwOnError: true,
+    // Throw to the error boundary only on a cold load (nothing on screen), not on a
+    // background-refetch failure — matching `tournamentDetailQuery` below. `throwOnError:
+    // true` fires on background refetches too (see web-client/CLAUDE.md), so a transient
+    // blip re-fetching the list — now more likely, since near-me round-trips through
+    // browser geolocation + the network and each radius/location is its own cache entry —
+    // would tear down an already-rendered list rather than keep the last-good view.
+    throwOnError: (_error, query) => query.state.data === undefined,
     retry: false,
   })
 }

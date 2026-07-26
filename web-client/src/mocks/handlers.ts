@@ -1693,10 +1693,12 @@ export const handlers = [
   // ----- geocode (preview pin) -------------------------------------------
   // The "Preview location" lookup (`GET /v1/geocode`). Mirrors the server: a
   // normal address resolves to deterministic coords + a `formatted` label, while
-  // the `__unresolvable__` sentinel (or an empty address) is the coded 422 both
+  // the `__unresolvable__` sentinel (or an empty address) is the coded 409 both
   // the preview and the create/edit write path answer a zero-result address with
-  // (`address_not_geocodable`). Deterministic per address, so the pin is stable
-  // across reloads and testable in vitest.
+  // (`address_not_geocodable`). It shares the 409 status with the other tournament
+  // refusals (league-not-editable, draw-under-way) but is told apart by its coded
+  // `detail`. Deterministic per address, so the pin is stable across reloads and
+  // testable in vitest.
   http.get('*/v1/geocode', async ({ request }) => {
     await delay(200)
     const address =
@@ -1709,7 +1711,7 @@ export const handlers = [
             message: 'We couldn’t locate that address.',
           },
         },
-        { status: 422 },
+        { status: 409 },
       )
     }
     const seed = djb2(address)

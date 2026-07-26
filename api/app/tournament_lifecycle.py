@@ -116,7 +116,7 @@ async def create_tournament(
       server-side at write time and are NOT NULL"). An unresolvable address raises
       :class:`~app.geocoding.AddressNotGeocodableError` **before** anything is written,
       so a write that cannot produce coordinates commits nothing; the caller maps it to
-      a coded ``422`` (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
+      a coded ``409`` (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
     * The value-objects (``address``, ``table_catalogue``) persist as plain JSONB;
       the dicts ``model_dump`` produces don't propagate beyond this write boundary.
     * **No** ``status`` is set: it isn't on the create schema (ADR-0017), so a
