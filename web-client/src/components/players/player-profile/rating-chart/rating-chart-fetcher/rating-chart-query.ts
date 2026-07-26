@@ -77,7 +77,7 @@ const FLAT_PADDING = 20
  * whole history is one evening, so on a 30d/90d/1y axis every point shares almost
  * the same `x` and the series collapses to a ~1px vertical spike hard against the
  * right edge — the honest rendering of one instant on a calendar, and unusable.
- * These three constants size the fix.
+ * These two constants size the fix.
  */
 
 /** When the drawn line reaches back **less than this fraction** of the selected
@@ -89,16 +89,15 @@ const FLAT_PADDING = 20
  * (ADR-0915), not something to zoom away. */
 const COLLAPSE_RANGE_FRACTION = 0.05
 
-/** The tightest the zoomed axis goes — its minimum-span floor. Matches closer
- * together than this fan into a near-vertical cluster rather than being spread
- * edge-to-edge, which would imply hours between matches that were minutes (or
- * seconds) apart. Three hours reads as "one session". */
-const MIN_SPAN_FLOOR_MS = 3 * 60 * 60 * 1000
-
-/** Below this drawn x-extent (in viewBox units) even the floored zoom has not
- * separated the points: every match shares one instant (≈ now), so there is no
- * line to draw. The card shows an "N matches today" label instead of a spike. */
-const SINGLE_INSTANT_MIN_SPAN = 1
+/** How coincident the in-window matches must be to count as **one instant** — the
+ * "N matches today" fallback. Measured on the RAW timestamps (`max − min`), not on
+ * the drawn x-extent: the zoom pins the earliest match to the left edge and fans
+ * distinct matches across the plot, so a *drawn* extent can never distinguish
+ * "seconds apart" (a real line) from "same moment" (no line). A whole second of
+ * slack absorbs clock jitter while still leaving a genuine two-matches-a-minute
+ * -apart session on the zoomed line — which is exactly a freshly-rated player's
+ * `initial` seed rating plus their first match (the regression this guards). */
+const SINGLE_INSTANT_MAX_SPAN_MS = 1000
 
 /* ------------------------------------------------------- the peak's label --
  * The peak carries a dot AND its rating, and the two must not sit on top of each
@@ -190,10 +189,13 @@ export type ChartView = {
    * case.
    *
    * When a whole history is one instant — N matches recorded at the same moment,
-   * ≈ now — the time axis cannot fan them out even after the minimum-span floor,
-   * and the line above collapses to a sub-pixel spike. The card then renders an
-   * "N matches today" label *in place of* the SVG. `matchCount` is the real number
-   * of in-window matches, for the "1 match" / "6 matches" copy.
+   * ≈ now — there is no span for the time axis to fan out, and a line would be a
+   * sub-pixel spike. The card then renders an "N matches today" label *in place of*
+   * the SVG. Fired on the RAW timestamps being coincident (`max − min` under a
+   * one-second slack), NOT on a collapsed drawn extent: distinct-but-close matches
+   * (a `initial` seed rating plus a first match, seconds apart) zoom to a real line
+   * and are never labelled. `matchCount` is the real number of in-window matches,
+   * for the "1 match" / "6 matches" copy.
    */
   singleInstant: { matchCount: number } | null
 }
@@ -388,8 +390,14 @@ type XDomain = { xMin: number; xMax: number; collapsed: boolean }
  * tonight" (reaches back hours → zoom) apart from "played early, quiet since"
  * (reaches back the whole window → keep it; that flat run is the honest story).
  * When the reach is under `COLLAPSE_RANGE_FRACTION` of the window, the domain
- * zooms to the data, floored to `MIN_SPAN_FLOOR_MS`, with the right edge pinned at
- * now so the flat-run-to-today and the current dot are always in frame.
+ * zooms to **fit the data**: the earliest match is pinned to the left edge and now
+ * to the right, so the session fans across the full plot. Fitting rather than
+ * flooring to a fixed `[now − 3h, now]` window is the fix for the over-firing
+ * label — a floor clusters *recent* matches (a freshly-rated player's seed rating
+ * plus a first match, minutes apart) against the right edge, where they read as one
+ * instant even though they aren't. The right edge stays pinned at now so the
+ * flat-run-to-today and the current dot are always in frame; `xSpan`'s own
+ * `Math.max(1, …)` floor keeps a truly-tiny span from dividing by zero.
  */
 function xDomain(
   window: RatingHistoryWindow,
@@ -413,8 +421,11 @@ function xDomain(
   const rangeSpan = RANGE_DAYS[range] * DAY_MS
   if (reach >= COLLAPSE_RANGE_FRACTION * rangeSpan) return full
 
-  const xMin = Math.min(minPoint, now - MIN_SPAN_FLOOR_MS)
-  return { xMin, xMax: now, collapsed: true }
+  // Zoom to fit: the earliest match at the left edge, now at the right. Distinct
+  // matches — however close — fan into a visible line; only truly coincident ones
+  // (caught by `SINGLE_INSTANT_MAX_SPAN_MS` in `selectRatingChart`) degrade to the
+  // "N matches today" label.
+  return { xMin: minPoint, xMax: now, collapsed: true }
 }
 
 /**
@@ -434,11 +445,11 @@ function xDomain(
  * **previous** range's data on screen (`keepPreviousData`), and re-projecting a
  * 90-day line into a 30-day domain would pile two thirds of it up on the left
  * edge, so widening to fit draws the old line as itself until the new one lands.
- * And it **zooms in** — starting *later* than the window start — when the data
- * has collapsed against the right edge (a brand-new player's one evening), so an
- * otherwise sub-pixel spike fans out to fill the plot (#957). Both live in
- * `xDomain`; a single-instant history degrades to an "N matches today" label
- * instead.
+ * And it **zooms in** — starting *later* than the window start, at the earliest
+ * match itself — when the data has collapsed against the right edge (a brand-new
+ * player's one evening), so an otherwise sub-pixel spike fans out to fill the plot
+ * (#957). Both live in `xDomain`; only a genuinely one-instant history (coincident
+ * raw timestamps) degrades to an "N matches today" label instead.
  */
 export function selectRatingChart(
   window: RatingHistoryWindow,
@@ -491,17 +502,18 @@ export function selectRatingChart(
       ? `${line} L${last.x} ${baseline} L${first.x} ${baseline} Z`
       : ''
 
-  // The genuinely-single-instant fallback (#957): the zoom branch was taken, yet
-  // even the floored domain has not separated the drawn vertices — every match is
-  // at one instant ≈ now, so the line is a sub-pixel spike. The card shows an
-  // "N matches today" label rather than draw it. Measured on the DRAWN x-extent,
-  // not the raw timestamps, so it is exactly "did the zoom fail to fan them".
-  const drawnXs = coords.map((point) => point.x)
-  const drawnXExtent = drawnXs.length
-    ? Math.max(...drawnXs) - Math.min(...drawnXs)
+  // The genuinely-single-instant fallback (#957): the zoom branch was taken AND the
+  // in-window matches are truly coincident — one instant, ≈ now — so there is no
+  // span to fan out and a line would be a sub-pixel spike. Gated on the RAW
+  // timestamps (`max − min`), NOT the drawn x-extent: the zoom pins the earliest
+  // match to the left edge, so distinct-but-close matches (a seed rating plus a
+  // first match, seconds apart) fan into a real line and must NOT be labelled —
+  // only genuinely one-instant histories degrade to "N matches today".
+  const rawSpan = pointTimes.length
+    ? Math.max(...pointTimes) - Math.min(...pointTimes)
     : 0
   const singleInstant =
-    collapsed && drawnXExtent < SINGLE_INSTANT_MIN_SPAN
+    collapsed && rawSpan < SINGLE_INSTANT_MAX_SPAN_MS
       ? { matchCount: window.points.length }
       : null
 

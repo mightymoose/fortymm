@@ -381,6 +381,42 @@ describe('selectRatingChart', () => {
     expect(view.singleInstant).toBeNull()
   })
 
+  it('draws a LINE for a freshly-rated player: seed rating + first match, seconds apart, no anchor (#957)', () => {
+    // The regression the composed root-e2e caught (`seedRatedPlayer`). A brand-new
+    // rated player's whole history is TWO points seconds apart — the `initial` seed
+    // rating and their first match — with no carry-in anchor, on the 90d range. The
+    // old zoom floored the domain to a fixed [now − 3h, now] window, which clustered
+    // these two *recent* points against the right edge; the drawn extent fell below
+    // a viewBox unit and the projection reported "2 matches today" INSTEAD of the
+    // line (5 e2e specs asserting the line went red). Distinct timestamps must fan
+    // into a real line: `singleInstant` is null and the session spans the plot.
+    const sec = 1 / (24 * 60 * 60)
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: null,
+        points: [
+          buildRatingPoint({ at: at(15 * sec), rating: 1500 }), // the seed rating
+          buildRatingPoint({ at: at(5 * sec), rating: 1516 }), // the first match, 10s later
+        ],
+        peak: buildRatingPoint({ at: at(5 * sec), rating: 1516 }),
+        change: 16,
+      }),
+      '90d',
+      NOW,
+    )
+
+    // A real, drawn line — not the degenerate single-instant label.
+    expect(view.singleInstant).toBeNull()
+    expect(view.line).not.toBe('')
+    const xCoords = xs(view.line)
+    // The earliest (seed) point is pinned to the left edge — the domain fit the
+    // data span rather than flooring recent points against the right edge…
+    expect(xCoords[0]).toBe(42) // PLOT.left
+    // …so the two-point session fans across most of the plot.
+    expect(xCoords.at(-1)! - xCoords[0]).toBeGreaterThan(400)
+    expect(new Set(xCoords).size).toBeGreaterThan(1)
+  })
+
   it('does NOT zoom when a carry-in anchor holds the line to the left edge (#957)', () => {
     // The zoom is only for a line with nothing pinning it left. An anchored line
     // already spans the plot — the anchor is drawn at window-start (ADR-0915), and
