@@ -80,10 +80,16 @@ then fan out across the plot on a real time axis, rather than compressing to a
 sub-pixel line. The range tab becomes "show me *at most* this window, zoomed to
 fit" rather than "stretch the data across the whole window".
 
-The one case the zoom cannot rescue is genuinely identical timestamps (every point
-at the same instant). There the minimum-span floor fans them out; if that is still
-degenerate, the card degrades to a **"N matches today"** label rather than drawing
-a spike. This is the match-indexed axis's one advantage (it needs no anchor and
-degrades gracefully on sparse data) recovered *without* reintroducing it — the
-axis never silently switches its meaning from time to sequence, which is the thing
-this ADR rejected the sequence axis to avoid.
+The zoom-to-fit is the whole fix; there is **no single-instant label**. Even
+genuinely identical timestamps (every point at the same instant) draw fine under
+it: the coincident instant pins to the domain's left edge and the line runs flat to
+today — a plain horizontal line, which is the honest picture of a history that is
+one moment old, and needs no words. An earlier version of this amendment guarded
+that case with an **"N matches today"** label, gated on a fixed-floor domain
+(`[now − 3h, now]`). That floor misfired: it clustered close-but-*distinct* recent
+points — a freshly-rated player's `initial` seed rating plus their first match,
+seconds apart — against the right edge, where their drawn extent fell below a
+viewBox unit and the label fired for a line that should have been drawn. Fitting the
+domain to the data's own span (rather than to a fixed floor) fans distinct points
+out and collapses only truly-coincident ones onto the left edge, so the label had
+nothing left to guard and was removed.

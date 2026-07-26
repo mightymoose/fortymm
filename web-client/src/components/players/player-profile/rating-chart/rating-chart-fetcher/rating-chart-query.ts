@@ -77,7 +77,10 @@ const FLAT_PADDING = 20
  * whole history is one evening, so on a 30d/90d/1y axis every point shares almost
  * the same `x` and the series collapses to a ~1px vertical spike hard against the
  * right edge — the honest rendering of one instant on a calendar, and unusable.
- * These two constants size the fix.
+ * The zoom-to-fit below sizes the fix, and it always produces a drawable line: a
+ * genuinely coincident-instant history simply fits its zero-width span to the
+ * left edge and runs flat to today (a horizontal line), which draws fine and needs
+ * no label.
  */
 
 /** When the drawn line reaches back **less than this fraction** of the selected
@@ -88,16 +91,6 @@ const FLAT_PADDING = 20
  * window stays on the full calendar domain, whose flat run is honest inactivity
  * (ADR-0915), not something to zoom away. */
 const COLLAPSE_RANGE_FRACTION = 0.05
-
-/** How coincident the in-window matches must be to count as **one instant** — the
- * "N matches today" fallback. Measured on the RAW timestamps (`max − min`), not on
- * the drawn x-extent: the zoom pins the earliest match to the left edge and fans
- * distinct matches across the plot, so a *drawn* extent can never distinguish
- * "seconds apart" (a real line) from "same moment" (no line). A whole second of
- * slack absorbs clock jitter while still leaving a genuine two-matches-a-minute
- * -apart session on the zoomed line — which is exactly a freshly-rated player's
- * `initial` seed rating plus their first match (the regression this guards). */
-const SINGLE_INSTANT_MAX_SPAN_MS = 1000
 
 /* ------------------------------------------------------- the peak's label --
  * The peak carries a dot AND its rating, and the two must not sit on top of each
@@ -184,20 +177,6 @@ export type ChartView = {
    * false and in the second is better said in words than in a chip.
    */
   change: ChartChangeView | null
-  /**
-   * The genuinely-single-instant fallback (#957), or **`null`** in every drawable
-   * case.
-   *
-   * When a whole history is one instant — N matches recorded at the same moment,
-   * ≈ now — there is no span for the time axis to fan out, and a line would be a
-   * sub-pixel spike. The card then renders an "N matches today" label *in place of*
-   * the SVG. Fired on the RAW timestamps being coincident (`max − min` under a
-   * one-second slack), NOT on a collapsed drawn extent: distinct-but-close matches
-   * (a `initial` seed rating plus a first match, seconds apart) zoom to a real line
-   * and are never labelled. `matchCount` is the real number of in-window matches,
-   * for the "1 match" / "6 matches" copy.
-   */
-  singleInstant: { matchCount: number } | null
 }
 
 const round = (value: number): number => Math.round(value * 100) / 100
@@ -364,10 +343,8 @@ const formatDay = (at: number, now: number): string => {
 }
 
 /** The x-domain the line is drawn into: normally window-start → now, but zoomed
- * to fit when the data has collapsed against the right edge. `collapsed` says
- * which branch was taken, so the caller knows a single-instant fallback is even
- * possible. */
-type XDomain = { xMin: number; xMax: number; collapsed: boolean }
+ * to fit when the data has collapsed against the right edge. */
+type XDomain = { xMin: number; xMax: number }
 
 /**
  * Where the x-axis starts and ends (#957).
@@ -392,12 +369,13 @@ type XDomain = { xMin: number; xMax: number; collapsed: boolean }
  * When the reach is under `COLLAPSE_RANGE_FRACTION` of the window, the domain
  * zooms to **fit the data**: the earliest match is pinned to the left edge and now
  * to the right, so the session fans across the full plot. Fitting rather than
- * flooring to a fixed `[now − 3h, now]` window is the fix for the over-firing
- * label — a floor clusters *recent* matches (a freshly-rated player's seed rating
- * plus a first match, minutes apart) against the right edge, where they read as one
- * instant even though they aren't. The right edge stays pinned at now so the
- * flat-run-to-today and the current dot are always in frame; `xSpan`'s own
- * `Math.max(1, …)` floor keeps a truly-tiny span from dividing by zero.
+ * flooring to a fixed `[now − 3h, now]` window is what keeps *recent* matches (a
+ * freshly-rated player's seed rating plus a first match, minutes apart) fanned into
+ * a real line instead of clustered against the right edge. The right edge stays
+ * pinned at now so the flat-run-to-today and the current dot are always in frame;
+ * `xSpan`'s own `Math.max(1, …)` floor keeps a truly-tiny span from dividing by
+ * zero — a genuinely coincident-instant history then pins to the left edge and
+ * runs flat to today, a horizontal line that draws fine and needs no label.
  */
 function xDomain(
   window: RatingHistoryWindow,
@@ -412,7 +390,6 @@ function xDomain(
   const full: XDomain = {
     xMin: Math.min(windowStart, minPoint),
     xMax: now,
-    collapsed: false,
   }
 
   if (window.anchor || pointTimes.length === 0) return full
@@ -421,11 +398,10 @@ function xDomain(
   const rangeSpan = RANGE_DAYS[range] * DAY_MS
   if (reach >= COLLAPSE_RANGE_FRACTION * rangeSpan) return full
 
-  // Zoom to fit: the earliest match at the left edge, now at the right. Distinct
-  // matches — however close — fan into a visible line; only truly coincident ones
-  // (caught by `SINGLE_INSTANT_MAX_SPAN_MS` in `selectRatingChart`) degrade to the
-  // "N matches today" label.
-  return { xMin: minPoint, xMax: now, collapsed: true }
+  // Zoom to fit: the earliest match at the left edge, now at the right. Every
+  // history — however close its points, down to a single coincident instant —
+  // fans (or, at zero span, runs flat) into a drawable line.
+  return { xMin: minPoint, xMax: now }
 }
 
 /**
@@ -448,8 +424,9 @@ function xDomain(
  * And it **zooms in** — starting *later* than the window start, at the earliest
  * match itself — when the data has collapsed against the right edge (a brand-new
  * player's one evening), so an otherwise sub-pixel spike fans out to fill the plot
- * (#957). Both live in `xDomain`; only a genuinely one-instant history (coincident
- * raw timestamps) degrades to an "N matches today" label instead.
+ * (#957). Both live in `xDomain`. The zoom always yields a drawable line, even for
+ * a genuinely one-instant history: its zero-width span fits to the left edge and
+ * runs flat to today — a horizontal line, no label.
  */
 export function selectRatingChart(
   window: RatingHistoryWindow,
@@ -462,13 +439,7 @@ export function selectRatingChart(
   // than it (the previous range's line, held on screen while this one loads) —
   // OR, when the data has collapsed against the right edge, zoomed to fit it
   // (#957). See `xDomain`.
-  const { xMin, xMax, collapsed } = xDomain(
-    window,
-    range,
-    now,
-    windowStart,
-    pointTimes,
-  )
+  const { xMin, xMax } = xDomain(window, range, now, windowStart, pointTimes)
   const xSpan = Math.max(1, xMax - xMin)
   const drawn = vertices(window, xMin, now)
 
@@ -501,21 +472,6 @@ export function selectRatingChart(
     first && last
       ? `${line} L${last.x} ${baseline} L${first.x} ${baseline} Z`
       : ''
-
-  // The genuinely-single-instant fallback (#957): the zoom branch was taken AND the
-  // in-window matches are truly coincident — one instant, ≈ now — so there is no
-  // span to fan out and a line would be a sub-pixel spike. Gated on the RAW
-  // timestamps (`max − min`), NOT the drawn x-extent: the zoom pins the earliest
-  // match to the left edge, so distinct-but-close matches (a seed rating plus a
-  // first match, seconds apart) fan into a real line and must NOT be labelled —
-  // only genuinely one-instant histories degrade to "N matches today".
-  const rawSpan = pointTimes.length
-    ? Math.max(...pointTimes) - Math.min(...pointTimes)
-    : 0
-  const singleInstant =
-    collapsed && rawSpan < SINGLE_INSTANT_MAX_SPAN_MS
-      ? { matchCount: window.points.length }
-      : null
 
   const currentVertex = drawn.at(-1)
   // The peak of the DRAWN line, anchor included — not `window.peak` read straight
@@ -554,7 +510,6 @@ export function selectRatingChart(
     ],
     summary: summarize(window, range),
     change: changeChip(window.change),
-    singleInstant,
   }
 }
 

@@ -377,8 +377,6 @@ describe('selectRatingChart', () => {
     // clustering against the right edge.
     expect(xCoords.at(-1)! - xCoords[0]).toBeGreaterThan(400)
     expect(new Set(xCoords).size).toBeGreaterThan(2)
-    // It is a real line, not the degenerate single-instant fallback.
-    expect(view.singleInstant).toBeNull()
   })
 
   it('draws a LINE for a freshly-rated player: seed rating + first match, seconds apart, no anchor (#957)', () => {
@@ -387,9 +385,10 @@ describe('selectRatingChart', () => {
     // rating and their first match — with no carry-in anchor, on the 90d range. The
     // old zoom floored the domain to a fixed [now − 3h, now] window, which clustered
     // these two *recent* points against the right edge; the drawn extent fell below
-    // a viewBox unit and the projection reported "2 matches today" INSTEAD of the
-    // line (5 e2e specs asserting the line went red). Distinct timestamps must fan
-    // into a real line: `singleInstant` is null and the session spans the plot.
+    // a viewBox unit and the card showed "2 matches today" INSTEAD of the line (5
+    // e2e specs asserting the line went red). The zoom-to-fit pins the earliest
+    // point to the left edge, so these distinct timestamps fan into a real line that
+    // spans the plot.
     const sec = 1 / (24 * 60 * 60)
     const view = selectRatingChart(
       buildRatingHistoryWindow({
@@ -405,8 +404,7 @@ describe('selectRatingChart', () => {
       NOW,
     )
 
-    // A real, drawn line — not the degenerate single-instant label.
-    expect(view.singleInstant).toBeNull()
+    // A real, drawn line.
     expect(view.line).not.toBe('')
     const xCoords = xs(view.line)
     // The earliest (seed) point is pinned to the left edge — the domain fit the
@@ -443,15 +441,16 @@ describe('selectRatingChart', () => {
     // The in-window matches sit hard against the right edge — the full-window
     // behaviour the anchor preserves, and the spike the no-anchor case above avoids.
     expect(xCoords[1]).toBeGreaterThan(580)
-    expect(view.singleInstant).toBeNull()
   })
 
-  it('degrades to an "N matches today" state when every match is at one instant (#957)', () => {
-    // The one case the zoom cannot rescue: genuinely identical timestamps. The
-    // minimum-span floor fans nothing when there is nothing to fan, so rather than
-    // draw a sub-pixel spike the projection reports the real count for the card to
-    // state in words.
-    const instant = at(0)
+  it('draws a LINE even when every match is at ONE instant — a flat run to today (#957)', () => {
+    // The case the zoom-to-fit handles without a label: genuinely identical
+    // timestamps. The coincident instant pins to the left edge and the line then
+    // runs flat to today — a drawable line, not a sub-pixel spike. There is no
+    // single-instant "N matches today" fallback any more — a fixed-floor domain
+    // misfired that label on close-but-distinct recent points, so it was removed and
+    // the zoom-to-fit always produces a drawable line.
+    const instant = at(1)
     const view = selectRatingChart(
       buildRatingHistoryWindow({
         anchor: null,
@@ -467,7 +466,13 @@ describe('selectRatingChart', () => {
       NOW,
     )
 
-    expect(view.singleInstant).toEqual({ matchCount: 3 })
+    // A real, drawn path — not an empty string, not a degenerate label.
+    expect(view.line).not.toBe('')
+    const xCoords = xs(view.line)
+    // The coincident instant is pinned to the left edge; the flat run reaches today.
+    expect(xCoords[0]).toBe(42) // PLOT.left
+    expect(xCoords.at(-1)).toBe(590) // CHART_WIDTH - PLOT.right — today's edge
+    expect(JSON.stringify(view)).not.toContain('singleInstant')
   })
 })
 

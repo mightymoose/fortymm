@@ -27,11 +27,6 @@ export interface RatingChartDisplayProps {
   onRetry: () => void
 }
 
-/** "1 match today" / "6 matches today" — the single-instant fallback's copy
- * (#957), pluralised on the real in-window match count. */
-const matchesTodayLabel = (count: number): string =>
-  `${count} ${count === 1 ? 'match' : 'matches'} today`
-
 /**
  * The rating chart's card: a heading, the signed change, the range tabs, a
  * sentence, and the line.
@@ -112,14 +107,6 @@ export const RatingChartDisplay = ({
               Try again
             </Button>
           </div>
-        ) : chart?.singleInstant ? (
-          // The whole history is one instant (#957): N matches recorded at the
-          // same moment, ≈ now. A calendar axis cannot fan them out — the line
-          // would be a sub-pixel spike against the right edge — so the card states
-          // the fact in words instead of drawing a spike.
-          <p className="rating-chart__single-instant" role="status">
-            {matchesTodayLabel(chart.singleInstant.matchCount)}
-          </p>
         ) : chart ? (
           <div
             className={cn(
