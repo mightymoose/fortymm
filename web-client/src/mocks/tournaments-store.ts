@@ -35,6 +35,7 @@ import {
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
 import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
+import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -619,14 +620,11 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
 // — a haversine over the coords each address already stores (`geocodeAddress`) — so
 // `npm run dev` and vitest exercise real filtering with no backend behind them.
 
-/** A location + radius the list is scoped to. All three fields or none: the handler
- * enforces the all-or-nothing contract at the boundary, so by the time a filter reaches
- * here it is complete. */
-export type NearMeFilter = {
-  lat: number
-  lng: number
-  radiusMiles: number
-}
+/** A location + radius the list is scoped to — the same shape the app-side list query
+ * carries (`TournamentsNearMe`), aliased here under the mock's name so the store and the
+ * app share one definition. All three fields or none: the handler enforces the
+ * all-or-nothing contract at the boundary, so a filter that reaches here is complete. */
+export type NearMeFilter = TournamentsNearMe
 
 /** Earth's mean radius in miles — the SAME constant the API's haversine uses, so a mock
  * `distance_miles` rounds to the value the real server would send. */

@@ -257,8 +257,7 @@ def _near_me_or_422(
     returns ``None``; all three present returns the filter the haversine reads. Each
     value's own range is checked by the ``Query`` bounds on the handler, so this only
     decides the cross-field "present together or not at all" rule."""
-    provided = [lat, lng, radius_miles]
-    if all(v is None for v in provided):
+    if lat is None and lng is None and radius_miles is None:
         return None
     if lat is None or lng is None or radius_miles is None:
         raise HTTPException(

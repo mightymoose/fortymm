@@ -56,23 +56,13 @@ async def geocode_address(geocoder: Geocoder, address: AddressInput) -> Address:
     to zero candidates; the caller maps it to a coded ``422``. Any other geocoder
     failure propagates.
     """
-    result = await geocoder.geocode(
-        compose_address(
-            venue=address.venue,
-            street=address.street,
-            city=address.city,
-            region=address.region,
-            postal=address.postal,
-            country=address.country,
-        )
-    )
+    # ``AddressInput`` holds exactly ``compose_address``'s six keyword params, and
+    # ``Address`` is those same six plus the coordinates, so one ``model_dump`` feeds
+    # both without re-listing the field names (``extra="forbid"`` keeps it honest).
+    components = address.model_dump()
+    result = await geocoder.geocode(compose_address(**components))
     return Address(
-        venue=address.venue,
-        street=address.street,
-        city=address.city,
-        region=address.region,
-        postal=address.postal,
-        country=address.country,
+        **components,
         latitude=result.latitude,
         longitude=result.longitude,
     )
