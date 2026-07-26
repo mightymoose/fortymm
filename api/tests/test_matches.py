@@ -4643,6 +4643,46 @@ async def test_accepting_result_notifies_the_poster(
     assert job.push_category is None
 
 
+async def test_accept_survives_notification_failure_with_201(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    """A notify-side failure on the accept path must NOT turn the already-
+    committed accept into a 500. The result is finalized before the best-effort
+    ``notify_result_accepted`` runs, so a raised exception there — swallowed by
+    the blanket guard, which rolls the session back — must still yield the 201
+    with the completed match.
+
+    Regression for the ordering bug: when the response was serialized *after*
+    the notify/``db.rollback()`` block, the rollback expired ``reloaded``'s
+    identity map and serialization lazy-loaded outside the greenlet
+    (``MissingGreenlet`` → 500). Reverting the reorder reds this with a 500."""
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("notification persistence exploded")
+
+    monkeypatch.setattr(matches_mod, "notify_result_accepted", boom)
+
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "notify-boom-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        details = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        standing = details["negotiation"]["standing_result"]
+        assert standing is not None
+        response = await opp_client.post(
+            f"/v1/matches/{match['id']}/results/{standing['id']}/acceptance"
+        )
+
+    # The commit already happened; the notify blow-up is best-effort. So the
+    # caller still gets a 201 with a completed match, never a 500.
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "completed"
+
+
 # ----- voiding a match (#750, ADR 0013) -----------------------------------
 
 

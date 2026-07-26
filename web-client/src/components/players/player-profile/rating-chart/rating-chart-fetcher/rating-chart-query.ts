@@ -428,13 +428,17 @@ function xDomain(
  * *numbers*, and they are asserted against numbers here rather than against
  * rendered pixels.
  *
- * The x-domain deserves a note. It runs from the window's start to now — except
- * that it stretches back to take in any point OLDER than the window start, which
- * happens for exactly one reason: while a range flip is in flight the card keeps
- * the **previous** range's data on screen (`keepPreviousData`), and re-projecting
- * a 90-day line into a 30-day domain would pile two thirds of it up on the left
- * edge. Widening the domain to fit the data draws the old line as itself until
- * the new one lands.
+ * The x-domain deserves a note. It usually runs from the window's start to now,
+ * but bends at both ends. It **stretches back** to take in any point OLDER than
+ * the window start: while a range flip is in flight the card keeps the
+ * **previous** range's data on screen (`keepPreviousData`), and re-projecting a
+ * 90-day line into a 30-day domain would pile two thirds of it up on the left
+ * edge, so widening to fit draws the old line as itself until the new one lands.
+ * And it **zooms in** — starting *later* than the window start — when the data
+ * has collapsed against the right edge (a brand-new player's one evening), so an
+ * otherwise sub-pixel spike fans out to fill the plot (#957). Both live in
+ * `xDomain`; a single-instant history degrades to an "N matches today" label
+ * instead.
  */
 export function selectRatingChart(
   window: RatingHistoryWindow,

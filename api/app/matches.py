@@ -904,13 +904,20 @@ async def accept_match_result(
             status_code=409, detail="The posted games no longer decide this match."
         ) from exc
 
+    extras = await view_extras(match_service, reloaded)
+    details = serialize_details(reloaded, current_user.id, extras)
     # Close the loop for the poster. The propose side told the *opponent* to
     # review; now that they've accepted, tell the *poster* their result is
     # final — otherwise their inbox stays empty on a completed match. The poster
     # is the accepted result's submitter, never the accepting current user.
-    # Best-effort and post-commit — mirrors the propose handler's guard, so a
-    # delivery-side failure can never turn the 201 into a 500; the session is
-    # rolled back so teardown is clean even when the in-app persist was at fault.
+    # Built after the response and best-effort — mirrors the propose handler's
+    # guard, so a delivery-side failure can never turn the 201 into a 500; the
+    # session is rolled back so teardown is clean even when the in-app persist
+    # was at fault. Building ``details`` off ``reloaded`` *before* this block is
+    # load-bearing: the ``except``'s ``db.rollback()`` expires the identity map,
+    # so any serialization after it would lazy-load ``reloaded``'s expired
+    # attributes outside the greenlet (``MissingGreenlet`` → the very 500 this
+    # guard exists to prevent).
     poster_id = next(
         (r.submitted_by_user_id for r in reloaded.results if r.id == result_id),
         None,
@@ -925,5 +932,4 @@ async def accept_match_result(
                 extra={"match_id": str(match_id)},
             )
 
-    extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return details
