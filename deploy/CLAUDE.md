@@ -137,18 +137,32 @@ unprompted.**
   kubectl get pod loki-0 -n monitoring \
     -o jsonpath='{.metadata.deletionTimestamp} {.metadata.deletionGracePeriodSeconds}'
   ```
-- **Fix (force-delete + clear the stranded release):** Loki here has **no PVC**
+- **Waiting does NOT fix it.** When the grace period expires the kubelet SIGKILLs
+  the pod and the StatefulSet recreates it, so the *pods* go healthy on their
+  own — but the release stays `pending-upgrade` forever, because no helm process
+  is alive to finish or fail it. The rollback below is mandatory; the
+  force-delete only buys back the remaining grace-period minutes.
+- **Fix (clear the stranded release, then the pod):** Loki here has **no PVC**
   and its storage renders as `emptyDir: {}`, so force-deleting loses nothing that
   wasn't already ephemeral:
   ```bash
-  kubectl delete pod loki-0 -n monitoring --grace-period=0 --force
-  helm rollback observability <last-deployed-rev> -n monitoring --wait
-  helm list -n monitoring        # expect: deployed
+  # Required — nothing else clears `pending-upgrade`:
+  helm --kube-context k3d-fortymm-uat rollback observability <last-deployed-rev> -n monitoring
+  # Optional — skips the wait for SIGKILL:
+  kubectl --context k3d-fortymm-uat delete pod loki-0 -n monitoring --grace-period=0 --force
+  helm --kube-context k3d-fortymm-uat list -n monitoring   # expect: deployed
   ```
   Use `helm history observability -n monitoring` to find the last `deployed`
   revision. `helm rollback` is the way out of `pending-upgrade`; a plain
   `helm upgrade` will just refuse. **[destructive/shared]** — flag for the user;
   do not run unprompted.
+- **Mind the kube context.** The default context is usually `docker-desktop`,
+  **not** the k3d cluster, and both tools fail *quietly* against the wrong one:
+  `helm list -n monitoring` returns an empty table and
+  `helm rollback ...` says `Error: release: not found` — neither of which reads
+  like "you're pointed at the wrong cluster". Pass
+  `--kube-context k3d-fortymm-uat` / `--context k3d-fortymm-uat` as above, or
+  `export KUBECONFIG="$(k3d kubeconfig write fortymm-uat)"` once per shell.
 - **Sidestep it:** `DEPLOY_OBSERVABILITY=false mise run redeploy-uat` deploys the
   app without touching the monitoring chart, so a wedged Loki doesn't block
   shipping UAT.
