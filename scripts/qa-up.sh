@@ -14,8 +14,11 @@
 # Override the search or pin exact ports:
 #   QA_PORT=8090 QA_MAILPIT_PORT=8091 scripts/qa-up.sh pr604
 #
-# Bring one down:   QA_ID=<ID> docker compose -p fortymm-qa-<ID> -f docker-compose.qa.yml down
-# Wipe its data:    add -v to the down above
+# Bring one down:   scripts/qa-down.sh [ID]      (same ID derivation as here)
+# Bring ALL down:   scripts/qa-down.sh --all     (add --prune-cache to reclaim
+#                   the buildx cache too — a raw `compose down` leaves the
+#                   built images and the build cache on disk, and they are what
+#                   fill Docker.raw)
 # List running:     docker compose ls | grep fortymm-qa
 
 set -euo pipefail
@@ -79,7 +82,7 @@ echo "==> Container status"
 
 echo
 echo "QA stack up: $QA_URL  (Mailpit http://127.0.0.1:${QA_MAILPIT_PORT})"
-echo "Tear down  : docker compose -p $PROJECT -f docker-compose.qa.yml down -v"
+echo "Tear down  : scripts/qa-down.sh $QA_ID   (also drops its volumes + built images)"
 echo
 
 # Machine-readable handoff — MUST be the last stdout line. Scripts/skills can
