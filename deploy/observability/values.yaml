@@ -43,6 +43,18 @@ loki-stack:
     # 2.8). Bump to 2.9.x and enable it so Explore shows volume.
     image:
       tag: 2.9.10
+    # The loki subchart defaults this to 4800 (80 minutes) — a sane figure for a
+    # production Loki flushing chunks to object storage on shutdown, and a trap
+    # here. We run with `persistence.enabled: false`, so Loki's storage is an
+    # EmptyDir: there is nothing durable to flush, and anything it does write
+    # dies with the pod regardless. But when Loki wedges (it 503s its readiness
+    # probe under memory pressure and then stops answering SIGTERM), the kubelet
+    # still honours the full 80 minutes before SIGKILL. The StatefulSet cannot
+    # recreate ordinal 0 until the old pod is gone, so a `helm upgrade --wait`
+    # that lands in that window blocks until it times out and leaves the release
+    # stranded in `pending-upgrade` — which then fails every subsequent upgrade
+    # with "another operation is in progress". 60s is plenty to exit cleanly.
+    terminationGracePeriodSeconds: 60
     config:
       limits_config:
         volume_enabled: true
