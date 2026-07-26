@@ -137,6 +137,19 @@ export function fmtVenueLine(address: Address): string {
   return joinPresent([address.venue, locality], ' · ')
 }
 
+/** A venue's distance from the searched-from point, as a card badge's label:
+ * `12 mi`, `0.4 mi` — never `12.0 mi`. The server already rounds to one decimal
+ * (`distance_miles`), so this only cleans the display: it re-rounds to one
+ * decimal (idempotent, guarding float artifacts like `0.30000000000000004`) and
+ * lets `String` drop a trailing `.0`, without flattening a real `0.4` to `0`.
+ *
+ * Called only with a number — the card decides whether the badge exists at all,
+ * since `distanceMiles` is `null`/absent when the list query sent no location. */
+export function fmtDistance(miles: number): string {
+  const rounded = Math.round(miles * 10) / 10
+  return `${rounded} mi`
+}
+
 /** A compact, human range: collapses same-day, same-month, and full spans. */
 export function fmtDateRange(
   a: string | null | undefined,
@@ -302,6 +315,10 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     startDate: null,
     endDate: null,
     description: '',
+    // `Tournament` is the READ model, so its `Address` carries the geocoded
+    // coordinates; a blank draft has none yet, so they seed at 0. The write path
+    // (`draftToCreateBody`) drops them — a client never sends coordinates — so
+    // these placeholders never reach the wire.
     address: {
       venue: '',
       street: '',
@@ -309,6 +326,8 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
       region: '',
       postal: '',
       country: 'USA',
+      latitude: 0,
+      longitude: 0,
     },
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [],

@@ -1,7 +1,8 @@
 import hashlib
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,8 @@ from app.draws import (
     NonSinglesDraw,
     UnsupportedDrawType,
 )
+from app.geocoding import AddressNotGeocodableError, Geocoder
+from app.geocoding.dependencies import get_geocoder
 from app.models import (
     Tournament,
     User,
@@ -33,6 +36,7 @@ from app.schemas.schedule_preview import (
     PreviewRequest,
 )
 from app.schemas.tournament import (
+    GeocodePreview,
     ScheduleSolveRead,
     TournamentCreate,
     TournamentDetailRead,
@@ -83,10 +87,18 @@ from app.tournament_errors import (
 from app.tournament_events import create_event as create_event_core
 from app.tournament_events import delete_event as delete_event_core
 from app.tournament_events import update_event as update_event_core
+from app.tournament_geocoding import (
+    ADDRESS_NOT_GEOCODABLE_MESSAGE,
+    AddressNotGeocodable,
+)
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import transition_tournament
-from app.tournament_list import list_tournament_details, tournament_detail
+from app.tournament_list import (
+    NearMeFilter,
+    list_tournament_details,
+    tournament_detail,
+)
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import visible_to as _visible_to
 from app.tournament_serialization import (
@@ -158,6 +170,37 @@ router = APIRouter(prefix="/v1")
 # the rule has one home the MCP tool shares too.
 
 
+def _address_not_geocodable() -> HTTPException:
+    """The coded ``409`` for a venue address that resolved to zero candidates.
+
+    A coded refusal, following the entry endpoint's ``entry_refused`` precedent
+    (ADR-0968): the machine-readable ``code`` is the contract a client switches on, the
+    ``message`` is fallback prose. The ``create``/``update`` verbs raise the
+    transport-neutral ``AddressNotGeocodableError``; this adapter turns it into the
+    ``{"detail": {"code": ..., "message": ...}}`` body — the same word
+    (:data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried on the :class:`AddressNotGeocodable`
+    model) the MCP tool names in its ``ToolError``, so a client holds one copy table
+    whichever surface refused it.
+
+    A ``409``, deliberately **not** a ``422``: FastAPI reserves ``422`` for its own
+    ``HTTPValidationError``, whose ``detail`` is an **array**, so a hand-rolled ``422``
+    object body drifts the generated ``schema.d.ts``/``Types.swift`` to a shape these
+    endpoints never return — and the strict-Codable iOS client cannot decode the real
+    object body (ADR-0968 rejects "one status, two body shapes" and uses coded ``409``).
+    The body is modeled (:class:`AddressNotGeocodable`) and declared on each route's
+    ``responses={409: ...}`` so the generated clients describe exactly what is sent."""
+    return HTTPException(
+        status_code=409,
+        # ``AddressNotGeocodable`` carries the code (its default) + message;
+        # ``.model_dump`` gives the ``{"code", "message"}`` object FastAPI nests under
+        # ``detail`` — the same ``{"detail": {"code", "message"}}`` envelope the entry
+        # endpoint's coded refusals send (``entry_refused`` / ``_score_conflict``).
+        detail=AddressNotGeocodable(
+            message=ADDRESS_NOT_GEOCODABLE_MESSAGE
+        ).model_dump(),
+    )
+
+
 # The transport-neutral tournament write verbs (``tournament_edit`` /
 # ``tournament_draw_service`` / ``tournament_solve_service``) each raise this closed
 # family of domain exceptions for the refusals that map identically across every
@@ -208,6 +251,32 @@ def _map_tournament_write_error(exc: _TournamentWriteError) -> HTTPException:
 # ----- tournament routes ---------------------------------------------------
 
 
+def _near_me_or_422(
+    *, lat: float | None, lng: float | None, radius_miles: float | None
+) -> NearMeFilter | None:
+    """Parse the list's ``lat``/``lng``/``radius_miles`` query triple into a
+    :class:`NearMeFilter`, enforcing **all-or-nothing** at the boundary.
+
+    The three are one filter, not three independent knobs: a point without a radius
+    (or a radius without a point) cannot describe "near me", so a *partial* triple is a
+    client bug worth a 422, not something to silently ignore (parse-at-boundaries). All
+    three absent is the unfiltered list — the request every caller already sends — and
+    returns ``None``; all three present returns the filter the haversine reads. Each
+    value's own range is checked by the ``Query`` bounds on the handler, so this only
+    decides the cross-field "present together or not at all" rule."""
+    if lat is None and lng is None and radius_miles is None:
+        return None
+    if lat is None or lng is None or radius_miles is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "lat, lng and radius_miles must be supplied together (or all "
+                "omitted) to filter tournaments near a location."
+            ),
+        )
+    return NearMeFilter(lat=lat, lng=lng, radius_miles=radius_miles)
+
+
 @router.get(
     "/tournaments",
     response_model=list[TournamentDetailRead],
@@ -216,22 +285,45 @@ def _map_tournament_write_error(exc: _TournamentWriteError) -> HTTPException:
 async def list_tournaments(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
+    # ``Annotated`` (not ``= Query(...)``) so the runtime default is a real ``None``:
+    # the handler is called directly, without FastAPI, by the statement-count tripwire
+    # in tests/test_tournaments.py, and a ``Query(None)`` sentinel default would reach
+    # ``_near_me_or_422`` as a non-null value.
+    lat: Annotated[float | None, Query(ge=-90.0, le=90.0)] = None,
+    lng: Annotated[float | None, Query(ge=-180.0, le=180.0)] = None,
+    radius_miles: Annotated[float | None, Query(gt=0.0)] = None,
 ) -> list[TournamentDetailRead]:
+    """List the tournaments the caller may see, newest first, each as the full detail
+    aggregate the list cards render.
+
+    Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    tournaments **near a point**: only those whose venue is within `radius_miles` of
+    `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    three describe one location filter, not three independent knobs. Omit all three
+    (the default) for every visible tournament, with `distance_miles` null.
+    """
     # The list page's cards render event-derived stats (event count, total
     # entries, table count), so the list returns the full aggregate — events, their
     # entrants and their draws included — rather than a thinner summary. The FIVE-query
     # batched read (no N+1, whatever the number of tournaments or events) lives in the
     # shared ``list_tournament_details`` so the MCP ``list_my_tournaments`` tool runs
-    # the exact same shape; this handler only supplies the WHERE.
+    # the exact same shape; this handler only supplies the WHERE and the optional
+    # near-me filter.
     #
     # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see, so it
     # never enters the result set — and, because the filter is a WHERE clause on the
     # first of the five queries, the events and entrants queries are keyed off the
     # surviving ids and cannot leak a hidden tournament's contents either. A predicate
     # costs no extra statement, so the statement-count tripwire in
-    # tests/test_tournaments.py still reads the same count.
+    # tests/test_tournaments.py still reads the same count — the near-me distance column
+    # and radius WHERE ride on that same first query too.
+    near_me = _near_me_or_422(lat=lat, lng=lng, radius_miles=radius_miles)
     return await list_tournament_details(
-        db, where=_visible_to(current_user.id), current_user_id=current_user.id
+        db,
+        where=_visible_to(current_user.id),
+        current_user_id=current_user.id,
+        near_me=near_me,
     )
 
 
@@ -240,27 +332,35 @@ async def list_tournaments(
     response_model=TournamentRead,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_create)],
+    responses={409: {"model": AddressNotGeocodable}},
 )
 async def create_tournament(
     payload: TournamentCreate,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
+    geocoder: Geocoder = Depends(get_geocoder),
 ) -> TournamentRead:
     # Thin adapter over the transport-neutral ``create_tournament`` verb: it owns
-    # the STRICT (FastAPI-free) league resolution and the write, and signals each
-    # league refusal with a domain exception. This handler maps each back to the
-    # exact status + body it produced before, so the wire contract is unchanged:
+    # the STRICT (FastAPI-free) league resolution, the on-write geocode and the write,
+    # and signals each refusal with a domain exception. This handler maps each back to
+    # the exact status + body it produced before, plus the geocode-failure 409:
     #
-    #   LeagueNotFoundError   -> 404 "League not found."
-    #   NoDefaultLeagueError  -> 500 "No default league configured."
+    #   LeagueNotFoundError         -> 404 "League not found."
+    #   NoDefaultLeagueError        -> 500 "No default league configured."
+    #   AddressNotGeocodableError   -> 409 coded ``address_not_geocodable`` refusal
     try:
         tournament = await create_tournament_core(
-            db, actor=current_user, payload=payload
+            db, actor=current_user, payload=payload, geocoder=geocoder
         )
     except LeagueNotFoundError as exc:
         # The STRICT resolution: a ``league_id`` that names no league is a 404,
         # never a silent fall back to the default (ADR-0783).
         raise HTTPException(status_code=404, detail="League not found.") from exc
+    except AddressNotGeocodableError as exc:
+        # The venue address resolved to zero candidates: a coded 409 refusal, never a
+        # coordinate-less write (the columns are NOT NULL). The verb geocodes before
+        # ``db.add``, so nothing was written.
+        raise _address_not_geocodable() from exc
     except NoDefaultLeagueError as exc:
         # An omitted league binds the default, so a deployment with no default is a
         # broken configuration — the 500 ``resolve_league`` raised inline before.
@@ -271,6 +371,47 @@ async def create_tournament(
         tournament,
         created_by_username=current_user.username,
         current_user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/geocode",
+    response_model=GeocodePreview,
+    dependencies=[Depends(require_create)],
+    responses={409: {"model": AddressNotGeocodable}},
+)
+async def preview_geocode(
+    address: Annotated[str, Query(min_length=1)],
+    geocoder: Geocoder = Depends(get_geocoder),
+) -> GeocodePreview:
+    """Resolve a free-text ``address`` string to coordinates for the web
+    "Preview location" pin, without writing anything.
+
+    Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    on a user action — the previewer typing/blurring the venue fields — not on
+    page load, so it is not folded into a page endpoint. It resolves through the
+    same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    geocodes with, so the pin the previewer sees matches the coordinates a
+    subsequent write would record.
+
+    Gated on ``tournament.create``: previewing a venue is part of composing a
+    tournament, so the same grant that lets a user create one lets them preview
+    its location — this is deliberately not a wide-open geocoding proxy.
+
+    A zero-result / unresolvable address is the same coded ``409`` the write path
+    answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    preview and the write agree on the refusal. Any other geocoder failure
+    (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    ``500`` handler.
+    """
+    try:
+        result = await geocoder.geocode(address)
+    except AddressNotGeocodableError as exc:
+        raise _address_not_geocodable() from exc
+    return GeocodePreview(
+        latitude=result.latitude,
+        longitude=result.longitude,
+        formatted=result.formatted,
     )
 
 
@@ -314,26 +455,37 @@ async def get_tournament(
     )
 
 
-@router.patch("/tournaments/{tournament_id}", response_model=TournamentRead)
+@router.patch(
+    "/tournaments/{tournament_id}",
+    response_model=TournamentRead,
+    responses={409: {"model": AddressNotGeocodable}},
+)
 async def update_tournament(
     tournament_id: uuid.UUID,
     payload: TournamentUpdate,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
+    geocoder: Geocoder = Depends(get_geocoder),
 ) -> TournamentRead:
     # Thin adapter over the transport-neutral ``edit_tournament`` verb: it owns the
-    # load-lock, the owner gate, the league state-rule, the STRICT league lookup,
-    # the partial apply and the table-catalogue → re-solve trigger, and signals
-    # each refusal with a domain exception. This handler maps each back to the
-    # exact status + body it produced before, so the wire contract is unchanged:
+    # load-lock, the owner gate, the league state-rule, the STRICT league lookup, the
+    # before-lock geocode of a changed address, the partial apply and the
+    # table-catalogue → re-solve trigger, and signals each refusal with a domain
+    # exception. This handler maps each back to the exact status + body it produced
+    # before, plus the geocode-failure 409:
     #
-    #   TournamentNotFoundError  -> 404 "Tournament not found."
-    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
-    #   LeagueNotEditableError   -> 409 "This tournament is {status}; its league …"
-    #   LeagueNotFoundError      -> 404 "League not found."
+    #   TournamentNotFoundError    -> 404 "Tournament not found."
+    #   NotTournamentOwnerError    -> 403 "You can only modify tournaments you created."
+    #   LeagueNotEditableError     -> 409 "This tournament is {status}; its league …"
+    #   LeagueNotFoundError        -> 404 "League not found."
+    #   AddressNotGeocodableError  -> 409 coded ``address_not_geocodable`` refusal
     try:
         tournament = await edit_tournament(
-            db, tournament_id=tournament_id, actor=current_user, updates=payload
+            db,
+            tournament_id=tournament_id,
+            actor=current_user,
+            updates=payload,
+            geocoder=geocoder,
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
         # Shared arms: the 404 (absent), the 403 (not the owner), and the 409
@@ -343,6 +495,11 @@ async def update_tournament(
         # Verb-specific: only the edit verb resolves a league, so the strict 404
         # for a ``league_id`` that names none is this adapter's alone.
         raise HTTPException(status_code=404, detail="League not found.") from exc
+    except AddressNotGeocodableError as exc:
+        # A changed venue address resolved to zero candidates: the same coded 409 the
+        # create path answers. The verb geocodes before the lock and before any
+        # ``setattr``/commit, so the edit wrote nothing.
+        raise _address_not_geocodable() from exc
     # The owner is the current user, so the username and can_edit are known.
     return serialize(
         tournament,

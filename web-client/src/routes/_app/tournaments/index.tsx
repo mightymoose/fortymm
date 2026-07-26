@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { TournamentsListPage } from '@/components/tournaments/tournaments-list-page'
@@ -6,6 +7,7 @@ import {
   useCreateTournament,
   useDeleteTournament,
   useTournaments,
+  type TournamentsNearMe,
 } from '@/components/tournaments/data/api'
 import { useHasPermission } from '@/api/session'
 import { PERM } from '@/lib/permissions'
@@ -20,7 +22,11 @@ export const Route = createFileRoute('/_app/tournaments/')({
 
 function TournamentsRoute() {
   const navigate = useNavigate()
-  const tournaments = useTournaments()
+  // The near-me filter is lifted here, where the list query is called, so a
+  // resolved location + radius re-runs it server-side. `undefined` = off (the
+  // default, and where a denied/unavailable location snaps back to).
+  const [nearMe, setNearMe] = useState<TournamentsNearMe | undefined>(undefined)
+  const tournaments = useTournaments(nearMe)
   const createTournament = useCreateTournament()
   const deleteTournament = useDeleteTournament()
   const canCreate = useHasPermission(PERM.TOURNAMENT_CREATE)
@@ -45,6 +51,7 @@ function TournamentsRoute() {
         })
       }}
       onDelete={(id) => deleteTournament.mutate(id)}
+      onNearMeChange={setNearMe}
     />
   )
 }

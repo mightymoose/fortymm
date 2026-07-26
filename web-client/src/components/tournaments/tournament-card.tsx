@@ -1,9 +1,15 @@
 import { MapPin, Trash2 } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-import { effectiveDateRange, fmtDateRange, fmtVenueLine } from './data/helpers'
+import {
+  effectiveDateRange,
+  fmtDateRange,
+  fmtDistance,
+  fmtVenueLine,
+} from './data/helpers'
 import type { Tournament } from './data/types'
 import { StatusBadge } from './status-badge'
 
@@ -70,6 +76,18 @@ export const TournamentCard = ({
               <MapPin size={12} />
               {venue}
             </div>
+          )}
+          {/* Rendered independently of the venue line: a distance is a fact
+              about the row whether or not the venue string is present, and it
+              only exists when the list query carried a location. */}
+          {t.distanceMiles != null && (
+            <Badge
+              variant="secondary"
+              data-testid="tournament-distance-badge"
+              className="mt-1.5"
+            >
+              {fmtDistance(t.distanceMiles)}
+            </Badge>
           )}
         </div>
 

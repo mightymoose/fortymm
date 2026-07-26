@@ -66,6 +66,8 @@ from app.draws import (
     NonSinglesDraw,
     UnsupportedDrawType,
 )
+from app.geocoding import AddressNotGeocodableError
+from app.geocoding.dependencies import get_geocoder
 from app.mappers.match_extras_mapper import empty_extras
 from app.match_creation import create_match as create_match_core
 from app.match_errors import (
@@ -174,6 +176,7 @@ from app.tournament_errors import (
 from app.tournament_events import create_event as create_event_core
 from app.tournament_events import delete_event as delete_event_core
 from app.tournament_events import update_event as update_event_core
+from app.tournament_geocoding import ADDRESS_NOT_GEOCODABLE_CODE
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import (
@@ -997,6 +1000,21 @@ def _map_tournament_write_tool_error(
     return ToolError(str(exc))
 
 
+def _map_address_not_geocodable_tool_error(
+    exc: AddressNotGeocodableError,
+) -> ToolError:
+    """Adapt an unresolvable venue address (ADR-0968's coded-refusal convention) to a
+    ``ToolError`` that NAMES the machine-readable code the HTTP surface answers with,
+    then hands the agent the address it could not resolve.
+
+    The HTTP create/edit adapters answer this with the coded 409
+    ``{"detail": {"code": ADDRESS_NOT_GEOCODABLE_CODE, ...}}``; an agent reads prose, so
+    the code rides in the prose (``[address_not_geocodable]``, exactly as the coded
+    entry refusals do) and the verb's own message — which address failed — follows, so
+    the agent is told both *which* rule refused it and *why* in its own words."""
+    return ToolError(f"Address not geocodable [{ADDRESS_NOT_GEOCODABLE_CODE}]: {exc}")
+
+
 @mcp.tool
 async def edit_tournament(
     tournament_id: uuid.UUID,
@@ -1025,10 +1043,16 @@ async def edit_tournament(
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may edit it), when you try to change
-    the league of a tournament that has left ``draft``, or when ``league_id`` names
-    no league.
+    the league of a tournament that has left ``draft``, when ``league_id`` names
+    no league, or when a changed venue ``address`` cannot be geocoded (the
+    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side on
+    write and are NOT NULL).
     """
     user_id = _authenticated_user_id()
+    # The geocoder is built from ``Settings`` (Google when keyed, else the keyless
+    # deterministic fake) — the MCP surface has no ``Depends``, so it constructs the
+    # same seam the HTTP route resolves with ``Depends(get_geocoder)``.
+    geocoder = get_geocoder(get_settings())
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
         if actor is None:
@@ -1039,6 +1063,7 @@ async def edit_tournament(
                 tournament_id=tournament_id,
                 actor=actor,
                 updates=updates,
+                geocoder=geocoder,
             )
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             raise _map_tournament_write_tool_error(
@@ -1048,6 +1073,8 @@ async def edit_tournament(
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
             raise ToolError("No league found with that id.") from exc
+        except AddressNotGeocodableError as exc:
+            raise _map_address_not_geocodable_tool_error(exc) from exc
         # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
         # so here the actor is the creator — the owner's perspective the HTTP PATCH
         # serializes from (``created_by_username`` known, ``can_edit`` true).
@@ -1080,10 +1107,16 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
     requires.
 
     Raises a ``ToolError`` when you lack ``tournament.create``, when ``league_id`` names
-    no league, or (a broken deployment) when no ``league_id`` is given and there is no
-    default league.
+    no league, when the venue ``address`` cannot be geocoded (the
+    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side on write
+    and are NOT NULL), or (a broken deployment) when no ``league_id`` is given and there
+    is no default league.
     """
     user_id = _authenticated_user_id()
+    # The geocoder is built from ``Settings`` (Google when keyed, else the keyless
+    # deterministic fake) — the MCP surface has no ``Depends``, so it constructs the
+    # same seam the HTTP route resolves with ``Depends(get_geocoder)``.
+    geocoder = get_geocoder(get_settings())
     async with mcp_session() as db:
         # Permission first, through the same shared gate the HTTP ``require_create``
         # dependency asks — before the caller is loaded or anything is written, the
@@ -1093,9 +1126,13 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
         if actor is None:
             raise ToolError("Not authenticated.")
         try:
-            tournament = await create_tournament_core(db, actor=actor, payload=payload)
+            tournament = await create_tournament_core(
+                db, actor=actor, payload=payload, geocoder=geocoder
+            )
         except LeagueNotFoundError as exc:
             raise ToolError("No league found with that id.") from exc
+        except AddressNotGeocodableError as exc:
+            raise _map_address_not_geocodable_tool_error(exc) from exc
         except NoDefaultLeagueError as exc:
             raise ToolError(
                 "This deployment has no default league configured, so a tournament "

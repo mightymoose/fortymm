@@ -5,10 +5,16 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { PreviewLocation } from '@/components/maps/preview-location'
 
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
+
+/** The address's six free-text components — everything the edit form touches.
+ * `latitude`/`longitude` are geocoded server-side and never edited here, so they
+ * are excluded from the keys the form can address. */
+type AddressTextField = Exclude<keyof Address, 'latitude' | 'longitude'>
 
 export interface DetailsTabProps {
   tournament: Tournament
@@ -60,10 +66,15 @@ export const DetailsTab = ({
   const save = () => onUpdate(draft)
 
   /** The address rows are the same shape six times over: an `Input` over the
-   * same value, which `Field` renders as text for a reader. */
+   * same value, which `Field` renders as text for a reader.
+   *
+   * Keyed by the six **text** components only — never `latitude`/`longitude`.
+   * Coordinates are geocoded server-side at write time and are read-only on the
+   * client (the read `Address` carries them; the write shape does not), so the
+   * edit form neither shows nor submits them. */
   const addressField = (
     label: string,
-    key: keyof Address,
+    key: AddressTextField,
     className?: string,
   ) => (
     <Field
@@ -159,6 +170,11 @@ export const DetailsTab = ({
               {addressField('Postal', 'postal', 'font-mono')}
             </div>
             {addressField('Country', 'country')}
+            {/* Confirm the venue before saving: geocodes the typed address and
+                drops a pin. An editor-only affordance (ADR 0015 — hide mutating
+                affordances, never disable them) and display-only: it adds no
+                coordinates to the update payload (the server geocodes on save). */}
+            {canEdit && <PreviewLocation address={draft.address} />}
           </div>
         </Card>
       </div>

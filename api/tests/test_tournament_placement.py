@@ -71,6 +71,8 @@ async def _seed_placeable_fixture(
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[
             {"id": "t1", "label": "Table 1", "court": "A"},

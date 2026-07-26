@@ -161,6 +161,11 @@ services:
     build:
       context: ./web-client
       dockerfile: Dockerfile.uat
+      args:
+        # Browser Google Maps key, baked into the built bundle. OPTIONAL: empty
+        # default => a keyless QA build succeeds and the map degrades to a text
+        # fallback. Export VITE_GOOGLE_MAPS_API_KEY in the shell to supply one.
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
     depends_on:
       - api
 

@@ -986,11 +986,60 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Tournaments */
+        /**
+         * List Tournaments
+         * @description List the tournaments the caller may see, newest first, each as the full detail
+         *     aggregate the list cards render.
+         *
+         *     Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+         *     tournaments **near a point**: only those whose venue is within `radius_miles` of
+         *     `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+         *     great-circle distance, in miles). Supplying some but not all three is a `422` — the
+         *     three describe one location filter, not three independent knobs. Omit all three
+         *     (the default) for every visible tournament, with `distance_miles` null.
+         */
         get: operations["list_tournaments_v1_tournaments_get"];
         put?: never;
         /** Create Tournament */
         post: operations["create_tournament_v1_tournaments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/geocode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Geocode
+         * @description Resolve a free-text ``address`` string to coordinates for the web
+         *     "Preview location" pin, without writing anything.
+         *
+         *     Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+         *     on a user action — the previewer typing/blurring the venue fields — not on
+         *     page load, so it is not folded into a page endpoint. It resolves through the
+         *     same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+         *     geocodes with, so the pin the previewer sees matches the coordinates a
+         *     subsequent write would record.
+         *
+         *     Gated on ``tournament.create``: previewing a venue is part of composing a
+         *     tournament, so the same grant that lets a user create one lets them preview
+         *     its location — this is deliberately not a wide-open geocoding proxy.
+         *
+         *     A zero-result / unresolvable address is the same coded ``409`` the write path
+         *     answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+         *     preview and the write agree on the refusal. Any other geocoder failure
+         *     (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+         *     ``500`` handler.
+         */
+        get: operations["preview_geocode_v1_geocode_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1570,7 +1619,19 @@ export interface components {
     schemas: {
         /**
          * Address
-         * @description A tournament venue address. Stored as a JSONB value-object.
+         * @description A tournament venue address as **stored and read**. A JSONB value-object.
+         *
+         *     The six free-text components a client sends (:class:`AddressInput`) **plus**
+         *     the ``latitude``/``longitude`` the server geocoded at write time — both NOT
+         *     NULL (ADR "a venue's coordinates are geocoded server-side at write time and are
+         *     NOT NULL"). Coordinates live inside the JSONB value-object, so the stored
+         *     address always carries them; a read that validates the column into this model
+         *     can rely on non-null coordinates rather than threading ``Optional[float]``
+         *     through every downstream reader.
+         *
+         *     This is the shape on the *read* schemas (:class:`TournamentRead` and the
+         *     detail/dashboard reads); the write schemas take :class:`AddressInput`, which
+         *     has no coordinates.
          */
         Address: {
             /** Venue */
@@ -1585,6 +1646,68 @@ export interface components {
             postal: string;
             /** Country */
             country: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+        };
+        /**
+         * AddressInput
+         * @description The venue address a client **sends** on a write (create/edit).
+         *
+         *     Six free-text components and **no coordinates**: coordinates are geocoded
+         *     server-side at write time and are never supplied by a client (ADR "a venue's
+         *     coordinates are geocoded server-side at write time and are NOT NULL"). A client
+         *     that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
+         *     rather than an unverified number the server would have to trust or re-check.
+         *
+         *     The write verbs geocode this input and construct the stored :class:`Address`
+         *     (with coordinates) before persisting; this is the shape on the *request*
+         *     schemas, and :class:`Address` is the shape on the *read* schemas.
+         */
+        AddressInput: {
+            /** Venue */
+            venue: string;
+            /** Street */
+            street: string;
+            /** City */
+            city: string;
+            /** Region */
+            region: string;
+            /** Postal */
+            postal: string;
+            /** Country */
+            country: string;
+        };
+        /**
+         * AddressNotGeocodable
+         * @description The ``409`` response body for a venue address that resolved to zero geocoding
+         *     candidates — the coded-refusal convention of ADR-0968, mirroring the entry
+         *     endpoint's ``{"code", "message"}`` shape.
+         *
+         *     ``code`` is the stable contract a client switches on — always
+         *     :data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried as the field's default so the one
+         *     constant is the single source of the string (no fork) and the concrete value
+         *     still surfaces in the generated OpenAPI. ``message`` is fallback prose for a
+         *     client without copy for the code, or a person.
+         *
+         *     Modeled (rather than a hand-rolled ``dict`` detail) so the create/edit/preview
+         *     routes' ``responses={409: {"model": AddressNotGeocodable}}`` describes the body
+         *     the generated web + iOS types actually receive — instead of the refusal riding on
+         *     FastAPI's reserved ``422``, whose auto-generated ``HTTPValidationError`` schema
+         *     says ``detail`` is an **array** and so cannot decode this object body (ADR-0968).
+         *     Pure Pydantic, kept beside the code/message it carries; the FastAPI
+         *     ``HTTPException`` that wraps it lives in the router adapter (``app.tournaments``),
+         *     so this module stays FastAPI-free.
+         */
+        AddressNotGeocodable: {
+            /**
+             * Code
+             * @default address_not_geocodable
+             */
+            code: string;
+            /** Message */
+            message: string;
         };
         /**
          * AdminScheduleSolveListResponse
@@ -2245,6 +2368,29 @@ export interface components {
             local_label: string;
             /** Tz Abbrev */
             tz_abbrev: string;
+        };
+        /**
+         * GeocodePreview
+         * @description The result of the read-only address-preview lookup (``GET /v1/geocode``).
+         *
+         *     The coordinates a free-text address string resolves to, plus the provider's
+         *     canonical ``formatted`` label, so the web "Preview location" pin can drop a
+         *     marker (and echo the normalized address it matched) *before* the tournament
+         *     write. This is not stored — it is a live lookup through the same injected
+         *     :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+         *     the pin the previewer sees matches the coordinates a subsequent write records.
+         *
+         *     An address that resolves to zero candidates is a coded ``409`` carrying the same
+         *     ``address_not_geocodable`` code the write path answers with — never a
+         *     coordinate-less preview.
+         */
+        GeocodePreview: {
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Formatted */
+            formatted: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4244,7 +4390,7 @@ export interface components {
             start_date?: string | null;
             /** End Date */
             end_date?: string | null;
-            address: components["schemas"]["Address"];
+            address: components["schemas"]["AddressInput"];
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][];
             /** League Id */
@@ -4295,6 +4441,8 @@ export interface components {
             updated_at: string;
             /** Events */
             events: components["schemas"]["TournamentEventRead"][];
+            /** Distance Miles */
+            distance_miles?: number | null;
             latest_schedule_solve: components["schemas"]["ScheduleSolveRead"] | null;
         };
         /**
@@ -4725,7 +4873,7 @@ export interface components {
             start_date?: string | null;
             /** End Date */
             end_date?: string | null;
-            address?: components["schemas"]["Address"] | null;
+            address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][] | null;
             /** League Id */
@@ -6655,7 +6803,11 @@ export interface operations {
     };
     list_tournaments_v1_tournaments_get: {
         parameters: {
-            query?: never;
+            query?: {
+                lat?: number | null;
+                lng?: number | null;
+                radius_miles?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: {
@@ -6706,6 +6858,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_geocode_v1_geocode_get: {
+        parameters: {
+            query: {
+                address: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeocodePreview"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
                 };
             };
             /** @description Validation Error */
@@ -6807,6 +7010,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressNotGeocodable"];
                 };
             };
             /** @description Validation Error */

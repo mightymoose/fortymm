@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
+import { LocationMap } from '@/components/maps/location-map'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
@@ -163,6 +164,19 @@ export const TournamentDetailPage = ({
             </MetaItem>
           )}
         </div>
+
+        {/* Display-only venue map at the tournament's server-geocoded coordinates
+            (read `Address` carries non-null lat/lng). Gated on the same `venue`
+            presence as the meta line so an address-less tournament shows nothing;
+            keyless (dev/CI/e2e) it degrades to a text fallback of the venue line. */}
+        {venue && (
+          <LocationMap
+            latitude={tournament.address.latitude}
+            longitude={tournament.address.longitude}
+            label={venue}
+            className="mb-5 h-44 max-w-md"
+          />
+        )}
 
         <div className="grid grid-cols-5 gap-3">
           <HeroStat label="Events" value={tournament.events.length} icon={<Trophy size={16} />} />

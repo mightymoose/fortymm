@@ -53,6 +53,7 @@ import {
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
+  type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
   transitionTournament,
@@ -1039,6 +1040,33 @@ function notNull<T>(value: T | null): value is T {
   return value !== null
 }
 
+/** Parse the list's near-me triple off the query string. The API's `lat`/`lng`/
+ * `radius_miles` are ALL-OR-NOTHING (they describe one location filter, not three
+ * independent knobs), so a partial triple is a 422 there and here. Returns `{}` when none
+ * are present (the default list), a `filter` when all three are, or an `error` string when
+ * some — but not all — are. A non-numeric value is treated as present-but-invalid, so it
+ * cannot silently drop out and turn a partial triple into a valid pair. */
+function parseNearMe(params: URLSearchParams):
+  | { filter?: NearMeFilter; error?: undefined }
+  | { error: string; filter?: undefined } {
+  const raw = [
+    params.get('lat'),
+    params.get('lng'),
+    params.get('radius_miles'),
+  ]
+  const present = raw.filter(notNull)
+  if (present.length === 0) return {}
+  if (present.length < 3 || present.some((v) => !Number.isFinite(Number(v)))) {
+    return {
+      error:
+        'lat, lng and radius_miles must be sent together as valid numbers — a location ' +
+        'filter is all-or-nothing.',
+    }
+  }
+  const [lat, lng, radiusMiles] = raw.map(Number)
+  return { filter: { lat, lng, radiusMiles } }
+}
+
 export const handlers = [
   http.get('*/v1/health', async () => {
     await delay(400)
@@ -1662,6 +1690,39 @@ export const handlers = [
     )
   }),
 
+  // ----- geocode (preview pin) -------------------------------------------
+  // The "Preview location" lookup (`GET /v1/geocode`). Mirrors the server: a
+  // normal address resolves to deterministic coords + a `formatted` label, while
+  // the `__unresolvable__` sentinel (or an empty address) is the coded 409 both
+  // the preview and the create/edit write path answer a zero-result address with
+  // (`address_not_geocodable`). It shares the 409 status with the other tournament
+  // refusals (league-not-editable, draw-under-way) but is told apart by its coded
+  // `detail`. Deterministic per address, so the pin is stable across reloads and
+  // testable in vitest.
+  http.get('*/v1/geocode', async ({ request }) => {
+    await delay(200)
+    const address =
+      new URL(request.url).searchParams.get('address')?.trim() ?? ''
+    if (!address || address.includes('__unresolvable__')) {
+      return HttpResponse.json(
+        {
+          detail: {
+            code: 'address_not_geocodable',
+            message: 'We couldn’t locate that address.',
+          },
+        },
+        { status: 409 },
+      )
+    }
+    const seed = djb2(address)
+    // A small deterministic jitter around Berkeley, so `npm run dev` drops a pin
+    // near a plausible place rather than at (0, 0).
+    return HttpResponse.json({
+      latitude: 37.87 + (seed % 1000) / 100000,
+      longitude: -122.27 + ((seed >> 3) % 1000) / 100000,
+      formatted: address,
+    })
+  }),
   // ----- tournaments (admin) ---------------------------------------------
   // Dev-only handlers backed by `tournaments-store`. The seed includes rows
   // owned by the dev user (editable, with events + pools) and one owned by
@@ -1675,9 +1736,14 @@ export const handlers = [
   // announced tournaments plus the dev user's own, so the seeded foreign draft is
   // missing from the list and 404s (not 403s) on detail — no branch here, because
   // `findTournament` simply does not find it.
-  http.get('*/v1/tournaments', async () => {
+  http.get('*/v1/tournaments', async ({ request }) => {
     await delay(250)
-    return HttpResponse.json(listTournaments())
+    const near = parseNearMe(new URL(request.url).searchParams)
+    // The near-me triple is ALL-OR-NOTHING on the server: a partial one is a 422, not a
+    // silent default. The mock mirrors that so a UI that sent, say, a lat with no radius
+    // meets the same wall in `npm run dev` and vitest that it would in production.
+    if (near.error) return detail(near.error, 422)
+    return HttpResponse.json(listTournaments(near.filter))
   }),
   http.post('*/v1/tournaments', async ({ request }) => {
     await delay(250)

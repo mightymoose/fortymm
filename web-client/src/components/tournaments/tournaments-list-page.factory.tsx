@@ -16,6 +16,7 @@ export function buildTournamentsListPageProps(
     onCreate: () => {},
     onDelete: () => {},
     canCreate: true,
+    onNearMeChange: () => {},
     ...overrides,
   }
 }

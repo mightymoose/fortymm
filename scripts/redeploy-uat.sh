@@ -115,6 +115,17 @@ WEB_BUILD_ARGS=()
 if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
   WEB_BUILD_ARGS+=(--build-arg "VITE_FARO_COLLECTOR_URL=/faro/collect")
 fi
+# Bake the browser Google Maps key into the UAT bundle when the operator has set
+# it in .env. OPTIONAL: unset/blank => no build arg, the bundle ships without a
+# Maps key and the map component falls back to a text render (keyless build stays
+# valid). This is the *browser* key; the server-side GOOGLE_GEOCODING_API_KEY is
+# synced into the fortymm-uat-env Secret below, not passed as a build arg.
+# `|| true`: read_env greps .env under `set -e -o pipefail`, so an absent
+# (optional) line would otherwise abort the deploy — swallow that miss.
+VITE_GOOGLE_MAPS_API_KEY="$(read_env VITE_GOOGLE_MAPS_API_KEY || true)"
+if [ -n "$VITE_GOOGLE_MAPS_API_KEY" ]; then
+  WEB_BUILD_ARGS+=(--build-arg "VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY")
+fi
 docker build -t "$WEB_IMAGE" "${WEB_BUILD_ARGS[@]+"${WEB_BUILD_ARGS[@]}"}" -f web-client/Dockerfile.uat web-client
 
 echo

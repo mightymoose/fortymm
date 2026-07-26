@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { screen } from '@/test/utilities'
+import { screen, waitFor } from '@/test/utilities'
 
 import { newTournamentModalPage } from './new-tournament-modal.page'
 
@@ -284,5 +284,73 @@ describe('NewTournamentModal', () => {
 
     await userEvent.click(newTournamentModalPage.getCancelButton())
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  // ----- Preview location (chore 4e) -------------------------------------
+
+  it('previews the typed venue address and drops a pin — without saving', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(
+      screen.getByLabelText('Venue name'),
+      'Berkeley TT Club',
+    )
+    await userEvent.click(newTournamentModalPage.getPreviewButton())
+
+    // The geocode resolves and the pin renders (keyless text fallback), and the
+    // preview did NOT fire a save.
+    await waitFor(() =>
+      expect(newTournamentModalPage.queryPreviewPin()).not.toBeNull(),
+    )
+    expect(newTournamentModalPage.queryPreviewError()).toBeNull()
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an inline error and no pin for an unresolvable address', async () => {
+    newTournamentModalPage.render()
+
+    // The `__unresolvable__` sentinel drives the mock's coded 409 — the same
+    // refusal the write path answers a zero-result address with.
+    await userEvent.type(
+      screen.getByLabelText('Venue name'),
+      '__unresolvable__',
+    )
+    await userEvent.click(newTournamentModalPage.getPreviewButton())
+
+    expect(await newTournamentModalPage.findPreviewError()).toBeVisible()
+    expect(newTournamentModalPage.queryPreviewPin()).toBeNull()
+  })
+
+  it('a preview then a submit sends only the address fields — no geocoded coords leak in', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.type(
+      screen.getByLabelText('Venue name'),
+      'Berkeley TT Club',
+    )
+    // Preview first (the geocode returns lat/lng), then save.
+    await userEvent.click(newTournamentModalPage.getPreviewButton())
+    await waitFor(() =>
+      expect(newTournamentModalPage.queryPreviewPin()).not.toBeNull(),
+    )
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    // The submitted address is exactly what was typed; the geocoded coordinates
+    // never leaked into it — the placeholder 0/0 the read-model draft carries is
+    // untouched, and `draftToCreateBody` drops even those on the wire.
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(onCreate.mock.calls[0][0].address).toEqual({
+      venue: 'Berkeley TT Club',
+      street: '',
+      city: '',
+      region: '',
+      postal: '',
+      country: 'USA',
+      latitude: 0,
+      longitude: 0,
+    })
   })
 })

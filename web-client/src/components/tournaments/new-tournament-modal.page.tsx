@@ -33,6 +33,23 @@ const scoped = (container: Container) => ({
   findErrorBanner() {
     return container.findByTestId('new-tournament-error')
   },
+  /** The "Preview location" button (chore 4e) — label flips to "Locating…" while
+   * the geocode is in flight. */
+  getPreviewButton() {
+    return container.getByRole('button', { name: /Preview location|Locating/ })
+  },
+  /** The preview pin's text fallback (keyless in tests), once a resolvable
+   * address geocodes; else null. */
+  queryPreviewPin() {
+    return container.queryByTestId('location-map-fallback')
+  },
+  /** The preview's inline "we couldn't locate that address" note; else null. */
+  queryPreviewError() {
+    return container.queryByTestId('preview-location-error')
+  },
+  findPreviewError() {
+    return container.findByTestId('preview-location-error')
+  },
 })
 
 /**

@@ -34,6 +34,9 @@ export function buildAddress(overrides: Partial<Address> = {}): Address {
     region: 'CA',
     postal: '94703',
     country: 'USA',
+    // Server-geocoded on the read model (NOT NULL) — Berkeley, CA.
+    latitude: 37.8715,
+    longitude: -122.273,
     ...overrides,
   }
 }

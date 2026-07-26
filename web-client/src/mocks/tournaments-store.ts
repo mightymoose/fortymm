@@ -35,6 +35,7 @@ import {
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
 import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
+import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -42,6 +43,8 @@ type TournamentStatus = components['schemas']['TournamentStatus']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+type Address = components['schemas']['Address']
+type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -180,6 +183,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '94703',
         country: 'USA',
+        latitude: 37.8715,
+        longitude: -122.273,
       },
       table_catalogue: tables(12),
       created_by_user_id: DEV_USER_ID,
@@ -384,6 +389,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '94303',
         country: 'USA',
+        latitude: 37.4419,
+        longitude: -122.143,
       },
       table_catalogue: tables(8),
       created_by_user_id: DEV_USER_ID,
@@ -451,6 +458,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '95112',
         country: 'USA',
+        latitude: 37.3382,
+        longitude: -121.8863,
       },
       table_catalogue: tables(10),
       created_by_user_id: 'u-office',
@@ -550,6 +559,8 @@ function seed(): StoredTournament[] {
         region: 'CA',
         postal: '95112',
         country: 'USA',
+        latitude: 37.3382,
+        longitude: -121.8863,
       },
       table_catalogue: tables(6),
       created_by_user_id: 'u-office',
@@ -595,7 +606,51 @@ function readEvent(event: StoredEvent): TournamentEventRead {
 }
 
 function readDetail(t: StoredTournament): TournamentDetailRead {
-  return { ...t, events: t.events.map(readEvent) }
+  // `distance_miles` is a property of a *near-me* read, not of the tournament: the
+  // default list and every detail read carry `null` (no location was asked about),
+  // exactly as the server sends it. `listTournaments` overwrites it for the rows a
+  // near-me query keeps.
+  return { ...t, events: t.events.map(readEvent), distance_miles: null }
+}
+
+// ----- near-me filtering (mirrors the API's haversine) ---------------------
+//
+// The list can be scoped to tournaments **near a point** (the all-or-nothing
+// `lat`/`lng`/`radius_miles` triple): only venues within `radius_miles` come back, each
+// carrying its `distance_miles`. The store computes that distance the way the server does
+// — a haversine over the coords each address already stores (`geocodeAddress`) — so
+// `npm run dev` and vitest exercise real filtering with no backend behind them.
+
+/** A location + radius the list is scoped to — the same shape the app-side list query
+ * carries (`TournamentsNearMe`), aliased here under the mock's name so the store and the
+ * app share one definition. All three fields or none: the handler enforces the
+ * all-or-nothing contract at the boundary, so a filter that reaches here is complete. */
+export type NearMeFilter = TournamentsNearMe
+
+/** Earth's mean radius in miles — the SAME constant the API's haversine uses, so a mock
+ * `distance_miles` rounds to the value the real server would send. */
+const EARTH_RADIUS_MILES = 3958.8
+
+const toRadians = (deg: number): number => (deg * Math.PI) / 180
+
+/** Great-circle distance in miles between two `(lat, lng)` points, rounded to one decimal
+ * — the API's `distance_miles` precision. Mirrors the server's haversine so a mock card
+ * shows the distance the real card would. */
+function haversineMiles(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number,
+): number {
+  const dLat = toRadians(bLat - aLat)
+  const dLng = toRadians(bLng - aLng)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(aLat)) *
+      Math.cos(toRadians(bLat)) *
+      Math.sin(dLng / 2) ** 2
+  const miles = 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h))
+  return Math.round(miles * 10) / 10
 }
 
 /** Reset the store to its seed — used by the dev worker bootstrap if needed, and
@@ -653,12 +708,29 @@ function isVisible(t: StoredTournament): boolean {
 }
 
 /** The list, newest-created first (mirrors the API's ordering) — and scoped to what
- * the dev user may see: another organiser's draft never appears. */
-export function listTournaments(): TournamentDetailRead[] {
-  return tournaments
+ * the dev user may see: another organiser's draft never appears.
+ *
+ * Pass `nearMe` to scope it to venues **within the radius of a point**: each surviving
+ * row carries its `distance_miles` (a haversine from that point to its venue), and the
+ * ones outside the radius are dropped — the server's near-me contract. Omit it and every
+ * visible tournament comes back with `distance_miles` null (via `readDetail`). */
+export function listTournaments(nearMe?: NearMeFilter): TournamentDetailRead[] {
+  const visible = tournaments
     .filter(isVisible)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(readDetail)
+  if (!nearMe) return visible
+  return visible
+    .map((t) => ({
+      ...t,
+      distance_miles: haversineMiles(
+        nearMe.lat,
+        nearMe.lng,
+        t.address.latitude,
+        t.address.longitude,
+      ),
+    }))
+    .filter((t) => t.distance_miles <= nearMe.radiusMiles)
 }
 
 /** A single tournament's detail, or `undefined` if it is missing **or hidden**.
@@ -698,6 +770,15 @@ function slugId(name: string): string {
  *
  * It is born `draft`, unconditionally: `TournamentCreate` has no `status` to ask
  * for one (ADR-0017), so this mirrors the server's column default. */
+/** Stand in for the server's write-time geocoding: a client sends the six-field
+ * coordinate-free `AddressInput`, and the server derives and stores the read
+ * `Address` (with `latitude`/`longitude`, NOT NULL). The store can't geocode, so
+ * it stamps a fixed Bay-Area coordinate — enough to satisfy the read contract
+ * every reader now depends on. */
+function geocodeAddress(input: AddressInput): Address {
+  return { ...input, latitude: 37.8715, longitude: -122.273 }
+}
+
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
@@ -713,7 +794,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     // names the ladder it will be judged on — the caller only says which when it
     // is not the default. No client surface sends one yet.
     league_id: body.league_id ?? DEFAULT_LEAGUE_ID,
-    address: body.address,
+    address: geocodeAddress(body.address),
     table_catalogue: body.table_catalogue ?? [],
     created_by_user_id: DEV_USER_ID,
     created_by_username: DEV_USERNAME,
@@ -844,7 +925,8 @@ export function updateTournament(
     start_date:
       patch.start_date === undefined ? existing.start_date : patch.start_date,
     end_date: patch.end_date === undefined ? existing.end_date : patch.end_date,
-    address: patch.address ?? existing.address,
+    address:
+      patch.address == null ? existing.address : geocodeAddress(patch.address),
     table_catalogue:
       patch.table_catalogue === undefined || patch.table_catalogue === null
         ? existing.table_catalogue

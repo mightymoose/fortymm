@@ -12,6 +12,7 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 
 import asyncio
 import json
+import math
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from sqlalchemy.orm import selectinload
 from app import match_calls
 from app.account_merge import merge_user
 from app.draws import DrawError
+from app.geocoding import FakeGeocoder, compose_address
 from app.leagues import seed_user_league_rating
 from app.models import (
     League,
@@ -121,6 +123,18 @@ def _address() -> dict[str, str]:
     }
 
 
+async def _geocoded_address(address: dict[str, str]) -> dict[str, object]:
+    """The stored/read address a created or edited tournament carries: the six text
+    fields the client sent plus the coordinates the server geocoded on write (NOT NULL,
+    ADR "a venue's coordinates are geocoded server-side ... and are NOT NULL").
+
+    Computed through the very ``FakeGeocoder`` the keyless test env resolves with (
+    ``get_geocoder`` returns it with no ``GOOGLE_GEOCODING_API_KEY``), so the expected
+    coordinates cannot drift from what the write path actually produced."""
+    result = await FakeGeocoder().geocode(compose_address(**address))
+    return {**address, "latitude": result.latitude, "longitude": result.longitude}
+
+
 def _create_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": "Bay Area Open 2026",
@@ -177,7 +191,9 @@ async def test_create_tournament_returns_201(
     assert body["status"] == "draft"
     assert body["start_date"] == "2026-06-13"
     assert body["end_date"] == "2026-06-14"
-    assert body["address"] == _address()
+    # The venue address is geocoded on write: the read carries the six text fields the
+    # client sent PLUS the server-resolved coordinates (NOT NULL).
+    assert body["address"] == await _geocoded_address(_address())
     assert body["table_catalogue"] == [
         {"id": "t1", "label": "Table 1", "court": "A"},
         {"id": "t2", "label": "Table 2", "court": "A"},
@@ -185,6 +201,92 @@ async def test_create_tournament_returns_201(
     assert body["can_edit"] is True
     assert body["created_by_username"] == user.username
     assert body["created_by_user_id"] == str(user.id)
+
+
+async def test_create_with_unresolvable_address_is_409_and_creates_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A venue address the geocoder cannot resolve is a coded 409 refusal, and the write
+    is atomic — no coordinate-less row is created. It is a 409, not a 422: FastAPI
+    reserves 422 for its own ``HTTPValidationError`` (a ``detail`` array), so this coded
+    object body rides on 409 instead (ADR-0968).
+
+    Uses the deterministic ``FakeGeocoder`` sentinel (``__unresolvable__``) so the
+    zero-result path is exercised with no network. The body carries the machine-readable
+    ``address_not_geocodable`` code (ADR-0968) the MCP surface names too.
+    """
+    client, _ = authed_client
+    bad = {**_address(), "venue": "__unresolvable__"}
+    response = await client.post("/v1/tournaments", json=_create_payload(address=bad))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "address_not_geocodable"
+    # A 422 that had already written a row would be a 422 in name only.
+    count = (
+        await db_session.execute(select(func.count()).select_from(Tournament))
+    ).scalar_one()
+    assert count == 0
+
+
+# ----- GET /v1/geocode address preview -------------------------------------
+
+
+async def test_geocode_preview_resolves_an_address(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The read-only preview endpoint resolves a free-text address string to the
+    coordinates + formatted label the injected ``FakeGeocoder`` deterministically
+    returns for it, so the web "Preview location" pin matches what a subsequent
+    write would record."""
+    client, _ = authed_client
+    query = "Berkeley TT Club, 2727 Milvia St, Berkeley, CA"
+
+    response = await client.get("/v1/geocode", params={"address": query})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Assert against the very ``FakeGeocoder`` the keyless test env resolves with,
+    # so the preview's coordinates cannot drift from the seam's output.
+    expected = await FakeGeocoder().geocode(query)
+    assert body == {
+        "latitude": expected.latitude,
+        "longitude": expected.longitude,
+        "formatted": expected.formatted,
+    }
+
+
+async def test_geocode_preview_unresolvable_address_is_the_coded_409(
+    authed_client: tuple[AsyncClient, User],
+):
+    """An address the geocoder cannot resolve is the same coded 409 the write path
+    answers — the machine-readable ``address_not_geocodable`` code (ADR-0968), so
+    the preview and the write agree on the refusal. Uses the deterministic
+    ``FakeGeocoder`` sentinel so the zero-result path is exercised with no
+    network."""
+    client, _ = authed_client
+
+    response = await client.get("/v1/geocode", params={"address": "__unresolvable__"})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "address_not_geocodable"
+
+
+async def test_geocode_preview_requires_the_create_permission(
+    db_session: AsyncSession,
+):
+    """The preview is gated on ``tournament.create`` — the same grant that lets a
+    user compose a tournament lets them preview its venue. A bare guest session
+    with no tournament permissions is 403, exactly as the create route rejects
+    them; it is not a wide-open geocoding proxy."""
+    async with make_client() as client:
+        await start_session(client, db_session)
+
+        response = await client.get(
+            "/v1/geocode", params={"address": "Berkeley TT Club, Berkeley, CA"}
+        )
+
+        assert response.status_code == 403, response.text
 
 
 async def test_create_is_born_draft_from_the_column_default(
@@ -299,9 +401,38 @@ async def test_patch_by_creator_updates_fields(
     assert body["name"] == "Bay Area Major"
     assert body["start_date"] == "2026-08-01"
     assert body["end_date"] == "2026-08-02"
-    assert body["address"] == new_address
+    # The changed address is re-geocoded on write, so the read carries the new venue's
+    # server-resolved coordinates alongside the six text fields.
+    assert body["address"] == await _geocoded_address(new_address)
     # Editing the tournament does not touch where it is in its lifecycle.
     assert body["status"] == "draft"
+
+
+async def test_patch_with_unresolvable_address_is_409_and_leaves_the_address(
+    authed_client: tuple[AsyncClient, User],
+):
+    """Editing the venue to an address the geocoder cannot resolve is the same coded
+    409 the create path answers, and the edit is atomic — the stored address (and its
+    coordinates) is left unchanged.
+
+    Re-reads the address afterwards rather than trusting the 409: a handler that wrote
+    the coordinate-less address and *then* failed would pass a status-code-only
+    assertion.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    original_address = created["address"]
+
+    bad = {**_address(), "venue": "__unresolvable__"}
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"address": bad}
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "address_not_geocodable"
+    # The stored address did not move — including its coordinates.
+    read_back = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert read_back["address"] == original_address
 
 
 async def test_patch_explicit_null_name_returns_422(
@@ -1641,6 +1772,202 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
         == [("p-a", 1, 1), ("p-a", 1, 2)]
         for e in tournament.events
     )
+
+
+# ----- near-me radius filter (ADR "Distance is a haversine expression") ------
+
+
+def _haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """The great-circle distance in miles between two points — the SAME haversine, with
+    the SAME Earth radius (3958.8 mi), the endpoint computes in SQL. Used to assert the
+    ``distance_miles`` a located list returns is the real distance, not a number pulled
+    from the implementation under test."""
+    r = 3958.8
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lng2 - lng1)
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+async def _seed_located_tournament(
+    db_session: AsyncSession,
+    *,
+    owner: User,
+    league: League,
+    name: str,
+    latitude: float,
+    longitude: float,
+    status: TournamentStatus = TournamentStatus.published,
+) -> Tournament:
+    """A tournament seeded DIRECTLY with controlled venue coordinates, so distance
+    assertions are stable — rather than through the create route, whose ``FakeGeocoder``
+    coordinates are a hash of the address text (deterministic but not a place on a map
+    a reader can reason about)."""
+    tournament = Tournament(
+        name=name,
+        status=status,
+        address={**_address(), "latitude": latitude, "longitude": longitude},
+        table_catalogue=[],
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    return tournament
+
+
+# A query point (downtown San Francisco) and two venues: one ~10 mi away (Berkeley,
+# inside a 50-mi radius) and one ~350 mi away (Los Angeles, well outside it).
+_SF_LAT, _SF_LNG = 37.7749, -122.4194
+_BERKELEY_LAT, _BERKELEY_LNG = 37.8716, -122.2727
+_LA_LAT, _LA_LNG = 34.0522, -118.2437
+
+
+async def test_list_near_me_returns_only_tournaments_within_radius(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """The ``lat``/``lng``/``radius_miles`` triple filters the list to venues within
+    the radius and stamps each survivor with its haversine ``distance_miles``: the
+    ~10-mi Berkeley venue comes back carrying its real distance, the ~350-mi LA venue is
+    gone."""
+    client, user = authed_client
+    near = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="Berkeley Open",
+        latitude=_BERKELEY_LAT,
+        longitude=_BERKELEY_LNG,
+    )
+    far = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="LA Open",
+        latitude=_LA_LAT,
+        longitude=_LA_LNG,
+    )
+
+    response = await client.get(
+        "/v1/tournaments",
+        params={"lat": _SF_LAT, "lng": _SF_LNG, "radius_miles": 50},
+    )
+    assert response.status_code == 200
+    rows = {r["id"]: r for r in response.json()}
+
+    assert str(far.id) not in rows
+    assert str(near.id) in rows
+    expected = _haversine_miles(_SF_LAT, _SF_LNG, _BERKELEY_LAT, _BERKELEY_LNG)
+    assert rows[str(near.id)]["distance_miles"] == pytest.approx(expected, abs=0.1)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"lat": _SF_LAT},
+        {"lng": _SF_LNG},
+        {"radius_miles": 50},
+        {"lat": _SF_LAT, "lng": _SF_LNG},
+        {"lat": _SF_LAT, "radius_miles": 50},
+    ],
+)
+async def test_list_near_me_partial_triple_is_422(
+    authed_client: tuple[AsyncClient, User],
+    params: dict[str, float],
+):
+    """The three are one location filter, not three independent knobs: any partial
+    subset — a point with no radius, a radius with no point — is a 422 at the boundary,
+    never a silently-ignored parameter."""
+    client, _ = authed_client
+    response = await client.get("/v1/tournaments", params=params)
+    assert response.status_code == 422
+
+
+async def test_list_without_location_is_unchanged_with_null_distance(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """With no location triple the list behaves exactly as before: every visible
+    tournament is returned (the far-away one included), each with ``distance_miles``
+    null — there is no point to measure from."""
+    client, user = authed_client
+    near = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="Berkeley Open",
+        latitude=_BERKELEY_LAT,
+        longitude=_BERKELEY_LNG,
+    )
+    far = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="LA Open",
+        latitude=_LA_LAT,
+        longitude=_LA_LNG,
+    )
+
+    response = await client.get("/v1/tournaments")
+    assert response.status_code == 200
+    rows = {r["id"]: r for r in response.json()}
+
+    assert {str(near.id), str(far.id)} <= set(rows)
+    assert rows[str(near.id)]["distance_miles"] is None
+    assert rows[str(far.id)]["distance_miles"] is None
+
+
+async def test_list_near_me_statement_count_stays_five(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+):
+    """The near-me distance column and radius WHERE ride on the FIRST of the five
+    batched queries — a computed column and a predicate, not a per-row follow-up — so a
+    located list is still exactly ``EXPECTED_TOURNAMENT_LIST_STATEMENTS`` statements (no
+    N+1 reintroduced by the filter).
+
+    The list is queried at the tournament's OWN geocoded coordinates so it is squarely
+    inside the radius and the events / entrants / fixtures / rating batches all run —
+    the shape the pin is about. See ``counted_statements``.
+    """
+    client, user = authed_client
+    user_id = user.id  # read outside the counted block, as the sibling pin does
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    await _enter(db_session, event["id"], await make_user(db_session, "near-player"))
+    await _cut(db_session, event["id"], pool_id="p-a", round=1, position=1)
+    await _cut(db_session, event["id"], pool_id="p-a", round=1, position=2)
+    # The coordinates the write path actually geocoded this address to (the FakeGeocoder
+    # the keyless test env resolves with), so the query point sits on the venue.
+    coords = await _geocoded_address(_address())
+
+    async with counted_statements(engine) as (session, statements):
+        listed = await list_tournaments(
+            db=session,
+            current_user=User(id=user_id),
+            lat=float(coords["latitude"]),
+            lng=float(coords["longitude"]),
+            radius_miles=25.0,
+        )
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_TOURNAMENT_LIST_STATEMENTS, statements
+    (tournament,) = [t for t in listed if str(t.id) == created["id"]]
+    assert tournament.distance_miles is not None
 
 
 # ----- permission gate -----------------------------------------------------

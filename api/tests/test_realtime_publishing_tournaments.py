@@ -165,6 +165,8 @@ async def _seed_field(
             "region": "CA",
             "postal": "94704",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[
             {"id": table, "label": table.upper(), "court": "Main"} for table in tables

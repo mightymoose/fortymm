@@ -23,6 +23,11 @@ const scoped = (container: Container) => ({
   queryVenueLine() {
     return container.queryByTestId('tournament-venue-line')
   },
+  /** The distance badge (e.g. `12 mi`), or null when the tournament carries no
+   * `distanceMiles` — its absence is the assertion, so this is a `query`. */
+  queryDistanceBadge() {
+    return container.queryByTestId('tournament-distance-badge')
+  },
   /** The card's status pill, reusing the badge's own query. */
   ...statusBadgePage.within(container),
 })

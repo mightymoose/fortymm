@@ -17,6 +17,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.geocoding import FakeGeocoder
 from app.models import (
     DrawType,
     EventFormat,
@@ -34,7 +35,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.schemas.tournament import Address, TournamentCreate, TournamentTable
+from app.schemas.tournament import AddressInput, TournamentCreate, TournamentTable
 from app.tournament_draws import cut_draw
 from app.tournament_errors import (
     IllegalTournamentTransitionError,
@@ -51,6 +52,11 @@ from app.tournament_lifecycle import (
     transition_tournament,
 )
 from tests._helpers import make_user
+
+# The keyless deterministic geocoder the create verb resolves the venue address with
+# (the same one ``get_geocoder`` hands out with no ``GOOGLE_GEOCODING_API_KEY``). A
+# service-layer test builds it directly, exactly as it constructs the raw session.
+_GEOCODER = FakeGeocoder()
 
 
 @pytest_asyncio.fixture
@@ -72,8 +78,10 @@ async def other_league(
     return league
 
 
-def _address() -> Address:
-    return Address(
+def _address() -> AddressInput:
+    """The write-shape address a client sends on create — no coordinates (1c's
+    verb geocodes it). Stored seeds add coordinates via ``_stored_address``."""
+    return AddressInput(
         venue="Berkeley TT Club",
         street="2727 Milvia St",
         city="Berkeley",
@@ -81,6 +89,12 @@ def _address() -> Address:
         postal="94703",
         country="USA",
     )
+
+
+def _stored_address() -> dict[str, object]:
+    """The stored/read-shape address dict a ``Tournament`` row holds: the write
+    fields plus the NOT NULL geocoded coordinates."""
+    return {**_address().model_dump(), "latitude": 37.8703, "longitude": -122.2731}
 
 
 def _payload(*, league_id: uuid.UUID | None = None) -> TournamentCreate:
@@ -103,7 +117,9 @@ async def test_create_persists_a_draft_owned_by_the_actor(
     actor = await make_user(db_session, "lifecycle-create-owner")
     actor_id = actor.id
 
-    tournament = await create_tournament(db_session, actor=actor, payload=_payload())
+    tournament = await create_tournament(
+        db_session, actor=actor, payload=_payload(), geocoder=_GEOCODER
+    )
 
     assert tournament.created_by_user_id == actor.id
     # Born ``draft`` from the column default — never set on the create path.
@@ -134,7 +150,10 @@ async def test_create_naming_a_league_runs_on_that_league(
     actor = await make_user(db_session, "lifecycle-create-league")
 
     tournament = await create_tournament(
-        db_session, actor=actor, payload=_payload(league_id=other_league.id)
+        db_session,
+        actor=actor,
+        payload=_payload(league_id=other_league.id),
+        geocoder=_GEOCODER,
     )
 
     assert tournament.league_id == other_league.id
@@ -149,7 +168,10 @@ async def test_create_naming_a_missing_league_raises_not_found(
 
     with pytest.raises(LeagueNotFoundError):
         await create_tournament(
-            db_session, actor=actor, payload=_payload(league_id=uuid.uuid4())
+            db_session,
+            actor=actor,
+            payload=_payload(league_id=uuid.uuid4()),
+            geocoder=_GEOCODER,
         )
 
     # The STRICT resolution created nothing.
@@ -174,7 +196,9 @@ async def test_create_without_a_league_and_no_default_raises(
     await db_session.commit()
 
     with pytest.raises(NoDefaultLeagueError):
-        await create_tournament(db_session, actor=actor, payload=_payload())
+        await create_tournament(
+            db_session, actor=actor, payload=_payload(), geocoder=_GEOCODER
+        )
 
 
 # ----- delete --------------------------------------------------------------
@@ -185,7 +209,7 @@ async def _make_tournament(
 ) -> Tournament:
     tournament = Tournament(
         name="Deletable Cup",
-        address=_address().model_dump(),
+        address=_stored_address(),
         table_catalogue=[],
         league_id=league.id,
         created_by_user_id=owner.id,
@@ -272,7 +296,7 @@ async def _make_tournament_at(
     it)."""
     tournament = Tournament(
         name="Lifecycle Cup",
-        address=_address().model_dump(),
+        address=_stored_address(),
         table_catalogue=[
             {"id": "t1", "label": "Table 1", "court": "A"},
             {"id": "t2", "label": "Table 2", "court": "A"},

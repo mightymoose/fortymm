@@ -14,6 +14,7 @@ import {
 } from '@tanstack/react-query'
 import { notFound } from '@tanstack/react-router'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
@@ -29,6 +30,7 @@ import {
 } from './solve'
 import type { LifecycleEdge } from './lifecycle'
 import type {
+  Address,
   Entrant,
   EventEntryState,
   Fixture,
@@ -46,6 +48,7 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type ApiPool = components['schemas']['Pool']
@@ -167,6 +170,19 @@ function apiToPool(p: ApiPool): Pool {
   return { id: p.id, name: p.name, slot: p.slot, tableIds: p.table_ids }
 }
 
+/** The server returns `distance_miles` on each tournament — a non-negative haversine
+ * distance in **miles** when the list query was given a location (the all-or-nothing
+ * `lat`/`lng`/`radius_miles` triple), or `null`/absent when it was not. PARSED at the
+ * boundary (`.claude/rules/parse-at-boundaries.md`): the wire is untrusted, so a
+ * negative or non-numeric value fails HERE — inside the queryFn — rather than surfacing
+ * as a nonsense badge three components away. Absent and `null` both collapse to `null`,
+ * the designed "no location sent" state, so a reader models one thing, not three. */
+const distanceMilesSchema = z
+  .number()
+  .nonnegative()
+  .nullish()
+  .transform((v) => v ?? null)
+
 /** Map an API tournament (list or detail; both return `TournamentDetailRead`)
  * to the prototype's `Tournament`. The tournament's `table_catalogue` IS the
  * catalogue, so `tableIds` is just its ids. */
@@ -182,6 +198,10 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     address: t.address,
     tableIds: t.table_catalogue.map((tbl) => tbl.id),
     events: t.events.map(apiToEvent),
+    // PARSED, not cast — a non-negative miles distance or `null` (`distanceMilesSchema`
+    // above). Present only when the list query sent a location; `null` on every other
+    // list card and on the detail payload.
+    distanceMiles: distanceMilesSchema.parse(t.distance_miles),
     // PARSED, not cast — the same boundary the fixtures and results cross
     // (`./solve`, `.claude/rules/parse-at-boundaries.md`): the solve strip switches
     // on this row's `status`/`trigger`/`verdict` by value, so an enum member this
@@ -189,6 +209,23 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     // of a `switch` as a blank strip. `null` — no solve ever requested — is the
     // designed state and parses straight through.
     latestScheduleSolve: parseLatestScheduleSolve(t.latest_schedule_solve),
+  }
+}
+
+/** Project the read `Address` (which carries the server-geocoded
+ * `latitude`/`longitude`) down to the coordinate-free `AddressInput` a write
+ * verb sends. Coordinates are geocoded server-side at write time and a client
+ * NEVER supplies them — the write schema is `extra="forbid"`, so sending them
+ * would 422. Picking the six text fields keeps the write path coord-free no
+ * matter what the read side accreted. */
+function toAddressInput(a: Address): AddressInput {
+  return {
+    venue: a.venue,
+    street: a.street,
+    city: a.city,
+    region: a.region,
+    postal: a.postal,
+    country: a.country,
   }
 }
 
@@ -209,7 +246,7 @@ export function draftToCreateBody(
     description: draft.description,
     start_date: draft.startDate,
     end_date: draft.endDate,
-    address: draft.address,
+    address: toAddressInput(draft.address),
     table_catalogue: [],
   }
 }
@@ -232,7 +269,7 @@ export function tournamentToUpdateBody(
     description: t.description,
     start_date: t.startDate,
     end_date: t.endDate,
-    address: t.address,
+    address: toAddressInput(t.address),
     table_catalogue: catalogue,
   }
 }
@@ -281,6 +318,30 @@ export function eventToUpdateBody(ev: TournamentEvent): TournamentEventUpdate {
 const TOURNAMENTS_KEY = ['tournaments'] as const
 const tournamentKey = (id: string) => ['tournaments', id] as const
 
+/** A location + radius to filter the list to tournaments **near a point**. All three
+ * are sent together or not at all — the API's `lat`/`lng`/`radius_miles` triple is
+ * all-or-nothing — so this client carries them as one value (present or `undefined`),
+ * never three loose optionals that could send a partial triple the server would 422. */
+export type TournamentsNearMe = {
+  lat: number
+  lng: number
+  radiusMiles: number
+}
+
+/** The list query's key. The near-me triple is PART of the key, so a change of
+ * location or radius is a different cache entry and refetches (rather than showing the
+ * previous radius's stale results). The default (no location) list keeps the bare
+ * `['tournaments']` key it has always had — which is also the prefix every mutation
+ * invalidates, so both the default and every near-me list refresh after a write. The
+ * near-me second element is an object, never colliding with a detail key's string id. */
+const tournamentsListKey = (nearMe?: TournamentsNearMe) =>
+  nearMe
+    ? ([
+        ...TOURNAMENTS_KEY,
+        { lat: nearMe.lat, lng: nearMe.lng, radiusMiles: nearMe.radiusMiles },
+      ] as const)
+    : TOURNAMENTS_KEY
+
 /** Invalidate both the list and one tournament's detail after a mutation. */
 function invalidateTournament(qc: QueryClient, id: string) {
   qc.invalidateQueries({ queryKey: TOURNAMENTS_KEY })
@@ -290,17 +351,52 @@ function invalidateTournament(qc: QueryClient, id: string) {
 // ----- queries -------------------------------------------------------------
 
 /** The tournament list, mapped to prototype `Tournament[]`. A 403 (a permitted
- * non-creator the server still gates) bubbles to the `RbacBoundary`. */
-export function useTournaments(): Tournament[] {
-  const { data } = useQuery({
-    queryKey: TOURNAMENTS_KEY,
+ * non-creator the server still gates) bubbles to the `RbacBoundary`.
+ *
+ * Pass `nearMe` to filter to tournaments **near a point**: its `lat`/`lng`/
+ * `radiusMiles` go on the wire as the API's all-or-nothing `lat`/`lng`/`radius_miles`
+ * query triple, and each row comes back carrying its `distance_miles` (parsed onto
+ * `Tournament.distanceMiles`). Omit it and the request is exactly the default list —
+ * no params — with every row's `distanceMiles` `null`. The triple is part of the query
+ * KEY (see `tournamentsListKey`), so changing location or radius refetches. */
+export function tournamentsListQuery(nearMe?: TournamentsNearMe) {
+  return queryOptions({
+    queryKey: tournamentsListKey(nearMe),
     queryFn: async (): Promise<Tournament[]> => {
-      const rows = unwrap('load tournaments', await api.GET('/v1/tournaments'))
+      const rows = unwrap(
+        'load tournaments',
+        await api.GET(
+          '/v1/tournaments',
+          nearMe
+            ? {
+                params: {
+                  query: {
+                    lat: nearMe.lat,
+                    lng: nearMe.lng,
+                    radius_miles: nearMe.radiusMiles,
+                  },
+                },
+              }
+            : undefined,
+        ),
+      )
       return rows.map(apiToTournament)
     },
-    throwOnError: true,
+    // Throw to the error boundary only on a cold load (nothing on screen), not on a
+    // background-refetch failure — matching `tournamentDetailQuery` below. `throwOnError:
+    // true` fires on background refetches too (see web-client/CLAUDE.md), so a transient
+    // blip re-fetching the list — now more likely, since near-me round-trips through
+    // browser geolocation + the network and each radius/location is its own cache entry —
+    // would tear down an already-rendered list rather than keep the last-good view.
+    throwOnError: (_error, query) => query.state.data === undefined,
     retry: false,
   })
+}
+
+/** Thin hook over `tournamentsListQuery` — returns the mapped list (or `[]` before
+ * it loads). Takes the same optional `nearMe` filter. */
+export function useTournaments(nearMe?: TournamentsNearMe): Tournament[] {
+  const { data } = useQuery(tournamentsListQuery(nearMe))
   return data ?? []
 }
 

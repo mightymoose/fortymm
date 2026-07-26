@@ -1,5 +1,22 @@
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
+
+// jsdom has no Google Maps runtime. Replace `@vis.gl/react-google-maps` with inert
+// doubles that capture the marker's props, so the key-present branch of the venue
+// `LocationMap` can be asserted (the pin lands on the tournament's stored
+// coordinates) without loading Google. Keyless — the default vitest env — the
+// component never touches these and renders its text fallback.
+const { markerProps } = vi.hoisted(() => ({ markerProps: vi.fn() }))
+
+vi.mock('@vis.gl/react-google-maps', () => ({
+  APIProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Map: (props: { children: ReactNode }) => <div>{props.children}</div>,
+  AdvancedMarker: (props: Record<string, unknown>) => {
+    markerProps(props)
+    return <div data-testid="mock-marker" />
+  },
+}))
 
 import { ApiError } from '@/api/client'
 import { mockSessionEndpoint } from '@/mocks/endpoints/session/session.endpoint'
@@ -55,6 +72,53 @@ describe('TournamentDetailPage', () => {
       // interpunct legitimately appears elsewhere on the page — the event card's
       // own meta — so this asserts the item, not the character.)
       expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
+    })
+  })
+
+  // The display-only venue map (chore 4d): opening a tournament shows its venue on
+  // a map at the server-geocoded coordinates the read `Address` carries.
+  describe('the venue map', () => {
+    afterEach(() => markerProps.mockClear())
+
+    it('mounts a venue map — labelled with the venue line — at the stored coordinates', () => {
+      // The default vitest env is keyless, so `LocationMap` renders its text
+      // fallback (labelled with the venue line) rather than loading Google.
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({ latitude: 40.7128, longitude: -74.006 }),
+        }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueMapFallback()).toHaveTextContent(
+        'Berkeley TT Club · Berkeley, CA',
+      )
+    })
+
+    it('centers the pin on the tournament coordinates when a Maps key is present', () => {
+      vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-browser-key')
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({ latitude: 40.7128, longitude: -74.006 }),
+        }),
+      })
+
+      // The coords are threaded through, not the factory defaults: an
+      // `objectContaining({ lat: 37.8715 })` would pass a wiring that ignored the
+      // tournament and re-geocoded from nothing.
+      expect(markerProps).toHaveBeenCalledWith(
+        expect.objectContaining({ position: { lat: 40.7128, lng: -74.006 } }),
+      )
+      vi.unstubAllEnvs()
+    })
+
+    it('shows no venue map when the tournament has no address', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({ venue: '', city: '', region: '' }),
+        }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueMapFallback()).toBeNull()
     })
   })
 

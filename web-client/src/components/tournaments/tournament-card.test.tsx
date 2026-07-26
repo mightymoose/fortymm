@@ -63,6 +63,42 @@ describe('TournamentCard', () => {
     })
   })
 
+  // The distance is `null`/absent unless the list query carried a location, so
+  // the card shows a badge only when it's a number — and never a "— mi" hole.
+  describe('the distance badge', () => {
+    it('shows the formatted distance when the tournament carries one', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({ distanceMiles: 12 }),
+      })
+
+      expect(tournamentCardPage.queryDistanceBadge()).toHaveTextContent('12 mi')
+    })
+
+    it('renders a sub-mile distance cleanly, without re-rounding to zero', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({ distanceMiles: 0.4 }),
+      })
+
+      expect(tournamentCardPage.queryDistanceBadge()).toHaveTextContent('0.4 mi')
+    })
+
+    it('renders no badge when the tournament carries no distance', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({ distanceMiles: null }),
+      })
+
+      expect(tournamentCardPage.queryDistanceBadge()).toBeNull()
+    })
+
+    it('renders no badge when distance is absent from the payload', () => {
+      // The default seed sets no `distanceMiles` at all (a seed/draft tournament,
+      // or the default un-located list) — the badge element must not exist.
+      tournamentCardPage.render({ tournament: buildTournament() })
+
+      expect(tournamentCardPage.queryDistanceBadge()).toBeNull()
+    })
+  })
+
   it('opens the tournament when the card is clicked', async () => {
     const onOpen = vi.fn()
     tournamentCardPage.render({

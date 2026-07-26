@@ -487,6 +487,9 @@ const draft: Omit<Tournament, 'id'> = {
   startDate: '2026-09-01',
   endDate: '2026-09-02',
   description: 'A new draft.',
+  // A read `Address` carries the server-geocoded coordinates (NOT NULL). The
+  // write builders below must STRIP them — the create/edit wire shape is the
+  // coord-free `AddressInput` — so the fixture is coord-carrying on purpose.
   address: {
     venue: 'Oakland Arena',
     street: '7000 Coliseum Way',
@@ -494,6 +497,8 @@ const draft: Omit<Tournament, 'id'> = {
     region: 'CA',
     postal: '94621',
     country: 'USA',
+    latitude: 37.7503,
+    longitude: -122.2032,
   },
   tableIds: [],
   events: [],
@@ -509,7 +514,18 @@ describe('draftToCreateBody', () => {
       description: 'A new draft.',
       start_date: '2026-09-01',
       end_date: '2026-09-02',
-      address: draft.address,
+      // The write shape is the coord-free `AddressInput`: the six text fields
+      // and NOTHING else. The draft's `address` carries `latitude`/`longitude`
+      // (it is a read `Address`), so this asserts the projector STRIPPED them —
+      // a client never sends coordinates, and the server 422s the extra keys.
+      address: {
+        venue: 'Oakland Arena',
+        street: '7000 Coliseum Way',
+        city: 'Oakland',
+        region: 'CA',
+        postal: '94621',
+        country: 'USA',
+      },
       table_catalogue: [],
     })
   })
@@ -532,6 +548,17 @@ describe('tournamentToUpdateBody', () => {
     expect(body.name).toBe('Renamed')
     expect(body.start_date).toBe('2026-09-01')
     expect(body.end_date).toBe('2026-09-02')
+    // The edit wire shape is the coord-free `AddressInput` too: the tournament
+    // is a read model carrying `latitude`/`longitude`, and the builder strips
+    // them — the server geocodes on its own and 422s a client-sent coordinate.
+    expect(body.address).toEqual({
+      venue: 'Oakland Arena',
+      street: '7000 Coliseum Way',
+      city: 'Oakland',
+      region: 'CA',
+      postal: '94621',
+      country: 'USA',
+    })
     expect('events' in body).toBe(false)
   })
 

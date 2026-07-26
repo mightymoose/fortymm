@@ -17,6 +17,12 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.geocoding import (
+    AddressNotGeocodableError,
+    FakeGeocoder,
+    GeocodeResult,
+    compose_address,
+)
 from app.models import (
     League,
     LeagueVisibility,
@@ -31,7 +37,7 @@ from app.models import (
     User,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.schemas.tournament import Address, TournamentTable, TournamentUpdate
+from app.schemas.tournament import AddressInput, TournamentTable, TournamentUpdate
 from app.tournament_edit import edit_tournament
 from app.tournament_errors import (
     LeagueNotEditableError,
@@ -40,6 +46,38 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from tests._helpers import make_user
+
+# The keyless deterministic geocoder the edit verb re-geocodes a changed address with
+# (the same one ``get_geocoder`` hands out with no ``GOOGLE_GEOCODING_API_KEY``). A
+# service-layer test builds it directly, exactly as it constructs the raw session.
+_GEOCODER = FakeGeocoder()
+
+
+class _CountingGeocoder:
+    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
+    the deterministic ``FakeGeocoder`` so results stay stable.
+
+    Lets a test assert the edit verb geocodes **only** when the address text actually
+    changes — a name-only edit, or one that resubmits the identical address, must never
+    pay for a geocode (and, in production, must never hold the row lock across the
+    network call). Structurally satisfies the ``Geocoder`` protocol, so it is injected
+    exactly where the real geocoder would be."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = FakeGeocoder()
+
+    async def geocode(self, address: str) -> GeocodeResult:
+        self.calls += 1
+        return await self._inner.geocode(address)
+
+
+async def _geocoded(address: dict[str, str]) -> dict[str, object]:
+    """The stored address dict the verb writes for ``address``: its six text fields
+    plus the coordinates the deterministic ``FakeGeocoder`` resolves them to — computed
+    through the very geocoder the verb uses, so the expectation cannot drift from it."""
+    result = await _GEOCODER.geocode(compose_address(**address))
+    return {**address, "latitude": result.latitude, "longitude": result.longitude}
 
 
 @pytest_asyncio.fixture
@@ -62,6 +100,9 @@ async def other_league(
 
 
 def _address() -> dict[str, str]:
+    # The write shape (``AddressInput``): six text components, no coordinates. Used
+    # to build ``TournamentUpdate`` payloads. Stored seeds add coordinates via
+    # ``_stored_address``.
     return {
         "venue": "Berkeley TT Club",
         "street": "2727 Milvia St",
@@ -70,6 +111,12 @@ def _address() -> dict[str, str]:
         "postal": "94703",
         "country": "USA",
     }
+
+
+def _stored_address() -> dict[str, object]:
+    # The stored/read shape a ``Tournament`` row holds: the write fields plus the
+    # NOT NULL geocoded coordinates.
+    return {**_address(), "latitude": 37.8703, "longitude": -122.2731}
 
 
 async def _make_tournament(
@@ -83,7 +130,7 @@ async def _make_tournament(
     tournament = Tournament(
         name="Bay Area Open 2026",
         description="Two-day open.",
-        address=_address(),
+        address=_stored_address(),
         table_catalogue=table_catalogue
         or [
             {"id": "t1", "label": "Table 1", "court": "A"},
@@ -166,12 +213,16 @@ async def test_owner_edit_updates_and_persists(
         actor=owner,
         updates=TournamentUpdate(
             name="Bay Area Major",
-            address=Address(**new_address),
+            address=AddressInput(**new_address),
         ),
+        geocoder=_GEOCODER,
     )
 
+    # The changed address is re-geocoded on write: the stored value is the six text
+    # fields plus the coordinates the geocoder resolved (NOT NULL, ADR-geocoded venues).
+    expected_address = await _geocoded(new_address)
     assert result.name == "Bay Area Major"
-    assert result.address == new_address
+    assert result.address == expected_address
     # The edit does not touch the lifecycle.
     assert result.status is TournamentStatus.draft
 
@@ -183,7 +234,147 @@ async def test_owner_edit_updates_and_persists(
         )
     ).scalar_one()
     assert row.name == "Bay Area Major"
-    assert row.address == new_address
+    assert row.address == expected_address
+
+
+async def test_unresolvable_new_address_raises_and_writes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A changed address the geocoder cannot resolve (the ``FakeGeocoder``
+    ``__unresolvable__`` sentinel) raises ``AddressNotGeocodableError`` before any
+    field is written — the edit is atomic, so the stored address (and its coordinates)
+    is left exactly as it was. The verb never writes a coordinate-less address."""
+    owner = await make_user(db_session, "owner-bad-address")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    bad_address = {**_address(), "venue": "__unresolvable__"}
+    with pytest.raises(AddressNotGeocodableError):
+        await edit_tournament(
+            db_session,
+            tournament_id=tournament_id,
+            actor=owner,
+            updates=TournamentUpdate(
+                name="Should Not Persist",
+                address=AddressInput(**bad_address),
+            ),
+            geocoder=_GEOCODER,
+        )
+
+    # Nothing was written: neither the name nor the original stored address moved.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.name == "Bay Area Open 2026"
+    assert row.address == _stored_address()
+
+
+# ----- geocode ONLY when the address text actually changes -------------------
+
+
+async def test_name_only_edit_does_not_geocode(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A patch that carries no address geocodes nothing — the stored address and its
+    coordinates are left untouched, and the geocoder is never called."""
+    owner = await make_user(db_session, "owner-name-only")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(name="Renamed, Same Venue"),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 0
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.name == "Renamed, Same Venue"
+    # The stored address — coordinates included — did not move.
+    assert row.address == _stored_address()
+
+
+async def test_resubmitting_the_identical_address_does_not_geocode(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Resubmitting the SAME six address text fields (as the web client does on every
+    edit) geocodes nothing — the six stored text fields are unchanged, so the stored
+    coordinates are preserved rather than recomputed. Only the other edited field moves.
+    """
+    owner = await make_user(db_session, "owner-same-address")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        # The address is byte-for-byte the stored one; only the name changes.
+        updates=TournamentUpdate(
+            name="Bay Area Major",
+            address=AddressInput(**_address()),
+        ),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 0
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.name == "Bay Area Major"
+    # The stored coordinates were kept, not re-derived (the seed's coordinates are NOT
+    # the ``FakeGeocoder`` output for this address, so a stray re-geocode would show).
+    assert row.address == _stored_address()
+
+
+async def test_changed_address_geocodes_exactly_once(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A genuinely different address IS geocoded — exactly once — and the stored
+    coordinates are the ones the geocoder resolved, beside the new six text fields."""
+    owner = await make_user(db_session, "owner-new-address")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    counting = _CountingGeocoder()
+    new_address = {**_address(), "venue": "Palo Alto Community Center"}
+    result = await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(address=AddressInput(**new_address)),
+        geocoder=counting,
+    )
+
+    assert counting.calls == 1
+    # The new venue's six text fields plus the coordinates the geocoder resolved.
+    assert result.address == await _geocoded(new_address)
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.address == await _geocoded(new_address)
 
 
 # ----- non-owner is refused with a domain exception -------------------------
@@ -204,6 +395,7 @@ async def test_non_owner_raises_not_owner(
             tournament_id=tournament_id,
             actor=stranger,
             updates=TournamentUpdate(name="Hijack"),
+            geocoder=_GEOCODER,
         )
 
     # Nothing was written.
@@ -228,6 +420,7 @@ async def test_missing_tournament_raises_not_found(
             tournament_id=uuid.uuid4(),
             actor=owner,
             updates=TournamentUpdate(name="Nowhere"),
+            geocoder=_GEOCODER,
         )
 
 
@@ -248,6 +441,7 @@ async def test_league_change_while_draft_moves_the_ladder(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(league_id=other_league.id),
+        geocoder=_GEOCODER,
     )
 
     assert result.league_id == other_league.id
@@ -277,6 +471,7 @@ async def test_league_change_after_publish_raises_not_editable(
             tournament_id=tournament_id,
             actor=owner,
             updates=TournamentUpdate(league_id=other_league.id),
+            geocoder=_GEOCODER,
         )
 
     # Carries the current status, so the HTTP adapter can rebuild the exact 409
@@ -301,6 +496,7 @@ async def test_league_that_names_no_league_raises_not_found(
             tournament_id=tournament_id,
             actor=owner,
             updates=TournamentUpdate(league_id=uuid.uuid4()),
+            geocoder=_GEOCODER,
         )
 
     # The STRICT lookup did not silently swap the ladder to the default.
@@ -338,6 +534,7 @@ async def test_table_catalogue_change_on_a_drawn_tournament_requests_a_solve(
                 TournamentTable(id="t3", label="Table 3", court="B"),
             ]
         ),
+        geocoder=_GEOCODER,
     )
 
     (solve,) = await _queued_solves(db_session, tournament_id)
@@ -364,6 +561,7 @@ async def test_table_catalogue_change_without_a_draw_requests_no_solve(
                 TournamentTable(id="t9", label="Table 9", court="C"),
             ]
         ),
+        geocoder=_GEOCODER,
     )
 
     assert await _queued_solves(db_session, tournament_id) == []

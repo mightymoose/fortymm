@@ -144,8 +144,18 @@ too — which is a feature. A rule the client can express is a rule the organize
 under the field instead of in a 422."""
 
 
-class Address(BaseModel):
-    """A tournament venue address. Stored as a JSONB value-object."""
+class AddressInput(BaseModel):
+    """The venue address a client **sends** on a write (create/edit).
+
+    Six free-text components and **no coordinates**: coordinates are geocoded
+    server-side at write time and are never supplied by a client (ADR "a venue's
+    coordinates are geocoded server-side at write time and are NOT NULL"). A client
+    that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
+    rather than an unverified number the server would have to trust or re-check.
+
+    The write verbs geocode this input and construct the stored :class:`Address`
+    (with coordinates) before persisting; this is the shape on the *request*
+    schemas, and :class:`Address` is the shape on the *read* schemas."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -155,6 +165,54 @@ class Address(BaseModel):
     region: str
     postal: str
     country: str
+
+
+class Address(BaseModel):
+    """A tournament venue address as **stored and read**. A JSONB value-object.
+
+    The six free-text components a client sends (:class:`AddressInput`) **plus**
+    the ``latitude``/``longitude`` the server geocoded at write time — both NOT
+    NULL (ADR "a venue's coordinates are geocoded server-side at write time and are
+    NOT NULL"). Coordinates live inside the JSONB value-object, so the stored
+    address always carries them; a read that validates the column into this model
+    can rely on non-null coordinates rather than threading ``Optional[float]``
+    through every downstream reader.
+
+    This is the shape on the *read* schemas (:class:`TournamentRead` and the
+    detail/dashboard reads); the write schemas take :class:`AddressInput`, which
+    has no coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    venue: str
+    street: str
+    city: str
+    region: str
+    postal: str
+    country: str
+    latitude: float
+    longitude: float
+
+
+class GeocodePreview(BaseModel):
+    """The result of the read-only address-preview lookup (``GET /v1/geocode``).
+
+    The coordinates a free-text address string resolves to, plus the provider's
+    canonical ``formatted`` label, so the web "Preview location" pin can drop a
+    marker (and echo the normalized address it matched) *before* the tournament
+    write. This is not stored — it is a live lookup through the same injected
+    :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+    the pin the previewer sees matches the coordinates a subsequent write records.
+
+    An address that resolves to zero candidates is a coded ``409`` carrying the same
+    ``address_not_geocodable`` code the write path answers with — never a
+    coordinate-less preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    latitude: float
+    longitude: float
+    formatted: str
 
 
 def _is_iana_timezone(value: str) -> str:
@@ -987,6 +1045,17 @@ class TournamentRead(BaseModel):
 
 class TournamentDetailRead(TournamentRead):
     events: list[TournamentEventRead]
+    # The tournament's distance from the caller's point, in **miles**, when the list
+    # was queried with a ``lat``/``lng``/``radius_miles`` triple (the "near me" filter,
+    # ADR "a venue's coordinates are geocoded server-side ... Distance is a haversine
+    # expression"). Computed server-side by the same haversine the radius filter uses,
+    # so a card can show "12.3 mi away" without the client doing any geo math.
+    #
+    # ``null`` means **no location was asked for** — the designed state of every read
+    # that is not near-me (the unfiltered list, the single-tournament detail read, the
+    # MCP owner-scoped list): there is no point to measure from, so there is no
+    # distance, and a client renders no "away" badge rather than a bogus zero.
+    distance_miles: float | None = None
     # The Schedule tab's solve strip (ADR "the schedule is solved, the call is
     # pinned"): the NEWEST row of the tournament's solve ledger, by ``requested_at``.
     # One row, not the ledger — the strip shows the current run's state (queued /
@@ -1023,7 +1092,10 @@ class TournamentCreate(BaseModel):
     description: str | None = Field(default=None, max_length=1024)
     start_date: date | None = None
     end_date: date | None = None
-    address: Address
+    # The write shape: six free-text components, no coordinates. The verb geocodes
+    # it into a stored ``Address`` (with coordinates) before persisting (ADR "a
+    # venue's coordinates are geocoded server-side ... and are NOT NULL").
+    address: AddressInput
     table_catalogue: list[TournamentTable] = Field(default_factory=list)
     league_id: uuid.UUID | None = None
 
@@ -1056,7 +1128,10 @@ class TournamentUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=1024)
     start_date: date | None = None
     end_date: date | None = None
-    address: Address | None = None
+    # The write shape: six free-text components, no coordinates (see
+    # ``TournamentCreate.address``). An explicit ``null`` is rejected below; an
+    # omitted key leaves the stored address (and its coordinates) unchanged.
+    address: AddressInput | None = None
     table_catalogue: list[TournamentTable] | None = None
     league_id: uuid.UUID | None = None
 

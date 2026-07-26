@@ -68,6 +68,10 @@ postgres:
   storageSize: 5Gi
 
 # Pre-created out-of-band by scripts/redeploy-uat.sh from .env and secrets/.
+# The api Deployment pulls GOOGLE_GEOCODING_API_KEY from `env` (below) as an
+# optional key — supply it via .env for UAT/prod (real Google geocoding), or
+# leave it out and the API falls back to the keyless FakeGeocoder. No real key
+# is ever committed here; the operator provides it out of band in .env.
 secrets:
   env: fortymm-uat-env
   apns: fortymm-uat-apns

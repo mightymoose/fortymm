@@ -408,6 +408,8 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
     )
@@ -467,6 +469,8 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
             "region": "CA",
             "postal": "94703",
             "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
         },
         table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
     )
@@ -960,6 +964,8 @@ async def _make_rr_event(
                 "region": "CA",
                 "postal": "94703",
                 "country": "USA",
+                "latitude": 37.8703,
+                "longitude": -122.2731,
             },
             table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
         )

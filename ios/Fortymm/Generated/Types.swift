@@ -532,6 +532,16 @@ internal protocol APIProtocol: Sendable {
     func broadcastNotificationV1NotificationsBroadcastPost(_ input: Operations.BroadcastNotificationV1NotificationsBroadcastPost.Input) async throws -> Operations.BroadcastNotificationV1NotificationsBroadcastPost.Output
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
     func listTournamentsV1TournamentsGet(_ input: Operations.ListTournamentsV1TournamentsGet.Input) async throws -> Operations.ListTournamentsV1TournamentsGet.Output
@@ -540,6 +550,31 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/post(create_tournament_v1_tournaments_post)`.
     func createTournamentV1TournamentsPost(_ input: Operations.CreateTournamentV1TournamentsPost.Input) async throws -> Operations.CreateTournamentV1TournamentsPost.Output
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    func previewGeocodeV1GeocodeGet(_ input: Operations.PreviewGeocodeV1GeocodeGet.Input) async throws -> Operations.PreviewGeocodeV1GeocodeGet.Output
     /// Get Tournament
     ///
     /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}`.
@@ -1833,10 +1868,26 @@ extension APIProtocol {
     }
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
-    internal func listTournamentsV1TournamentsGet(headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()) async throws -> Operations.ListTournamentsV1TournamentsGet.Output {
-        try await listTournamentsV1TournamentsGet(Operations.ListTournamentsV1TournamentsGet.Input(headers: headers))
+    internal func listTournamentsV1TournamentsGet(
+        query: Operations.ListTournamentsV1TournamentsGet.Input.Query = .init(),
+        headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()
+    ) async throws -> Operations.ListTournamentsV1TournamentsGet.Output {
+        try await listTournamentsV1TournamentsGet(Operations.ListTournamentsV1TournamentsGet.Input(
+            query: query,
+            headers: headers
+        ))
     }
     /// Create Tournament
     ///
@@ -1849,6 +1900,39 @@ extension APIProtocol {
         try await createTournamentV1TournamentsPost(Operations.CreateTournamentV1TournamentsPost.Input(
             headers: headers,
             body: body
+        ))
+    }
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    internal func previewGeocodeV1GeocodeGet(
+        query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query,
+        headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers = .init()
+    ) async throws -> Operations.PreviewGeocodeV1GeocodeGet.Output {
+        try await previewGeocodeV1GeocodeGet(Operations.PreviewGeocodeV1GeocodeGet.Input(
+            query: query,
+            headers: headers
         ))
     }
     /// Get Tournament
@@ -2420,7 +2504,19 @@ internal enum Servers {}
 internal enum Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     internal enum Schemas {
-        /// A tournament venue address. Stored as a JSONB value-object.
+        /// A tournament venue address as **stored and read**. A JSONB value-object.
+        ///
+        /// The six free-text components a client sends (:class:`AddressInput`) **plus**
+        /// the ``latitude``/``longitude`` the server geocoded at write time — both NOT
+        /// NULL (ADR "a venue's coordinates are geocoded server-side at write time and are
+        /// NOT NULL"). Coordinates live inside the JSONB value-object, so the stored
+        /// address always carries them; a read that validates the column into this model
+        /// can rely on non-null coordinates rather than threading ``Optional[float]``
+        /// through every downstream reader.
+        ///
+        /// This is the shape on the *read* schemas (:class:`TournamentRead` and the
+        /// detail/dashboard reads); the write schemas take :class:`AddressInput`, which
+        /// has no coordinates.
         ///
         /// - Remark: Generated from `#/components/schemas/Address`.
         internal struct Address: Codable, Hashable, Sendable {
@@ -2436,7 +2532,123 @@ internal enum Components {
             internal var postal: Swift.String
             /// - Remark: Generated from `#/components/schemas/Address/country`.
             internal var country: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Address/latitude`.
+            internal var latitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/Address/longitude`.
+            internal var longitude: Swift.Double
             /// Creates a new `Address`.
+            ///
+            /// - Parameters:
+            ///   - venue:
+            ///   - street:
+            ///   - city:
+            ///   - region:
+            ///   - postal:
+            ///   - country:
+            ///   - latitude:
+            ///   - longitude:
+            internal init(
+                venue: Swift.String,
+                street: Swift.String,
+                city: Swift.String,
+                region: Swift.String,
+                postal: Swift.String,
+                country: Swift.String,
+                latitude: Swift.Double,
+                longitude: Swift.Double
+            ) {
+                self.venue = venue
+                self.street = street
+                self.city = city
+                self.region = region
+                self.postal = postal
+                self.country = country
+                self.latitude = latitude
+                self.longitude = longitude
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case venue
+                case street
+                case city
+                case region
+                case postal
+                case country
+                case latitude
+                case longitude
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.venue = try container.decode(
+                    Swift.String.self,
+                    forKey: .venue
+                )
+                self.street = try container.decode(
+                    Swift.String.self,
+                    forKey: .street
+                )
+                self.city = try container.decode(
+                    Swift.String.self,
+                    forKey: .city
+                )
+                self.region = try container.decode(
+                    Swift.String.self,
+                    forKey: .region
+                )
+                self.postal = try container.decode(
+                    Swift.String.self,
+                    forKey: .postal
+                )
+                self.country = try container.decode(
+                    Swift.String.self,
+                    forKey: .country
+                )
+                self.latitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .latitude
+                )
+                self.longitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .longitude
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "venue",
+                    "street",
+                    "city",
+                    "region",
+                    "postal",
+                    "country",
+                    "latitude",
+                    "longitude"
+                ])
+            }
+        }
+        /// The venue address a client **sends** on a write (create/edit).
+        ///
+        /// Six free-text components and **no coordinates**: coordinates are geocoded
+        /// server-side at write time and are never supplied by a client (ADR "a venue's
+        /// coordinates are geocoded server-side at write time and are NOT NULL"). A client
+        /// that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
+        /// rather than an unverified number the server would have to trust or re-check.
+        ///
+        /// The write verbs geocode this input and construct the stored :class:`Address`
+        /// (with coordinates) before persisting; this is the shape on the *request*
+        /// schemas, and :class:`Address` is the shape on the *read* schemas.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AddressInput`.
+        internal struct AddressInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AddressInput/venue`.
+            internal var venue: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/street`.
+            internal var street: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/city`.
+            internal var city: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/region`.
+            internal var region: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/postal`.
+            internal var postal: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AddressInput/country`.
+            internal var country: Swift.String
+            /// Creates a new `AddressInput`.
             ///
             /// - Parameters:
             ///   - venue:
@@ -2501,6 +2713,63 @@ internal enum Components {
                     "region",
                     "postal",
                     "country"
+                ])
+            }
+        }
+        /// The ``409`` response body for a venue address that resolved to zero geocoding
+        /// candidates — the coded-refusal convention of ADR-0968, mirroring the entry
+        /// endpoint's ``{"code", "message"}`` shape.
+        ///
+        /// ``code`` is the stable contract a client switches on — always
+        /// :data:`ADDRESS_NOT_GEOCODABLE_CODE`, carried as the field's default so the one
+        /// constant is the single source of the string (no fork) and the concrete value
+        /// still surfaces in the generated OpenAPI. ``message`` is fallback prose for a
+        /// client without copy for the code, or a person.
+        ///
+        /// Modeled (rather than a hand-rolled ``dict`` detail) so the create/edit/preview
+        /// routes' ``responses={409: {"model": AddressNotGeocodable}}`` describes the body
+        /// the generated web + iOS types actually receive — instead of the refusal riding on
+        /// FastAPI's reserved ``422``, whose auto-generated ``HTTPValidationError`` schema
+        /// says ``detail`` is an **array** and so cannot decode this object body (ADR-0968).
+        /// Pure Pydantic, kept beside the code/message it carries; the FastAPI
+        /// ``HTTPException`` that wraps it lives in the router adapter (``app.tournaments``),
+        /// so this module stays FastAPI-free.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable`.
+        internal struct AddressNotGeocodable: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable/code`.
+            internal var code: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AddressNotGeocodable/message`.
+            internal var message: Swift.String
+            /// Creates a new `AddressNotGeocodable`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - message:
+            internal init(
+                code: Swift.String? = nil,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.message = message
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case message
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "message"
                 ])
             }
         }
@@ -4215,6 +4484,68 @@ internal enum Components {
                 case instant
                 case localLabel = "local_label"
                 case tzAbbrev = "tz_abbrev"
+            }
+        }
+        /// The result of the read-only address-preview lookup (``GET /v1/geocode``).
+        ///
+        /// The coordinates a free-text address string resolves to, plus the provider's
+        /// canonical ``formatted`` label, so the web "Preview location" pin can drop a
+        /// marker (and echo the normalized address it matched) *before* the tournament
+        /// write. This is not stored — it is a live lookup through the same injected
+        /// :class:`~app.geocoding.Geocoder` the create/edit write path geocodes with, so
+        /// the pin the previewer sees matches the coordinates a subsequent write records.
+        ///
+        /// An address that resolves to zero candidates is a coded ``409`` carrying the same
+        /// ``address_not_geocodable`` code the write path answers with — never a
+        /// coordinate-less preview.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GeocodePreview`.
+        internal struct GeocodePreview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/latitude`.
+            internal var latitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/longitude`.
+            internal var longitude: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/GeocodePreview/formatted`.
+            internal var formatted: Swift.String
+            /// Creates a new `GeocodePreview`.
+            ///
+            /// - Parameters:
+            ///   - latitude:
+            ///   - longitude:
+            ///   - formatted:
+            internal init(
+                latitude: Swift.Double,
+                longitude: Swift.Double,
+                formatted: Swift.String
+            ) {
+                self.latitude = latitude
+                self.longitude = longitude
+                self.formatted = formatted
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case latitude
+                case longitude
+                case formatted
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.latitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .latitude
+                )
+                self.longitude = try container.decode(
+                    Swift.Double.self,
+                    forKey: .longitude
+                )
+                self.formatted = try container.decode(
+                    Swift.String.self,
+                    forKey: .formatted
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "latitude",
+                    "longitude",
+                    "formatted"
+                ])
             }
         }
         /// - Remark: Generated from `#/components/schemas/HTTPValidationError`.
@@ -9193,7 +9524,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/end_date`.
             internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/address`.
-            internal var address: Components.Schemas.Address
+            internal var address: Components.Schemas.AddressInput
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/league_id`.
@@ -9213,7 +9544,7 @@ internal enum Components {
                 description: Swift.String? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
-                address: Components.Schemas.Address,
+                address: Components.Schemas.AddressInput,
                 tableCatalogue: [Components.Schemas.TournamentTable]? = nil,
                 leagueId: Swift.String? = nil
             ) {
@@ -9253,7 +9584,7 @@ internal enum Components {
                     forKey: .endDate
                 )
                 self.address = try container.decode(
-                    Components.Schemas.Address.self,
+                    Components.Schemas.AddressInput.self,
                     forKey: .address
                 )
                 self.tableCatalogue = try container.decodeIfPresent(
@@ -9307,6 +9638,8 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/events`.
             internal var events: [Components.Schemas.TournamentEventRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/distance_miles`.
+            internal var distanceMiles: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
             internal struct LatestScheduleSolvePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve/value1`.
@@ -9345,6 +9678,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - events:
+            ///   - distanceMiles:
             ///   - latestScheduleSolve:
             internal init(
                 id: Swift.String,
@@ -9362,6 +9696,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 events: [Components.Schemas.TournamentEventRead],
+                distanceMiles: Swift.Double? = nil,
                 latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil
             ) {
                 self.id = id
@@ -9379,6 +9714,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.events = events
+                self.distanceMiles = distanceMiles
                 self.latestScheduleSolve = latestScheduleSolve
             }
             internal enum CodingKeys: String, CodingKey {
@@ -9397,6 +9733,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case events
+                case distanceMiles = "distance_miles"
                 case latestScheduleSolve = "latest_schedule_solve"
             }
         }
@@ -10584,12 +10921,12 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address/value1`.
-                internal var value1: Components.Schemas.Address
+                internal var value1: Components.Schemas.AddressInput
                 /// Creates a new `AddressPayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
-                internal init(value1: Components.Schemas.Address) {
+                internal init(value1: Components.Schemas.AddressInput) {
                     self.value1 = value1
                 }
                 internal init(from decoder: any Swift.Decoder) throws {
@@ -20651,11 +20988,46 @@ internal enum Operations {
     }
     /// List Tournaments
     ///
+    /// List the tournaments the caller may see, newest first, each as the full detail
+    /// aggregate the list cards render.
+    ///
+    /// Pass an **all-or-nothing** `lat` / `lng` / `radius_miles` triple to filter to
+    /// tournaments **near a point**: only those whose venue is within `radius_miles` of
+    /// `(lat, lng)` come back, each carrying its `distance_miles` (a haversine
+    /// great-circle distance, in miles). Supplying some but not all three is a `422` — the
+    /// three describe one location filter, not three independent knobs. Omit all three
+    /// (the default) for every visible tournament, with `distance_miles` null.
+    ///
     /// - Remark: HTTP `GET /v1/tournaments`.
     /// - Remark: Generated from `#/paths//v1/tournaments/get(list_tournaments_v1_tournaments_get)`.
     internal enum ListTournamentsV1TournamentsGet {
         internal static let id: Swift.String = "list_tournaments_v1_tournaments_get"
         internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/lat`.
+                internal var lat: Swift.Double?
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/lng`.
+                internal var lng: Swift.Double?
+                /// - Remark: Generated from `#/paths/v1/tournaments/GET/query/radius_miles`.
+                internal var radiusMiles: Swift.Double?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - lat:
+                ///   - lng:
+                ///   - radiusMiles:
+                internal init(
+                    lat: Swift.Double? = nil,
+                    lng: Swift.Double? = nil,
+                    radiusMiles: Swift.Double? = nil
+                ) {
+                    self.lat = lat
+                    self.lng = lng
+                    self.radiusMiles = radiusMiles
+                }
+            }
+            internal var query: Operations.ListTournamentsV1TournamentsGet.Input.Query
             /// - Remark: Generated from `#/paths/v1/tournaments/GET/header`.
             internal struct Headers: Sendable, Hashable {
                 internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListTournamentsV1TournamentsGet.AcceptableContentType>]
@@ -20671,8 +21043,13 @@ internal enum Operations {
             /// Creates a new `Input`.
             ///
             /// - Parameters:
+            ///   - query:
             ///   - headers:
-            internal init(headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()) {
+            internal init(
+                query: Operations.ListTournamentsV1TournamentsGet.Input.Query = .init(),
+                headers: Operations.ListTournamentsV1TournamentsGet.Input.Headers = .init()
+            ) {
+                self.query = query
                 self.headers = headers
             }
         }
@@ -20900,6 +21277,57 @@ internal enum Operations {
                     }
                 }
             }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateTournamentV1TournamentsPost.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateTournamentV1TournamentsPost.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/post(create_tournament_v1_tournaments_post)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.CreateTournamentV1TournamentsPost.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.CreateTournamentV1TournamentsPost.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
             internal struct UnprocessableContent: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/tournaments/POST/responses/422/content`.
                 internal enum Body: Sendable, Hashable {
@@ -20939,6 +21367,256 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.CreateTournamentV1TournamentsPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Preview Geocode
+    ///
+    /// Resolve a free-text ``address`` string to coordinates for the web
+    /// "Preview location" pin, without writing anything.
+    ///
+    /// Its own BFF-style endpoint (root ``CLAUDE.md``, "BFF endpoints"): it fetches
+    /// on a user action — the previewer typing/blurring the venue fields — not on
+    /// page load, so it is not folded into a page endpoint. It resolves through the
+    /// same injected :class:`~app.geocoding.Geocoder` the create/edit write path
+    /// geocodes with, so the pin the previewer sees matches the coordinates a
+    /// subsequent write would record.
+    ///
+    /// Gated on ``tournament.create``: previewing a venue is part of composing a
+    /// tournament, so the same grant that lets a user create one lets them preview
+    /// its location — this is deliberately not a wide-open geocoding proxy.
+    ///
+    /// A zero-result / unresolvable address is the same coded ``409`` the write path
+    /// answers (:func:`_address_not_geocodable`, ``address_not_geocodable``), so the
+    /// preview and the write agree on the refusal. Any other geocoder failure
+    /// (:class:`~app.geocoding.GeocoderError`) is unexpected and propagates to the
+    /// ``500`` handler.
+    ///
+    /// - Remark: HTTP `GET /v1/geocode`.
+    /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)`.
+    internal enum PreviewGeocodeV1GeocodeGet {
+        internal static let id: Swift.String = "preview_geocode_v1_geocode_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/geocode/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/query/address`.
+                internal var address: Swift.String
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - address:
+                internal init(address: Swift.String) {
+                    self.address = address
+                }
+            }
+            internal var query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/geocode/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PreviewGeocodeV1GeocodeGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PreviewGeocodeV1GeocodeGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                query: Operations.PreviewGeocodeV1GeocodeGet.Input.Query,
+                headers: Operations.PreviewGeocodeV1GeocodeGet.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.GeocodePreview)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.GeocodePreview {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.PreviewGeocodeV1GeocodeGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.PreviewGeocodeV1GeocodeGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.PreviewGeocodeV1GeocodeGet.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/geocode/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/geocode/get(preview_geocode_v1_geocode_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.PreviewGeocodeV1GeocodeGet.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):
@@ -21262,6 +21940,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/PATCH/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/PATCH/responses/409/content/application\/json`.
+                    case json(Components.Schemas.AddressNotGeocodable)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AddressNotGeocodable {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/patch(update_tournament_v1_tournaments__tournament_id__patch)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }

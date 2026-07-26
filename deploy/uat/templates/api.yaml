@@ -55,6 +55,23 @@ spec:
               memory: 512Mi
           envFrom:
             {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+          env:
+            # Server-side geocoding key for venue addresses — see
+            # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
+            # Sourced from the .env-backed Secret (secrets.env), the same place
+            # every other sensitive var comes from; only UAT/prod set it.
+            # optional:true is the whole point of "keyless everywhere else":
+            # when the key is absent from the Secret the var stays unset and the
+            # API selects its deterministic, network-free FakeGeocoder, so local
+            # dev / CI / e2e / QA never touch the network. Declared explicitly
+            # (not just via the bulk envFrom Secret) so the wiring is visible and
+            # greppable in the rendered Deployment.
+            - name: GOOGLE_GEOCODING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.env }}
+                  key: GOOGLE_GEOCODING_API_KEY
+                  optional: true
           ports:
             - containerPort: 8000
           volumeMounts:

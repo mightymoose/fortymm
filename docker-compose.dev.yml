@@ -108,6 +108,12 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       VITE_ENABLE_MSW: "false"
+      # Browser Google Maps key. Dev runs the Vite dev server (not a bundle
+      # build), so this is a runtime passthrough, not a build arg — the dev
+      # server reads import.meta.env.VITE_* from its process env. OPTIONAL:
+      # empty default => the map degrades to a text fallback. Export
+      # VITE_GOOGLE_MAPS_API_KEY in your shell to supply a real key locally.
+      VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules
