@@ -30,7 +30,7 @@ Infra has no single directory — it spans:
 | Stack | How | Host URL | Notes |
 |-------|-----|----------|-------|
 | dev   | `docker compose -f docker-compose.dev.yml up` | :8080 | dev servers, MSW off; real API |
-| QA    | `scripts/qa-up.sh [id]` | :8085 (auto) | built artifacts, MSW off, **Mailpit :8087** captures all mail; multi-stack |
+| QA    | up `scripts/qa-up.sh [id]` / down `scripts/qa-down.sh [id]` | :8085 (auto) | built artifacts, MSW off, **Mailpit :8087** captures all mail; multi-stack; **reap on merge** |
 | UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; sends REAL Postmark email |
 
 ## Topology
@@ -40,7 +40,7 @@ Infra has no single directory — it spans:
 **UAT is also on the tailnet.** The chart runs a `tailscale/tailscale` proxy (`deploy/uat/templates/tailscale.yaml`, `tailscale.enabled` in values, on by default) that fronts the routing nginx via `tailscale serve`, so UAT is reachable privately at **`https://fortymm-uat.<tailnet>.ts.net`** with auto-HTTPS — independent of the DDNS/router/Caddy chain (which still serves `uat.fortymm.com` unchanged; Tailscale is purely additive). It reads `TS_AUTHKEY` (a reusable, non-ephemeral key from the Tailscale admin console) straight from the `.env`-backed secret, so just add a `TS_AUTHKEY=tskey-...` line to `.env`; `redeploy-uat.sh` errors early if it's missing. The proxy persists its node identity in the `tailscale-state` Secret (survives restarts; no re-auth). Requires HTTPS certs + MagicDNS enabled in the tailnet. Set `tailscale.enabled=false` to skip it.
 
 Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only nginx published):
-- `docker compose -f docker-compose.qa.yml up -d --build` — `fortymm-qa`, nginx on **:8085**, local-only at http://127.0.0.1:8085. Same app shape as UAT, separate project/port/volumes. `down -v` to wipe its data. To run **multiple QA stacks at once**, parameterize per stack: `QA_ID=<id> QA_PORT=<port> QA_MAILPIT_PORT=<port>` override the project name, nginx host port (+`APP_BASE_URL`), and Mailpit port. `scripts/qa-up.sh [id]` picks a free port trio automatically and prints the assigned URL.
+- `docker compose -f docker-compose.qa.yml up -d --build` — `fortymm-qa`, nginx on **:8085**, local-only at http://127.0.0.1:8085. Same app shape as UAT, separate project/port/volumes. Tear down with **`scripts/qa-down.sh [id]`**, not `down -v` — the latter leaves the stack's built images and buildx cache behind (that leak once grew `Docker.raw` to 230 GB and wedged the daemon). To run **multiple QA stacks at once**, parameterize per stack: `QA_ID=<id> QA_PORT=<port> QA_MAILPIT_PORT=<port>` override the project name, nginx host port (+`APP_BASE_URL`), and Mailpit port. `scripts/qa-up.sh [id]` picks a free port trio automatically and prints the assigned URL.
 
 **Preview-stack email.** The **QA** stack runs a `mailpit` service that captures *all* outbound email instead of relaying it through the real Postmark account in `.env`. Its api/worker `environment:` blocks override `SMTP_*` (`SMTP_HOST=mailpit`, `:1025`, no TLS, blank creds) so it can never send real mail — the worker's RQ `email` jobs (confirmation / magic-link sign-in / account-merge, see `api/app/email.py`) land in Mailpit. Read them at the Mailpit web UI: **QA → http://127.0.0.1:8087** (host-local only; not proxied by Caddy, since captured mail contains live sign-in links). QA also overrides `APP_BASE_URL` to `http://127.0.0.1:8085` so captured links are clickable. To verify a sign-in/confirmation flow on QA, trigger it in the UI then open the Mailpit UI to grab the link.
 
@@ -52,6 +52,10 @@ Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only
 mise run redeploy-uat                 # rebuild + helm upgrade the k3d UAT stack, smoke-check uat.fortymm.com
 DEPLOY_OBSERVABILITY=false mise run redeploy-uat   # skip the monitoring chart
 scripts/qa-up.sh [id]                 # bring up an isolated QA stack on a free port trio; prints QA_URL / Mailpit URL
+scripts/qa-down.sh [id]               # reap that stack: containers, volumes (named + anonymous), networks, built images
+scripts/qa-down.sh --dry-run [id]     # preview what would be removed
+scripts/qa-down.sh --all              # every fortymm-qa-* stack (k3d/UAT resources are guarded)
+scripts/qa-down.sh --all --prune-cache  # ...plus the GLOBAL buildx cache (opt-in; next build is cold everywhere)
 
 # Inspect UAT (point kubectl/helm at the k3d cluster first):
 export KUBECONFIG="$(k3d kubeconfig write fortymm-uat)"

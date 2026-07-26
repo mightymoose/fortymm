@@ -9,6 +9,10 @@ k3d = "latest"
 description = "Rebuild images and helm-deploy the fortymm-uat k3d cluster; smoke-check https://uat.fortymm.com"
 run = "./scripts/redeploy-uat.sh"
 
+[tasks.qa-down]
+description = "Tear down a QA stack and reclaim its volumes + built images (--all for every stack, --prune-cache for the buildx cache)"
+run = "./scripts/qa-down.sh"
+
 [tasks.release-beta]
 description = "Release to test channels: redeploy UAT, then build + upload the iOS app to TestFlight"
 run = """
