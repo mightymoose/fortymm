@@ -35,7 +35,9 @@ from app.ratings.stats import (
     current_streak_for_user,
     latest_rated_match_change,
     league_peak_rating,
-    league_percentile,
+    league_percentile_if_ranked,
+    league_rank,
+    league_rated_population,
 )
 from app.result_acceptance import side_win_counts
 from app.retirement import retirement_deadline
@@ -44,6 +46,7 @@ from app.schemas.dashboard import (
     DashboardAttentionItem,
     DashboardRating,
     DashboardRatingStat,
+    DashboardRatingState,
     DashboardRecentResult,
     DashboardResponse,
     DashboardStreak,
@@ -293,40 +296,41 @@ def _build_recent_result(
     )
 
 
-async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating | None:
-    """Resolve the user's headline rating row — or ``None``, and no card at all.
+async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating:
+    """The dashboard's rating card — ALWAYS an object now, carrying a ``state``
+    discriminator, never a bare ``None`` (ADR 20260725).
 
-    Picks the default league's rating if they hold one there, otherwise the oldest
-    league they DO hold one in. "Hold" is ``is_rated_member()``: the widget stays
-    hidden until the league is actually scoring you, which is what this docstring
-    has always claimed and what the row filter now makes true.
+    The ``RATED`` arm is the headline rating: picks the default league's rating if
+    the user holds one there, otherwise the oldest league they DO hold one in.
+    "Hold" is ``is_rated_member()`` — the card shows a rating only when a league is
+    actually scoring them, not when they merely hold the 1500 the league seeded on
+    join (that seed is the strategy's prior, not a rating they earned; #382/#952).
 
-    It was not true. Joining a league seeds a 1500 row, so a guest who had never
-    played anything got the full card — current 1500, peak 1500, RD 350, a
-    one-point sparkline — every number of which is the strategy's PRIOR rather than
-    anything they did. The percentile was suppressed for them (#382) precisely
-    because it was the most obviously absurd of the five; the fix is the same one
-    the profile now makes, applied once and to all of them: a player who has never
-    finished a rated match has no rating, so there is no rating card. They see the
-    same "Unrated" story here as on their profile instead of a fabricated one.
+    The three non-rated arms replace what used to be three indistinguishable
+    ``return None`` exits, which the client could only render as one (false-for-two)
+    string:
 
-    (The alternative — keep the card and null out ``peak``/``percentile`` — would
-    make ``DashboardRating.peak`` nullable, i.e. an OpenAPI change, and would still
-    print a rating of 1500 next to a profile that says Unrated. Hiding the card
-    needs no schema change: ``rating`` is already ``DashboardRating | None`` for
-    manual-strategy leagues, and the client already renders that.)
+    * ``UNRATED`` — in a Glicko-2 (automatic) league, no rated match finished yet;
+    * ``AWAITING_IMPORT`` — a manual-strategy league whose import is pending (or a
+      manual member whose imported rating we do not headline as a Glicko-2 card);
+    * ``NOT_RATED_LEAGUE`` — not a member of any rated league at all.
+
+    Which of the three obtains is a fact only the server holds, so it names it here
+    rather than leaving the client to guess from a ``null``.
 
     ``completed_match_count`` is no longer a parameter: it was a PROXY for "is this
-    player rated" (#382), and we now have the predicate itself. A rated player has,
-    by definition, completed a rated match — so the old gate could no longer fire,
-    and a dead guard that looks live is worse than no guard.
+    player rated" (#382), and we now have the predicate itself.
     """
     rating_row = await _resolve_user_rating(db, user_id)
     if rating_row is None or rating_row.rating_value is None:
-        return None
+        # Not a rated member. Name the league they ARE in (and why it does not rate
+        # them), or ``NOT_RATED_LEAGUE`` if they are in none.
+        return await _non_rated_rating(db, user_id)
     strategy = rating_row.league.rating_strategy
     if not strategy.is_automatic:
-        return None
+        # A rated member of a manual-strategy league: an imported number, not a
+        # Glicko-2 card. Its state is the manual-league one.
+        return _non_rated_card(DashboardRatingState.AWAITING_IMPORT, rating_row.league)
 
     current = rating_row.rating_value
     league_id = rating_row.league_id
@@ -339,10 +343,17 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
     # merely stops being computed here.
     change = await latest_rated_match_change(db, user_id, league_id)
     peak = await league_peak_rating(db, user_id, league_id, current)
-    percentile = await league_percentile(db, league_id, current)
+    # Population + rank first, then the percentile ONLY if the ladder clears the
+    # threshold — below it the card renders "#rank of population" and the percentile
+    # is withheld, so the lowest-rated player of a small league never reads "Top
+    # 100%" (#959). The switch is the shared helper both surfaces read.
+    population = await league_rated_population(db, league_id)
+    rank = await league_rank(db, league_id, user_id)
+    percentile = await league_percentile_if_ranked(db, league_id, current, population)
     streak = await current_streak_for_user(db, user_id)
 
     return DashboardRating(
+        state=DashboardRatingState.RATED,
         league_id=league_id,
         league_name=rating_row.league.name,
         strategy_key=strategy.key,
@@ -350,6 +361,8 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
         delta=None if change is None else change.delta,
         peak=peak,
         percentile=percentile,
+        rank=rank,
+        population=population,
         spark_data=spark,
         streak=(
             None if streak is None else DashboardStreak(kind=streak.kind, n=streak.n)
@@ -358,22 +371,68 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
     )
 
 
-async def _resolve_user_rating(
-    db: AsyncSession, user_id: uuid.UUID
+async def _non_rated_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating:
+    """The card for a user who is not a rated member: resolve the league they belong
+    to (default first, else oldest membership) and name why it does not rate them.
+
+    ``UNRATED`` for an automatic (Glicko-2) league they have simply not played a
+    rated match in yet; ``AWAITING_IMPORT`` for a manual league; ``NOT_RATED_LEAGUE``
+    when they are a member of no league at all.
+    """
+    league = await _resolve_user_league(db, user_id)
+    if league is None:
+        return _non_rated_card(DashboardRatingState.NOT_RATED_LEAGUE, None)
+    state = (
+        DashboardRatingState.UNRATED
+        if league.rating_strategy.is_automatic
+        else DashboardRatingState.AWAITING_IMPORT
+    )
+    return _non_rated_card(state, league)
+
+
+def _non_rated_card(
+    state: DashboardRatingState, league: League | None
+) -> DashboardRating:
+    """A non-``RATED`` card: it carries the league context it has (``None`` for
+    ``NOT_RATED_LEAGUE``) and leaves every rating-payload field null/empty — there is
+    no rating to report, and a zero or a 1500 seed here is exactly the fabrication
+    the state exists to avoid."""
+    return DashboardRating(
+        state=state,
+        league_id=None if league is None else league.id,
+        league_name=None if league is None else league.name,
+        strategy_key=None if league is None else league.rating_strategy.key,
+        current=None,
+        delta=None,
+        peak=None,
+        percentile=None,
+        rank=None,
+        population=None,
+        spark_data=[],
+        streak=None,
+        stats=[],
+    )
+
+
+async def _pick_user_rating_row(
+    db: AsyncSession, user_id: uuid.UUID, *, rated_only: bool
 ) -> UserLeagueRating | None:
-    # The default league's rating first; failing that, the oldest league the user
-    # is actually rated in, so a player who only plays on a side ladder still gets
-    # a card — for THAT ladder. Eager-load the league and strategy so the caller
-    # can read is_automatic without an extra round trip.
-    #
-    # Both reads are gated on ``is_rated_member()``, so "no row" and "a row holding
-    # nothing but the seed the league handed them on join" answer the same way:
-    # ``None``, and no card. Without it the default-league branch always hits — every
-    # user is seeded there the moment their session is minted — and the fallback
-    # below was dead code for everyone.
+    """The user's headline ``UserLeagueRating`` row — their default league's, else
+    the oldest league they belong to, else ``None``. Eager-loads the league and its
+    strategy so callers read ``is_automatic`` without an extra round trip.
+
+    ``rated_only`` gates both reads on ``is_rated_member()``. The rated card resolver
+    passes ``True`` so "no row" and "a row holding nothing but the seed the league
+    handed them on join" both answer ``None`` (no card); without the gate the
+    default-league branch always hits — every user is seeded there the moment their
+    session is minted — and the oldest-league fallback is dead code. The non-rated
+    resolver passes ``False``, because every member seeds a row on join whether or
+    not anything has moved it, and it is precisely those unrated members it resolves.
+    """
     options = (
         selectinload(UserLeagueRating.league).selectinload(League.rating_strategy),
     )
+    gate = (is_rated_member(),) if rated_only else ()
     default = (
         await db.execute(
             select(UserLeagueRating)
@@ -381,7 +440,7 @@ async def _resolve_user_rating(
             .where(
                 UserLeagueRating.user_id == user_id,
                 League.is_default.is_(True),
-                is_rated_member(),
+                *gate,
             )
             .options(*options)
             .limit(1)
@@ -394,13 +453,31 @@ async def _resolve_user_rating(
             select(UserLeagueRating)
             .where(
                 UserLeagueRating.user_id == user_id,
-                is_rated_member(),
+                *gate,
             )
             .options(*options)
             .order_by(UserLeagueRating.created_at.asc())
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def _resolve_user_league(db: AsyncSession, user_id: uuid.UUID) -> League | None:
+    """The league whose story a NON-rated user's card tells — ungated by
+    ``is_rated_member()`` (the unrated members are exactly who it resolves for; see
+    ``_pick_user_rating_row``)."""
+    row = await _pick_user_rating_row(db, user_id, rated_only=False)
+    return None if row is None else row.league
+
+
+async def _resolve_user_rating(
+    db: AsyncSession, user_id: uuid.UUID
+) -> UserLeagueRating | None:
+    """The user's headline rated card row, gated on ``is_rated_member()`` (see
+    ``_pick_user_rating_row``): the default league's rating first, else the oldest
+    league they are actually rated in, so a side-ladder-only player still gets a
+    card for THAT ladder."""
+    return await _pick_user_rating_row(db, user_id, rated_only=True)
 
 
 async def _spark(

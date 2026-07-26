@@ -26,6 +26,7 @@ import {
   notificationPreferences,
   notificationTaxonomy,
   sessionResponse,
+  unratedDashboardRating,
 } from '../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from './support/realtime'
 
@@ -46,7 +47,9 @@ const DASHBOARD = {
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,
-  rating: null,
+  // The rating block is always present now; these specs are about the shell, so
+  // any valid non-RATED shape does (ADR 20260725).
+  rating: unratedDashboardRating(),
   completed_match_count: 0,
   recent_results: [],
   // No live tournament, so the dashboard's tournament panel never renders in

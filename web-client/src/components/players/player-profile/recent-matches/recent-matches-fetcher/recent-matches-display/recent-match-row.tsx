@@ -127,7 +127,7 @@ export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
       )}
     </td>
     <td>
-      {row.delta ? (
+      {row.delta.kind === 'change' ? (
         <span
           role="img"
           aria-label={row.delta.ariaLabel}
@@ -141,9 +141,13 @@ export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
           {row.delta.label}
         </span>
       ) : (
+        // The em dash means different things for different rows — undecided,
+        // unrated, or a rating just established — so the accessible name comes
+        // off the view model (`emptyRatingDeltaAria`) rather than a hardcoded
+        // "No rating change" that lied for two of the three.
         <span
           role="img"
-          aria-label="No rating change"
+          aria-label={row.delta.ariaLabel}
           className="recent-matches__delta-none"
         >
           {NO_VALUE}

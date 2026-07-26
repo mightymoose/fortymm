@@ -61,3 +61,35 @@ first paint still costs one request. It is therefore also the one card that owns
 its own error state — a failed range flip renders "Couldn't load that range · Try
 again" inside the card and leaves the rest of the painted page alone, rather than
 throwing to the route boundary the way a bundle failure does.
+
+## Amendment (2026-07-25, #957): the domain zooms to fit a collapsed span
+
+The calendar axis has a sharp edge the original decision did not address. When a
+player's entire history falls within a tiny fraction of the selected range — a
+brand-new player after one evening of matches — every point shares almost the same
+`x`, and the series collapses to a **1px vertical spike hard against the right
+edge**, ~99% of the plot empty. It is the *honest* rendering of a calendar axis
+over one instant, and it is unusable — and it is exactly the shape a new player
+sees, which is exactly when they are most likely to look.
+
+The fix keeps the calendar axis (this ADR's choice stands) and adds a
+degenerate-case rule: **when the data's own span is a small fraction of the
+selected range, the x-domain zooms to the data's span** (padded out to a
+minimum-span floor) instead of running window-start → now. An evening's six matches
+then fan out across the plot on a real time axis, rather than compressing to a
+sub-pixel line. The range tab becomes "show me *at most* this window, zoomed to
+fit" rather than "stretch the data across the whole window".
+
+The zoom-to-fit is the whole fix; there is **no single-instant label**. Even
+genuinely identical timestamps (every point at the same instant) draw fine under
+it: the coincident instant pins to the domain's left edge and the line runs flat to
+today — a plain horizontal line, which is the honest picture of a history that is
+one moment old, and needs no words. An earlier version of this amendment guarded
+that case with an **"N matches today"** label, gated on a fixed-floor domain
+(`[now − 3h, now]`). That floor misfired: it clustered close-but-*distinct* recent
+points — a freshly-rated player's `initial` seed rating plus their first match,
+seconds apart — against the right edge, where their drawn extent fell below a
+viewBox unit and the label fired for a line that should have been drawn. Fitting the
+domain to the data's own span (rather than to a fixed floor) fans distinct points
+out and collapses only truly-coincident ones onto the left edge, so the label had
+nothing left to guard and was removed.

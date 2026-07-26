@@ -32,7 +32,7 @@ class MatchService:
         match_id: uuid.UUID,
         league_id: uuid.UUID,
         status: MatchStatus,
-        created_at: datetime,
+        as_played: datetime,
         user_ids: list[uuid.UUID],
     ) -> MatchViewExtras:
         """The participant-only extras block for a match the caller has already
@@ -41,13 +41,20 @@ class MatchService:
         Takes primitives rather than a loaded row so the repository stays free of
         the ORM hierarchy. Callers that must *not* show the extras (anonymous or
         spectator viewers — see #515) pass none of this and use
-        ``MatchViewExtras.empty()`` instead."""
+        ``MatchViewExtras.empty()`` instead.
+
+        ``as_played`` is the match's as-played instant — its ``completed_at`` when
+        completed, else *now* — and is the strict-``<`` cutoff the pre-match
+        snapshot (form, rating trail, career, H2H) anchors on. NOT ``created_at``:
+        a match created in a batch (a tournament schedule, or a player queuing
+        several) but completed later has a ``created_at`` that predates its own
+        participants' priors, filtering every prior out (ADR-0012 #951)."""
         return MatchViewExtras(
             rating_changes=await self._details.rating_changes(match_id, status),
             recent_form=await self._details.recent_form(
-                user_ids, match_id, league_id, created_at
+                user_ids, match_id, league_id, as_played
             ),
             head_to_head=await self._details.head_to_head(
-                user_ids, match_id, created_at
+                user_ids, match_id, as_played
             ),
         )

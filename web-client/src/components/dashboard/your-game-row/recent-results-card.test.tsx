@@ -50,21 +50,27 @@ describe('RecentResultsCard', () => {
     expect(row.getByLabelText('Gained 24 rating')).toBeInTheDocument()
   })
 
-  it('shows an em dash when the match carries no rating change', () => {
+  it('shows an em dash, named "No rating change", when the match moved no rating', () => {
+    // The bare em dash had no accessible name at all on the dashboard, so a
+    // screen reader heard nothing here. It now names the state.
     recentResultsCardPage.render()
 
-    expect(recentResultsCardPage.getRow('patel.m').getByText('—')).toBeInTheDocument()
+    const row = recentResultsCardPage.getRow('patel.m')
+    expect(row.getByText('—')).toBeInTheDocument()
+    expect(row.getByLabelText('No rating change')).toBeInTheDocument()
   })
 
-  it('shows an em dash — never a signed number — for the match that ESTABLISHED the rating', () => {
+  it('shows an em dash, named "Rating established", for the match that ESTABLISHED the rating', () => {
     // The change is *present* here; only its `delta` is null. Before the fix the
     // column read the delta straight, and `null >= 0` is `true` in JS — so this
     // row would have painted a green "+null"/"+0"-ish chip for a player whose
-    // rating had just come into existence (#952).
+    // rating had just come into existence (#952). And a screen reader must hear
+    // that this is a first rated match, not the same "nothing" as an unrated one.
     recentResultsCardPage.render()
 
     const row = recentResultsCardPage.getRow('invisible-sloth')
     expect(row.getByText('—')).toBeInTheDocument()
+    expect(row.getByLabelText('Rating established')).toBeInTheDocument()
     expect(row.queryByText(/^[+-]/)).toBeNull()
     expect(row.queryByText(/1500|null|NaN/)).toBeNull()
   })

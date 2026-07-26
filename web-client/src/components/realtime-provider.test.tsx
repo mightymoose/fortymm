@@ -6,6 +6,7 @@ import { useDashboard } from '@/api/dashboard'
 import { closeRealtimeConnections } from '@/api/realtime/connection'
 import { SSE_CONTENT_TYPE } from '@/mocks/realtime-stream'
 import { server } from '@/mocks/server'
+import { unratedDashboardRating } from '@/test/factories'
 import type { components } from '@/api/schema'
 import { RealtimeProvider } from './realtime-provider'
 
@@ -33,7 +34,9 @@ function dashboardWith(attentionTotal: number): DashboardResponse {
     attention: [],
     attention_total_count: attentionTotal,
     waiting_count: 0,
-    rating: null,
+    // Rating is irrelevant to the resync behaviour under test; the block is
+    // always present now, so stand in a valid non-RATED shape.
+    rating: unratedDashboardRating(),
     completed_match_count: 0,
     recent_results: [],
     tournaments: [],

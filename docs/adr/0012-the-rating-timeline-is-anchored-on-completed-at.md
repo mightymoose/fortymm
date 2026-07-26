@@ -78,3 +78,25 @@ completed.
   ("reads current state and rewrites it deterministically") true for *every* input.
 - `matches.py` (rating history) and `dashboard.py` (the sparkline) both order by
   `rating_history.created_at`; they inherit the stable axis for free.
+
+## Amendment (2026-07-25, #951): the pre-match snapshot obeys the rule too
+
+This ADR claims "history/form/H2H queries anchor on `completed_at`, not the mutable
+`updated_at`." The match-detail **pre-match snapshot** — "Players · going into this
+match" — did not. `pre_match_ratings`, `career_before`, and `head_to_head`
+(`match_details_repository.py`) all took `before = match.created_at` as their
+cutoff. `created_at` is the match's *creation* instant, not its as-played instant,
+and the two diverge whenever matches are created as a batch (a tournament schedule,
+or a player queuing several) but completed later: a match's `created_at` then
+predates its own participants' priors' `completed_at`, so every prior is filtered
+out. Both players read **"Unrated · 0 career matches"** on a match they walked into
+with real histories — the reported symptom, on both fields for both players at once,
+because both the rating trail and the career count share the wrong cutoff.
+
+The fix anchors the snapshot on the **as-played** instant this ADR already
+established: `before = match.completed_at` when the match is completed, else *now*
+for a match not yet decided ("going in" then means the players' current standing).
+Because rating rows are stamped `created_at == completed_at` (this ADR), the strict
+`<` cutoff still excludes the match's own rating row and includes every prior — the
+snapshot becomes historically frozen and correct, and the timeline axis is finally
+uniform across every reader the ADR named.

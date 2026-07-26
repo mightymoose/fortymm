@@ -1,4 +1,9 @@
-import { dashboardRating } from '@/test/factories'
+import {
+  awaitingImportDashboardRating,
+  dashboardRating,
+  notRatedLeagueDashboardRating,
+  unratedDashboardRating,
+} from '@/test/factories'
 
 import { yourGameRowPage } from './your-game-row.page'
 
@@ -21,14 +26,44 @@ describe('YourGameRow', () => {
     expect(yourGameRowPage.recentResults.queryTable()).not.toBeNull()
   })
 
-  it('falls back to the unrated empty state when there is no rating', async () => {
-    yourGameRowPage.render({ rating: null })
+  // The four `state` arms — the client says the true thing per state instead of
+  // the old one-string-fits-all "Not in a rated league yet." (ADR 20260725).
+  it('shows the UNRATED line for a glicko2 player with no rated match yet', async () => {
+    yourGameRowPage.render({ rating: unratedDashboardRating() })
+
+    await yourGameRowPage.findHeading()
+    expect(
+      yourGameRowPage.emptyCard.getBody(
+        'Unrated — finish a rated match to start your rating',
+      ),
+    ).toBeInTheDocument()
+    // Crucially NOT the "not in a rated league" lie — this player IS in one.
+    expect(
+      yourGameRowPage.emptyCard.queryBody('Not in a rated league yet.'),
+    ).toBeNull()
+    // The full rating card is gone — its Peak tile confirms we didn't render it.
+    expect(yourGameRowPage.ratingCard.queryStatLabel('Peak')).toBeNull()
+  })
+
+  it('shows the AWAITING_IMPORT line for a manual league pending its import', async () => {
+    yourGameRowPage.render({ rating: awaitingImportDashboardRating() })
+
+    await yourGameRowPage.findHeading()
+    expect(
+      yourGameRowPage.emptyCard.getBody(
+        "Ratings haven't been imported for this league yet",
+      ),
+    ).toBeInTheDocument()
+    expect(yourGameRowPage.ratingCard.queryStatLabel('Peak')).toBeNull()
+  })
+
+  it('shows the NOT_RATED_LEAGUE line only when the player is in no rated league', async () => {
+    yourGameRowPage.render({ rating: notRatedLeagueDashboardRating() })
 
     await yourGameRowPage.findHeading()
     expect(
       yourGameRowPage.emptyCard.getBody('Not in a rated league yet.'),
     ).toBeInTheDocument()
-    // The rating card's Peak tile is gone — we fell through to the empty state.
     expect(yourGameRowPage.ratingCard.queryStatLabel('Peak')).toBeNull()
   })
 

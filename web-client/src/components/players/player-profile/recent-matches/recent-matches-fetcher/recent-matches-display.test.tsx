@@ -3,6 +3,7 @@ import {
   buildRecentMatchesView,
 } from './recent-matches-display.factory'
 import {
+  buildEmptyRecentMatchDeltaView,
   buildLiveRecentMatchRowView,
   buildRecentMatchOpponentView,
   buildRecentMatchRowView,
@@ -27,7 +28,7 @@ const sixMixedRows = () => [
       label: 'Awaiting acceptance',
     }),
     score: { kind: 'text', text: 'Awaiting' },
-    delta: null,
+    delta: buildEmptyRecentMatchDeltaView({ ariaLabel: 'Not yet decided' }),
   }),
   buildRecentMatchRowView({
     id: 'm-win',
@@ -38,13 +39,13 @@ const sixMixedRows = () => [
     opponent: buildRecentMatchOpponentView({ id: 'p-12', name: 'joe.bell' }),
     status: buildRecentMatchStatusView({ tone: 'voided', label: 'Voided' }),
     score: { kind: 'text', text: '—' },
-    delta: null,
+    delta: buildEmptyRecentMatchDeltaView(),
   }),
   buildSoloRecentMatchRowView({ id: 'm-solo' }),
   buildRecentMatchRowView({
     id: 'm-unrated',
     opponent: buildRecentMatchOpponentView({ id: 'p-13', name: 'nia.k' }),
-    delta: null,
+    delta: buildEmptyRecentMatchDeltaView(),
   }),
 ]
 

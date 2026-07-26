@@ -31,3 +31,51 @@ export function formatRatingDeltaAria(delta: number): string {
   const verb = rounded > 0 ? 'Gained' : 'Lost'
   return `${verb} ${Math.abs(rounded)} rating`
 }
+
+/**
+ * The three truthful accessible names for a Δ (rating-change) cell that prints
+ * an **em dash** instead of a signed figure. The same glyph stands for three
+ * different facts, and a screen reader must be told which — otherwise every
+ * no-delta row announces identically (or, on the dashboard, not at all).
+ */
+export const RATING_DELTA_EMPTY_ARIA = {
+  /** A decided match that moved no rating — unrated, voided, or a rounded-0. */
+  noChange: 'No rating change',
+  /** A live / awaiting / up-next match — the rating is not decided yet. */
+  undecided: 'Not yet decided',
+  /** The player's FIRST rated match: a *present* change whose `delta` is null.
+   * It established the rating rather than moving it (#915). */
+  established: 'Rating established',
+} as const
+
+/**
+ * The accessible name for a Δ cell with no signed figure to show, resolved from
+ * the two facts that separate its three states:
+ *
+ * - a *present* rating change with a `null` delta established the rating rather
+ *   than moving it → "Rating established";
+ * - otherwise, an undecided (still-in-play) match → "Not yet decided";
+ * - otherwise, a decided match that moved no rating → "No rating change".
+ *
+ * A present change with a *numeric* delta never reaches here — that renders the
+ * signed figure via `formatRatingDeltaAria` (which itself says "No rating
+ * change" for a rounded-0). Shared by the profile recent-match row and the
+ * dashboard recent-results card so the two surfaces cannot drift.
+ */
+export function emptyRatingDeltaAria(
+  ratingChange: { delta: number | null } | null | undefined,
+  decided: boolean,
+): string {
+  if (ratingChange != null) return RATING_DELTA_EMPTY_ARIA.established
+  return decided
+    ? RATING_DELTA_EMPTY_ARIA.noChange
+    : RATING_DELTA_EMPTY_ARIA.undecided
+}
+
+/** The rank line — "#3 of 42": the player's 1-based position out of the rated
+ * population it's drawn from. Always both halves, never a naked "#3" (which in a
+ * twelve-player league flatters). Shared by the dashboard rating card and the
+ * profile standing so the format cannot drift (#959, ADR 20260725). */
+export function formatRankOfPopulation(rank: number, rankOf: number): string {
+  return `#${rank} of ${rankOf}`
+}

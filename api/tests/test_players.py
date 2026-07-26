@@ -1536,6 +1536,37 @@ async def test_get_player_withholds_percentile_until_the_ladder_is_big_enough(
     assert body["percentile"] == 2
 
 
+async def test_get_player_shows_rank_not_percentile_at_the_bottom_of_a_small_ladder(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The #959 shape, on the profile: the LOWEST-rated player of a below-floor
+    league. Their percentile would be "Top 100%" — literally true, reads like a
+    compliment, and the one value that should never be shown. Below
+    ``PERCENTILE_MIN_RATED_PLAYERS`` the hero withholds it and renders RANK
+    instead, and rank is honest at the very bottom: "#N of N" is a fact, not a
+    congratulation.
+
+    So ``percentile`` is ``null`` while ``rank`` and ``rank_of`` are populated and
+    EQUAL — the client renders "#N of M" with N == M. A mutant that emitted the
+    percentile below the floor would read 100 here; one that blanked ``rank`` /
+    ``rank_of`` below the floor would leave the hero with nothing to show."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "bottom.target")
+    # A cohort seated ABOVE the target (base 1400 > 1300), one short of the floor,
+    # so the whole ladder — target included — stays below it. The target is dead
+    # last, so their rank equals the population.
+    await _earn_rating(db_session, target, 1300.0)
+    await _rated_cohort(
+        db_session, "bottom.peer", PERCENTILE_MIN_RATED_PLAYERS - 2, base=1400.0
+    )
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    assert body["rank_of"] == PERCENTILE_MIN_RATED_PLAYERS - 1
+    # Dead last: "#49 of 49" — rank == rank_of, the honest bottom of the ladder.
+    assert body["rank"] == body["rank_of"]
+    assert body["percentile"] is None
+
+
 async def test_get_player_form_is_ten_results_long(
     api_client: AsyncClient, db_session: AsyncSession
 ):

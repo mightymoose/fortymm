@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
@@ -66,17 +67,50 @@ class DashboardRatingStat(BaseModel):
     value: str
 
 
+class DashboardRatingState(StrEnum):
+    """WHICH rating story the card tells — server-authoritative, because it is the
+    API that knows which of the four situations obtains, not the client guessing
+    from a ``null`` (ADR 20260725).
+
+    A bare ``rating: None`` used to collapse three distinct non-rated facts into one
+    signal, and the client rendered a single string — *"Not in a rated league
+    yet."* — that was a lie for the player who IS in a rated league but has not
+    finished a rated match. The state names the situation so the client can say the
+    true thing per arm.
+    """
+
+    # Has a rating: the value + delta, plus the rank-or-percentile line below.
+    RATED = "RATED"
+    # In a Glicko-2 (automatic-strategy) league but has not finished a rated match
+    # yet — the seed 1500 is the strategy's prior, not a rating they earned.
+    UNRATED = "UNRATED"
+    # Manual-strategy league whose external ratings have not been imported yet.
+    AWAITING_IMPORT = "AWAITING_IMPORT"
+    # Not a member of any rated league at all.
+    NOT_RATED_LEAGUE = "NOT_RATED_LEAGUE"
+
+
 class DashboardRating(BaseModel):
     """Per-league rating snapshot for the dashboard RatingCard.
 
-    Emitted only when the user has a rated row in an automatic-strategy league
-    (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+    ALWAYS emitted for a signed-in user — the parent is no longer ``| None``. The
+    ``state`` discriminator says which of four stories the card tells; only the
+    ``RATED`` arm carries the rating payload below (``current`` / ``delta`` /
+    ``peak`` / the rank-or-percentile line / ``spark_data`` / ``streak`` /
+    ``stats``). The three non-rated arms carry the league context they have
+    (``UNRATED`` / ``AWAITING_IMPORT`` name a league; ``NOT_RATED_LEAGUE`` has
+    none) and leave the payload fields null/empty (ADR 20260725).
     """
 
-    league_id: uuid.UUID
-    league_name: str
-    strategy_key: str
-    current: float
+    # Which story this card tells — the client renders copy + payload per arm.
+    state: DashboardRatingState
+    # The league context. Present for RATED / UNRATED / AWAITING_IMPORT; ``None``
+    # for NOT_RATED_LEAGUE (there is no league to name).
+    league_id: uuid.UUID | None
+    league_name: str | None
+    strategy_key: str | None
+    # The headline rating — ``None`` on every non-RATED arm.
+    current: float | None
     # What the player's last rated match DID to them — the "+12 last match" chip.
     #
     # ``None`` means THERE IS NO MOVE TO REPORT, and the client must render nothing
@@ -97,12 +131,25 @@ class DashboardRating(BaseModel):
     # claims a rated match moved the rating by nothing, which is a different (and
     # false) statement.
     delta: float | None
-    peak: float
+    # ``None`` on every non-RATED arm — a peak is a rating they held, and they hold
+    # none.
+    peak: float | None
+    # "Top N%" — but ONLY once the rated population reaches
+    # ``PERCENTILE_MIN_RATED_PLAYERS`` (50). Below that the card shows RANK instead
+    # (``#N of M`` from ``rank`` + ``population``), because "Top 8% of 12" is "you
+    # are first" in a costume and "Top 100%" is the lowest-rated player being
+    # congratulated (ADR 20260725, #959). ``None`` below the threshold and on every
+    # non-RATED arm.
     percentile: int | None
+    # The player's 1-based position among the league's rated members, and how many
+    # rated members there are. The client renders "#N of M" from the pair. Populated
+    # on the RATED arm; ``None`` on every non-RATED arm.
+    rank: int | None
+    population: int | None
     # The rating changes of the last 30 days, oldest-first — and NOT the ``initial``
     # seed row, which is the prior the league hands out on join, not a rating anyone
     # held. So a player one rated match old has a ONE-POINT spark (their result), not
-    # a two-point line sloping out of 1500.
+    # a two-point line sloping out of 1500. Empty on every non-RATED arm.
     spark_data: list[float]
     streak: DashboardStreak | None
     stats: list[DashboardRatingStat]
@@ -273,7 +320,9 @@ class DashboardResponse(BaseModel):
     # as footer text only — never a row.
     waiting_count: int
     recent_results: list[DashboardRecentResult]
-    rating: DashboardRating | None = None
+    # ALWAYS present now — the ``state`` discriminator carries the unrated/awaiting
+    # cases that used to be a bare parent ``null`` (ADR 20260725).
+    rating: DashboardRating
     # Total completed matches the current user participated in. The guest
     # persistence banner uses this to reference history concretely ("Your N
     # matches…") and to stay hidden until the user has any history at all.

@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dashboard import _strategy_stats
+from app.dashboard import _build_rating, _strategy_stats
 from app.models import (
     League,
     LeagueMembership,
@@ -19,6 +19,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings.stats import league_percentile
+from app.schemas.dashboard import DashboardRatingState
 from tests._helpers import (
     accept_standing_result,
     make_client,
@@ -76,14 +77,25 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert body["waiting_count"] == 0
     assert body["recent_results"] == []
     assert body["completed_match_count"] == 0
-    # NO RATING CARD. A fresh signup is auto-joined to the default Glicko-2 league,
-    # which seeds them a 1500 row — but a seed is a prior, not a rating (CONTEXT.md:
-    # a player who has never finished a rated match has no rating). The card used to
-    # light up here with current 1500, peak 1500, RD 350 and a one-point sparkline:
-    # five numbers, every one of them the strategy's starting state rather than
-    # anything this player did. The widget stays hidden until the league is actually
-    # scoring you — which is what `_build_rating` always said it did.
-    assert body["rating"] is None
+    # UNRATED, not a fabricated card. A fresh signup is auto-joined to the default
+    # Glicko-2 league, which seeds them a 1500 row — but a seed is a prior, not a
+    # rating (CONTEXT.md: a player who has never finished a rated match has no
+    # rating). The card used to light up with current 1500, peak 1500, RD 350 and a
+    # one-point sparkline; then it collapsed to a bare `null` indistinguishable from
+    # "not in a rated league". Now the card is present with `state="UNRATED"` — they
+    # ARE in a rated league, just not scored yet — and carries no rating payload
+    # (ADR 20260725).
+    rating = body["rating"]
+    assert rating["state"] == "UNRATED"
+    assert rating["current"] is None
+    assert rating["peak"] is None
+    assert rating["percentile"] is None
+    assert rating["rank"] is None
+    assert rating["population"] is None
+    assert rating["spark_data"] == []
+    # It still names the (Glicko-2, default) league they are unrated IN.
+    assert rating["league_name"] == "FortyMM"
+    assert rating["strategy_key"] == "glicko2"
 
 
 async def test_dashboard_returns_score_attention_for_in_progress_match(
@@ -217,9 +229,9 @@ async def test_dashboard_scoped_to_current_user(
     # Bob's completed match must not bleed into Alice's history total.
     assert body["completed_match_count"] == 0
     # Alice has her own seeded league row but has never finished a rated match, so
-    # she is unrated and has no rating card — and Bob's match cannot conjure her
-    # one either.
-    assert body["rating"] is None
+    # she is UNRATED — and Bob's match cannot conjure her a rating either.
+    assert body["rating"]["state"] == "UNRATED"
+    assert body["rating"]["current"] is None
 
 
 async def _post_result(client: AsyncClient, match_id: str, *, best_of: int = 1) -> None:
@@ -617,30 +629,40 @@ async def _seed_rated_peers(db_session: AsyncSession) -> League:
     return default_league
 
 
-async def test_dashboard_no_rating_card_for_an_unplayed_user_with_peers(
+async def test_dashboard_rating_unrated_for_an_unplayed_user_with_peers(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """A never-played user sits at the seed rating (1500, RD 350) — fully unrated.
-    Surrounded by rated peers, they get NO RATING CARD at all.
+    Surrounded by rated peers, they get an UNRATED card with no rating payload.
 
     #382 suppressed only the *percentile* here, on the grounds that ranking the
     unrankable reads as placeholder data. It was right, and it did not go far
     enough: `current`, `peak`, `delta`, the RD tile and the sparkline were the same
     placeholder — the strategy's initial state, printed as if it were this player's.
-    The percentile was just the one that said it out loud."""
+    Now the whole payload is withheld and the card says `state="UNRATED"` (ADR
+    20260725)."""
     await start_session(api_client, db_session)
     await _seed_rated_peers(db_session)
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["completed_match_count"] == 0
-    assert body["rating"] is None
+    assert body["rating"]["state"] == "UNRATED"
+    assert body["rating"]["current"] is None
+    assert body["rating"]["percentile"] is None
 
 
-async def test_dashboard_percentile_shown_once_user_has_played(
+async def test_dashboard_rating_shows_rank_not_percentile_below_the_threshold(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Once the user has completed a match they're genuinely rated, so the
-    percentile against league peers comes back. (#382)"""
+    """Once the user has completed a rated match they are genuinely RATED — but in a
+    small league (well under ``PERCENTILE_MIN_RATED_PLAYERS``) the card conveys RANK,
+    not percentile.
+
+    This is the #959 fix: the dashboard used to call ``league_percentile``
+    unconditionally, so the lowest-rated player of a twelve-player alpha read "Top
+    100%" — literally true, reads like a compliment, the one percentile value that
+    should never show. Now `percentile` is withheld below the threshold and
+    `rank`/`population` carry an honest "#N of M" instead (ADR 20260725)."""
     await start_session(api_client, db_session)
     await _seed_rated_peers(db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
@@ -658,9 +680,13 @@ async def test_dashboard_percentile_shown_once_user_has_played(
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["completed_match_count"] == 1
-    percentile = body["rating"]["percentile"]
-    assert percentile is not None
-    assert 0 <= percentile <= 100
+    rating = body["rating"]
+    assert rating["state"] == "RATED"
+    # 4 seeded peers + the winner + the rival, all now rated members.
+    assert rating["population"] == 6
+    assert 1 <= rating["rank"] <= 6
+    # The whole point: NO percentile below the threshold — no "Top 100%".
+    assert rating["percentile"] is None
 
 
 async def test_league_percentile_ranks_against_rated_members(
@@ -773,11 +799,12 @@ async def test_dashboard_sparkline_returns_most_recent_points(
     assert spark == [float(v) for v in range(1510, 1540)]
 
 
-async def test_dashboard_rating_is_null_for_manual_league(
+async def test_dashboard_rating_awaiting_import_for_manual_league(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    # Move the seeded league over to the manual strategy and null the user's
-    # rating row — the widget should disappear instead of showing a stale 1500.
+    # Move the seeded league over to the manual strategy: the member holds a NULL
+    # rating awaiting its import. The card is present with `state="AWAITING_IMPORT"`
+    # (never a stale 1500, and no longer an indistinguishable bare `null`).
     manual = (
         await db_session.execute(
             select(RatingStrategy).where(RatingStrategy.key == "manual")
@@ -791,7 +818,9 @@ async def test_dashboard_rating_is_null_for_manual_league(
 
     await start_session(api_client, db_session)
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["rating"] is None
+    assert body["rating"]["state"] == "AWAITING_IMPORT"
+    assert body["rating"]["current"] is None
+    assert body["rating"]["strategy_key"] == "manual"
 
 
 async def test_dashboard_and_profile_agree_that_a_never_played_user_is_unrated(
@@ -803,15 +832,17 @@ async def test_dashboard_and_profile_agree_that_a_never_played_user_is_unrated(
     The dashboard used to say `1500 / peak 1500 / RD 350` about a player whose
     profile said "Unrated" — two pages of the same app disagreeing about whether
     someone has a rating. They cannot now: both read `app.ratings.rated`, so the
-    card is absent and every rating field on the profile is `null`.
+    dashboard card says `state="UNRATED"` (no rating payload) and every rating field
+    on the profile is `null`.
 
-    (A weaker fix — hide the profile's rating but keep the dashboard's card —
-    passes every other test in this file. It reds here.)"""
+    (A weaker fix — narrate a rating on the dashboard's card while the profile says
+    Unrated — passes every other test in this file. It reds here.)"""
     await start_session(api_client, db_session)
     await _seed_rated_peers(db_session)
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["rating"] is None
+    assert body["rating"]["state"] == "UNRATED"
+    assert body["rating"]["current"] is None
     assert body["completed_match_count"] == 0
 
     me = (await api_client.get("/v1/session")).json()["data"]["user"]
@@ -855,3 +886,80 @@ async def test_dashboard_peak_is_the_best_rating_earned_not_the_seed(
     assert after_two["peak"] < 1500.0
     # The sparkline says the same thing: two results, no seed point rising into them.
     assert after_two["spark_data"] == [after_one_loss["current"], after_two["current"]]
+
+
+# --- The `state` discriminator: `_build_rating` returns an object for every
+# situation, named, instead of a bare `None` that collapsed three of them
+# (ADR 20260725). Exercised directly (like `_strategy_stats`) so each arm is
+# checked in isolation without threading a session through the endpoint. ---
+
+
+async def test_dashboard_rating_last_place_shows_rank_not_percentile(
+    db_session: AsyncSession,
+):
+    """A RATED player at the BOTTOM of a small ladder is the #959 poster child: they
+    are #M of M, and the old unconditional percentile called that "Top 100%".
+
+    Seeded peers at 1200/1400/1600/1800 and the player last of all at 1000, so the
+    rank IS the population and every rated member sits above them. The card is RATED,
+    carries `rank == population`, and `percentile is None` — the honest "#5 of 5"
+    with no costume."""
+    me = await make_user(db_session, "wooden.spoon")
+    default_league = await _seed_rated_peers(db_session)
+    await _rate_member(db_session, me, default_league, 1000.0)
+    await db_session.commit()
+
+    rating = await _build_rating(db_session, me.id)
+    assert rating.state is DashboardRatingState.RATED
+    assert rating.population == 5
+    assert rating.rank == 5
+    assert rating.rank == rating.population
+    assert rating.percentile is None
+    assert rating.current == 1000.0
+
+
+async def test_dashboard_rating_state_unrated_for_seeded_glicko2_member(
+    db_session: AsyncSession,
+):
+    """A member of the default Glicko-2 league who holds only the seeded 1500 (no
+    rated match yet) is UNRATED — in a rated league, just not scored — with the
+    league named and no rating payload."""
+    default_league = (
+        await db_session.execute(select(League).where(League.is_default.is_(True)))
+    ).scalar_one()
+    me = await make_user(db_session, "just.joined")
+    db_session.add(LeagueMembership(league_id=default_league.id, user_id=me.id))
+    db_session.add(
+        UserLeagueRating(
+            league_id=default_league.id,
+            user_id=me.id,
+            rating_strategy_id=default_league.rating_strategy_id,
+            rating_value=1500.0,
+            rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        )
+    )
+    await db_session.commit()
+
+    rating = await _build_rating(db_session, me.id)
+    assert rating.state is DashboardRatingState.UNRATED
+    assert rating.league_id == default_league.id
+    assert rating.strategy_key == "glicko2"
+    assert rating.current is None
+    assert rating.rank is None
+    assert rating.population is None
+
+
+async def test_dashboard_rating_state_not_rated_league_without_any_membership(
+    db_session: AsyncSession,
+):
+    """A user who is a member of NO league at all gets NOT_RATED_LEAGUE — the only
+    arm with no league to name. `make_user` creates a bare user with no membership,
+    which is exactly that state."""
+    me = await make_user(db_session, "no.league")
+
+    rating = await _build_rating(db_session, me.id)
+    assert rating.state is DashboardRatingState.NOT_RATED_LEAGUE
+    assert rating.league_id is None
+    assert rating.league_name is None
+    assert rating.strategy_key is None
+    assert rating.current is None

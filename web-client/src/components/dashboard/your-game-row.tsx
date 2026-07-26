@@ -1,4 +1,8 @@
-import type { DashboardRating, DashboardRecentResult } from '@/api/dashboard'
+import type {
+  DashboardRating,
+  DashboardRatingState,
+  DashboardRecentResult,
+} from '@/api/dashboard'
 
 import { EmptyCard } from './your-game-row/empty-card'
 import { RatingCard } from './your-game-row/rating-card'
@@ -11,6 +15,30 @@ function ratingStrategyLabel(key: string): string {
   if (key === 'glicko2') return 'Glicko-2'
   if (key === 'manual') return 'Manual'
   return key
+}
+
+// Per-state copy for the non-RATED arms. The server's `state` discriminator —
+// not a `null` rating — decides which line the empty card shows, so the client
+// says the true thing for each situation instead of the old one-string-fits-all
+// "Not in a rated league yet." that lied to a glicko2-unrated player (#956,
+// ADR 20260725). RATED never reaches this map (it renders the RatingCard).
+const EMPTY_RATING_COPY: Record<
+  Exclude<DashboardRatingState, 'RATED'>,
+  string
+> = {
+  UNRATED: 'Unrated — finish a rated match to start your rating',
+  AWAITING_IMPORT: "Ratings haven't been imported for this league yet",
+  NOT_RATED_LEAGUE: 'Not in a rated league yet.',
+}
+
+function emptyRatingBody(rating: DashboardRating | null): string {
+  // A missing rating is not a wire state the server emits (the block is always
+  // present now); default to the "no rated league" copy for the null-prop edge
+  // (e.g. data still resolving) rather than inventing a fourth string.
+  if (rating === null || rating.state === 'RATED') {
+    return EMPTY_RATING_COPY.NOT_RATED_LEAGUE
+  }
+  return EMPTY_RATING_COPY[rating.state]
 }
 
 export interface YourGameRowProps {
@@ -37,7 +65,9 @@ export const YourGameRow = ({
       <SectionHeader
         title="Your game"
         subtitle={
-          rating
+          // The strategy label rides on the RATED arm's `strategy_key`; the
+          // non-rated arms may not carry one, so fall back to the bare window.
+          rating?.strategy_key
             ? `${ratingStrategyLabel(rating.strategy_key)} · last 30 days`
             : 'Last 30 days'
         }
@@ -48,12 +78,12 @@ export const YourGameRow = ({
       <div className="your-game-grid">
         {isLoading ? (
           <RatingCardSkeleton />
-        ) : rating ? (
+        ) : rating?.state === 'RATED' ? (
           <RatingCard rating={rating} />
         ) : (
           <EmptyCard
             overline="Current rating"
-            body="Not in a rated league yet."
+            body={emptyRatingBody(rating)}
           />
         )}
         {isLoading ? (

@@ -177,6 +177,30 @@ export function buildPlayerDetail(
 }
 
 /**
+ * A rated player high on a LARGE ladder — one past `PERCENTILE_MIN_RATED_PLAYERS`,
+ * so a percentile means something and the API sends it: the hero prints "Top 2%"
+ * and drops the rank line (ADR 20260725). The sub-threshold default
+ * (`buildPlayerDetail`, `percentile: null` on a 42-strong ladder) is the other arm
+ * of the same switch — it keeps `rank`/`rank_of` and the hero shows "#N of M"
+ * instead. Between them the two fixtures pin both halves of the rank-vs-percentile
+ * decision the profile shares with the dashboard, so a regression that collapsed
+ * them back together reds here.
+ *
+ * `rank`/`rank_of` stay populated (the API sends them at any league size); the
+ * profile simply prefers the percentile once it exists.
+ */
+export function buildRankedPlayerDetail(
+  overrides: Partial<PlayerDetail> = {},
+): PlayerDetail {
+  return buildPlayerDetail({
+    rank: 3,
+    rank_of: 220,
+    percentile: 2,
+    ...overrides,
+  })
+}
+
+/**
  * A player who has never finished a rated match. No rating means no rank — and
  * so no ladder position, no peak, no percentile and no rating delta
  * (`CONTEXT.md` § *Rank*). They may still have *form*: form counts decided

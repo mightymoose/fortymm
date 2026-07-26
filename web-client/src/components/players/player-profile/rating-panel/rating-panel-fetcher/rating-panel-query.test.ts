@@ -62,6 +62,21 @@ describe('ratingPanelQuery', () => {
     })
   })
 
+  it('shows RANK below the percentile threshold and PERCENTILE at or above it — never both, so the profile reads like the dashboard (ADR 20260725)', async () => {
+    // Below the threshold the API withholds the percentile and sends rank+rank_of
+    // — the honest bottom of a small ladder, "#49 of 49" (#959). The rank takes
+    // the standing slot the percentile would have occupied.
+    const below = await selectFrom({ rank: 49, rank_of: 49, percentile: null })
+    expect(below.stats).toContainEqual({ label: 'Rank', value: '#49 of 49' })
+    expect(below.stats.map((s) => s.label)).not.toContain('Percentile')
+
+    // At or above it the percentile is present and takes that slot; the rank line
+    // steps aside, so the two surfaces agree (rank below, percentile above).
+    const above = await selectFrom({ rank: 3, rank_of: 220, percentile: 2 })
+    expect(above.stats).toContainEqual({ label: 'Percentile', value: 'Top 2%' })
+    expect(above.stats.map((s) => s.label)).not.toContain('Rank')
+  })
+
   it('signs the rating delta from the most recent rated match', async () => {
     const view = await selectFrom({
       rating_delta: buildRatingChange({ before: 1675, after: 1687 }),

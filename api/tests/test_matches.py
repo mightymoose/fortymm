@@ -3012,21 +3012,25 @@ async def test_details_recent_form_excludes_the_current_match(
 async def test_details_recent_form_excludes_matches_after_this_one(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Viewing an older match shows form as it stood then: a match completed
-    before this one was created counts; one completed after it does not."""
+    """Viewing a COMPLETED match shows form as it stood at its as-played instant:
+    a match completed before it counts; one completed after it does not. The
+    cutoff is the viewed match's ``completed_at`` (ADR-0012 #951), so this holds
+    even though the later match completed before the *request* is served."""
     me = await start_session(api_client, db_session)
-    opp = await make_user(db_session, "after-rival")
     async with opponent_session(db_session, "after-third-party") as (
         other_client,
         other,
     ):
-        # A match I finished *before* the viewed match is created.
+        # A match I finished *before* the viewed match.
         earlier = await _play_match_to_completion(
             api_client, other_client, other.id, best_of=3, side_1_wins=True
         )
-        # The match we'll view (in progress, so it stays "current" in time).
-        current = await _create_match(api_client, opp.id, best_of=3)
-        # A match I finish *after* the viewed match was created.
+        # The match we'll view, played to completion — its completed_at is the
+        # anchor the snapshot freezes on.
+        current = await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        # A match I finish *after* the viewed match completed.
         later = await _play_match_to_completion(
             api_client, other_client, other.id, best_of=3, side_1_wins=False
         )
@@ -3362,6 +3366,95 @@ async def test_details_career_counts_are_per_player(
     assert forms[str(me.id)]["career_wins_before"] == 2
     assert forms[str(opp.id)]["career_matches_before"] == 1
     assert forms[str(opp.id)]["career_wins_before"] == 0
+
+
+async def test_details_pre_match_snapshot_anchors_on_completed_not_created(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The pre-match snapshot of a COMPLETED match anchors its cutoff on the
+    as-played instant (``completed_at``), not the creation instant (ADR-0012
+    #951).
+
+    Batch creation — a tournament schedule, or a player queuing several — creates
+    a match well before it is played, so its ``created_at`` can predate its own
+    participants' priors' ``completed_at``. Anchored on ``created_at`` the snapshot
+    filtered every one of those priors out and reported both players as
+    "Unrated · 0 career matches" on a match they walked into with real histories.
+    We reproduce that by backdating the current match's ``created_at`` to long
+    before its priors completed, leaving its ``completed_at`` (as-played) intact."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "as-played-opp") as (opp_client, opp):
+        # Two decided priors between the same pair build career + rating history.
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        # The match under view, also played to completion (its completed_at is
+        # the latest of the three).
+        current = await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+
+    # Simulate batch creation: the current match was *created* long before the
+    # priors finished. Its completed_at (the as-played anchor) is untouched, so a
+    # correct snapshot still sees the priors; the old created_at anchor would
+    # filter every prior out.
+    await db_session.execute(
+        update(Match)
+        .where(Match.id == uuid.UUID(current["id"]))
+        .values(created_at=datetime(2020, 1, 1, tzinfo=UTC))
+    )
+    await db_session.commit()
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    mine = forms[str(me.id)]
+    # Two priors count (the current match itself is excluded by the strict `<`
+    # on completed_at, since its own rating row / completed record sit at the
+    # anchor exactly).
+    assert mine["career_matches_before"] == 2
+    assert mine["career_wins_before"] == 2
+    assert mine["rating_before"] is not None
+    assert len(mine["rating_history"]) == 2
+    assert mine["rating_history"][-1] == mine["rating_before"]
+    # The head-to-head aggregates anchor on the same instant, so both priors
+    # count and the current meeting excludes itself.
+    assert detail["head_to_head"]["total_meetings"] == 2
+
+
+async def test_details_pre_match_snapshot_for_a_live_match_uses_current_standing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A not-yet-decided match is being walked into *now*, so "going into this
+    match" means the players' CURRENT standing — the snapshot anchors on the
+    current instant, not the (earlier) creation instant (ADR-0012 #951).
+
+    Created first, then left live while two priors are played to completion: the
+    priors complete *after* this match's ``created_at``, so the old created_at
+    anchor would exclude them and report Unrated · 0; anchoring on *now* counts
+    them. No timestamp surgery is needed — the natural ordering is the bug."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "live-standing-opp") as (opp_client, opp):
+        # The live match is created first, so its created_at precedes the priors.
+        current = await _create_match(api_client, opp.id, best_of=3)
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    assert detail["status"] != "completed"
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    mine = forms[str(me.id)]
+    # Current standing going into a live match: both priors count.
+    assert mine["career_matches_before"] == 2
+    assert mine["career_wins_before"] == 2
+    assert mine["rating_before"] is not None
+    assert len(mine["rating_history"]) == 2
 
 
 async def test_career_before_batches_every_user_into_one_statement(
@@ -3711,7 +3804,7 @@ async def test_view_extras_issues_a_pinned_number_of_statements(
             match_id=match.id,
             league_id=match.league_id,
             status=match.status,
-            created_at=match.created_at,
+            as_played=match.completed_at,
             user_ids=[me.id, opp.id],
         )
 
@@ -4223,6 +4316,7 @@ async def test_concurrent_accept_and_counter_serialize(
                 actor = (
                     await session.execute(select(User).where(User.id == me_id))
                 ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
                 try:
                     await accept_match_result(
                         match_id,
@@ -4230,6 +4324,7 @@ async def test_concurrent_accept_and_counter_serialize(
                         actor,
                         session,
                         get_match_service(session),
+                        notifications,
                     )
                     return "ok-accept"
                 except HTTPException as exc:
@@ -4496,6 +4591,96 @@ async def test_unrated_result_enqueues_no_confirmation(
         assert response.status_code == 201
 
     assert enqueued_notification_jobs(fake_notifications_queue) == []
+
+
+async def test_accepting_result_notifies_the_poster(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """Accepting a standing proposal closes the loop for the poster: the side
+    that proposed the now-final result gets an in-app notice that their result
+    was accepted (category ``result_confirm``), addressed to them and not the
+    acceptor, and framed with the accepting opponent's name + the final score.
+
+    This is the gap chore 7a fills — before it, accepting completed the match
+    and settled ratings but the poster's inbox stayed empty; only the opponent
+    (asked to confirm) was ever told anything. Removing the
+    ``notify_result_accepted`` call in ``accept_match_result`` reds the
+    ``accept_jobs`` assertion below."""
+    me = await start_session(api_client, db_session)
+    me.username = "poster"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        # The propose step notifies only the opponent (asked to confirm); the
+        # poster's inbox is still empty at this point.
+        proposed_jobs = enqueued_notification_jobs(fake_notifications_queue)
+        assert [job.user_id for job in proposed_jobs] == [opp.id]
+
+        await accept_standing_result(opp_client, match["id"])
+
+    # The accept step adds the result-accepted notice — to the poster, never the
+    # accepting opponent.
+    accept_jobs = [
+        job
+        for job in enqueued_notification_jobs(fake_notifications_queue)
+        if job.collapse_id == f"result-accepted:{match['id']}"
+    ]
+    assert [job.user_id for job in accept_jobs] == [me.id]
+    job = accept_jobs[0]
+    assert job.category.value == "result_confirm"
+    assert job.title == "Your result was accepted"
+    assert job.link == f"/matches/{match['id']}"
+    assert "rival accepted your reported result" in job.body
+    # Final score is oriented poster-first (poster won 11–4, 11–4).
+    assert "11–4" in job.body
+    # No stale propose action group: the match is final, nothing to accept or
+    # counter, so this fans out as a plain notice (no APNs action category).
+    assert job.push_category is None
+
+
+async def test_accept_survives_notification_failure_with_201(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    """A notify-side failure on the accept path must NOT turn the already-
+    committed accept into a 500. The result is finalized before the best-effort
+    ``notify_result_accepted`` runs, so a raised exception there — swallowed by
+    the blanket guard, which rolls the session back — must still yield the 201
+    with the completed match.
+
+    Regression for the ordering bug: when the response was serialized *after*
+    the notify/``db.rollback()`` block, the rollback expired ``reloaded``'s
+    identity map and serialization lazy-loaded outside the greenlet
+    (``MissingGreenlet`` → 500). Reverting the reorder reds this with a 500."""
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("notification persistence exploded")
+
+    monkeypatch.setattr(matches_mod, "notify_result_accepted", boom)
+
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "notify-boom-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        details = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        standing = details["negotiation"]["standing_result"]
+        assert standing is not None
+        response = await opp_client.post(
+            f"/v1/matches/{match['id']}/results/{standing['id']}/acceptance"
+        )
+
+    # The commit already happened; the notify blow-up is best-effort. So the
+    # caller still gets a 201 with a completed match, never a 500.
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "completed"
 
 
 # ----- voiding a match (#750, ADR 0013) -----------------------------------

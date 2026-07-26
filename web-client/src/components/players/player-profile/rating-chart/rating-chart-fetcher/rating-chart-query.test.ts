@@ -346,6 +346,134 @@ describe('selectRatingChart', () => {
     expect(xCoords.at(-1)! - xCoords[0]).toBeGreaterThan(400)
     expect(new Set(xCoords).size).toBeGreaterThan(2)
   })
+
+  it('zooms the x-domain to fit a history collapsed into one evening (#957)', () => {
+    // A brand-new player's whole history is one session. On the raw 90-day calendar
+    // axis every point shares almost the same x and the line collapses to a ~1px
+    // spike hard against the right edge (`M589.48 … L589.5`). With no anchor pinning
+    // it to the left, the domain zooms to the data so the session fans across the
+    // plot instead.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: null,
+        points: [
+          buildRatingPoint({ at: at(0.8), rating: 1500 }),
+          buildRatingPoint({ at: at(0.4), rating: 1516 }),
+          buildRatingPoint({ at: at(0.05), rating: 1524 }),
+        ],
+        peak: buildRatingPoint({ at: at(0.05), rating: 1524 }),
+        change: 24,
+      }),
+      '90d',
+      NOW,
+    )
+
+    const xCoords = xs(view.line)
+    // The earliest match is pinned to the plot's left edge — the domain was zoomed
+    // to the data span, NOT left at window-start (where a 0.8-day-old point would
+    // sit at x ≈ 585, jammed against the others in a sub-pixel cluster).
+    expect(xCoords[0]).toBe(42) // PLOT.left
+    // …so the whole session fans across most of the 548-unit plot rather than
+    // clustering against the right edge.
+    expect(xCoords.at(-1)! - xCoords[0]).toBeGreaterThan(400)
+    expect(new Set(xCoords).size).toBeGreaterThan(2)
+  })
+
+  it('draws a LINE for a freshly-rated player: seed rating + first match, seconds apart, no anchor (#957)', () => {
+    // The regression the composed root-e2e caught (`seedRatedPlayer`). A brand-new
+    // rated player's whole history is TWO points seconds apart — the `initial` seed
+    // rating and their first match — with no carry-in anchor, on the 90d range. The
+    // old zoom floored the domain to a fixed [now − 3h, now] window, which clustered
+    // these two *recent* points against the right edge; the drawn extent fell below
+    // a viewBox unit and the card showed "2 matches today" INSTEAD of the line (5
+    // e2e specs asserting the line went red). The zoom-to-fit pins the earliest
+    // point to the left edge, so these distinct timestamps fan into a real line that
+    // spans the plot.
+    const sec = 1 / (24 * 60 * 60)
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: null,
+        points: [
+          buildRatingPoint({ at: at(15 * sec), rating: 1500 }), // the seed rating
+          buildRatingPoint({ at: at(5 * sec), rating: 1516 }), // the first match, 10s later
+        ],
+        peak: buildRatingPoint({ at: at(5 * sec), rating: 1516 }),
+        change: 16,
+      }),
+      '90d',
+      NOW,
+    )
+
+    // A real, drawn line.
+    expect(view.line).not.toBe('')
+    const xCoords = xs(view.line)
+    // The earliest (seed) point is pinned to the left edge — the domain fit the
+    // data span rather than flooring recent points against the right edge…
+    expect(xCoords[0]).toBe(42) // PLOT.left
+    // …so the two-point session fans across most of the plot.
+    expect(xCoords.at(-1)! - xCoords[0]).toBeGreaterThan(400)
+    expect(new Set(xCoords).size).toBeGreaterThan(1)
+  })
+
+  it('does NOT zoom when a carry-in anchor holds the line to the left edge (#957)', () => {
+    // The zoom is only for a line with nothing pinning it left. An anchored line
+    // already spans the plot — the anchor is drawn at window-start (ADR-0915), and
+    // re-homing it onto a zoomed domain would misdate a point whose whole meaning
+    // is "as of the window start". So the same one-evening points, given an anchor,
+    // stay on the full calendar domain: the anchor at the far left, the matches
+    // clustered at the right, exactly as ADR-0915 draws them.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: buildRatingPoint({ at: at(120), rating: 1490 }),
+        points: [
+          buildRatingPoint({ at: at(0.8), rating: 1500 }),
+          buildRatingPoint({ at: at(0.05), rating: 1524 }),
+        ],
+        peak: buildRatingPoint({ at: at(0.05), rating: 1524 }),
+        change: 34,
+      }),
+      '90d',
+      NOW,
+    )
+
+    const xCoords = xs(view.line)
+    expect(xCoords[0]).toBe(42) // the anchor, drawn at window-start
+    // The in-window matches sit hard against the right edge — the full-window
+    // behaviour the anchor preserves, and the spike the no-anchor case above avoids.
+    expect(xCoords[1]).toBeGreaterThan(580)
+  })
+
+  it('draws a LINE even when every match is at ONE instant — a flat run to today (#957)', () => {
+    // The case the zoom-to-fit handles without a label: genuinely identical
+    // timestamps. The coincident instant pins to the left edge and the line then
+    // runs flat to today — a drawable line, not a sub-pixel spike. There is no
+    // single-instant "N matches today" fallback any more — a fixed-floor domain
+    // misfired that label on close-but-distinct recent points, so it was removed and
+    // the zoom-to-fit always produces a drawable line.
+    const instant = at(1)
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: null,
+        points: [
+          buildRatingPoint({ at: instant, rating: 1500 }),
+          buildRatingPoint({ at: instant, rating: 1512 }),
+          buildRatingPoint({ at: instant, rating: 1525 }),
+        ],
+        peak: buildRatingPoint({ at: instant, rating: 1525 }),
+        change: 25,
+      }),
+      '90d',
+      NOW,
+    )
+
+    // A real, drawn path — not an empty string, not a degenerate label.
+    expect(view.line).not.toBe('')
+    const xCoords = xs(view.line)
+    // The coincident instant is pinned to the left edge; the flat run reaches today.
+    expect(xCoords[0]).toBe(42) // PLOT.left
+    expect(xCoords.at(-1)).toBe(590) // CHART_WIDTH - PLOT.right — today's edge
+    expect(JSON.stringify(view)).not.toContain('singleInstant')
+  })
 })
 
 describe('the chart’s own query', () => {

@@ -2,7 +2,11 @@ import type { DashboardRecentResult } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { Overline } from '@/components/overline'
 import { fmtDateShort } from '@/lib/dates'
-import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
+import {
+  emptyRatingDeltaAria,
+  formatRatingDelta,
+  formatRatingDeltaAria,
+} from '@/lib/rating'
 import { C, UI } from '@/components/dashboard/dashboard-tokens'
 
 import { Card } from './card'
@@ -96,7 +100,10 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
               // moved no rating at all; a *present* change with a null `delta` is
               // the player's FIRST rated match — it established their rating
               // rather than moving it, so there is no movement to report here
-              // either. Never a signed figure off the seeded 1500 (#952).
+              // either. Never a signed figure off the seeded 1500 (#952). The two
+              // read the same glyph but are different facts, so the em-dash cell
+              // takes a truthful accessible name (`emptyRatingDeltaAria`) — these
+              // rows are always completed matches, so they are always "decided".
               const delta = r.my_rating_change?.delta ?? null
               return (
                 <tr
@@ -156,7 +163,11 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                         {formatRatingDelta(delta)}
                       </Mono>
                     ) : (
-                      <Mono size={12} color={C.chalk500}>
+                      <Mono
+                        size={12}
+                        color={C.chalk500}
+                        ariaLabel={emptyRatingDeltaAria(r.my_rating_change, true)}
+                      >
                         —
                       </Mono>
                     )}

@@ -2,6 +2,7 @@ import {
   LIVE_MATCH_ID,
   RECENT_MATCH_HREF,
   SOLO_MATCH_ID,
+  buildEmptyRecentMatchDeltaView,
   buildLiveRecentMatchRowView,
   buildRecentMatchDeltaView,
   buildRecentMatchGameView,
@@ -74,16 +75,38 @@ describe('RecentMatchRow', () => {
   })
 
   it('prints an em dash — never "+0" — when no rating moved', async () => {
-    recentMatchRowPage.render({ row: buildRecentMatchRowView({ delta: null }) })
+    recentMatchRowPage.render({
+      row: buildRecentMatchRowView({ delta: buildEmptyRecentMatchDeltaView() }),
+    })
 
     await recentMatchRowPage.findRow(OPPONENT)
 
     const delta = recentMatchRowPage.getDeltaCell(OPPONENT)
     expect(delta).toHaveTextContent('—')
     expect(delta).not.toHaveTextContent('0')
-    expect(delta.querySelector('[role="img"]')).toHaveAccessibleName(
-      'No rating change',
-    )
+  })
+
+  // The em dash stands for three different facts, and a screen reader must be
+  // told which — before this the cell announced "No rating change" for all three,
+  // which was a lie for two of them (#915). The state is resolved in the view
+  // model (`selectDelta` / `emptyRatingDeltaAria`); the row simply renders the
+  // name it is handed.
+  it.each([
+    ['No rating change'],
+    ['Not yet decided'],
+    ['Rating established'],
+  ])('gives the em-dash cell the accessible name %s', async (ariaLabel) => {
+    recentMatchRowPage.render({
+      row: buildRecentMatchRowView({
+        delta: buildEmptyRecentMatchDeltaView({ ariaLabel }),
+      }),
+    })
+
+    await recentMatchRowPage.findRow(OPPONENT)
+
+    const delta = recentMatchRowPage.getDeltaCell(OPPONENT)
+    expect(delta).toHaveTextContent('—')
+    expect(delta.querySelector('[role="img"]')).toHaveAccessibleName(ariaLabel)
   })
 
   it('marks the games the player lost apart from the ones they won', async () => {

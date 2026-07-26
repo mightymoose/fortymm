@@ -93,6 +93,69 @@ def _result_confirmation_copy(
     return "Accept your match result", body
 
 
+def _result_accepted_copy(match: Match, poster_id: uuid.UUID) -> tuple[str, str] | None:
+    """Title + body for the "your reported result was accepted" notice, framed
+    for the *poster* (the side that proposed the now-final result).
+
+    Names the accepting opponent and lists the per-game scores oriented
+    poster-first (so they read the same way the poster entered them). Returns
+    ``None`` when the opposing side isn't a real player (a solo / player-less
+    sentinel side — nothing could have accepted)."""
+    poster_side = my_side(match, poster_id)
+    acceptor_side = opponent_side(match, poster_id)
+    if poster_side is None or acceptor_side is None or not acceptor_side.players:
+        return None
+
+    acceptor_name = acceptor_side.players[0].user.username
+    games = _game_scores_text(match, poster_side.side_number)
+    headline = f"{acceptor_name} accepted your reported result"
+    body = (
+        f"{headline}. Final score {games}. It's now official."
+        if games
+        else f"{headline}. It's now official."
+    )
+    return "Your result was accepted", body
+
+
+async def notify_result_accepted(
+    notifications: NotificationService, match: Match, poster_id: uuid.UUID
+) -> None:
+    """Tell the poster (the side that proposed the standing result) that their
+    result was accepted and the match is now final — closing the loop the
+    propose-side prompt opened.
+
+    The mirror of :func:`notify_result_posted`: propose notifies the side that
+    *owes* a response; accept notifies the side that was *waiting* on one. Filed
+    under the same ``RESULT_CONFIRM`` family and enqueued once per player on the
+    poster's side. Unlike the propose prompt it carries **no** APNs action group
+    or ``push_category`` — the match is finalized, there is nothing left to
+    accept or counter — so it fans out as a plain in-app + push/email notice,
+    matching the retirement notices in ``app.retirement_jobs``. A per-match
+    ``collapse_id`` (distinct from the propose prompt's) replaces any stale
+    accepted-notice on the lock screen. Returns without enqueuing when the
+    poster's side can't be resolved to a real player (a solo / player-less
+    sentinel side)."""
+    poster_side = my_side(match, poster_id)
+    if poster_side is None or not poster_side.players:
+        return
+    copy = _result_accepted_copy(match, poster_id)
+    if copy is None:
+        return
+    title, body = copy
+    for player in poster_side.players:
+        notifications.enqueue_notification(
+            NotificationJob(
+                user_id=player.user_id,
+                category=NotificationCategory.RESULT_CONFIRM,
+                title=title,
+                body=body,
+                link=f"/matches/{match.id}",
+                action_label="View result",
+                collapse_id=f"result-accepted:{match.id}",
+            )
+        )
+
+
 async def notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:

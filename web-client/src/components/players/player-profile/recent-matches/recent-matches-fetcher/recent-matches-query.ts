@@ -7,12 +7,24 @@ import {
 } from '@/api/players'
 import type { MatchDetailRoute } from '@/components/matches/match-row-link/match-row-link'
 import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
-import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
+import {
+  emptyRatingDeltaAria,
+  formatRatingDelta,
+  formatRatingDeltaAria,
+} from '@/lib/rating'
 
 /** The em dash the card prints wherever a number would lie: an unfinished
  * match has no score, and an undecided *or* unrated one has no rating change.
  * Never a "+0" (ADR-0915). */
 export const NO_VALUE = '—'
+
+/**
+ * How many rows the overview card draws. The API already caps the bundle at six
+ * (`PROFILE_RECENT_MATCHES`), so this is normally a no-op — but the card owns its
+ * own shape: cap the projection here too, so a longer bundle from any code path
+ * can never silently turn the overview into a long table. The full history lives
+ * behind the "view all" link, on its own paginated surface. */
+export const RECENT_MATCHES_SHOWN = 6
 
 /** What the Opponent cell reads for a solo match — one with nobody on the other
  * side (ADR-0008). It is a name for an absence, not a player. */
@@ -54,16 +66,31 @@ export type RecentMatchScoreView =
   | { kind: 'games'; games: RecentMatchGameView[] }
   | { kind: 'text'; text: string }
 
-/** The Δ cell's contents. `null` — rendered as `—` — for any row whose rating
- * did not *move*: undecided, unrated, or the player's first rated match (which
- * established the rating instead). */
-export type RecentMatchDeltaView = {
-  /** The terse signed figure, e.g. "+12" / "-14". */
-  label: string
-  /** Spelled out for a screen reader, e.g. "Gained 12 rating". */
-  ariaLabel: string
-  tone: 'win' | 'loss'
-}
+/**
+ * The Δ cell's contents — a discriminated union, not a nullable chip.
+ *
+ * A row whose rating *moved* is a `change`: the signed figure and its spoken
+ * label. A row whose rating did **not** move still renders the em dash, but it
+ * carries a truthful `ariaLabel` naming *which* of the three no-move states it
+ * is (`empty`) — "No rating change" / "Not yet decided" / "Rating established"
+ * (`emptyRatingDeltaAria`) — so a screen reader no longer hears the same nothing
+ * for a live match, an unrated one, and a first-rated one. */
+export type RecentMatchDeltaView =
+  | {
+      kind: 'change'
+      /** The terse signed figure, e.g. "+12" / "-14". */
+      label: string
+      /** Spelled out for a screen reader, e.g. "Gained 12 rating". */
+      ariaLabel: string
+      tone: 'win' | 'loss'
+    }
+  | {
+      kind: 'empty'
+      /** The visible cell is an em dash; this names which empty state it is for a
+       * screen reader — "No rating change" / "Not yet decided" / "Rating
+       * established". */
+      ariaLabel: string
+    }
 
 /**
  * Who the match was against — and, therefore, whether the cell is a **link**.
@@ -103,8 +130,9 @@ export type RecentMatchRowView = {
   opponent: RecentMatchOpponentView
   status: RecentMatchStatusView
   score: RecentMatchScoreView
-  /** `null` when no rating moved: the display prints `—`, never "+0". */
-  delta: RecentMatchDeltaView | null
+  /** The Δ cell. An `empty` variant (rendered as `—`, never "+0") still carries
+   * a spoken name for its no-move state; a `change` carries the signed figure. */
+  delta: RecentMatchDeltaView
   /** e.g. "Mar 14". `—` when the timestamp is unreadable. */
   when: string
   /** The `{to,params}` target of the row's link — the match's detail page. Built
@@ -200,19 +228,31 @@ const selectScore = (row: PlayerMatchRow): RecentMatchScoreView => {
   }
 }
 
-const selectDelta = (
-  ratingChange: PlayerMatchRow['rating_change'],
-): RecentMatchDeltaView | null => {
-  // Keyed on the field alone, never on the status: a *completed, decided* win in
-  // an unrated match moved no rating either, and it must read `—` too.
-  if (ratingChange == null) return null
-  // And a present change with a null `delta` is the player's FIRST rated match:
-  // it *established* their rating rather than moving it. The Δ column measures
-  // movement, and nothing moved — so `—`, not a signed number off the seeded
-  // 1500 they never held (#952). The row still shows its result and score; the
-  // match-detail page is where the new rating is spelled out (`Unrated → X`).
-  if (ratingChange.delta === null) return null
+const selectDelta = (row: PlayerMatchRow): RecentMatchDeltaView => {
+  const ratingChange = row.rating_change
+  // The em-dash path — no signed figure to show — but it stands for three
+  // different facts, so it carries a spoken name for the one this row is
+  // (`emptyRatingDeltaAria`):
+  //   - a *present* change with a null `delta` is the player's FIRST rated match:
+  //     it ESTABLISHED their rating rather than moving it, so `—`, never a signed
+  //     number off the seeded 1500 they never held (#952) → "Rating established";
+  //   - `rating_change == null` on a match still in play has not DECIDED a rating
+  //     yet → "Not yet decided";
+  //   - `rating_change == null` on a decided match (unrated / voided) moved no
+  //     rating → "No rating change".
+  // "Decided" is the match having reached a terminal state — completed or voided
+  // — which is exactly when a rating either moved or provably never will.
+  if (ratingChange == null || ratingChange.delta === null) {
+    return {
+      kind: 'empty',
+      ariaLabel: emptyRatingDeltaAria(
+        ratingChange,
+        row.status === 'completed' || row.status === 'voided',
+      ),
+    }
+  }
   return {
+    kind: 'change',
     label: formatRatingDelta(ratingChange.delta),
     ariaLabel: formatRatingDeltaAria(ratingChange.delta),
     tone: ratingChange.delta >= 0 ? 'win' : 'loss',
@@ -252,7 +292,7 @@ const selectRow = (
     opponent,
     status: selectStatus(row),
     score: selectScore(row),
-    delta: selectDelta(row.rating_change),
+    delta: selectDelta(row),
     when,
     // The row is a link to its match (#989). Both halves of that link are
     // *derived data*, so they belong here rather than in the row component: the
@@ -281,9 +321,13 @@ export const selectRecentMatches = (
   const total = player.match_total
   return {
     playerId: player.id,
-    // Straight through, unfiltered: the bundle already sent the six most recent,
-    // and every state in them belongs on the card.
-    rows: player.matches.items.map((row) => selectRow(row, timeZone)),
+    // Unfiltered — every state belongs on the card — but capped: the card draws
+    // the six most recent, no matter how long a bundle it is handed. The API
+    // already sends six; the slice makes that the card's own contract rather than
+    // a promise it merely trusts the server to keep.
+    rows: player.matches.items
+      .slice(0, RECENT_MATCHES_SHOWN)
+      .map((row) => selectRow(row, timeZone)),
     total,
     // "View all 1 match" reads wrong — "all" presupposes more than one — so the
     // lone-match case drops both the count and the "all".
