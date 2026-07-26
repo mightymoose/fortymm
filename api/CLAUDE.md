@@ -93,6 +93,23 @@ and re-run alembic against a fresh database to test.
 - Renaming a table touches: the model's `__tablename__`, the migration's
   create/drop/FK/index/constraint names, the migration filename and
   docstring, and any hardcoded references in app or test code.
+- **An alter migration that slips in gets rolled up.** If a change lands as its
+  own `add_column`/`alter_column` revision, fold it back into the migration that
+  creates the table and delete the revision — with one limit: **fold only when the
+  target table is already created by an *earlier* revision, and never reorder table
+  creation to make a fold possible.** That limit is why `0005`'s `add_column` of
+  `matches.league_id` stays where it is: `league_id` is an FK to `leagues`, which
+  `0005` itself creates, so folding it into `0004` would reference a table that does
+  not exist yet.
+- **Deleting a revision invalidates every database that applied it.** Alembic
+  refuses outright — `Can't locate revision identified by '00NN'` — it does not
+  degrade. So a roll-up means wiping UAT, local dev databases, and any live QA stack
+  volume, not just re-running migrations. That is affordable pre-deploy and will
+  stop being affordable the day it isn't.
+- **A test may load a migration by filename.** `tests/test_match_calls_notifications.py`
+  reads its seed constant straight out of a migration module, so deleting or renaming
+  one turns that test into a `FileNotFoundError`. Grep the suite for the filename
+  before you delete a revision.
 
 **Route/schema/docstring changes regenerate `openapi.json`.** A FastAPI route
 **docstring** becomes the OpenAPI description, so even a docstring edit drifts the
@@ -140,8 +157,8 @@ confirm the test reds *for the stated reason*, put it back. See
 `.claude/rules/verify-the-artifact-under-test.md`.
 
 **Some display strings are DB seed data, not app code.** Notification category and
-channel display names are seed rows: migration `0009` inserts them (`0015` adds
-`match_calls`), `tests/conftest.py` re-seeds them by hand
+channel display names are seed rows: migration `0009` inserts them,
+`tests/conftest.py` re-seeds them by hand
 (`NOTIFICATION_TYPE_LABELS` / `NOTIFICATION_CHANNEL_LABELS`, because `create_all`
 skips the migration), and `web-client/src/test/factories.ts` mirrors them for MSW.
 Three places that must change together — and a copy/wording sweep that greps `app/`
