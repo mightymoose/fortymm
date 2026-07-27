@@ -4,8 +4,9 @@ import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { screen, waitFor } from '@/test/utilities'
+import { fireEvent, screen, waitFor } from '@/test/utilities'
 
 import { newTournamentModalPage } from './new-tournament-modal.page'
 
@@ -113,6 +114,51 @@ describe('NewTournamentModal', () => {
     expect(
       await newTournamentModalPage.findError(
         'Name must be 255 characters or fewer.',
+      ),
+    ).toBeVisible()
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The venue box carries the server's `AddressComponent` bound (#1199).
+   *
+   * It has to be re-stated on the client at all because the generated schema drops
+   * it: `openapi-typescript` has no TypeScript construct for a string length, so
+   * `maxLength` appears **nowhere** in `src/api/schema.d.ts`. Nothing between the
+   * organizer and the API knows about the 255 except this.
+   */
+  it('caps the venue box at the 255 characters the server accepts', async () => {
+    newTournamentModalPage.render()
+
+    const input = newTournamentModalPage.getVenueInput()
+    expect(input).toHaveAttribute('maxlength', '255')
+
+    // Pasting the pathological 680-character name in — the realistic way an
+    // over-long venue gets typed — leaves 255 in the box, not 680.
+    await userEvent.click(input)
+    await userEvent.paste(UNBREAKABLE_VENUE_NAME)
+    expect((input as HTMLInputElement).value).toHaveLength(255)
+  })
+
+  it('refuses an over-long venue inline rather than letting the server 422 it', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    // `fireEvent.change`, deliberately: `maxLength` already stops typing and
+    // pasting, so the only way a 680-character venue reaches the form is a
+    // programmatic set — autofill, a password manager, a restored draft. The Zod
+    // bound is what catches THAT, and this is the only way to exercise it. Without
+    // it the organizer's feedback is a nested-address 422 the form cannot even pin
+    // to a box (`FORM_FIELD` maps `name` alone), i.e. the banner.
+    fireEvent.change(newTournamentModalPage.getVenueInput(), {
+      target: { value: UNBREAKABLE_VENUE_NAME },
+    })
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(
+      await newTournamentModalPage.findError(
+        'Venue name must be 255 characters or fewer.',
       ),
     ).toBeVisible()
     expect(onCreate).not.toHaveBeenCalled()

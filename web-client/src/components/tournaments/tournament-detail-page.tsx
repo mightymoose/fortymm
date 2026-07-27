@@ -166,7 +166,36 @@ export const TournamentDetailPage = ({
           </MetaItem>
           {venue && (
             <MetaItem icon={<MapPin size={14} />} testId="tournament-venue-line">
-              <span className="truncate text-[color:var(--fg-1)]">{venue}</span>
+              {/* WRAPS — it does not truncate, and it must not clamp (#1199).
+                  A venue name is one free-text component the *read* shape leaves
+                  unbounded on purpose (`api/app/schemas/tournament.py`: the bound
+                  goes on the way in only, so historical rows still serialize), so
+                  the page has to survive one that is already 680 characters long.
+                  Hiding it is the wrong answer twice over — the organizer's own
+                  venue is what the reader came for, and an ellipsis would not have
+                  stopped the overflow anyway.
+
+                  `wrap-anywhere` (overflow-wrap: anywhere), not `break-words`:
+                  this span is a FLEX ITEM, and only `anywhere` shrinks the item's
+                  **min-content contribution** down to one character.
+                  `overflow-wrap: break-word` leaves min-content at the width of
+                  the whole unbroken word — the item then refuses to shrink, paints
+                  straight out of the header and takes the document with it.
+                  Measured against the 680-character fixture: the span lays out
+                  5236px wide and `html` reports a 3146px scroll width inside a
+                  1280px viewport. `min-w-0` says
+                  the same thing through the other mechanism (flex items default to
+                  `min-width: auto`); both, because the two are cheap and the failure
+                  is invisible in jsdom, which performs no layout. */}
+              {/* Its own test id, separate from the meta item's: the overflow
+                  assertions have to measure the TEXT box, not the row that
+                  contains an icon as well. */}
+              <span
+                data-testid="tournament-venue-text"
+                className="min-w-0 wrap-anywhere text-[color:var(--fg-1)]"
+              >
+                {venue}
+              </span>
             </MetaItem>
           )}
         </div>

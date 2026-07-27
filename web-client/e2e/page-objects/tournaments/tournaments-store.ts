@@ -20,6 +20,7 @@ import {
   buildTournamentEntrantRead,
   entryStateFor,
   planRoundRobinFixtures,
+  UNBREAKABLE_VENUE_NAME,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
@@ -342,6 +343,30 @@ function drawableEvents(): TournamentEventRead[] {
   ]
 }
 
+/** The `address` the seed carries, as a spread — three cases, and each has to be
+ * expressible independently of the factory's default:
+ *
+ * - nothing spread in → the factory's Berkeley venue,
+ * - `{ address: null }` → the tournament with NO venue (CONTEXT.md, "Venue"),
+ * - `{ address: {…, venue: <680 unbroken chars> } }` → the pathological row the
+ *   layout has to survive (#1199). It keeps the Berkeley coordinates and the rest
+ *   of the components, so the ONLY thing that differs from the happy path is the
+ *   length of one string — which is what makes an overflow measured against it
+ *   attributable.
+ *
+ * `venueless` wins if both are passed: "there is no venue" is not a venue name.
+ */
+function addressOverride(
+  options: TournamentsStoreOptions,
+): Partial<Pick<TournamentDetailRead, 'address'>> {
+  if (options.venueless ?? false) return { address: null }
+  if (!(options.longVenue ?? false)) return {}
+  const { address } = buildTournamentDetailRead()
+  // The factory's default address is never null; narrow rather than assert.
+  if (!address) return {}
+  return { address: { ...address, venue: UNBREAKABLE_VENUE_NAME } }
+}
+
 /** All three roster states (`listed` / `empty` / `entry-closed`) on one page, on
  * purpose: it is the real shape of an Events tab, and it lets one axe scan cover
  * every state the roster can be in.
@@ -351,9 +376,7 @@ function drawableEvents(): TournamentEventRead[] {
  * the journey spec asserts on. */
 function seed(options: TournamentsStoreOptions): TournamentDetailRead {
   const crowded = options.crowded ?? false
-  // `undefined` keeps the factory's Berkeley venue; `null` IS the venue-less
-  // tournament, so it must be spread in rather than passed unconditionally.
-  const address = (options.venueless ?? false) ? { address: null } : {}
+  const address = addressOverride(options)
   if (options.drawable ?? false) {
     return buildTournamentDetailRead({
       id: TOURNAMENT_ID,
@@ -512,6 +535,17 @@ export interface TournamentsStoreOptions {
    * `null` address off the wire — the generated schema made it nullable, and a
    * page-object stub that could not produce one would leave that untested. */
   venueless?: boolean
+  /** Serve the tournament with a **680-character venue name and no break
+   * opportunity in it** (`UNBREAKABLE_VENUE_NAME`) — the row that made the detail
+   * page scroll sideways (#1199).
+   *
+   * It has to be an e2e option and not a vitest fixture alone, because the claim
+   * is about **layout**: jsdom performs none, so `scrollWidth`/`clientWidth` are
+   * `0` there and an overflow assertion passes whether the page wraps, truncates,
+   * or runs 2000px off the right-hand edge. Only a browser can tell those apart.
+   *
+   * Ignored when `venueless` is set. */
+  longVenue?: boolean
   /** Events ME is already entered in when the page loads — by event name. The
    * only way to reach "an entered player on a *live* tournament", since entering
    * one through the UI is (rightly) refused. */

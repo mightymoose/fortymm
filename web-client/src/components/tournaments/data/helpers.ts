@@ -136,6 +136,26 @@ const ADDRESS_TEXT_KEYS: readonly (keyof AddressText)[] = [
   'country',
 ]
 
+/**
+ * The longest one component of a venue address may be **on the way in** — the
+ * client's mirror of the server's `MAX_ADDRESS_COMPONENT`
+ * (`api/app/schemas/tournament.py`), which bounds all six components of
+ * `AddressInput` at 255 and 422s anything longer.
+ *
+ * It has to be re-stated here because **the generated clients do not carry it**:
+ * `openapi-typescript` has no TypeScript construct for a string length, so
+ * `maxLength` appears nowhere in `src/api/schema.d.ts` (nor in the iOS
+ * `Types.swift`). This constant, and the write surfaces that apply it, are the
+ * only client-side enforcement that exists — without it the organizer's only
+ * feedback on an over-long venue is a bare 4xx.
+ *
+ * It is deliberately a **write-side** bound only, exactly as on the server: the
+ * stored/read `Address` is unbounded so rows predating the limit still serialize,
+ * which is why the detail page has to render a 680-character venue rather than
+ * assume one cannot exist (#1199).
+ */
+export const MAX_ADDRESS_COMPONENT = 255
+
 /** An address with every component blank and the read model's placeholder
  * coordinates — what an edit surface puts in its boxes for a tournament that has
  * **no** venue, so the organizer can start typing one.

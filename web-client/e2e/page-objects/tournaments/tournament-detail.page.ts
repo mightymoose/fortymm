@@ -71,6 +71,36 @@ export class TournamentDetailPage {
     )
   }
 
+  /** The venue line's **text**, without the pin icon beside it — the box whose
+   * width and height are the overflow claim (#1199). */
+  get venueText(): Locator {
+    return this.page.getByTestId('tournament-venue-text')
+  }
+
+  /** The map's **text fallback** specifically — the keyless branch, which prints
+   * the venue line as its label. Named separately from `venueMap` because the
+   * overflow spec has to measure *this* box: the Google branch is an iframe with
+   * its own clipping, so a measurement that might have landed on either would not
+   * be a measurement of anything in particular. */
+  get venueMapFallback(): Locator {
+    return this.page.getByTestId('location-map-fallback')
+  }
+
+  /** The label *inside* that fallback. Measured separately from the box around it,
+   * because "the label starts inside its own box" is a claim about the two
+   * rectangles' relative positions and cannot be made from either alone. */
+  get venueMapFallbackLabel(): Locator {
+    return this.page.getByTestId('location-map-fallback-label')
+  }
+
+  /** The whole document, as something to measure horizontal scroll on. `html` is
+   * the scrolling element for the page, so `scrollWidth > clientWidth` here is
+   * exactly "the page scrolls sideways" — the user-visible defect, rather than a
+   * proxy for it somewhere in the tree. */
+  get documentElement(): Locator {
+    return this.page.locator('html')
+  }
+
   // ----- the lifecycle header (ADR-0017) -----------------------------------
 
   /** The status pill in the detail hero. Its text IS the status, in the words the

@@ -17,7 +17,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
-import { blankAddress, emptyTournament, hasVenue } from './data/helpers'
+import {
+  MAX_ADDRESS_COMPONENT,
+  blankAddress,
+  emptyTournament,
+  hasVenue,
+} from './data/helpers'
 import {
   TOURNAMENT_SAVE_TARGET,
   saveFailure,
@@ -49,7 +54,15 @@ const schema = z.object({
     .max(NAME_MAX, {
       message: `Name must be ${NAME_MAX} characters or fewer.`,
     }),
-  venue: z.string(),
+  // Mirrors the server's `AddressComponent` bound (255) the same way `name`
+  // mirrors `tournaments.name` — and it is the *only* client-side statement of
+  // it, since the generated schema drops `maxLength` entirely
+  // (`MAX_ADDRESS_COMPONENT`). Without it the organizer's feedback on an
+  // over-long venue is a nested-address 422 that this form cannot even pin to a
+  // box (`FORM_FIELD` maps `name` alone), i.e. the banner (#1199).
+  venue: z.string().max(MAX_ADDRESS_COMPONENT, {
+    message: `Venue name must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
+  }),
   street: z.string(),
   city: z.string(),
   region: z.string(),
@@ -242,29 +255,66 @@ export const NewTournamentModal = ({
               <span className="h-px flex-1 bg-[color:var(--border-subtle)]" />
             </div>
 
-            <Field label="Venue name">
+            <Field
+              label="Venue name"
+              error={!!errors.venue}
+              hint={errors.venue?.message}
+            >
               {(id) => (
-                <Input id={id} placeholder="Berkeley TT Club" {...register('venue')} />
+                <Input
+                  id={id}
+                  // The hard stop, and the schema above is the guarantee: typing
+                  // and pasting are capped here, while the Zod bound still catches
+                  // a value that arrived some other way (autofill, a restored
+                  // draft) and says so under the box instead of at the server.
+                  maxLength={MAX_ADDRESS_COMPONENT}
+                  aria-invalid={!!errors.venue}
+                  placeholder="Berkeley TT Club"
+                  {...register('venue')}
+                />
               )}
             </Field>
+            {/* The other four components share the venue box's server bound —
+                `AddressComponent` applies to all six — so they carry the same
+                hard stop. Only `venue` also carries a Zod message today; the
+                remaining four would each need their own sentence, and none of
+                them is the field an organizer pastes an essay into. */}
             <Field label="Street">
               {(id) => (
-                <Input id={id} placeholder="2727 Milvia St" {...register('street')} />
+                <Input
+                  id={id}
+                  maxLength={MAX_ADDRESS_COMPONENT}
+                  placeholder="2727 Milvia St"
+                  {...register('street')}
+                />
               )}
             </Field>
             <div className="grid grid-cols-[2fr_1fr_1fr] gap-3">
               <Field label="City">
                 {(id) => (
-                  <Input id={id} placeholder="Berkeley" {...register('city')} />
+                  <Input
+                    id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
+                    placeholder="Berkeley"
+                    {...register('city')}
+                  />
                 )}
               </Field>
               <Field label="Region">
-                {(id) => <Input id={id} placeholder="CA" {...register('region')} />}
+                {(id) => (
+                  <Input
+                    id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
+                    placeholder="CA"
+                    {...register('region')}
+                  />
+                )}
               </Field>
               <Field label="Postal">
                 {(id) => (
                   <Input
                     id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
                     placeholder="94703"
                     className="font-mono"
                     {...register('postal')}

@@ -10,6 +10,12 @@ const scoped = (container: Container) => ({
   getNameInput() {
     return container.getByLabelText(/Name/)
   },
+  /** The venue-name box. Addressed by its exact label, because `getNameInput`'s
+   * `/Name/` is capital-N and this row is "Venue name" — the two must not resolve
+   * to each other. */
+  getVenueInput() {
+    return container.getByLabelText('Venue name')
+  },
   getCreateButton() {
     return container.getByRole('button', { name: /Create tournament/ })
   },

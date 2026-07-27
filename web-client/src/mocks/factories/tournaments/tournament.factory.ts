@@ -617,6 +617,30 @@ export function buildTournamentEventRead(
 }
 
 /**
+ * A venue name of **680 characters with not one break opportunity in it** — no
+ * space, no hyphen, no slash. The pathological row the detail page has to survive
+ * (#1199): unwrapped, this single word laid out ~5742px wide and took the
+ * document's scroll width to ~3399px inside a 1280px viewport, so the whole page
+ * scrolled sideways.
+ *
+ * It is a **read**-shape fixture, and it is not hypothetical. The server bounds
+ * every address component at 255 on the way IN only (`AddressComponent`,
+ * `api/app/schemas/tournament.py`) — deliberately, so rows that predate the bound
+ * still serialize — and the generated `schema.d.ts` carries no `maxLength` at all.
+ * So a client that assumes ≤255 is assuming something neither the wire nor the
+ * database promises.
+ *
+ * Exported from the factory rather than re-typed per suite because BOTH layers
+ * need the same string: vitest (which cannot prove the layout claim — jsdom does
+ * no layout, `scrollWidth` is always 0 there) and `e2e/`, where a real browser
+ * measures it.
+ */
+export const UNBREAKABLE_VENUE_NAME =
+  'BerkeleyTableTennisClubhouseAndCommunityRecreationCentre'
+    .repeat(13)
+    .slice(0, 680)
+
+/**
  * The published "Bay Area Open 2026" with a four-table catalogue and a single
  * Open Singles event, owned (editable) by the current user. The list and detail
  * endpoints both return this `TournamentDetailRead` shape.

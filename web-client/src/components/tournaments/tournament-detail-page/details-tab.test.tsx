@@ -1,8 +1,9 @@
 import userEvent from '@testing-library/user-event'
 
+import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
 import { screen } from '@/test/utilities'
 
-import { buildTournament } from '../data/seed.factory'
+import { buildAddress, buildTournament } from '../data/seed.factory'
 import { detailsTabPage } from './details-tab.page'
 
 describe('DetailsTab', () => {
@@ -217,6 +218,34 @@ describe('DetailsTab', () => {
       ])
       expect(detailsTabPage.getFormElements()).toHaveLength(0)
     })
+  })
+
+  /**
+   * The organizer meets the server's `AddressComponent` bound here, not at the
+   * 422 (#1199). The generated schema cannot carry it — `openapi-typescript` has
+   * no TypeScript construct for a string length, so `maxLength` appears nowhere
+   * in `src/api/schema.d.ts` — which makes this the only statement of it on the
+   * edit surface.
+   */
+  it('caps every venue box at the 255 characters the server accepts', () => {
+    detailsTabPage.render({ tournament: buildTournament() })
+
+    for (const input of detailsTabPage.getVenueInputs()) {
+      expect(input).toHaveAttribute('maxlength', '255')
+    }
+  })
+
+  /** The bound is on the way IN only, exactly as on the server: a row stored
+   * before it existed still has to be editable, not silently rewritten. */
+  it('still shows a stored 680-character venue in full, so it can be shortened', () => {
+    detailsTabPage.render({
+      tournament: buildTournament({
+        address: buildAddress({ venue: UNBREAKABLE_VENUE_NAME }),
+      }),
+    })
+
+    const [venue] = detailsTabPage.getVenueInputs()
+    expect(venue).toHaveValue(UNBREAKABLE_VENUE_NAME)
   })
 
   it('renders an em-dash for a field the organizer left empty', () => {

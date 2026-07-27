@@ -16,6 +16,11 @@ const scoped = (container: Container) => ({
   getFallback() {
     return container.getByTestId('location-map-fallback')
   },
+  /** The label element *inside* the fallback — the box that has to wrap an
+   * unbroken venue name (#1199), as opposed to the padded container around it. */
+  getFallbackLabel() {
+    return container.getByTestId('location-map-fallback-label')
+  },
 })
 
 /**

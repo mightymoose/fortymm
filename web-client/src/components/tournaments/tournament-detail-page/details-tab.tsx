@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
-import { blankAddress } from '../data/helpers'
+import { MAX_ADDRESS_COMPONENT, blankAddress } from '../data/helpers'
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
@@ -83,7 +83,13 @@ export const DetailsTab = ({
    * Keyed by the six **text** components only — never `latitude`/`longitude`.
    * Coordinates are geocoded server-side at write time and are read-only on the
    * client (the read `Address` carries them; the write shape does not), so the
-   * edit form neither shows nor submits them. */
+   * edit form neither shows nor submits them.
+   *
+   * Every one of the six is capped at `MAX_ADDRESS_COMPONENT` — the server's
+   * `AddressComponent` bound, which the generated schema cannot express, so this
+   * is the only place the organizer meets it before the 422 (#1199). It caps the
+   * *typing*, not the value: a row that already holds a 680-character venue from
+   * before the bound still renders it in full, and can still be shortened. */
   const addressField = (
     label: string,
     key: AddressTextField,
@@ -100,6 +106,7 @@ export const DetailsTab = ({
         <Input
           id={id}
           className={className}
+          maxLength={MAX_ADDRESS_COMPONENT}
           value={address[key]}
           onChange={(e) => updateAddress({ [key]: e.target.value })}
         />
