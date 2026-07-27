@@ -60,12 +60,24 @@ spec:
             # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
             # Sourced from the .env-backed Secret (secrets.env), the same place
             # every other sensitive var comes from; only UAT/prod set it.
-            # optional:true is the whole point of "keyless everywhere else":
-            # when the key is absent from the Secret the var stays unset and the
-            # API selects its deterministic, network-free FakeGeocoder, so local
-            # dev / CI / e2e / QA never touch the network. Declared explicitly
-            # (not just via the bulk envFrom Secret) so the wiring is visible and
-            # greppable in the rendered Deployment.
+            # optional:true does NOT mean "fall back to the fake geocoder". It
+            # used to: the provider was inferred from key presence, so a missing
+            # key silently selected FakeGeocoder — which is exactly how UAT spent
+            # weeks writing hash-derived coordinates as though they were real.
+            # That inference is gone. `GEOCODER` now names the provider outright,
+            # it defaults to `google`, and a `google` with no key RAISES at
+            # Settings construction — the pod fails its probe rather than
+            # degrading.
+            #
+            # So this ref is only safe to leave optional because
+            # `config.GEOCODER` is pinned to `fake` in values.yaml (see the
+            # comment on that value). Remove that pin and the missing key stops
+            # being harmless and starts being a boot failure. When UAT gets a
+            # real key (#1205), the key lands in .env, `GEOCODER` flips to
+            # `google`, and `optional: true` should come off with it.
+            #
+            # Declared explicitly (not just via the bulk envFrom Secret) so the
+            # wiring is visible and greppable in the rendered Deployment.
             - name: GOOGLE_GEOCODING_API_KEY
               valueFrom:
                 secretKeyRef:
