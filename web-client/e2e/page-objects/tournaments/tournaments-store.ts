@@ -20,9 +20,9 @@ import {
   buildTournamentEntrantRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
-  planRoundRobinFixtures,
-  planSingleElimFixtures,
+  planDraw,
   UNBREAKABLE_VENUE_NAME,
+  type DrawPlan,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
@@ -863,89 +863,26 @@ function drawOrder(entrants: TournamentEntrantRead[]): TournamentEntrantRead[] {
   )
 }
 
-/** The **snake**: which pool each entrant is dealt into (`api/app/draws.py`) — row by row
- * across the pools, reversing every other row, so the top seeds land one per pool and
- * pool sizes differ by at most one.
- *
- * Only the SIZES are wanted here (the planner deals the fixtures itself), and they are
- * wanted because the 422 is asked of the pools the snake actually produced, never of
- * arithmetic on N and P: it is the dealt pool that would have a lone entrant in it. */
-function snakedSizes(count: number, poolCount: number): number[] {
-  const sizes = Array.from({ length: poolCount }, () => 0)
-  for (let index = 0; index < count; index += 1) {
-    const row = Math.floor(index / poolCount)
-    const offset = index % poolCount
-    const column = row % 2 === 0 ? offset : poolCount - 1 - offset
-    sizes[column] += 1
-  }
-  return sizes
-}
-
-/** A planned draw, or the server's sentence for why this event cannot be cut as it
- * stands. ONE value for both, because they are the same decision: split in two, a
- * refusal check could answer "nothing wrong here" for a shape the planner then has
- * nothing to deal for. */
-type DrawPlan =
-  | { ok: true; fixtures: TournamentFixtureRead[] }
-  | { ok: false; detail: string }
-
 /** Plan an event's draw exactly as the cut route does — from its entrants in draw order —
- * or say why it cannot be, in the server's own words (`app/draws.py`), because for these
- * 422s the sentence IS the answer: it names the thing the director has to change. Used
- * for BOTH the seeded draws (`drawn`) and the route, so a fixture on screen is always one
- * this stub could have dealt.
+ * or say why it cannot be. Used for BOTH the seeded draws (`drawn`) and the route, so a
+ * fixture on screen is always one this stub could have dealt.
  *
- * **Exhaustive over `DrawType`, and there is no draw-TYPE refusal left.** Both members
- * have a strategy on the server (single-elim since #785; ADR 20260726 shrank the enum to
- * exactly what runs), so the arm that used to answer "a `<type>` draw cannot be cut yet"
- * would have been this stub putting words in the server's mouth it can no longer say —
- * and, worse, would have made a single-elim cut unreachable from a browser at all.
- *
- * The `switch` is written exhaustively, but **nothing enforces that here**: `tsconfig.app.json`
- * includes only `src`, so no `tsc -b` ever reads this directory and Playwright transforms it
- * without typechecking. The identical `switch` in `src/mocks/tournaments-store.ts` IS checked,
- * and that is where a new `DrawType` member reds. Adding one here is a silent fall-through
- * until someone brings `e2e/` under a tsconfig — said plainly because the earlier version of
- * this comment claimed a compile-time guarantee that does not exist. */
-function planDraw(event: TournamentEventRead): DrawPlan {
-  const entryIds = drawOrder(event.entrants).map((e) => e.id)
-  switch (event.draw_type) {
-    case 'round-robin': {
-      if (event.pools.length === 0) {
-        return { ok: false, detail: 'A round-robin draw needs at least one pool.' }
-      }
-      const sizes = snakedSizes(entryIds.length, event.pools.length)
-      if (sizes.some((size) => size < 2)) {
-        return {
-          ok: false,
-          detail:
-            `${entryIds.length} entrants across ${event.pools.length} pool(s) would ` +
-            'leave a pool with fewer than 2 entrants, who would have nobody to play.',
-        }
-      }
-      return {
-        ok: true,
-        fixtures: planRoundRobinFixtures(
-          entryIds,
-          event.pools.map((p) => p.id),
-        ),
-      }
-    }
-    case 'single-elim': {
-      // Round-robin's per-pool floor, one level up. The event's POOLS are not consulted:
-      // a bracket is un-pooled, so a single-elim event cuts with pools or without them,
-      // exactly as on the server.
-      if (entryIds.length < 2) {
-        return {
-          ok: false,
-          detail:
-            'A single-elimination draw needs at least 2 entrants — a bracket of ' +
-            'one has nobody to play.',
-        }
-      }
-      return { ok: true, fixtures: planSingleElimFixtures(entryIds) }
-    }
-  }
+ * The decision itself — which draws are refused, and the server's own sentences for
+ * refusing them (`app/draws.py`, where for these 422s the sentence IS the answer) — is
+ * `planDraw` in `src/mocks/factories/tournaments/tournament.factory.ts`, shared with the
+ * MSW store. It used to be copied here, and that copy could not be trusted to stay in
+ * step: `tsconfig.app.json` includes only `src`, so no `tsc -b` ever reads this directory
+ * and Playwright transforms it without typechecking — its exhaustive `switch` over
+ * `DrawType` had no compile-time guarantee at all, and a new member would have red in the
+ * `src` store while silently falling through here. Behind the one checked declaration,
+ * both stubs get that guarantee. What is left local is only how a row is read into the
+ * planner's arguments. */
+function planEventDraw(event: TournamentEventRead): DrawPlan {
+  return planDraw(
+    event.draw_type,
+    drawOrder(event.entrants).map((e) => e.id),
+    event.pools.map((p) => p.id),
+  )
 }
 
 /** Why this event PATCH is refused by a standing draw — or `null` when it is not
@@ -1035,7 +972,7 @@ export class TournamentsStore {
     // start a tournament would be refused for a reason it never asked for.
     for (const name of options.drawn ?? []) {
       const event = this.eventNamed(name)
-      const plan = planDraw(event)
+      const plan = planEventDraw(event)
       if (!plan.ok) {
         throw new Error(`cannot seed a draw for ${name}: ${plan.detail}`)
       }
@@ -1502,7 +1439,7 @@ export class TournamentsStore {
     if (drawHasPlay(event)) {
       return json(route, 409, { detail: DRAW_UNDER_WAY_DETAIL })
     }
-    const plan = planDraw(event)
+    const plan = planEventDraw(event)
     if (!plan.ok) return json(route, 422, { detail: plan.detail })
 
     const fixtures = plan.fixtures

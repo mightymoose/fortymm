@@ -488,10 +488,14 @@ async def update_event(
         setattr(event, key, value)
     if draw_type is not None:
         # The one place an event's draw type moves after create (the freeze above
-        # has already refused this on a cut draw). The settings row is loaded with
-        # the event (``lazy="joined"``), so this is a plain attribute write, not a
-        # lazy load in async context.
-        event.draw_settings.draw_type_key = draw_type.value
+        # has already refused this on a cut draw). Assigned through the settings
+        # row's ``draw_type`` property, not its ``draw_type_key`` column, so the
+        # enum→slug conversion stays in the single place that owns it
+        # (``TournamentEventDrawSettings.draw_type``'s setter, which
+        # ``for_draw_type`` also goes through at create). The settings row is
+        # loaded with the event (``lazy="joined"``), so this is a plain attribute
+        # write, not a lazy load in async context.
+        event.draw_settings.draw_type = draw_type
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a
         # no-op): recompose every placement so its local reading is unchanged and only

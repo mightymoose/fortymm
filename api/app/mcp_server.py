@@ -1737,11 +1737,6 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
     A ``match`` over the error, not ``str(error)`` over whatever arrives, so each arm
     tells an agent which of *their* events cannot be cut and why:
 
-    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's draw
-      type has no generator, a fact to change on the event, not a transient one to
-      retry. No cut can raise it today (``strategy_for`` is total now the enum holds
-      only draw types that run), but it is still a ``DrawError``, so the arm stays
-      rather than letting a future raiser fall through to the generic sentence.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (an entry is one row per player, with nowhere to
       seat a partner or a team, ADR-0788), so the refusal names the event and is
@@ -1751,13 +1746,11 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       across 3 pool(s)"), passed through so the agent reads exactly what a director
       would.
     * The fallback arm is a generic sentence, never a future subclass's own message —
-      refusing vaguely is a bug report, leaking internals is a defect."""
+      refusing vaguely is a bug report, leaking internals is a defect. Covered by
+      ``test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_it``,
+      which invents a ``DrawError`` subclass carrying internals and asserts none of
+      them reach the client."""
     match error:
-        case UnsupportedDrawType():
-            return ToolError(
-                f"This event's {error.draw_type.value} draw can't be cut yet. Change "
-                "the event's draw type to one that can, or wait for support."
-            )
         case NonSinglesDraw():
             return ToolError(
                 f"A {error.event_format.value} event can't be given a draw — only "
@@ -2021,7 +2014,12 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
       draw type has no schedule generator yet (only round-robin does today; single-elim
       can be *cut* but not yet *placed*), a fact to change on the event, not a
-      transient one to retry.
+      transient one to retry. **This arm is the reason the mirror is not exact:**
+      ``_map_draw_refusal_tool_error`` has no ``UnsupportedDrawType`` arm, because on
+      the CUT path the error is unreachable (``strategy_for`` is total). On the PREVIEW
+      path it is genuinely raised — ``schedule_preview`` raises it for single-elim — so
+      the arm here is live code with its own coverage in
+      ``test_schedule_preview_snapshot``.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (ADR-0788), so it can never be previewed.
     * ``DegenerateDraw``'s message is domain-authored copy (the numbers the director

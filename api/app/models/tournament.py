@@ -206,10 +206,23 @@ class TournamentEvent(Base):
     # There is deliberately NO ``draw_type`` column beside it. The settings row is
     # the only home for that fact, so an event whose draw type disagrees with its
     # settings is not a state anyone can construct.
+    #
+    # ``index=True`` because Postgres does not index a REFERENCING column, and this
+    # one is on a routine DELETE path: every ``tournament_event_draw_settings`` row
+    # we delete (the delete-orphan on event delete, and ``reap_draw_settings`` on
+    # tournament delete) makes the RESTRICT trigger run
+    # ``SELECT 1 FROM tournament_events WHERE draw_settings_id = $1 FOR KEY SHARE``.
+    # Unindexed that is a sequential scan of EVERY event on the platform per
+    # settings row deleted, not per event in the tournament (measured on 50k
+    # events: 7.9ms → 0.08ms), and ``reap_draw_settings``' ``NOT EXISTS`` anti-join
+    # has nothing to probe either. The sibling ``matches.match_settings_id`` is
+    # deliberately left unindexed and that asymmetry is intentional: match settings
+    # rows are never deleted, so its RI check never runs.
     draw_settings_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_event_draw_settings.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
     )
     # NULL means "no cap" (ADR-0935). A present cap is positive by CHECK.
     max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)

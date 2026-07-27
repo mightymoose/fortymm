@@ -3,6 +3,9 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
+import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
+
+import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import type {
   Address,
@@ -639,21 +642,22 @@ export function buildStandingsEvent(
 /** The draw-type catalogue **as the server serves it** (ADR 20260726): both seeded
  * rows, labelled with the migration's copy, in `display_order` — round robin first.
  *
- * A fixture of a *response*, not a menu this client authors. It is deliberately not
- * derived from `DRAW_TYPES` with labels invented here: a component test's picker must
- * hold the words a director really sees, and the only place those words exist is the
- * server's seed (mirrored in `src/mocks/factories/tournaments/tournament.factory.ts`,
- * which copies the migration verbatim).
+ * A fixture of a *response*, not a menu this client authors. The labels are therefore
+ * NOT written here: they are the server's seed copy, which lives verbatim in
+ * `DRAW_TYPE_CATALOGUE` (`src/mocks/factories/tournaments/tournament.factory.ts`,
+ * itself a copy of the migration's `DRAW_TYPE_SEED`) — so a component test's picker
+ * holds the words a director really sees, from one place. Run through the real
+ * `parseDrawTypeCatalogue`, so this fixture is a *parsed* payload rather than an
+ * option list assembled by hand, and the parser is exercised on the way (the `?? []`
+ * is unreachable — the parser answers `null` only for a nullish catalogue, and
+ * `DRAW_TYPE_CATALOGUE` is an array).
  *
  * ⚠️ Never assert the picker's contents against **this** fixture alone — that is a
  * mock agreeing with itself. The claim worth proving is that the picker follows
  * *whatever* catalogue arrives, which is what the hand-written catalogues in
  * `basics-section.test.tsx` exercise. */
 export function buildDrawTypes(): DrawTypeOption[] {
-  return [
-    { value: 'round-robin', label: 'Round robin' },
-    { value: 'single-elim', label: 'Single elimination' },
-  ]
+  return parseDrawTypeCatalogue(DRAW_TYPE_CATALOGUE) ?? []
 }
 
 /** The published "Bay Area Open 2026" with a single Open Singles event. */

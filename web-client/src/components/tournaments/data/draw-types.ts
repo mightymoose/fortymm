@@ -10,22 +10,56 @@
 
 import { z } from 'zod'
 
-import type { DrawType, DrawTypeOption } from './types'
+import type { components } from '@/api/schema'
 
-/** The draw-type keys **this client understands** — the runtime twin of the `DrawType`
- * union, and the only list of slugs left on the client.
+/** The draw-type keys **this client understands** — the ONE declaration of the
+ * vocabulary, and the only list of slugs left on the client. The Zod schema, the
+ * `DrawType` union and the catalogue parser's filter are all derived from it below
+ * (the `data/solve.ts` shape), so there is nothing here for a second copy to drift
+ * against.
  *
  * This is a *vocabulary*, not a menu: it says which keys this build can put in a
  * `TournamentEvent.drawType` and send back as `draw_type`, and nothing about which of
  * them a director is offered — that is the served catalogue's job, and only its job.
  *
- * `satisfies` stops a slug the API's enum does not hold from being added; `draw-types.test.ts`
- * pins the other direction (a member missing here is a compile failure), so the two
+ * `satisfies` pins it to the generated enum, so a slug the API does not hold is a
+ * compile error here; `draw-types.test.ts` pins the other direction (a member of the
+ * API's enum *missing* from this array is a compile failure there), so the two
  * cannot drift apart. */
 export const DRAW_TYPES = [
   'round-robin',
   'single-elim',
-] as const satisfies readonly DrawType[]
+] as const satisfies readonly components['schemas']['DrawType'][]
+
+/** The runtime parser for a single draw-type slug — what the event form validates
+ * `drawType` with, so the form cannot accept a slug the catalogue parser would drop. */
+export const drawTypeSchema = z.enum(DRAW_TYPES)
+
+/** The draw types the API accepts — **exactly two**, and deliberately not a
+ * roadmap (ADR 20260726 "a draw type is a seeded row"): a member exists iff the
+ * server has a strategy that can plan it, so `double-elim`, `rr-then-ko` and
+ * `swiss` were removed from the API's enum and are a 422 at the boundary now.
+ *
+ * Inferred from `DRAW_TYPES` above rather than hand-written, and pinned to the
+ * generated `components['schemas']['DrawType']` by a compile-time assertion in
+ * `data/draw-types.test.ts` — so this cannot drift back into offering a director
+ * something the server would refuse. Re-exported from `./types` for the domain
+ * modules that read every tournament type from there. */
+export type DrawType = z.infer<typeof drawTypeSchema>
+
+/** One selectable draw format, **as the server sent it** — a `draw_types` row
+ * (`DrawTypeRead`) reduced to what a picker needs (ADR 20260726). `value` is the slug
+ * an event stores and sends as its `draw_type`; `label` is the server's own `name`, the
+ * only copy for it that exists anywhere.
+ *
+ * Shaped `value`/`label` rather than the wire's `key`/`name` so it *is* an option list:
+ * `labelFor` (`./options`) reads it, and `OptionSelect` renders it, exactly as they do
+ * the format and match-length lists. The client no longer authors one of these — they
+ * are parsed out of the tournament-detail payload by the parser below. */
+export interface DrawTypeOption {
+  value: DrawType
+  label: string
+}
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(DRAW_TYPES)
 

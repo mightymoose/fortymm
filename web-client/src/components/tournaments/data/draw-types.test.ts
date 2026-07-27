@@ -1,8 +1,10 @@
 import type { components } from '@/api/schema'
 
-import { eventSchema } from '../tournament-detail-page/event-form'
-import { DRAW_TYPES, parseDrawTypeCatalogue } from './draw-types'
-import type { DrawType } from './types'
+import {
+  DRAW_TYPES,
+  parseDrawTypeCatalogue,
+  type DrawType,
+} from './draw-types'
 
 /** One row of the served catalogue, in the wire's shape. Hand-written (not spread from
  * a domain fixture) because this is what the *parser* is fed — a plain JSON object off
@@ -24,29 +26,24 @@ const row = (over: Partial<Record<string, unknown>> = {}) => ({
  * now holds exactly the two that run, and the three that did not are a **422 at the
  * request boundary**.
  *
- * What survives on the client is a *vocabulary*, not an offer: the domain union, the
- * form's `z.enum`, and `DRAW_TYPES` (the runtime twin the catalogue parser filters
- * with). The labels are gone from all three — those are the server's now — but the set
- * of slugs still has to match `schema.d.ts`, and nothing but this file makes it. */
+ * What survives on the client is a *vocabulary*, not an offer, and it is declared
+ * **once**: `DRAW_TYPES` in `./draw-types`, with `drawTypeSchema` (the event form's
+ * validator), the `DrawType` union and the catalogue parser's filter all derived from
+ * it. The labels are gone — those are the server's now — but the set of slugs still has
+ * to match `schema.d.ts`, and nothing but this file makes it. */
 describe('the draw-type vocabulary (a contract with the API, not a menu)', () => {
   /** The generated enum, straight off `schema.d.ts` — never re-typed here, or the pin
    * would be two lists agreeing with each other rather than with the server. */
   type WireDrawType = components['schemas']['DrawType']
 
+  /** The pin that binds the whole vocabulary to the server. `DrawType` is inferred
+   * from `DRAW_TYPES`, so this fails if a member of the API's enum is *missing* from
+   * that array (a seeded row the picker would silently drop, and a slug the form would
+   * refuse); the array's own `satisfies` blocks the other direction, an *extra* slug
+   * the API would 422. One declaration, both directions covered. */
   it('is EXACTLY the API’s enum — no client-only member can exist', () => {
     expectTypeOf<DrawType>().toEqualTypeOf<WireDrawType>()
-  })
-
-  it('is the same set the event form will accept', () => {
-    type FormDrawType = ReturnType<typeof eventSchema.parse>['drawType']
-    expectTypeOf<FormDrawType>().toEqualTypeOf<WireDrawType>()
-  })
-
-  /** `DRAW_TYPES` is what the catalogue parser filters unknown keys with, so a member
-   * missing from it is a seeded row silently dropped from the picker. `satisfies`
-   * already blocks an *extra* slug at compile time; this pins the other direction. */
-  it('lists every member of the union, and nothing else', () => {
-    expectTypeOf<(typeof DRAW_TYPES)[number]>().toEqualTypeOf<WireDrawType>()
+    expectTypeOf<(typeof DRAW_TYPES)[number]>().toEqualTypeOf<DrawType>()
   })
 
   it('makes a draw type the server would 422 a compile error', () => {

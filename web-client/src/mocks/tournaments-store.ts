@@ -23,8 +23,9 @@ import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.facto
 import {
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  planDraw,
   planRoundRobinFixtures,
-  planSingleElimFixtures,
+  type DrawPlan,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   manualPlacementPin,
@@ -1513,24 +1514,12 @@ function drawTypeFrozenDetail(
   )
 }
 
-/** A planned draw, or the server's sentence for why this event cannot be cut as it
- * stands. One value, because the refusal and the plan are the same decision: a shape that
- * asked "is it refused?" and then, separately, "plan it" could answer *no* to the first
- * and still have nothing to deal for the second. */
-type DrawPlan =
-  | { ok: true; fixtures: TournamentFixtureRead[] }
-  | { ok: false; detail: string }
-
-/** Plan an event's draw, or say why it cannot be — the planner's 422s, in the server's
- * own words (`app/draws.py`), because for these the sentence IS the answer: it names the
- * thing the director has to change.
- *
- * **Exhaustive over `DrawType`, with no default arm.** Every member of the enum has a
- * server-side strategy by construction (ADR 20260726), so there is no "this type cannot
- * be cut" refusal left to make — and adding a member tomorrow is a *type error* here
- * until it is given a planner, rather than a mock that quietly refuses a draw the server
- * would have dealt. */
-function planDraw(event: StoredEvent): DrawPlan {
+/** Plan a stored event's draw, or say why it cannot be — the decision itself lives in
+ * `planDraw` (`mocks/factories/tournaments/tournament.factory.ts`), shared with the
+ * Playwright store so the two stubs cannot drift on which draws are refused or on the
+ * server's own sentences for refusing them. What is local here is only how a *stored*
+ * row is read into the planner's arguments. */
+function planEventDraw(event: StoredEvent): DrawPlan {
   // Entrants are ordered by SEED ascending where one is set, then by registration order
   // (ADR-0786) — the store lists them in registration order already, so this is a stable
   // sort that floats the seeded ones to the front. Nothing is random, so the same field
@@ -1538,52 +1527,11 @@ function planDraw(event: StoredEvent): DrawPlan {
   const ordered = [...event.entrants].sort(
     (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
   )
-  const entryIds = ordered.map((e) => e.id)
-
-  switch (event.draw_type) {
-    case 'round-robin': {
-      if (event.pools.length === 0) {
-        return { ok: false, detail: 'A round-robin draw needs at least one pool.' }
-      }
-      const poolIds = event.pools.map((p) => p.id)
-      const sizes = poolIds.map(
-        (_, poolIndex) =>
-          entryIds.filter((_entryId, index) => {
-            const row = Math.floor(index / poolIds.length)
-            const offset = index % poolIds.length
-            const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
-            return column === poolIndex
-          }).length,
-      )
-      // Asked of the DEALT pools, not of arithmetic on N and P — the refusal is about the
-      // pools the snake actually produced, and it names the numbers the director must
-      // change.
-      if (sizes.some((size) => size < 2)) {
-        return {
-          ok: false,
-          detail:
-            `${entryIds.length} entrants across ${poolIds.length} pool(s) would leave ` +
-            'a pool with fewer than 2 entrants, who would have nobody to play.',
-        }
-      }
-      return { ok: true, fixtures: planRoundRobinFixtures(entryIds, poolIds) }
-    }
-    case 'single-elim': {
-      // Round-robin's per-pool floor, one level up: a bracket of one has no fixtures and
-      // is not a competition. The event's POOLS are not consulted at all — a bracket is
-      // un-pooled, so a single-elim event with pools cuts perfectly well and a
-      // single-elim event with none is not refused, exactly as on the server.
-      if (entryIds.length < 2) {
-        return {
-          ok: false,
-          detail:
-            'A single-elimination draw needs at least 2 entrants — a bracket of ' +
-            'one has nobody to play.',
-        }
-      }
-      return { ok: true, fixtures: planSingleElimFixtures(entryIds) }
-    }
-  }
+  return planDraw(
+    event.draw_type,
+    ordered.map((e) => e.id),
+    event.pools.map((p) => p.id),
+  )
 }
 
 /** `POST …/events/{event_id}/draw` — cut (or re-cut) an event's draw.
@@ -1593,9 +1541,10 @@ function planDraw(event: StoredEvent): DrawPlan {
  * That is the point — a draw is a plan made against a field, and once the field has
  * changed the whole plan is re-made, pool sizes and seeding included.
  *
- * The 422s are the planner's (see `planDraw`), and they are the ones a director actually
- * meets: a round-robin with no pools, a pool the snake would leave with fewer than two
- * entrants, and a bracket of fewer than two. **There is no draw-TYPE refusal**: both
+ * The 422s are the planner's (see `planDraw` in the tournament factory, shared with the
+ * Playwright store), and they are the ones a director actually meets: a round-robin with
+ * no pools, a pool the snake would leave with fewer than two entrants, and a bracket of
+ * fewer than two. **There is no draw-TYPE refusal**: both
  * members of `DrawType` have a strategy on the server (ADR 20260726) and both have a
  * planner here, so a mock that still refused single-elim would be putting a sentence in
  * the server's mouth that it can no longer say — and would make a single-elim cut
@@ -1611,7 +1560,7 @@ export function cutDraw(tournamentId: string, eventId: string): CutDrawResult {
   if (drawHasPlay(event)) {
     return { ok: false, status: 409, detail: DRAW_UNDER_WAY_DETAIL }
   }
-  const plan = planDraw(event)
+  const plan = planEventDraw(event)
   if (!plan.ok) return { ok: false, status: 422, detail: plan.detail }
   const fixtures = plan.fixtures
   const next: StoredEvent = { ...event, fixtures }

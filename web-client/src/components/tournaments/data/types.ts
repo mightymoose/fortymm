@@ -6,6 +6,7 @@
 // here, but nothing crosses back at runtime.
 import type { MatchStatus } from '@/api/matches'
 
+import type { DrawType, DrawTypeOption } from './draw-types'
 import type { PredicateOp } from './options'
 import type { ScheduleSolve } from './solve'
 
@@ -13,29 +14,11 @@ export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 
 export type EventFormat = 'singles' | 'doubles' | 'teams'
 
-/** The draw types the API accepts — **exactly two**, and deliberately not a
- * roadmap (ADR 20260726 "a draw type is a seeded row"): a member exists iff the
- * server has a strategy that can plan it, so `double-elim`, `rr-then-ko` and
- * `swiss` were removed from the API's enum and are a 422 at the boundary now.
- *
- * Pinned to the generated `components['schemas']['DrawType']` by a compile-time
- * assertion in `data/draw-types.test.ts`, so this hand-written union cannot drift
- * back into offering a director something the server would refuse. */
-export type DrawType = 'single-elim' | 'round-robin'
-
-/** One selectable draw format, **as the server sent it** — a `draw_types` row
- * (`DrawTypeRead`) reduced to what a picker needs (ADR 20260726). `value` is the slug
- * an event stores and sends as its `draw_type`; `label` is the server's own `name`, the
- * only copy for it that exists anywhere.
- *
- * Shaped `value`/`label` rather than the wire's `key`/`name` so it *is* an option list:
- * `labelFor` (`./options`) reads it, and `OptionSelect` renders it, exactly as they do
- * the format and match-length lists. The client no longer authors one of these — they
- * are parsed out of the tournament-detail payload by `./draw-types`. */
-export interface DrawTypeOption {
-  value: DrawType
-  label: string
-}
+/** The draw-type vocabulary is declared **once**, next to its Zod schema and the
+ * catalogue parser (`./draw-types`), the way `./solve` declares its enums. Re-exported
+ * here so the domain modules that read every tournament type from `./types` keep doing
+ * so — there is no second declaration to drift. */
+export type { DrawType, DrawTypeOption }
 
 export type MatchLength = 1 | 3 | 5 | 7
 

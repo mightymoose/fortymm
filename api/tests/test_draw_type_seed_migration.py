@@ -10,9 +10,10 @@ holds only what runs" promises.
 The claim under test is the ADR's central one: **a row in ``draw_types`` means
 "this draw type has an implementation"**, so the ``key`` set a migrated database
 ends up with must equal ``{t.value for t in DrawType}`` — the closed set the code
-dispatches on. The seed lives in two hardcoded places (the migration, which by
-design cannot import app code, and ``conftest.DRAW_TYPE_SEED``) and nothing
-compared either to the enum until now.
+dispatches on. The seed is hardcoded in the migration, which by design cannot
+import app code (``conftest.DRAW_TYPE_SEED`` now reads it back out of that
+migration by path rather than re-typing it), and nothing compared it to the enum
+until now.
 
 **Where the database comes from.** Migrating the suite's own database would
 prove nothing — it is already fully built by ``create_all``, so ``upgrade head``

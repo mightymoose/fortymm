@@ -346,6 +346,30 @@ export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
   return runs
 }
 
+/** The **snake** (`api/app/draws.py`): which entrants each pool is dealt, row by row
+ * across the pools and reversing every other row, so the top seeds land one per pool and
+ * pool sizes differ by at most one. Returns one member list per pool, in `poolIds` order,
+ * each preserving draw order.
+ *
+ * ONE declaration of the arithmetic, because two callers want two different things from
+ * it and used to compute it twice: `planRoundRobinFixtures` below wants the *members* to
+ * pair, and `planDraw`'s round-robin refusal wants the *sizes* — and that refusal is
+ * asked of the pools the snake actually produced, never of arithmetic on N and P, because
+ * it is the dealt pool that would have a lone entrant in it. */
+function snakedPools(
+  entryIds: readonly string[],
+  poolCount: number,
+): string[][] {
+  const pools: string[][] = Array.from({ length: poolCount }, () => [])
+  entryIds.forEach((entryId, index) => {
+    const row = Math.floor(index / poolCount)
+    const offset = index % poolCount
+    const column = row % 2 === 0 ? offset : poolCount - 1 - offset
+    pools[column].push(entryId)
+  })
+  return pools
+}
+
 /**
  * Plan a **round-robin** draw the way the API plans one (`api/app/draws.py`): snake the
  * ordered entrants across the pools, then pair each pool by the circle method — every
@@ -377,15 +401,12 @@ export function planRoundRobinFixtures(
 ): TournamentFixtureRead[] {
   const fixtures: TournamentFixtureRead[] = []
   let counter = 0
+  const dealt = snakedPools(entryIds, poolIds.length)
 
   for (const [poolIndex, poolId] of poolIds.entries()) {
-    // The snake: row-by-row across the pools, reversing every other row.
-    const members = entryIds.filter((_, index) => {
-      const row = Math.floor(index / poolIds.length)
-      const offset = index % poolIds.length
-      const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
-      return column === poolIndex
-    })
+    // The snake (`snakedPools` above): row-by-row across the pools, reversing every
+    // other row.
+    const members = dealt[poolIndex]
 
     // The circle method: pin the first seat, rotate the rest one step per round, and
     // pair across the circle. An odd pool gets a phantom (`null`) seat — the entrant
@@ -570,6 +591,80 @@ export function planSingleElimFixtures(
     }
   }
   return fixtures
+}
+
+/** A planned draw, or the server's sentence for why this event cannot be cut as it
+ * stands. ONE value for both, because they are the same decision: split in two, a
+ * refusal check could answer "nothing wrong here" for a shape the planner then has
+ * nothing to deal for. */
+export type DrawPlan =
+  | { ok: true; fixtures: TournamentFixtureRead[] }
+  | { ok: false; detail: string }
+
+/**
+ * Plan an event's draw exactly as the cut route does, or say why it cannot be — the
+ * planner's 422s, in the server's own words (`app/draws.py`), because for these the
+ * sentence IS the answer: it names the thing the director has to change.
+ *
+ * **One implementation for both stubs.** The MSW store (`src/mocks/tournaments-store.ts`)
+ * and the Playwright store (`e2e/page-objects/tournaments/tournaments-store.ts`) mirror
+ * each other on purpose, but this decision — which refusals exist, and the three
+ * server-authored sentences that carry them — is not a thing for them to mirror: two
+ * copies is two chances for a spec to be green against words the API never says. Each
+ * store still owns its own entrant ordering (it reads its own row shape) and hands the
+ * result in.
+ *
+ * `entryIds` arrive in **draw order** — seed ascending where one is set, then
+ * registration order (ADR-0786) — because that is the list the API's planner is handed.
+ *
+ * **Exhaustive over `DrawType`, with no default arm.** Every member of the enum has a
+ * server-side strategy by construction (ADR 20260726), so there is no "this type cannot
+ * be cut" refusal left to make — and adding a member tomorrow is a *type error* here
+ * until it is given a planner, rather than a stub that quietly refuses a draw the server
+ * would have dealt. Living in `src`, this `switch` is genuinely checked by `tsc -b`;
+ * the copy that used to sit in `e2e/` was not (`tsconfig.app.json` covers only `src`),
+ * which is the other reason there is one of these now.
+ */
+export function planDraw(
+  drawType: components['schemas']['DrawType'],
+  entryIds: readonly string[],
+  poolIds: readonly string[],
+): DrawPlan {
+  switch (drawType) {
+    case 'round-robin': {
+      if (poolIds.length === 0) {
+        return { ok: false, detail: 'A round-robin draw needs at least one pool.' }
+      }
+      // Asked of the DEALT pools, not of arithmetic on N and P — the refusal is about
+      // the pools the snake actually produced, and it names the numbers the director
+      // must change.
+      const dealt = snakedPools(entryIds, poolIds.length)
+      if (dealt.some((pool) => pool.length < 2)) {
+        return {
+          ok: false,
+          detail:
+            `${entryIds.length} entrants across ${poolIds.length} pool(s) would leave ` +
+            'a pool with fewer than 2 entrants, who would have nobody to play.',
+        }
+      }
+      return { ok: true, fixtures: planRoundRobinFixtures(entryIds, poolIds) }
+    }
+    case 'single-elim': {
+      // Round-robin's per-pool floor, one level up: a bracket of one has no fixtures and
+      // is not a competition. The event's POOLS are not consulted at all — a bracket is
+      // un-pooled, so a single-elim event with pools cuts perfectly well and a
+      // single-elim event with none is not refused, exactly as on the server.
+      if (entryIds.length < 2) {
+        return {
+          ok: false,
+          detail:
+            'A single-elimination draw needs at least 2 entrants — a bracket of ' +
+            'one has nobody to play.',
+        }
+      }
+      return { ok: true, fixtures: planSingleElimFixtures(entryIds) }
+    }
+  }
 }
 
 /** One wire standings row (`StandingRowRead`, ADR-0788): entry `entry-1`, 1st, a clean

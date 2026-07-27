@@ -78,11 +78,14 @@ class TournamentEventDrawSettings(Base):
     def for_draw_type(cls, draw_type: DrawType) -> "TournamentEventDrawSettings":
         """Build the settings row for ``draw_type``.
 
-        The ONE place a :class:`DrawType` member becomes the persisted slug, so
-        every construction site names the draw type once and no site can invent a
-        key the reference table has never heard of.
+        The create path's door onto the ``draw_type`` setter below, which is the
+        ONE place a :class:`DrawType` member becomes the persisted slug — so every
+        construction site names the draw type once and no site can invent a key the
+        reference table has never heard of.
         """
-        return cls(draw_type_key=draw_type.value)
+        settings = cls()
+        settings.draw_type = draw_type
+        return settings
 
     @property
     def draw_type(self) -> DrawType:
@@ -95,3 +98,16 @@ class TournamentEventDrawSettings(Base):
         they ever stop agreeing.
         """
         return DrawType(self.draw_type_key)
+
+    @draw_type.setter
+    def draw_type(self, draw_type: DrawType) -> None:
+        """The ONE place a :class:`DrawType` member becomes the persisted slug.
+
+        Both writers go through here — ``for_draw_type`` above at create, and
+        ``app.tournament_events.update_event`` at edit. Without a setter the edit
+        path had to reach past the property and write
+        ``draw_settings.draw_type_key = draw_type.value`` itself, which gave
+        enum→slug conversion a second home to drift in and made the "ONE place"
+        claim above false.
+        """
+        self.draw_type_key = draw_type.value

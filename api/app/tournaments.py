@@ -12,7 +12,6 @@ from app.draws import (
     DegenerateDraw,
     DrawError,
     NonSinglesDraw,
-    UnsupportedDrawType,
 )
 from app.geocoding import AddressNotGeocodableError, Geocoder
 from app.geocoding.dependencies import get_geocoder
@@ -986,8 +985,8 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     """The 422 for a draw the domain will not produce — in words a director can read.
 
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
-    a competition (``DegenerateDraw``) or is not a format we can cut yet
-    (``UnsupportedDrawType``). So it is a 422 — the request is well-formed and
+    a competition (``DegenerateDraw``) or is not a shape a fixture can seat
+    (``NonSinglesDraw``). So it is a 422 — the request is well-formed and
     authorized, but its *content* (this event's pools, this event's field, this event's
     draw type) cannot be turned into a draw — rather than the 500 an uncaught exception
     would be, and rather than a 409, which would invite a retry that will fail
@@ -995,14 +994,10 @@ def _draw_refusal(error: DrawError) -> HTTPException:
 
     A ``match`` over the error, not ``str(error)`` over whatever arrives:
 
-    * ``UnsupportedDrawType`` carries the ``draw_type`` **structurally**, so the
-      sentence is composed here from the fact rather than parsed out of a message. Its
-      own ``str()`` ("… is not supported here yet") is written for the developer; the
-      director needs to be told which of *their* events cannot be cut, and that the
-      rest of the tournament is unaffected. (No cut can raise it today —
-      ``strategy_for`` is total now the enum holds only what runs — but it remains a
-      ``DrawError``, so the arm stays rather than letting a future raiser fall through
-      to the generic sentence.)
+    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
+      is composed here from the fact rather than parsed out of a message written for a
+      developer — the director needs to be told which of *their* events cannot be cut,
+      and that the rest of the tournament is unaffected.
     * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
       it is passed through on purpose: only the strategy knows *which* degeneracy it hit
       — no pools at all, or a snake that would leave some pool with one player and
@@ -1017,15 +1012,9 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       same way ``_registration_refusal_detail`` buys its totality.)
     """
     match error:
-        case UnsupportedDrawType():
-            detail = (
-                f"A {error.draw_type.value} draw cannot be cut yet. "
-                "Change the event's draw type to one that can, or wait for support."
-            )
         case NonSinglesDraw():
-            # Composed from the structural ``event_format``, like
-            # ``UnsupportedDrawType`` above: a doubles/teams event can never be cut in
-            # any state (an entry is
+            # Composed from the structural ``event_format``: a doubles/teams event can
+            # never be cut in any state (an entry is
             # one row per player, with nowhere to record a partner or a team, ADR-0788),
             # so a director is told which event is un-drawable and why — a permanent
             # fact, not a retryable one.

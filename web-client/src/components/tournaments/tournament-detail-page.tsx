@@ -91,12 +91,14 @@ export const TournamentDetailPage = ({
     .filter((t): t is TournamentTable => t !== undefined)
 
   const canEdit = tournament.canEdit
-  // The draw formats this server can run, as it sent them (ADR 20260726). **This is the
-  // one place the "no catalogue" case is decided**, because this is where the payload
-  // lands: `null` means the tournament reached this page without one (the list route
-  // withholds it; a never-fetched draft has none), and the surfaces below are handed an
-  // empty catalogue rather than a nullable one. They then offer no draw type and label
-  // none — never the raw slug — instead of every renderer re-deciding the same thing.
+  // The draw formats this server can run, as it sent them (ADR 20260726), for the
+  // surfaces that do NOT get the tournament itself. `EventEditor` takes an `event`, not
+  // a tournament, so the catalogue has to be threaded to it — and the "no catalogue"
+  // case is decided here, where the payload lands: `null` means the tournament reached
+  // this page without one (the list route withholds it; a never-fetched draft has
+  // none), so the editor is handed an empty catalogue rather than a nullable one and
+  // offers no draw type instead of re-deciding the same thing. The Events tab is handed
+  // the whole `tournament` and reads the catalogue off it — one fact, one prop.
   const drawTypes = tournament.drawTypes ?? []
   const range = effectiveDateRange(tournament)
   const days = daysBetween(range.start, range.end)
@@ -266,7 +268,6 @@ export const TournamentDetailPage = ({
             <EventsTab
               tournament={tournament}
               canEdit={canEdit}
-              drawTypes={drawTypes}
               onOpenEvent={openEvent}
               onNewEvent={openNewEvent}
             />
