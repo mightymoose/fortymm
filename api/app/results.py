@@ -8,7 +8,7 @@ draw type — a round-robin's result is its **standings** table, a single-elim's
 placement and a **champion** — so a single shared method on ``DrawStrategy`` would
 force every draw type to implement a table it does not have (ADR-0788, "results are a
 separate strategy family"). ``results_for(draw_type)`` mirrors ``strategy_for``'s
-exhaustive ``match`` / ``UnsupportedResultsType``, so a new
+exhaustive, catch-all-free ``match``, so a new
 :class:`~app.models.tournament.DrawType` is a type error here until somebody says how
 it reads out.
 
@@ -35,20 +35,6 @@ from dataclasses import dataclass
 
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
-
-
-class UnsupportedResultsType(Exception):
-    """This draw type has no results strategy yet.
-
-    Raised by :func:`results_for`, whose ``match`` is exhaustive with no catch-all —
-    so a new :class:`~app.models.tournament.DrawType` member is a *type* error until it
-    is handled here, and a member handled-but-unimplemented is a catchable domain error
-    rather than a 500. The exact mirror of ``app.draws.UnsupportedDrawType``.
-    """
-
-    def __init__(self, draw_type: DrawType) -> None:
-        self.draw_type = draw_type
-        super().__init__(f"Draw type {draw_type.value!r} has no results strategy yet.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +136,8 @@ class EventResults:
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
-    knockout stage to join its pool winners (that is ``rr_then_ko``, not this slice), so
+    knockout stage to join its pool winners (that is a round-robin-then-knockout draw
+    type, which does not exist yet — not this slice), so
     ``champion`` is ``None`` there even when the event is complete. ``None`` also while
     any fixture is still to be played.
     """
@@ -241,28 +228,24 @@ _TIEBREAKERS: tuple[Callable[[_Stat], int], ...] = (
 def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
     """The results strategy for this draw type.
 
-    An exhaustive ``match`` with **no catch-all**, exactly as
-    ``app.draws.strategy_for``: adding a member to
-    :class:`~app.models.tournament.DrawType` makes this fail to type-check until the
-    member is handled, so a new format cannot read out its results silently
-    unimplemented. The formats without a strategy yet raise
-    :class:`UnsupportedResultsType` — a catchable domain error, not a 500.
+    **Total**, exactly as ``app.draws.strategy_for``: an exhaustive ``match`` with
+    **no catch-all** over an enum that holds only what runs (ADR "a draw type is a
+    seeded row, and the enum holds only what runs"), so every member reads out and
+    adding one fails to type-check here until it says how. There is no
+    "unsupported results type" error, because no input can reach one.
 
     The return type is a **union tagged by shape** (ADR-0785): round-robin's
     :class:`RoundRobinResults` reads out a **standings** table, single-elim's
     :class:`SingleElimResults` reads out the bracket's **finishes**. A caller narrows
     the union (an exhaustive ``match`` over the two concrete strategies) to call the
     right ``tabulate`` — so a third strategy is a type error at every call site until
-    handled. A further draw type lands its own strategy and widens this the way
-    ``strategy_for`` already is.
+    handled. A further draw type lands its own strategy and widens this union.
     """
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinResults()
         case DrawType.single_elim:
             return SingleElimResults()
-        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
-            raise UnsupportedResultsType(draw_type)
 
 
 @dataclass(frozen=True, slots=True)

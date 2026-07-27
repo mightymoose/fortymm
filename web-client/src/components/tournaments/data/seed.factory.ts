@@ -3,9 +3,13 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
+import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
+
+import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import type {
   Address,
+  DrawTypeOption,
   Entrant,
   EventEntryState,
   FinishesResults,
@@ -135,7 +139,10 @@ export function buildEvent(
     id: 'ev-open-singles',
     name: 'Open Singles',
     format: 'singles',
-    drawType: 'rr-then-ko',
+    // Round-robin, and pooled to match — see the wire-side twin in
+    // `mocks/factories/tournaments/tournament.factory.ts`. `DrawType` holds only the two
+    // types the server can plan (ADR 20260726).
+    drawType: 'round-robin',
     maxPlayers: 64,
     entryFee: 45,
     timezone: 'America/Chicago',
@@ -632,6 +639,27 @@ export function buildStandingsEvent(
   })
 }
 
+/** The draw-type catalogue **as the server serves it** (ADR 20260726): both seeded
+ * rows, labelled with the migration's copy, in `display_order` — round robin first.
+ *
+ * A fixture of a *response*, not a menu this client authors. The labels are therefore
+ * NOT written here: they are the server's seed copy, which lives verbatim in
+ * `DRAW_TYPE_CATALOGUE` (`src/mocks/factories/tournaments/tournament.factory.ts`,
+ * itself a copy of the migration's `DRAW_TYPE_SEED`) — so a component test's picker
+ * holds the words a director really sees, from one place. Run through the real
+ * `parseDrawTypeCatalogue`, so this fixture is a *parsed* payload rather than an
+ * option list assembled by hand, and the parser is exercised on the way (the `?? []`
+ * is unreachable — the parser answers `null` only for a nullish catalogue, and
+ * `DRAW_TYPE_CATALOGUE` is an array).
+ *
+ * ⚠️ Never assert the picker's contents against **this** fixture alone — that is a
+ * mock agreeing with itself. The claim worth proving is that the picker follows
+ * *whatever* catalogue arrives, which is what the hand-written catalogues in
+ * `basics-section.test.tsx` exercise. */
+export function buildDrawTypes(): DrawTypeOption[] {
+  return parseDrawTypeCatalogue(DRAW_TYPE_CATALOGUE) ?? []
+}
+
 /** The published "Bay Area Open 2026" with a single Open Singles event. */
 export function buildTournament(
   overrides: Partial<Tournament> = {},
@@ -654,6 +682,9 @@ export function buildTournament(
     // NO SOLVE YET — the designed state every tournament is born in. A fixture that
     // wants a row on the strip passes a `buildScheduleSolve()` override.
     latestScheduleSolve: null,
+    // The DETAIL payload's catalogue, because this builds a tournament as a page holds
+    // one. A list-row fixture passes `drawTypes: null` — the shape that route sends.
+    drawTypes: buildDrawTypes(),
     ...overrides,
   }
 }

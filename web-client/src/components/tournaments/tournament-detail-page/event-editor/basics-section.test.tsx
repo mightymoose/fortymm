@@ -6,6 +6,101 @@ import { buildDrawnEvent, buildEvent } from '../../data/seed.factory'
 import { basicsSectionPage } from './basics-section.page'
 
 describe('BasicsSection', () => {
+  /**
+   * ADR 20260726: the draw types a director is offered are **the rows the server sent**
+   * (`draw_type_catalogue`), not a list this client keeps. `DRAW_TYPE_OPTIONS` — two
+   * hardcoded entries with copy of their own — is deleted, and this is what replaces
+   * the pin that used to guard it.
+   *
+   * ⚠️ These tests deliberately do NOT assert "the picker offers Round robin and Single
+   * elimination". That passes just as happily against a hardcoded list, and would have
+   * proved nothing about where the options came from. Each one hands the section a
+   * catalogue that **differs from the seed** — renamed, reordered, or one row short —
+   * and asserts the picker followed it.
+   */
+  describe('the draw-type picker (the rows the server sent)', () => {
+    it('offers the served options, labelled and ordered as the server sent them', async () => {
+      // Neither the seeded labels nor the seeded order — and not alphabetical either,
+      // so a picker sorting on its own would fail too.
+      basicsSectionPage.render({
+        drawTypes: [
+          { value: 'single-elim', label: 'Knockout bracket' },
+          { value: 'round-robin', label: 'Everyone plays everyone' },
+        ],
+      })
+
+      expect(await basicsSectionPage.openDrawTypeOptions()).toEqual([
+        'Knockout bracket',
+        'Everyone plays everyone',
+      ])
+    })
+
+    /** The point of serving the catalogue: a format the server does not offer cannot be
+     * chosen. Withhold single-elim and the bracket is simply not on the menu — the
+     * director never gets to click it and meet a 422 four steps later. */
+    it('cannot offer a draw type the server withheld', async () => {
+      basicsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin' }),
+        drawTypes: [{ value: 'round-robin', label: 'Round robin' }],
+      })
+
+      expect(await basicsSectionPage.openDrawTypeOptions()).toEqual([
+        'Round robin',
+      ])
+      expect(screen.queryByRole('option', { name: /elimination/i })).toBeNull()
+    })
+
+    /** The label is the server's; the **wire value is still the slug**. Picking an
+     * option whose words the server chose must still emit `draw_type: 'single-elim'`,
+     * or the catalogue would have bought a menu and lost a payload. */
+    it('emits the slug, whatever the server calls it', async () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin' }),
+        drawTypes: [
+          { value: 'round-robin', label: 'Everyone plays everyone' },
+          { value: 'single-elim', label: 'Knockout bracket' },
+        ],
+        onChange,
+      })
+
+      await basicsSectionPage.chooseDrawType('Knockout bracket')
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ drawType: 'single-elim' }),
+      )
+    })
+
+    /** The read-only half reads the same catalogue as the picker (ADR-0015: a viewer
+     * gets a value, never a disabled control). Rename the row and the *viewer's* words
+     * change with it — proof the two halves are one lookup, not two copies. */
+    it('reads a viewer the served label for the stored slug', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ drawType: 'single-elim' }),
+        drawTypes: [{ value: 'single-elim', label: 'Knockout bracket' }],
+        canEdit: false,
+      })
+
+      expect(basicsSectionPage.getFieldValue('Draw type')).toHaveTextContent(
+        'Knockout bracket',
+      )
+    })
+
+    /** No catalogue reached this surface. The row must not fall back to the stored
+     * slug — an enum key is not a thing anyone reads, and `round-robin` on screen is
+     * exactly the defect `labelFor` exists to prevent. An em-dash says "unknown". */
+    it('never falls back to the raw slug when the catalogue is missing', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin' }),
+        drawTypes: [],
+        canEdit: false,
+      })
+
+      expect(basicsSectionPage.getFieldValue('Draw type')).toHaveTextContent('—')
+      expect(screen.queryByText('round-robin')).toBeNull()
+    })
+  })
+
   // ADR-0786: the draw type is the strategy that DEALT the event's fixtures, so once a
   // draw exists it is frozen (the server 409s a change). The editor declines to build
   // that change — and says why, and how to undo the block, because a director who is
@@ -282,7 +377,7 @@ describe('BasicsSection', () => {
         event: buildEvent({
           name: 'Open Singles',
           format: 'doubles',
-          drawType: 'rr-then-ko',
+          drawType: 'single-elim',
           maxPlayers: 64,
           entryFee: 45,
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
@@ -298,7 +393,7 @@ describe('BasicsSection', () => {
         'Doubles',
       )
       expect(basicsSectionPage.getFieldValue('Draw type')).toHaveTextContent(
-        'RR → KO',
+        'Single elimination',
       )
       expect(basicsSectionPage.getFieldValue('Player limit')).toHaveTextContent(
         '64',

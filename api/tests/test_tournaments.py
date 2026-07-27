@@ -51,6 +51,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -156,7 +157,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": "Open Singles",
         "format": "singles",
-        "draw_type": "rr-then-ko",
+        "draw_type": "single-elim",
         "max_players": 64,
         "entry_fee": 45,
         "timezone": "America/Chicago",
@@ -657,7 +658,7 @@ async def test_create_event_round_trips_jsonb(
     assert body["name"] == "Open Singles"
     # Enum wire values keep the hyphenated prototype strings.
     assert body["format"] == "singles"
-    assert body["draw_type"] == "rr-then-ko"
+    assert body["draw_type"] == "single-elim"
     assert body["max_players"] == 64
     # entry_fee is emitted as a JSON number, not a Decimal string.
     assert body["entry_fee"] == 45
@@ -1168,7 +1169,7 @@ async def test_event_negative_entry_fee_violates_db_check(
         tournament_id=uuid.UUID(created["id"]),
         name="Bad Fee",
         format=EventFormat.singles,
-        draw_type=DrawType.single_elim,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
         max_players=8,
         entry_fee=-1,
         timezone="America/Chicago",
@@ -1196,7 +1197,7 @@ async def test_detail_lists_created_event(
 
     detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
     assert [e["id"] for e in detail["events"]] == [event["id"]]
-    assert detail["events"][0]["draw_type"] == "rr-then-ko"
+    assert detail["events"][0]["draw_type"] == "single-elim"
 
 
 async def test_patch_event_by_creator_updates_jsonb(
@@ -4173,15 +4174,163 @@ async def test_the_list_and_the_detail_agree_about_an_entrants_rating(
     assert listed_event["entrants"] == detail_event["entrants"]
 
 
+# ----- the draw-type catalogue on the detail payload -------------------------
+#
+# The tournament page's event form offers a draw format, and the options it offers are
+# the ``draw_types`` ROWS — served here, not hardcoded in the client (ADR "a draw type
+# is a seeded row, and the enum holds only what runs", section "the catalogue is served,
+# not hardcoded"). What makes that design real rather than nominal is the pair of tests
+# below that change the TABLE and watch the payload follow: without them, a refactor
+# that quietly re-derived the list from the ``DrawType`` enum — or hardcoded the copy in
+# Python beside it — would pass every other assertion in this file.
+
+
+async def _catalogue_of(
+    client: AsyncClient, tournament_id: str
+) -> list[dict[str, Any]]:
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    catalogue: list[dict[str, Any]] = response.json()["draw_type_catalogue"]
+    return catalogue
+
+
+async def test_the_detail_payload_carries_the_seeded_draw_types_in_display_order(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """A client loading a tournament is handed the draw formats it may offer — every
+    seeded one, in ``display_order``, each with the copy to render it.
+
+    Order is asserted as a list, not a set: a picker whose options move between two
+    loads is a real defect, and the round-robin/single-elim sequence is the one the seed
+    states."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [row["key"] for row in catalogue] == ["round-robin", "single-elim"]
+    assert [row["display_order"] for row in catalogue] == sorted(
+        row["display_order"] for row in catalogue
+    )
+    # Every option is renderable: a label and the sentence explaining the trade-off. An
+    # option with a blank name is a radio button with no words next to it.
+    assert all(row["name"].strip() for row in catalogue), catalogue
+    assert all(row["description"].strip() for row in catalogue), catalogue
+
+
+async def test_the_draw_type_catalogue_is_the_table_not_the_draw_type_enum(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**The test that makes the design structural.** Delete a ``draw_types`` row and
+    the payload loses that option — because the payload is a read of the table.
+
+    A catalogue derived from the ``DrawType`` enum instead would answer both formats
+    here, which is why the enum is asserted to still hold both: the two sources are the
+    same set in every other test in the suite, so this is the only arrangement in which
+    "reads the table" and "iterates the enum" give different answers. If a future
+    refactor swaps one for the other, this is what reds.
+
+    The event is a ROUND-ROBIN one so the row being deleted is unreferenced — the FK is
+    ``ON DELETE RESTRICT`` and would otherwise refuse (see
+    ``test_a_seeded_draw_type_cannot_be_deleted_while_an_event_uses_it``)."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(draw_type="round-robin")
+    )
+
+    await db_session.execute(text("DELETE FROM draw_types WHERE key = 'single-elim'"))
+    await db_session.commit()
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [row["key"] for row in catalogue] == ["round-robin"]
+    # And the enum still holds both, so "it followed the table" is the only reading of
+    # the assertion above.
+    assert {t.value for t in DrawType} == {"round-robin", "single-elim"}
+
+
+async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The other half of the same claim: the label, the help text and the order a client
+    renders all come off the row, so a copy change is a seed change and nothing else.
+
+    Rewriting the two rows swaps their order and their words; a catalogue assembled from
+    a Python dict of labels keyed by enum member would answer the old copy in the old
+    order, whatever the table says."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+    await db_session.execute(
+        text(
+            "UPDATE draw_types SET name = 'Knockout', "
+            "description = 'Lose once and you are out.', display_order = 1 "
+            "WHERE key = 'single-elim'"
+        )
+    )
+    await db_session.execute(
+        text(
+            "UPDATE draw_types SET name = 'Everybody plays everybody', "
+            "description = 'One pool, every pairing.', display_order = 2 "
+            "WHERE key = 'round-robin'"
+        )
+    )
+    await db_session.commit()
+    # A test artefact, not the subject: the request runs on THIS session (conftest
+    # overrides ``get_session`` with it) and the sessionmaker is ``expire_on_commit=
+    # False``, so the seed fixture's instances would still be sitting in the identity
+    # map with their old copy — a real request gets a fresh session and reads the row.
+    # Without this the assertion below would measure SQLAlchemy's cache, not the table:
+    # the ORDER BY would come back reordered (that is computed in SQL) while the names
+    # stayed stale, which is precisely the confusing half-right failure to avoid.
+    db_session.expire_all()
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [(row["key"], row["name"], row["description"]) for row in catalogue] == [
+        ("single-elim", "Knockout", "Lose once and you are out."),
+        ("round-robin", "Everybody plays everybody", "One pool, every pairing."),
+    ]
+
+
+async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """``null``, not a copy per card: the list renders no event form, so it does not pay
+    a query to repeat one global catalogue on every tournament it returns.
+
+    This is the payload-level statement of what ``EXPECTED_TOURNAMENT_LIST_STATEMENTS``
+    pins numerically — the two together are what keep the catalogue a detail-BFF
+    concern."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+
+    rows = (await client.get("/v1/tournaments")).json()
+
+    listed = next(row for row in rows if row["id"] == tournament_id)
+    assert listed["draw_type_catalogue"] is None
+    # And the detail read of the very same tournament does carry it, so this is a
+    # decision about the LIST and not a feature that quietly stopped working.
+    assert await _catalogue_of(client, tournament_id)
+
+
 # The pin, measured: the tournament + username join, its events, ONE batched load of
 # those events' active entrants (their ratings on the tournament's ladder ride along on
 # that same statement — see ``active_entrants_by_event``), ONE batched load of those
 # events' fixtures — their draws (ADR-0786) — ONE read of the caller's rating on the
-# tournament's league, and ONE read of the newest solve-ledger row (the Schedule tab's
-# solve strip, ADR "the schedule is solved, the call is pinned"). Six, whatever the
-# number of events, whatever the number of entrants in them, whatever the size of
-# their draws, and whatever the length of the day's solve ledger.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 6
+# tournament's league, ONE read of the newest solve-ledger row (the Schedule tab's
+# solve strip, ADR "the schedule is solved, the call is pinned"), and ONE read of the
+# ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
+# seeded row, and the enum holds only what runs"). Seven, whatever the number of
+# events, whatever the number of entrants in them, whatever the size of their draws,
+# and whatever the length of the day's solve ledger.
+#
+# It was six until the catalogue landed, and the seventh is deliberate: the catalogue
+# is global reference data with nothing to key off the page, so it is one flat read
+# that does not grow with anything — which is exactly what the parametrized cases
+# below check by measuring the same number at one event and at four.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 7
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4335,7 +4484,7 @@ async def test_an_events_draw_comes_back_in_pool_round_position_order(
     in the right order could not tell the two apart, and would pass against a read with
     no ORDER BY at all.
 
-    The un-pooled fixture (``pool_id`` NULL — the KO stage of this rr-then-ko event)
+    The un-pooled fixture (``pool_id`` NULL — as a knockout stage's fixtures are)
     sorts LAST, after the pools that feed it. NULL is a real value in this domain ("this
     fixture belongs to no pool"), not a missing one, so it has a defined place in the
     order rather than an incidental one.
@@ -4631,12 +4780,12 @@ POOL_B: dict[str, Any] = {
 
 
 def _rr_payload(*pools: dict[str, Any], **overrides: Any) -> dict[str, Any]:
-    """A **round-robin** event over ``pools`` — the one draw type that has a strategy
-    today (ADR-0786). The shared ``_event_payload`` is deliberately an ``rr-then-ko``,
-    which has none, so a draw test that used it would be testing the 422.
+    """A **round-robin** event over ``pools`` — the pooled draw type (ADR-0786). The
+    shared ``_event_payload`` is deliberately a ``single-elim``, which is un-pooled, so
+    a pooled-draw test that used it would be testing the wrong shape.
 
-    ``draw_type`` is overridable (the unimplemented-type tests need exactly this event
-    with a different generator on it), so it goes through ``overrides``."""
+    ``draw_type`` is overridable (a test may want exactly this event with a different
+    generator on it), so it goes through ``overrides``."""
     return _event_payload(
         **{"draw_type": "round-robin", "pools": list(pools), **overrides}
     )
@@ -5169,36 +5318,44 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
 
 
 @pytest.mark.parametrize("draw_type", ["double-elim", "rr-then-ko", "swiss"])
-async def test_cutting_an_unimplemented_draw_type_is_422(
+async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_boundary(
     authed_client: tuple[AsyncClient, User],
-    db_session: AsyncSession,
     draw_type: str,
 ) -> None:
-    """Round-robin and single-elim have strategies today (ADR-0786, ADR-0785); these
-    three remain enum stubs — a designed 422 that NAMES the draw type, not a 500
-    from an unhandled exception, and not an empty draw the director would have to notice
-    was empty.
+    """An unimplemented draw type is refused by REQUEST VALIDATION, at create — not
+    accepted and refused later at cut time (ADR "a draw type is a seeded row, and the
+    enum holds only what runs").
 
-    422, because the request is well-formed and authorized: it is this event's *content*
-    — the draw type it was configured with — that cannot become a draw. Nothing is
-    written, and the field is left alone.
+    This is the ticket's actual complaint (#1086) fixed at the layer that made it. It
+    used to be ``test_cutting_an_unimplemented_draw_type_is_422``: a director could
+    configure a ``swiss`` event, enter a field, and only discover it was never possible
+    at the moment they cut the draw. ``DrawType`` now holds exactly the two types that
+    run, so Pydantic rejects the slug at the edge with a 422 that NAMES the valid
+    values, no custom validator required — and no event row is written at all.
+
+    The parametrized subjects are deliberately the three ex-members: they are the
+    values a stale client (or a stale hardcoded picker) would still send.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B, draw_type=draw_type)
-    )
-    await _seed_field(db_session, event["id"], 4)
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
-    response = await client.post(_draw_url(tournament_id, event["id"]))
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_rr_payload(POOL_A, POOL_B, draw_type=draw_type),
+    )
 
     assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert draw_type in detail, detail
-    # The sentence is for the director, and it says what to do about it. It is NOT the
-    # exception's own ("… is not implemented yet"), which is written for the developer
-    # who has to go implement it.
-    assert "cannot be cut yet" in detail, detail
-    assert await _fixture_rows(db_session, event["id"]) == []
+    body = response.json()
+    (error,) = [e for e in body["detail"] if e["loc"][-1] == "draw_type"]
+    # The 422 names the two slugs that run, and nothing else — a client reading it
+    # learns exactly what it may send.
+    assert set(error["ctx"]["expected"].replace("'", "").split(" or ")) == {
+        "round-robin",
+        "single-elim",
+    }, error
+    # Refused at the boundary means refused before persistence: no event exists.
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert detail["events"] == []
 
 
 @pytest.mark.parametrize("event_format", ["doubles", "teams"])
@@ -6347,15 +6504,21 @@ async def test_patching_a_table_catalogue_with_an_empty_table_id_is_refused(
 
 
 async def _draw_type_of(db_session: AsyncSession, event_id: str) -> DrawType:
-    """The event's ``draw_type``, read straight from the column — never from a response
-    body, and never from an ORM instance the test session may be holding stale."""
-    return (
+    """The event's draw type, read straight from the ``tournament_event_draw_settings``
+    row it points at — the one place that fact is stored (ADR "an event's draw
+    configuration is a row, not a column"). Never from a response body, and never from
+    an ORM instance the test session may be holding stale."""
+    key = (
         await db_session.execute(
-            select(TournamentEvent.draw_type).where(
-                TournamentEvent.id == uuid.UUID(event_id)
+            select(TournamentEventDrawSettings.draw_type_key)
+            .join(
+                TournamentEvent,
+                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
             )
+            .where(TournamentEvent.id == uuid.UUID(event_id))
         )
     ).scalar_one()
+    return DrawType(key)
 
 
 async def test_a_cut_draw_freezes_the_draw_type(
@@ -6417,12 +6580,15 @@ async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_
     assert response.status_code == 409, response.text
     stored = (
         await db_session.execute(
-            select(TournamentEvent.name, TournamentEvent.draw_type).where(
-                TournamentEvent.id == uuid.UUID(event["id"])
+            select(TournamentEvent.name, TournamentEventDrawSettings.draw_type_key)
+            .join(
+                TournamentEventDrawSettings,
+                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
             )
+            .where(TournamentEvent.id == uuid.UUID(event["id"]))
         )
     ).one()
-    assert stored == (event["name"], DrawType.round_robin)
+    assert stored == (event["name"], DrawType.round_robin.value)
 
 
 async def test_an_undrawn_event_still_changes_its_draw_type(

@@ -24,6 +24,7 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
+    from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_fixture import TournamentFixture
 
 
@@ -41,14 +42,26 @@ class EventFormat(enum.Enum):
 
 
 class DrawType(enum.Enum):
-    # Member names use underscores; the persisted *values* keep the hyphenated
-    # wire strings from the front-end prototype (values_callable on the column
-    # makes Postgres store the value, not the member name).
+    # The draw types that RUN — nothing else (ADR "a draw type is a seeded row, and the
+    # enum holds only what runs"). A member exists here if and only if
+    # ``app.draws.strategy_for`` dispatches it to a strategy and
+    # ``app.results.results_for`` reads it back out. That is what makes an unimplemented
+    # draw type a 422 at the REQUEST BOUNDARY, named by Pydantic with the valid values,
+    # rather than an event a director configures, enters players into, and only
+    # discovers is impossible at the moment they cut it. Adding a format is a member
+    # *plus* its strategies: the exhaustive ``match`` at every dispatch site is a type
+    # error until all of them are written.
+    #
+    # No docstring on purpose: Pydantic emits an enum's ``__doc__`` as the OpenAPI
+    # ``description``, so prose here would cross the wire into both generated clients.
+    #
+    # Member names use underscores; the *values* keep the hyphenated wire strings
+    # from the front-end prototype. They are no longer a Postgres enum: a draw type
+    # is persisted as the ``draw_types.key`` slug on an event's settings row, so
+    # these values are that table's primary keys (a migration test asserts the two
+    # agree) as well as the JSON the clients send.
     single_elim = "single-elim"
-    double_elim = "double-elim"
     round_robin = "round-robin"
-    rr_then_ko = "rr-then-ko"
-    swiss = "swiss"
 
 
 class Tournament(Base):
@@ -184,13 +197,32 @@ class TournamentEvent(Base):
         ),
         nullable=False,
     )
-    draw_type: Mapped[DrawType] = mapped_column(
-        Enum(
-            DrawType,
-            name="draw_type",
-            values_callable=lambda e: [m.value for m in e],
-        ),
+    # The event's draw configuration, as a row (ADR "an event's draw configuration
+    # is a row, not a column"). NOT NULL, and the FK lives HERE on the parent —
+    # the ``matches.match_settings_id`` shape — because that is the only way SQL
+    # can say "every event has exactly one settings row". ``RESTRICT`` so a
+    # settings row cannot be deleted out from under the event that points at it.
+    #
+    # There is deliberately NO ``draw_type`` column beside it. The settings row is
+    # the only home for that fact, so an event whose draw type disagrees with its
+    # settings is not a state anyone can construct.
+    #
+    # ``index=True`` because Postgres does not index a REFERENCING column, and this
+    # one is on a routine DELETE path: every ``tournament_event_draw_settings`` row
+    # we delete (the delete-orphan on event delete, and ``reap_draw_settings`` on
+    # tournament delete) makes the RESTRICT trigger run
+    # ``SELECT 1 FROM tournament_events WHERE draw_settings_id = $1 FOR KEY SHARE``.
+    # Unindexed that is a sequential scan of EVERY event on the platform per
+    # settings row deleted, not per event in the tournament (measured on 50k
+    # events: 7.9ms → 0.08ms), and ``reap_draw_settings``' ``NOT EXISTS`` anti-join
+    # has nothing to probe either. The sibling ``matches.match_settings_id`` is
+    # deliberately left unindexed and that asymmetry is intentional: match settings
+    # rows are never deleted, so its RI check never runs.
+    draw_settings_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tournament_event_draw_settings.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
     )
     # NULL means "no cap" (ADR-0935). A present cap is positive by CHECK.
     max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -225,6 +257,42 @@ class TournamentEvent(Base):
 
     tournament: Mapped["Tournament"] = relationship(back_populates="events")
 
+    # Eager by default, and eager as a JOIN. Async SQLAlchemy raises rather than
+    # emitting a lazy load, so a reader that reaches ``event.draw_settings`` on an
+    # event some other loader fetched would blow up unless every one of those ~13
+    # loaders remembered an option — declaring the strategy once on the
+    # relationship is what makes that impossible to get wrong.
+    #
+    # ``joined`` rather than ``selectin`` because this is a NOT NULL many-to-one
+    # onto a one-row-per-event table: it rides along in the query that loads the
+    # event instead of costing a second round trip, so it moves NO statement count
+    # anywhere (the ``EXPECTED_TOURNAMENT_*_STATEMENTS`` pins in
+    # ``test_tournaments.py`` are unchanged by it), and a many-to-one join cannot
+    # multiply rows, so it is safe under the LIMIT/OFFSET the list queries use.
+    # ``innerjoin=True`` because the FK is NOT NULL — an outer join would be
+    # asking about an absence the schema has ruled out.
+    #
+    # ``delete-orphan`` (with ``single_parent=True``, which SQLAlchemy requires to
+    # cascade a delete *up* a many-to-one) because a settings row exists only to
+    # configure the event pointing at it: deleting the event through the ORM must
+    # take its settings row with it, or every event delete leaks a row nothing
+    # will ever reference again. The unit of work orders the two DELETEs for us —
+    # ``tournament_events`` holds the FK, so it goes first and the ``RESTRICT`` is
+    # never tripped.
+    #
+    # This does NOT cover the tournament-delete path: ``Tournament.events`` is
+    # ``passive_deletes=True``, so events are removed by Postgres' ``ON DELETE
+    # CASCADE`` without the ORM ever seeing them, and a database cascade does not
+    # run Python-side cascades. ``app.tournament_draw_settings.reap_draw_settings``
+    # is what closes that path.
+    draw_settings: Mapped["TournamentEventDrawSettings"] = relationship(
+        back_populates="events",
+        lazy="joined",
+        innerjoin=True,
+        cascade="all, delete-orphan",
+        single_parent=True,
+    )
+
     entries: Mapped[list["TournamentEntry"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
@@ -246,8 +314,9 @@ class TournamentEvent(Base):
     # bracket has one order, and there is no reader that wants the other one.
     #
     # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
-    # ``pool_id`` is a real value here ("this fixture belongs to no pool" — an
-    # rr-then-ko event's KO stage), and it belongs after the pools that feed it.
+    # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
+    # single-elim today, and the knockout stage of a pools-then-knockout draw type
+    # once #787 adds one), and it belongs after the pools that feed it.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",

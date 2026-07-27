@@ -747,7 +747,8 @@ class TournamentFixtureRead(BaseModel):
       state without a per-slot round-trip; it is the match's *current* status, read
       live, not a copy frozen at go-live.
     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-      un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+      un-pooled (single-elim), or this is the knockout stage of a future
+      pools-then-knockout draw type. When
       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
       JSONB, not a foreign key, because pools are value-objects with no table.
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
@@ -961,7 +962,8 @@ class StandingsResultsRead(BaseModel):
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
-    knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+    knockout stage to join its pool winners (a pools-then-knockout draw type, a later
+    slice), so it is
     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
     played."""
 
@@ -1107,6 +1109,34 @@ class TournamentEventRead(BaseModel):
         return len(self.entrants)
 
 
+class DrawTypeRead(BaseModel):
+    """One selectable draw format, as the ``draw_types`` table holds it.
+
+    The rows of this table are the draw formats the product can actually run — a row
+    exists exactly when the server has a strategy that can cut and stand that draw (ADR
+    "a draw type is a seeded row, and the enum holds only what runs"). So a client
+    renders the catalogue it is sent and never keeps a list of its own: a format added
+    on the server appears in the picker with no client change, and one the server cannot
+    run is never offered in the first place.
+
+    ``name`` and ``description`` are the copy to show — a short label and the sentence
+    or two explaining the trade-off a director is choosing between. Both are always
+    present and never empty. ``key`` is the value to send back as an event's
+    ``draw_type``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    key: DrawType
+    name: str
+    description: str
+    # The order to render the options in. Ships already applied — the catalogue arrives
+    # sorted by it — so a client can iterate the list as given; it is carried so a
+    # client that re-sorts (or renders into a grid) can reproduce the intended order
+    # rather than inventing one.
+    display_order: int
+
+
 class TournamentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1158,6 +1188,20 @@ class TournamentDetailRead(TournamentRead):
     # designed state of every tournament until a draw exists and something (go-live,
     # the Run-scheduler button, a completed match) asks for a schedule.
     latest_schedule_solve: ScheduleSolveRead | None
+    # The draw formats a director may pick when adding or editing an event on this page,
+    # in ``display_order`` — read from the ``draw_types`` table, never derived from the
+    # Python enum, because the table is what gates the choice (ADR "a draw type is a
+    # seeded row"). It rides on this payload for the same one-endpoint-per-page reason
+    # ``fixtures`` and ``latest_schedule_solve`` do: the event form is part of the
+    # tournament page, not a second round-trip, and a catalogue fetched separately is a
+    # picker that renders empty for one paint.
+    #
+    # ``null`` means **not projected**, exactly as the LIST's other nulls mean "not
+    # computed here" (``distance_miles`` above): the tournament LIST
+    # returns this same aggregate but renders no event form, so it skips the query
+    # rather than repeating one global two-row catalogue on every card. It is never
+    # empty when it is present — there is always at least one runnable draw format.
+    draw_type_catalogue: list[DrawTypeRead] | None
 
 
 # ----- write models ---------------------------------------------------------

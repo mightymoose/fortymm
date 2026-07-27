@@ -398,6 +398,44 @@ describe('apiToTournament', () => {
     expect(tournament.tableIds).toEqual(['t1', 't2', 't3', 't4'])
   })
 
+  /** The draw-type catalogue rides in on the detail payload and is what the event
+   * editor's picker renders (ADR 20260726). Asserted with the server's own copy, since
+   * that is what a director reads — and with the LIST route's `null`, which means
+   * "this payload carried none", not "there are none". */
+  it('carries the served draw-type catalogue through as the picker’s options', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({
+        draw_type_catalogue: [
+          {
+            key: 'single-elim',
+            name: 'Single elimination',
+            description: 'A knockout bracket.',
+            display_order: 2,
+          },
+          {
+            key: 'round-robin',
+            name: 'Round robin',
+            description: 'Everyone in a pool plays everyone else.',
+            display_order: 1,
+          },
+        ],
+      }),
+    )
+
+    expect(tournament.drawTypes).toEqual([
+      { value: 'round-robin', label: 'Round robin' },
+      { value: 'single-elim', label: 'Single elimination' },
+    ])
+  })
+
+  it('keeps a withheld catalogue (the list route) as null', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ draw_type_catalogue: null }),
+    )
+
+    expect(tournament.drawTypes).toBeNull()
+  })
+
   // `address: null` is a tournament with NO VENUE (CONTEXT.md, "Venue") — a
   // first-class state, so it is carried across untouched. Coalescing it to a blank
   // `Address` (the way `description` is coalesced above, one test down) would erase
@@ -526,6 +564,9 @@ const draft: Omit<Tournament, 'id'> = {
   tableIds: [],
   events: [],
   latestScheduleSolve: null,
+  // A draft that has never been fetched carries no served catalogue (ADR 20260726),
+  // and the write builders below drop it either way — it is read-model data.
+  drawTypes: null,
 }
 
 describe('draftToCreateBody', () => {
@@ -697,7 +738,7 @@ const event: TournamentEvent = {
   id: 'ev-1',
   name: 'U1500 Singles',
   format: 'singles',
-  drawType: 'rr-then-ko',
+  drawType: 'round-robin',
   maxPlayers: 48,
   entryFee: 30,
   timezone: 'America/Chicago',
@@ -737,7 +778,7 @@ describe('eventToCreateBody', () => {
   it('maps the event to a snake_case create body, excluding server-managed entered', () => {
     const body = eventToCreateBody(event)
 
-    expect(body.draw_type).toBe('rr-then-ko')
+    expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
     // The IANA timezone anchors the windows (ADR 20260719) — carried on the create
@@ -823,7 +864,7 @@ describe('eventToUpdateBody', () => {
   it('maps the same snake_case fields as create', () => {
     const body = eventToUpdateBody(event)
 
-    expect(body.draw_type).toBe('rr-then-ko')
+    expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
     expect(body.timezone).toBe('America/Chicago')

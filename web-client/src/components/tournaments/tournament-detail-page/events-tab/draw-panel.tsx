@@ -52,9 +52,11 @@ export interface DrawPanelProps {
  * authored for them and it names the numbers they must change:
  *
  * - **409** — the draw shows evidence of play. It can no longer be cut or removed.
- * - **422** — this event cannot be planned as it stands: an unsupported draw type (only
- *   round-robin has a generator today), no pools, or a pool that would get fewer than
- *   two entrants.
+ * - **422** — this event cannot be planned **as it stands**. Always about the event's
+ *   configuration, never about its type: every member of `DrawType` has a strategy behind
+ *   it (ADR 20260726 shrank the enum to exactly what runs), so the refusals left are a
+ *   round-robin with no pools, a pool that would get fewer than two entrants, and a
+ *   bracket with fewer than two entrants.
  *
  * Everything else (403, an expired session, a 5xx, a dead network) has designed words of
  * its own in `drawRefusalNotice` — there is no arm that fails silently.
@@ -213,8 +215,8 @@ const DrawBody = ({
           {state.pools.map((pool) => (
             <PoolDraw key={pool.id} pool={pool} />
           ))}
-          {/* Fixtures belonging to no pool — a single-elim bracket (or the KO stage of an
-              rr-then-ko). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
+          {/* Fixtures belonging to no pool — a single-elim bracket (or the knockout stage
+              of a combined draw type, #787). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
               replaces the flat `RoundList` here; pools above keep `RoundList`. Shown both
               pre-live (the director reviews the seeded round-1 pairings and byes) and
               live. */}

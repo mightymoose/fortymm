@@ -35,6 +35,7 @@ from app.models import (
     SolverVerdict,
     Tournament,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
 )
@@ -78,7 +79,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=64,
         entry_fee=Decimal("20.00"),
         timezone="America/Chicago",

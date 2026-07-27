@@ -31,6 +31,7 @@ from app.models import (
     DrawType,
     ScheduleSolveTrigger,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     User,
 )
@@ -111,7 +112,12 @@ async def create_event(
         tournament_id=tournament.id,
         name=payload.name,
         format=payload.format,
-        draw_type=payload.draw_type,
+        # The event's draw configuration as a row, created here with the event and
+        # flushed ahead of it by the relationship — the FK is NOT NULL, so an event
+        # without one is not a row Postgres will accept. This is the ONLY place the
+        # requested draw type is persisted; there is no column beside it to keep in
+        # step.
+        draw_settings=TournamentEventDrawSettings.for_draw_type(payload.draw_type),
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
         timezone=payload.timezone,
@@ -150,6 +156,14 @@ async def delete_event(
     drawn/live guard (the delete route has none), so this issues the ``DELETE`` and
     commits it. Never raises ``HTTPException`` — the caller adapts each domain
     exception to its transport.
+
+    The event's ``draw_settings`` row goes with it. That is the ORM's
+    ``delete-orphan`` on :attr:`TournamentEvent.draw_settings`, not a database
+    cascade — the FK points the other way, so Postgres cannot reap it — and it
+    needs the event to be an ORM object, which is why this deletes the loaded
+    ``event`` rather than issuing a ``DELETE ... WHERE id =``. The two statements
+    are ordered by the unit of work: the event holds the ``ON DELETE RESTRICT`` FK,
+    so its row goes first and the settings row it named goes second.
     """
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
@@ -198,9 +212,10 @@ def _draw_type_frozen_detail(current: DrawType) -> str:
 
     It says *how* to get unstuck, because the alternative is a stuck director: the
     draw type chose the strategy that dealt these fixtures, so an event that is
-    ``single-elim`` while holding pooled round-robin fixtures cannot even be re-cut
-    back into agreement with itself (``single-elim`` has no strategy, so the re-cut
-    is a 422). The refusal names the way out instead — remove the draw, then re-cut.
+    ``single-elim`` while holding pooled round-robin fixtures is claiming a shape its
+    own draw does not have: the fixtures carry a ``pool_id`` that a bracket has no
+    pools to name. The refusal names the way out — remove the draw, then re-cut, and
+    the new strategy deals fixtures that match the type.
     """
     return (
         f"This event's draw is already cut, so its draw type is frozen: its "
@@ -278,8 +293,14 @@ async def _enforce_draw_type_frozen(
     form back (draw type included) to move a pool's tables is the very edit the freeze
     exists to permit. Asked **before** anything is written, under the tournament's row
     lock the verb holds.
+
+    The type the event *currently* has is read off its ``draw_settings`` row — the one
+    home of that fact (ADR "an event's draw configuration is a row, not a column") —
+    and read once, before the caller's ``setattr`` loop, so what is compared is the
+    stored draw type and not the one the payload is asking for.
     """
-    if updates.draw_type is None or updates.draw_type is event.draw_type:
+    current = event.draw_settings.draw_type
+    if updates.draw_type is None or updates.draw_type is current:
         return
     # Only now the query — and only for a payload that really moves the draw type. It is
     # the same ``event_has_draw`` the pool freeze asks; a payload that changes both asks
@@ -288,7 +309,7 @@ async def _enforce_draw_type_frozen(
     if not await event_has_draw(db, event.id):
         return
     raise DrawTypeFrozenError(
-        _draw_type_frozen_detail(event.draw_type), draw_type=event.draw_type.value
+        _draw_type_frozen_detail(current), draw_type=current.value
     )
 
 
@@ -411,8 +432,13 @@ async def update_event(
 
     Then the partial apply (``model_dump(exclude_unset=True)`` serializes the nested
     value-objects to plain dicts/lists, so one ``setattr`` loop covers the JSONB and
-    scalar columns alike), with two side effects preserved exactly from the router:
+    scalar columns alike), with three side effects — the first new, the other two
+    preserved exactly from the router:
 
+    * a **draw_type** edit is applied to the event's ``draw_settings`` row, the only
+      place an event's draw type is stored. It is deliberately taken out of the
+      ``setattr`` loop: there is no ``draw_type`` attribute on the mapped event, so
+      the loop would bind an unmapped Python attribute and drop the edit;
     * a **timezone** edit re-anchors every placed fixture's ``scheduled_start`` so its
       wall-clock reading is unchanged and only its stored instant shifts
       (:func:`_reanchor_placements_for_timezone_change`), captured against the OLD zone
@@ -446,8 +472,31 @@ async def update_event(
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
     # recover it.
     old_timezone = event.timezone
-    for key, value in updates.model_dump(exclude_unset=True).items():
+    changes = updates.model_dump(exclude_unset=True)
+    # ``draw_type`` is NOT a column on the event — it is the ``draw_type_key`` slug
+    # on the settings row the event points at — so it is routed OUT of the generic
+    # setattr loop rather than through it. This is not decoration: SQLAlchemy's
+    # declarative instances accept any attribute, so ``setattr(event, "draw_type",
+    # ...)`` would bind a plain Python attribute the mapper never persists — the
+    # edit would be silently accepted and silently dropped. Popping it leaves the
+    # loop below touching mapped columns only.
+    #
+    # ``None`` here means "absent", never "clear it": ``TournamentEventUpdate``
+    # rejects an explicit ``null`` on ``draw_type`` at the boundary (422), so a key
+    # that is present carries a real :class:`DrawType`.
+    draw_type: DrawType | None = changes.pop("draw_type", None)
+    for key, value in changes.items():
         setattr(event, key, value)
+    if draw_type is not None:
+        # The one place an event's draw type moves after create (the freeze above
+        # has already refused this on a cut draw). Assigned through the settings
+        # row's ``draw_type`` property, not its ``draw_type_key`` column, so the
+        # enum→slug conversion stays in the single place that owns it
+        # (``TournamentEventDrawSettings.draw_type``'s setter, which
+        # ``for_draw_type`` also goes through at create). The settings row is
+        # loaded with the event (``lazy="joined"``), so this is a plain attribute
+        # write, not a lazy load in async context.
+        event.draw_settings.draw_type = draw_type
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a
         # no-op): recompose every placement so its local reading is unchanged and only

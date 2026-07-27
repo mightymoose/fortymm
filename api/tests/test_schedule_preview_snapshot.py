@@ -9,7 +9,7 @@ non-persistent solve over a synthetic field"). These tests prove:
   entrants and exactly the round-robin fixture set (``C(N, 2)`` in one pool);
 * the field is disjoint across events (no synthetic player is in two events);
 * a per-event count override changes the field size and the fixture count;
-* every non-round-robin draw type (elim, swiss, rr-then-ko) is refused loud with
+* every non-round-robin draw type (today: single-elim) is refused loud with
   the unsupported-draw domain error and produces no partial snapshot;
 * no ``TournamentEntry`` / ``TournamentFixture`` row is ever created;
 * the snapshot is coherent enough for the real solver to place.
@@ -34,6 +34,7 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -101,7 +102,7 @@ async def _add_event(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=max_players,
         entry_fee=Decimal("0"),
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
@@ -398,14 +399,12 @@ async def test_preview_snapshot_count_override_resizes_field(
 
 @pytest.mark.parametrize(
     "draw_type",
-    [
-        DrawType.single_elim,
-        DrawType.double_elim,
-        DrawType.swiss,
-        # rr-then-ko is an enum stub too: production cannot cut it, so a preview
-        # must refuse it rather than fake a pool stage (ADR "round-robin only").
-        DrawType.rr_then_ko,
-    ],
+    # Single-elim is the whole live subject now the enum holds only draw types that
+    # run (ADR "a draw type is a seeded row, …"): it *can* be cut (#785), but the
+    # CP-SAT table scheduler is pool-based and a pool-less bracket has no windows to
+    # solve over, so the preview must refuse it rather than invent a grid. The old
+    # double-elim / swiss / rr-then-ko subjects are no longer enum members.
+    [DrawType.single_elim],
 )
 async def test_preview_snapshot_unsupported_draw_raises(
     db_session: AsyncSession, default_league: League, draw_type: DrawType

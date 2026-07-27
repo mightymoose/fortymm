@@ -11,9 +11,14 @@ import {
   enteredSummary,
   eventCapacity,
 } from '../../data/capacity'
-import { fmtDateShort, fmtTimeWindow, formatPredicate } from '../../data/helpers'
-import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
-import type { TournamentEvent } from '../../data/types'
+import {
+  EM_DASH,
+  fmtDateShort,
+  fmtTimeWindow,
+  formatPredicate,
+} from '../../data/helpers'
+import { FORMAT_OPTIONS, labelFor } from '../../data/options'
+import type { DrawTypeOption, TournamentEvent } from '../../data/types'
 import { EntrantsList } from './entrants-list'
 
 export interface EventCardProps {
@@ -21,6 +26,10 @@ export interface EventCardProps {
   /** When false (a non-owner), the card opens a read-only editor — the
    * affordance reads "View" instead of "Edit". */
   canEdit: boolean
+  /** The draw formats the server offers (ADR 20260726) — the catalogue this card
+   * resolves `event.drawType` through to get the words beside the format. The card
+   * authors no copy for a draw type and holds no list of its own. */
+  drawTypes: DrawTypeOption[]
   /** The signed-in player's username, handed to the roster so it can pin their
    * own chip into the visible slice (#781). Absent when signed out, or while
    * the session is still in flight. */
@@ -60,6 +69,7 @@ export interface EventCardProps {
 export const EventCard = ({
   event: ev,
   canEdit,
+  drawTypes,
   username,
   onOpen,
   action,
@@ -81,9 +91,16 @@ export const EventCard = ({
   const uncapped = capacity.state === 'uncapped'
   // Falling back to the stored key, not to `null`: a card must never blank out a
   // row, so an unknown key shows *something* (cf. the read-only `Field`s, which
-  // pass `null` and let the em-dash say "unset").
+  // pass `null` and let the em-dash say "unset"). The format list is this client's
+  // own and its keys are the wire's, so the key and the label are never far apart.
   const formatLabel = labelFor(FORMAT_OPTIONS, ev.format, ev.format)
-  const drawLabel = labelFor(DRAW_TYPE_OPTIONS, ev.drawType, ev.drawType)
+  // The DRAW TYPE is different, and falls back to an EM-DASH instead. Its labels come
+  // from the server's catalogue (ADR 20260726), so "no entry for this key" means the
+  // catalogue did not reach this card — and printing `round-robin` at a director would
+  // be exactly the leak `labelFor` exists to prevent, in the one place a slug looks
+  // plausible enough to survive review. An em-dash says "unknown" without lying, and
+  // still keeps the row's shape.
+  const drawLabel = labelFor(drawTypes, ev.drawType, EM_DASH)
   const tableCount = new Set(ev.pools.flatMap((p) => p.tableIds)).size
   // The card opens the editor, which is read-only for a non-owner — so the
   // affordance reads "View" (not "Edit") when the viewer can't mutate.

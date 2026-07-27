@@ -10,8 +10,6 @@ hand-computed in each test's docstring so a green assertion means the *table* (o
 
 import uuid
 
-import pytest
-
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
 from app.results import (
@@ -20,7 +18,6 @@ from app.results import (
     PoolInput,
     RoundRobinResults,
     SingleElimResults,
-    UnsupportedResultsType,
     results_for,
 )
 
@@ -74,20 +71,17 @@ def test_results_for_returns_the_single_elim_strategy() -> None:
     assert isinstance(results_for(DrawType.single_elim), SingleElimResults)
 
 
-@pytest.mark.parametrize(
-    "draw_type",
-    [
-        DrawType.double_elim,
-        DrawType.rr_then_ko,
-        DrawType.swiss,
-    ],
-)
-def test_results_for_refuses_the_draw_types_without_a_strategy(
-    draw_type: DrawType,
-) -> None:
-    with pytest.raises(UnsupportedResultsType) as excinfo:
-        results_for(draw_type)
-    assert excinfo.value.draw_type is draw_type
+def test_every_draw_type_reads_out_and_none_refuses() -> None:
+    """``results_for`` is **total** — the enum holds only draw types that run (ADR "a
+    draw type is a seeded row, and the enum holds only what runs"), so every member has
+    a results strategy and there is no ``UnsupportedResultsType`` left to raise.
+
+    This replaces the old parametrized refusal test, whose subjects (``double_elim`` /
+    ``rr_then_ko`` / ``swiss``) are no longer enum members. It reds if a member is added
+    without a results strategy, which is the claim that refusal was really protecting.
+    """
+    for draw_type in DrawType:
+        assert results_for(draw_type) is not None
 
 
 def test_orders_by_wins_descending() -> None:

@@ -21,8 +21,11 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
 import {
+  DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  planDraw,
   planRoundRobinFixtures,
+  type DrawPlan,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   manualPlacementPin,
@@ -76,7 +79,20 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
 }
-type StoredTournament = Omit<TournamentDetailRead, 'events'> & {
+/** What the store holds for a tournament: the wire shape minus its events (which are
+ * stored in their own reduced form above) and minus `draw_type_catalogue`.
+ *
+ * The catalogue is **global reference data, not a fact about a row** — the `draw_types`
+ * table, which every tournament shares — and it is page data besides: the DETAIL payload
+ * carries it and the LIST payload sends `null` (ADR "a draw type is a seeded row, and the
+ * enum holds only what runs"). Seeding it per tournament would let two rows disagree
+ * about what the server's table holds, and would leave each read shape's answer to
+ * whoever wrote the seed. So it is not stored at all: `readDetail` and `readListRow`
+ * below decide it, one place each. */
+type StoredTournament = Omit<
+  TournamentDetailRead,
+  'events' | 'draw_type_catalogue'
+> & {
   events: StoredEvent[]
 }
 
@@ -203,7 +219,7 @@ function seed(): StoredTournament[] {
           tournament_id: 'bay-area-open-2026',
           name: 'Open Singles',
           format: 'singles',
-          draw_type: 'rr-then-ko',
+          draw_type: 'round-robin',
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
@@ -236,11 +252,18 @@ function seed(): StoredTournament[] {
         {
           // Deliberately empty: the designed empty entrants state, and the event
           // whose count a dev demo ticks from 0 to 1.
+          //
+          // It is ALSO the seed's **uncuttable** event, and it stays uncuttable for a
+          // reason that survives (ADR 20260726): round-robin with **NO POOLS**. It used
+          // to be `rr-then-ko`, refused because nothing could plan that type — but that
+          // slug left the enum, and "an unplannable type" is no longer a state a valid
+          // event can be in. `pools: []` is the refusal that replaces it, and it is
+          // permanent: "A round-robin draw needs at least one pool." Do not give it pools.
           id: 'ev-u1500',
           tournament_id: 'bay-area-open-2026',
           name: 'U1500 Singles',
           format: 'singles',
-          draw_type: 'rr-then-ko',
+          draw_type: 'round-robin',
           max_players: 48,
           entry_fee: 30,
           timezone: 'America/Los_Angeles',
@@ -284,10 +307,12 @@ function seed(): StoredTournament[] {
           // card reads back out of the event's own `predicates`. Not derivable from
           // the event alone (there is no ladder in a mock), so it is seeded.
           //
-          // It is ALSO the seed's one **drawn** event (ADR-0786), and it is the only
-          // event that could be: round-robin is the one draw type with a generator
-          // today, so every other seeded event's draw type would be refused with a 422
-          // by the very endpoint this store mirrors. Nine entrants across two pools
+          // It is ALSO the seed's one **drawn** event (ADR-0786) — the only one that
+          // arrives with fixtures already, so `npm run dev` can show a cut draw without
+          // anyone clicking Generate. Round-robin, because a POOLED draw is the one whose
+          // scaffold (pools, rounds, the sit-out) needs seeing without anybody clicking;
+          // the bracket is one Generate click away on any single-elim event, both types
+          // being cuttable here now. Nine entrants across two pools
           // (5 + 4 by the snake) — an ODD pool, so Pool A's rounds have a player
           // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
           // not a fixture with an empty side.
@@ -665,7 +690,26 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
   // default list and every detail read carry `null` (no location was asked about),
   // exactly as the server sends it. `listTournaments` overwrites it for the rows a
   // near-me query keeps.
-  return { ...t, events: t.events.map(readEvent), distance_miles: null }
+  return {
+    ...t,
+    events: t.events.map(readEvent),
+    distance_miles: null,
+    // The served draw-type catalogue — every draw type the server can actually run, with
+    // the copy to render it by (ADR "a draw type is a seeded row"). Non-null on DETAIL,
+    // because this is the page that picks one.
+    draw_type_catalogue: DRAW_TYPE_CATALOGUE,
+  }
+}
+
+/** One row of the LIST, which is the detail shape with the catalogue withheld.
+ *
+ * `null`, not the catalogue and not an empty array: the list route genuinely sends
+ * `draw_type_catalogue: null` (`api/app/tournament_list.py`), because a catalogue is page
+ * data for the one page that picks a draw type and repeating it on every row of a list
+ * would be the BFF paying for it N times. `[]` would be a lie of a different kind — "the
+ * server can run no draw types at all" — so the absence has to be spelled as absence. */
+function readListRow(t: StoredTournament): TournamentDetailRead {
+  return { ...readDetail(t), draw_type_catalogue: null }
 }
 
 // ----- near-me filtering (mirrors the API's haversine) ---------------------
@@ -773,7 +817,7 @@ export function listTournaments(nearMe?: NearMeFilter): TournamentDetailRead[] {
   const visible = tournaments
     .filter(isVisible)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map(readDetail)
+    .map(readListRow)
   if (!nearMe) return visible
   return (
     visible
@@ -1470,6 +1514,26 @@ function drawTypeFrozenDetail(
   )
 }
 
+/** Plan a stored event's draw, or say why it cannot be — the decision itself lives in
+ * `planDraw` (`mocks/factories/tournaments/tournament.factory.ts`), shared with the
+ * Playwright store so the two stubs cannot drift on which draws are refused or on the
+ * server's own sentences for refusing them. What is local here is only how a *stored*
+ * row is read into the planner's arguments. */
+function planEventDraw(event: StoredEvent): DrawPlan {
+  // Entrants are ordered by SEED ascending where one is set, then by registration order
+  // (ADR-0786) — the store lists them in registration order already, so this is a stable
+  // sort that floats the seeded ones to the front. Nothing is random, so the same field
+  // always cuts the same draw, and a re-cut of an unchanged field is a no-op in effect.
+  const ordered = [...event.entrants].sort(
+    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
+  )
+  return planDraw(
+    event.draw_type,
+    ordered.map((e) => e.id),
+    event.pools.map((p) => p.id),
+  )
+}
+
 /** `POST …/events/{event_id}/draw` — cut (or re-cut) an event's draw.
  *
  * **A re-cut replaces the draw wholesale**: the old fixtures are dropped and a fresh set
@@ -1477,14 +1541,14 @@ function drawTypeFrozenDetail(
  * That is the point — a draw is a plan made against a field, and once the field has
  * changed the whole plan is re-made, pool sizes and seeding included.
  *
- * The 422s are the planner's, and they are the ones a director actually meets:
- * - **an unsupported draw type.** Round-robin is the only type with a generator today
- *   (single-elim is #785), so every other type is refused — *before* the field is even
- *   looked at, exactly as the server refuses it, because no arrangement of entrants
- *   would make a swiss draw cuttable.
- * - **no pools**, on a pooled draw type. There is nowhere to deal the field.
- * - **a pool that would get fewer than two entrants** — a lone entrant has nobody to
- *   play, so the draw is refused rather than silently emitting a pool of one. */
+ * The 422s are the planner's (see `planDraw` in the tournament factory, shared with the
+ * Playwright store), and they are the ones a director actually meets: a round-robin with
+ * no pools, a pool the snake would leave with fewer than two entrants, and a bracket of
+ * fewer than two. **There is no draw-TYPE refusal**: both
+ * members of `DrawType` have a strategy on the server (ADR 20260726) and both have a
+ * planner here, so a mock that still refused single-elim would be putting a sentence in
+ * the server's mouth that it can no longer say — and would make a single-elim cut
+ * untestable in `npm run dev`, in vitest and in the browser at once. */
 export function cutDraw(tournamentId: string, eventId: string): CutDrawResult {
   const owned = requireOwned(tournamentId)
   if (!owned.ok) return owned
@@ -1496,54 +1560,9 @@ export function cutDraw(tournamentId: string, eventId: string): CutDrawResult {
   if (drawHasPlay(event)) {
     return { ok: false, status: 409, detail: DRAW_UNDER_WAY_DETAIL }
   }
-  if (event.draw_type !== 'round-robin') {
-    return {
-      ok: false,
-      status: 422,
-      detail:
-        `A ${event.draw_type} draw cannot be cut yet. ` +
-        "Change the event's draw type to one that can, or wait for support.",
-    }
-  }
-  if (event.pools.length === 0) {
-    return {
-      ok: false,
-      status: 422,
-      detail: 'A round-robin draw needs at least one pool.',
-    }
-  }
-  // Entrants are ordered by SEED ascending where one is set, then by registration order
-  // (ADR-0786) — the store lists them in registration order already, so this is a stable
-  // sort that floats the seeded ones to the front. Nothing is random, so the same field
-  // always cuts the same draw, and a re-cut of an unchanged field is a no-op in effect.
-  const ordered = [...event.entrants].sort(
-    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
-  )
-  const poolIds = event.pools.map((p) => p.id)
-  const sizes = poolIds.map(
-    (_, poolIndex) =>
-      ordered.filter((_entrant, index) => {
-        const row = Math.floor(index / poolIds.length)
-        const offset = index % poolIds.length
-        const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
-        return column === poolIndex
-      }).length,
-  )
-  // Asked of the DEALT pools, not of arithmetic on N and P — the refusal is about the
-  // pools the snake actually produced, and it names the numbers the director must change.
-  if (sizes.some((size) => size < 2)) {
-    return {
-      ok: false,
-      status: 422,
-      detail:
-        `${ordered.length} entrants across ${poolIds.length} pool(s) would leave ` +
-        'a pool with fewer than 2 entrants, who would have nobody to play.',
-    }
-  }
-  const fixtures = planRoundRobinFixtures(
-    ordered.map((e) => e.id),
-    poolIds,
-  )
+  const plan = planEventDraw(event)
+  if (!plan.ok) return { ok: false, status: 422, detail: plan.detail }
+  const fixtures = plan.fixtures
   const next: StoredEvent = { ...event, fixtures }
   replace({
     ...existing,

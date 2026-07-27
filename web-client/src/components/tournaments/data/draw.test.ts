@@ -10,6 +10,7 @@ import {
 } from './draw'
 import {
   buildDrawnEvent,
+  buildDrawTypes,
   buildEntrant,
   buildEntrants,
   buildEvent,
@@ -318,10 +319,19 @@ describe('drawRefusalNotice', () => {
     expect(notice.description).toBe(detail)
   })
 
-  it('shows the server’s sentence for an unsupported draw type', () => {
+  /** The sample was "A single-elim draw cannot be cut yet." until the enum shrank to
+   * the types that run (ADR 20260726). **The CUT route can no longer say it** —
+   * `strategy_for` is total, so no draw type a director can pick lacks a generator.
+   * (The sentence itself is not dead: `schedule_preview` still raises
+   * `UnsupportedDrawType` for single-elim, because the CP-SAT scheduler is
+   * round-robin-only. Grep it and you will find it alive, on that path.) The claim
+   * under test never depended on the sample: the panel prints whatever refusal came
+   * back. So the sample is now one the CUT route really emits (`draws.py`,
+   * `SingleElimStrategy.plan_initial`). */
+  it('shows the server’s sentence for a bracket with nobody to play', () => {
     const detail =
-      'A swiss draw cannot be cut yet. ' +
-      "Change the event's draw type to one that can, or wait for support."
+      'A single-elimination draw needs at least 2 entrants — a bracket of ' +
+      'one has nobody to play.'
 
     const notice = drawRefusalNotice(
       new ApiError(422, detail, 'cut the draw'),
@@ -407,16 +417,42 @@ describe('poolSetFreeze', () => {
 
 describe('drawTypeFreeze', () => {
   it('is open while no draw is cut', () => {
-    expect(drawTypeFreeze(buildEvent()).kind).toBe('open')
+    expect(drawTypeFreeze(buildEvent(), buildDrawTypes()).kind).toBe('open')
   })
 
   it('freezes once the draw is cut, naming the type its fixtures were dealt as', () => {
-    const freeze = drawTypeFreeze(buildDrawnEvent())
+    const freeze = drawTypeFreeze(buildDrawnEvent(), buildDrawTypes())
     if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw type')
 
     // In the select's own words — never the wire's enum key.
     expect(freeze.reason).toContain('“Round robin”')
     expect(freeze.reason).not.toContain('round-robin')
     expect(freeze.reason).toContain('Delete the draw')
+  })
+
+  // The label is the SERVER's (ADR 20260726), so the sentence follows the catalogue —
+  // it is not a second copy of the copy. Rename the row and the freeze renames with it.
+  it('quotes the served catalogue’s words, not a list of its own', () => {
+    const freeze = drawTypeFreeze(buildDrawnEvent(), [
+      { value: 'round-robin', label: 'Groups of everyone' },
+    ])
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw type')
+
+    expect(freeze.reason).toContain('“Groups of everyone”')
+    expect(freeze.reason).not.toContain('Round robin')
+  })
+
+  /** The catalogue has no row for the event's type — a build that does not know the
+   * slug, or a surface that was handed none. The clause naming the type is dropped;
+   * the raw key is NEVER printed at a director (that is the leak `labelFor` exists to
+   * prevent), and the half that gets them unstuck is still there. */
+  it('drops the “dealt as” clause rather than leaking the slug', () => {
+    const freeze = drawTypeFreeze(buildDrawnEvent(), [])
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw type')
+
+    expect(freeze.reason).not.toContain('round-robin')
+    expect(freeze.reason).not.toContain('dealt as')
+    expect(freeze.reason).toContain('its draw type is frozen')
+    expect(freeze.reason).toContain('Delete the draw to change the type')
   })
 })

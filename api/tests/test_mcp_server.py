@@ -52,6 +52,7 @@ from app import mcp_server
 from app import queue as queue_module
 from app.admin_schedule_solves import SCHEDULING_VIEW_PERMISSION
 from app.auth0_provisioning import AUTH0_EMAIL_CLAIM, AUTH0_EMAIL_VERIFIED_CLAIM
+from app.draws import DrawError
 from app.main import app as fastapi_app
 from app.main import mcp, mcp_app
 from app.mcp_server import (
@@ -76,6 +77,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1409,7 +1411,7 @@ def _event_payload() -> dict[str, object]:
     return {
         "name": "Open Singles",
         "format": "singles",
-        "draw_type": "rr-then-ko",
+        "draw_type": "single-elim",
         "max_players": 64,
         "entry_fee": 45,
         "timezone": "America/Chicago",
@@ -2116,7 +2118,7 @@ async def _seed_drawable_tournament(
         tournament_id=tournament.id,
         name="Open Singles",
         format=format,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",
@@ -2348,22 +2350,95 @@ async def test_build_cut_non_singles_event_raises_readable_tool_error(
     assert remaining == []
 
 
-async def test_build_cut_unsupported_draw_type_raises_readable_tool_error(
+# ``test_build_cut_unsupported_draw_type_raises_readable_tool_error`` lived here. Its
+# only subject was an ``rr-then-ko`` event — a draw type that is no longer a
+# ``DrawType`` member (ADR "a draw type is a seeded row, and the enum holds only what
+# runs"), and ``strategy_for`` is now total, so no event ``build_cut`` can be handed
+# raises ``UnsupportedDrawType``. There is no live subject to re-point it at: the
+# refusal that replaced it is asserted in ``test_tournaments`` (create-event 422) and
+# ``test_draws`` (``strategy_for`` is total). The ``UnsupportedDrawType`` arm of
+# ``_map_draw_refusal_tool_error`` has since been deleted as dead code — the test below
+# is what covers the generic fallback a future raiser would now reach instead. The
+# preview's own ``UnsupportedDrawType`` path (single-elim) is genuinely reachable and
+# keeps both its arm (``_map_preview_draw_error``) and its coverage in
+# ``test_schedule_preview_snapshot``.
+
+
+async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_it(
     db_session: AsyncSession,
     default_league: League,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An ``rr-then-ko`` event has no generator yet (ADR-0786): ``build_cut`` surfaces
-    the ``UnsupportedDrawType`` refusal as a readable ``ToolError`` that names
-    round-robin as the supported type."""
-    owner = await make_user(db_session, "mcp-draw-rrko-owner")
+    """A ``DrawError`` subclass this adapter has never heard of is still a designed
+    ``ToolError`` — with a **generic** sentence, never the exception's own.
+
+    The MCP twin of ``test_tournaments``'
+    ``test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_message``.
+    ``_map_draw_refusal_tool_error`` matches on the errors that exist today and composes
+    an agent-readable sentence for each; its fallback arm is what a *new* one hits, and
+    the rule there is that a message written for a developer must not become the
+    sentence an MCP client is handed.
+
+    **The no-leak half is the point.** A ``DrawError`` raised deep in a strategy can
+    carry a table name, a pool ref, a column — internals that are a bug report when they
+    stay in the log and a defect the moment they reach a client. So the invented error's
+    message is deliberately full of them and the assertion is that *none* of it survives
+    into the ``ToolError``.
+
+    The only honest way to raise the base error is to invent the subclass the domain
+    does not have yet — which is precisely the future this arm exists for. Patched at
+    the same seam the HTTP test uses (``app.tournament_draw_service.cut_draw``, the
+    domain core both surfaces share), so what is under test is the MCP *adapter*, not a
+    second copy of the domain.
+    """
+    owner = await make_user(db_session, "mcp-draw-unknown-error-owner")
     raw = await _mint(db_session, owner)
-    _, event = await _seed_drawable_tournament(
-        db_session, owner, default_league, draw_type=DrawType.rr_then_ko
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+
+    # Every fragment of this is something a client must never be shown.
+    leaked = (
+        "tournament_fixtures.pool_id='p-a' has a NULL seat at (round=2, position=1)"
+    )
+
+    class SwissRoundNotSettled(DrawError):
+        """The DrawError of some slice that has not been written."""
+
+    async def _raise_an_unknown_draw_error(
+        db: AsyncSession, event: TournamentEvent
+    ) -> None:
+        raise SwissRoundNotSettled(leaked)
+
+    monkeypatch.setattr(
+        "app.tournament_draw_service.cut_draw", _raise_an_unknown_draw_error
     )
 
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="round-robin"):
+        with pytest.raises(ToolError) as caught:
             await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+    message = str(caught.value)
+    assert "This event's draw can't be cut as the event stands." in message
+    # Asserted fragment by fragment, not just as the whole sentence: a partial leak
+    # (the table name alone) is the same defect as the whole message.
+    assert leaked not in message
+    for internals in ("tournament_fixtures", "pool_id", "NULL seat", "round=2"):
+        assert internals not in message, (
+            f"the refusal leaked {internals!r} from a DrawError nobody wrote copy "
+            f"for: {message!r}"
+        )
+
+    # The refusal wrote nothing: the verb rolled back, as the other draw-refusal
+    # tools' tests assert too.
+    remaining = (
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
 
 
 async def test_uncut_non_owner_raises_tool_error(
@@ -2583,7 +2658,7 @@ async def _seed_previewable_tournament(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=4,
         entry_fee=Decimal("0"),
         slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
@@ -3199,7 +3274,7 @@ async def _seed_event(db: AsyncSession, tournament: Tournament) -> TournamentEve
         tournament_id=tournament.id,
         name="Existing Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3427,7 +3502,7 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         tournament_id=tournament.id,
         name="Cut Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3538,7 +3613,7 @@ async def test_update_event_frozen_change_raises_tool_error(
             select(TournamentEvent).where(TournamentEvent.id == event_id)
         )
     ).scalar_one()
-    assert persisted.draw_type is DrawType.round_robin
+    assert persisted.draw_settings.draw_type is DrawType.round_robin
     assert persisted.name == "Cut Singles"
 
 
@@ -3603,7 +3678,7 @@ async def _seed_published_singles_event(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=max_players,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3939,7 +4014,7 @@ async def _seed_placeable_fixture(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",

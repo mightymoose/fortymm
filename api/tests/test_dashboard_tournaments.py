@@ -9,14 +9,16 @@ what the panel projects is what the product actually writes.
 
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.dashboard_tournaments import build_tournament_panels
 from app.match_voiding import void_match
 from app.models import (
     Match,
@@ -26,12 +28,13 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from tests._helpers import opponent_session
+from tests._helpers import counted_statements, opponent_session
 from tests.test_tournaments import (
     POOL_A,
     _call_fixtures,
     _cut_the_draw,
     _enter,
+    _event_payload,
     _fixture_rows,
     _go_live,
     _live_two_player_pool,
@@ -717,3 +720,102 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
         await _set_status(db_session, tournament_id, TournamentStatus.live)
 
         assert await _panels(client) == []
+
+
+# The pin, measured (print the statements below to re-measure): the caller's live
+# entries — joined to their events, those events' tournaments AND, since #1086, those
+# events' draw settings rows — then ONE batched load of every event's active entrants,
+# ONE of every event's fixtures, ONE of the completed matches' game counts, ONE of the
+# handful of focus matches, and that load's own eager options (the match's league,
+# results, sides, settings, side players and those players' users — one batched
+# ``selectin`` each). Eleven, whatever the number of events.
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 11
+
+
+@pytest.mark.parametrize("event_count", [1, 3])
+async def test_panel_statement_count_does_not_grow_with_events(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event_count: int,
+) -> None:
+    """The panel's round and stage wording is draw-type-dependent, and since #1086 the
+    draw type lives on the event's ``draw_settings`` row rather than on a column of the
+    event — so reading it is exactly the shape an N+1 takes: one SELECT per event, on
+    the endpoint every signed-in player loads. It must cost none, and that is what the
+    relationship's ``lazy="joined"`` buys: the settings row rides along in the query
+    that already loads the event.
+
+    The two ``event_count`` cases are what makes this discriminating. A per-event
+    settings load emits one statement per event, so it would measure 12 at one event and
+    14 at three — failing the pin at three even if it slipped past at one. The events
+    alternate round-robin and single-elim, so both branches of the wording are exercised
+    by the same payload, and the assertions below read the label off each.
+
+    The second assertion names the failure directly rather than only counting: every
+    statement that touches ``tournament_event_draw_settings`` must also name
+    ``tournament_events``, i.e. be the join — a standalone lazy load of the settings
+    table is the specific regression, and a future statement added elsewhere must not be
+    able to absorb it under an unchanged total.
+
+    Counted around the builder rather than the HTTP request, and on a fresh session, for
+    the reasons ``counted_statements`` documents.
+    """
+    client, owner = authed_client
+    user_id = owner.id  # read outside the counted block; see counted_statements
+    async with opponent_session(db_session, "panel-n1-opp") as (_opp_client, opp):
+        tournament_id, events = await _tournament_with_events(
+            client,
+            *[
+                (
+                    _rr_payload(POOL_A, name=f"Round robin {n}")
+                    if n % 2 == 0
+                    else _event_payload(name=f"Bracket {n}", draw_type="single-elim")
+                )
+                for n in range(event_count)
+            ],
+        )
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        for event in events:
+            await _enter(
+                db_session,
+                event["id"],
+                owner,
+                seed=1,
+                created_at=base + timedelta(minutes=1),
+            )
+            await _enter(
+                db_session,
+                event["id"],
+                opp,
+                seed=2,
+                created_at=base + timedelta(minutes=2),
+            )
+            await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+
+        async with counted_statements(engine) as (session, statements):
+            panels = await build_tournament_panels(session, user_id)
+
+    for n, statement in enumerate(statements, start=1):
+        print(f"[{n}] {' '.join(statement.split())}")
+
+    assert len(statements) == EXPECTED_DASHBOARD_PANEL_STATEMENTS, statements
+    assert not [
+        s
+        for s in statements
+        if "tournament_event_draw_settings" in s and "tournament_events" not in s
+    ], "a settings row was loaded on its own — the draw type became an N+1"
+
+    # And the block it counted really did the work: every event is on the panel, and
+    # each one's wording is its own draw type's.
+    (panel,) = panels
+    assert len(panel.events) == event_count
+    for n, event in enumerate(panel.events):
+        expected = "Group play" if n % 2 == 0 else "In play"
+        assert event.stage_label == expected, (event.name, event.stage_label)
+        assert event.match is not None
+        assert event.match.round_label == (
+            "Group match 1" if n % 2 == 0 else "Round 1"
+        ), (event.name, event.match.round_label)

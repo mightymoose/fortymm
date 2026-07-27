@@ -91,6 +91,15 @@ export const TournamentDetailPage = ({
     .filter((t): t is TournamentTable => t !== undefined)
 
   const canEdit = tournament.canEdit
+  // The draw formats this server can run, as it sent them (ADR 20260726), for the
+  // surfaces that do NOT get the tournament itself. `EventEditor` takes an `event`, not
+  // a tournament, so the catalogue has to be threaded to it — and the "no catalogue"
+  // case is decided here, where the payload lands: `null` means the tournament reached
+  // this page without one (the list route withholds it; a never-fetched draft has
+  // none), so the editor is handed an empty catalogue rather than a nullable one and
+  // offers no draw type instead of re-deciding the same thing. The Events tab is handed
+  // the whole `tournament` and reads the catalogue off it — one fact, one prop.
+  const drawTypes = tournament.drawTypes ?? []
   const range = effectiveDateRange(tournament)
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
@@ -289,6 +298,7 @@ export const TournamentDetailPage = ({
         onOpenChange={setEditorOpen}
         event={editorEvent}
         tables={tournamentTables}
+        drawTypes={drawTypes}
         canEdit={canEdit}
         onSave={saveEvent}
         onDelete={(id) => {

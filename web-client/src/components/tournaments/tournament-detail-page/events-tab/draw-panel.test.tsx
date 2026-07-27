@@ -288,22 +288,31 @@ describe('DrawPanel', () => {
       expect(await page.findNoticeText()).toContain(PLAY_GUARD)
     })
 
-    it('shows the 422 for a draw type nothing can cut yet', async () => {
+    /** The sample used to be "A single-elim draw cannot be cut yet." — a refusal the
+     * server could still send when `DrawType` held five members and `strategy_for` had
+     * a raise-arm. The enum now holds only what runs (ADR 20260726), so that sentence
+     * is unreachable, while the behaviour under test (echo the server's own words
+     * inline, no toast) is unchanged. The sample is a refusal single-elim really can
+     * produce: a one-entrant bracket (`draws.py`). */
+    it('shows the 422 for a bracket with nobody to play', async () => {
       const detail =
-        'A swiss draw cannot be cut yet. ' +
-        "Change the event's draw type to one that can, or wait for support."
+        'A single-elimination draw needs at least 2 entrants — a bracket of ' +
+        'one has nobody to play.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
       )
       page.render({
         event: buildEvent({
-          id: 'ev-swiss',
-          name: 'Swiss Singles',
-          drawType: 'swiss',
+          id: 'ev-bracket',
+          name: 'Championship Singles',
+          drawType: 'single-elim',
+          entrants: buildEntrants(1),
+          // Un-pooled — a bracket has no pools (ADR-0786).
+          pools: [],
         }),
       })
 
-      await userEvent.click(await page.findGenerateButton('Swiss Singles'))
+      await userEvent.click(await page.findGenerateButton('Championship Singles'))
 
       const notice = await page.findNoticeText()
       expect(notice).toContain("This event can't be drawn yet")

@@ -3,8 +3,13 @@ import { Input } from '@/components/ui/input'
 import type { EditFreeze } from '../../data/draw'
 import { ENTRY_FEE_MAX, PLAYERS_MAX } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
-import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
-import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
+import { FORMAT_OPTIONS, labelFor } from '../../data/options'
+import type {
+  DrawType,
+  DrawTypeOption,
+  EventFormat,
+  TournamentEvent,
+} from '../../data/types'
 import { Field } from '../../field'
 import { SectionHeader } from '../section-header'
 import { OptionSelect } from './option-select'
@@ -44,6 +49,17 @@ export interface BasicsSectionProps {
    * who cannot see why they are stuck cannot get unstuck. (Contrast the *viewer* case,
    * where the whole control is simply absent — ADR-0015.) */
   drawTypeFreeze: EditFreeze
+  /** The draw formats **the server offers**, in its order — the tournament payload's
+   * catalogue (ADR 20260726), threaded down from the page. This section keeps no list
+   * of its own, so a format the server cannot run is not merely discouraged, it is not
+   * on the menu; and the words on each option are the server's, which is what makes the
+   * picker's labels and the read-only value below it one copy rather than two.
+   *
+   * `[]` is the degenerate "no catalogue reached this surface" case (a payload without
+   * one — the list route's shape). The picker then offers nothing and the read-only
+   * value falls to an em-dash: a director offered no choice is stuck loudly, which is
+   * the honest failure. It never falls back to the stored slug. */
+  drawTypes: DrawTypeOption[]
   onChange: (next: TournamentEvent) => void
 }
 
@@ -75,6 +91,7 @@ export const BasicsSection = ({
   canEdit,
   errors = {},
   drawTypeFreeze,
+  drawTypes,
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -152,11 +169,16 @@ export const BasicsSection = ({
 
             Hidden would be worse: the draw type is a fact about the event the director
             came here to check, and hiding it would answer a question they did not ask
-            while silently dropping the one they did. */}
+            while silently dropping the one they did.
+
+            Both halves of the row read the SAME served catalogue — the options an editor
+            picks from and the label a reader is shown — so the two can never say
+            different words for one slug. The reader's fallback is `null` (an em-dash),
+            never `event.drawType`: an enum key is not a thing anyone reads (ADR-0015). */}
         <Field
           label="Draw type"
           readOnly={readOnly}
-          value={labelFor(DRAW_TYPE_OPTIONS, event.drawType, null)}
+          value={labelFor(drawTypes, event.drawType, null)}
           hint={
             drawTypeFreeze.kind === 'frozen' ? drawTypeFreeze.reason : undefined
           }
@@ -170,7 +192,7 @@ export const BasicsSection = ({
             <OptionSelect
               ariaLabel="Draw type"
               value={event.drawType}
-              options={DRAW_TYPE_OPTIONS}
+              options={drawTypes}
               disabled={drawTypeFreeze.kind === 'frozen'}
               describedById={hintId}
               onChange={(v) => set({ drawType: v as DrawType })}

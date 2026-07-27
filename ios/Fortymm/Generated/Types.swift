@@ -759,10 +759,16 @@ internal protocol APIProtocol: Sendable {
     /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
-    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
-    /// no generator yet (only round-robin does today), it has **no pools** configured for a
-    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
-    /// than two players has nobody to play. The message names what to change.
+    /// Refused with a `422` when this event cannot produce a draw at all: it has
+    /// **no pools** configured for a pooled draw type, its field is too small for the
+    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// bracket has fewer than two entrants. The message names what to change.
+    ///
+    /// There is no longer a "this draw type has no generator" refusal here: every
+    /// draw type a director can pick is one that has a strategy, because the pickable
+    /// set *is* the seeded `draw_types` rows, and those are the types that run
+    /// (ADR 20260726). Every `422` this route can raise is now about the event's
+    /// **field or pools**, not its type.
     ///
     /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
     /// tournament-detail page carries them.
@@ -2201,10 +2207,16 @@ extension APIProtocol {
     /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
-    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
-    /// no generator yet (only round-robin does today), it has **no pools** configured for a
-    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
-    /// than two players has nobody to play. The message names what to change.
+    /// Refused with a `422` when this event cannot produce a draw at all: it has
+    /// **no pools** configured for a pooled draw type, its field is too small for the
+    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// bracket has fewer than two entrants. The message names what to change.
+    ///
+    /// There is no longer a "this draw type has no generator" refusal here: every
+    /// draw type a director can pick is one that has a strategy, because the pickable
+    /// set *is* the seeded `draw_types` rows, and those are the types that run
+    /// (ADR 20260726). Every `422` this route can raise is now about the event's
+    /// **field or pools**, not its type.
     ///
     /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
     /// tournament-detail page carries them.
@@ -4248,10 +4260,56 @@ internal enum Components {
         /// - Remark: Generated from `#/components/schemas/DrawType`.
         internal enum DrawType: String, Codable, Hashable, Sendable, CaseIterable {
             case singleElim = "single-elim"
-            case doubleElim = "double-elim"
             case roundRobin = "round-robin"
-            case rrThenKo = "rr-then-ko"
-            case swiss = "swiss"
+        }
+        /// One selectable draw format, as the ``draw_types`` table holds it.
+        ///
+        /// The rows of this table are the draw formats the product can actually run — a row
+        /// exists exactly when the server has a strategy that can cut and stand that draw (ADR
+        /// "a draw type is a seeded row, and the enum holds only what runs"). So a client
+        /// renders the catalogue it is sent and never keeps a list of its own: a format added
+        /// on the server appears in the picker with no client change, and one the server cannot
+        /// run is never offered in the first place.
+        ///
+        /// ``name`` and ``description`` are the copy to show — a short label and the sentence
+        /// or two explaining the trade-off a director is choosing between. Both are always
+        /// present and never empty. ``key`` is the value to send back as an event's
+        /// ``draw_type``.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DrawTypeRead`.
+        internal struct DrawTypeRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DrawTypeRead/key`.
+            internal var key: Components.Schemas.DrawType
+            /// - Remark: Generated from `#/components/schemas/DrawTypeRead/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DrawTypeRead/description`.
+            internal var description: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DrawTypeRead/display_order`.
+            internal var displayOrder: Swift.Int
+            /// Creates a new `DrawTypeRead`.
+            ///
+            /// - Parameters:
+            ///   - key:
+            ///   - name:
+            ///   - description:
+            ///   - displayOrder:
+            internal init(
+                key: Components.Schemas.DrawType,
+                name: Swift.String,
+                description: Swift.String,
+                displayOrder: Swift.Int
+            ) {
+                self.key = key
+                self.name = name
+                self.description = description
+                self.displayOrder = displayOrder
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case key
+                case name
+                case description
+                case displayOrder = "display_order"
+            }
         }
         /// The event holds ``max_players`` active entrants already, so nobody may enter it
         /// — the one arm of this union that says nothing about who is asking.
@@ -9424,7 +9482,8 @@ internal enum Components {
         ///
         /// ``champion`` is the leader of a **complete, single-pool** event — a pure
         /// round-robin's winner. A multi-pool round-robin has no single champion without a
-        /// knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+        /// knockout stage to join its pool winners (a pools-then-knockout draw type, a later
+        /// slice), so it is
         /// ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
         /// played.
         ///
@@ -9737,6 +9796,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
             internal var latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload?
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/draw_type_catalogue`.
+            internal var drawTypeCatalogue: [Components.Schemas.DrawTypeRead]?
             /// Creates a new `TournamentDetailRead`.
             ///
             /// - Parameters:
@@ -9757,6 +9818,7 @@ internal enum Components {
             ///   - events:
             ///   - distanceMiles:
             ///   - latestScheduleSolve:
+            ///   - drawTypeCatalogue:
             internal init(
                 id: Swift.String,
                 name: Swift.String,
@@ -9774,7 +9836,8 @@ internal enum Components {
                 updatedAt: Foundation.Date,
                 events: [Components.Schemas.TournamentEventRead],
                 distanceMiles: Swift.Double? = nil,
-                latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil
+                latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil,
+                drawTypeCatalogue: [Components.Schemas.DrawTypeRead]? = nil
             ) {
                 self.id = id
                 self.name = name
@@ -9793,6 +9856,7 @@ internal enum Components {
                 self.events = events
                 self.distanceMiles = distanceMiles
                 self.latestScheduleSolve = latestScheduleSolve
+                self.drawTypeCatalogue = drawTypeCatalogue
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -9812,6 +9876,7 @@ internal enum Components {
                 case events
                 case distanceMiles = "distance_miles"
                 case latestScheduleSolve = "latest_schedule_solve"
+                case drawTypeCatalogue = "draw_type_catalogue"
             }
         }
         /// One *active* entry in an event. Withdrawn entries are not entrants: they
@@ -10570,7 +10635,8 @@ internal enum Components {
         ///   state without a per-slot round-trip; it is the match's *current* status, read
         ///   live, not a copy frozen at go-live.
         /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-        ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+        ///   un-pooled (single-elim), or this is the knockout stage of a future
+        ///   pools-then-knockout draw type. When
         ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
         ///   JSONB, not a foreign key, because pools are value-objects with no table.
         /// * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
@@ -23611,10 +23677,16 @@ internal enum Operations {
     /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
-    /// Refused with a `422` when this event cannot produce a draw at all: its draw type has
-    /// no generator yet (only round-robin does today), it has **no pools** configured for a
-    /// pooled draw type, or its field is too small for the pools it has — a pool with fewer
-    /// than two players has nobody to play. The message names what to change.
+    /// Refused with a `422` when this event cannot produce a draw at all: it has
+    /// **no pools** configured for a pooled draw type, its field is too small for the
+    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// bracket has fewer than two entrants. The message names what to change.
+    ///
+    /// There is no longer a "this draw type has no generator" refusal here: every
+    /// draw type a director can pick is one that has a strategy, because the pickable
+    /// set *is* the seeded `draw_types` rows, and those are the types that run
+    /// (ADR 20260726). Every `422` this route can raise is now about the event's
+    /// **field or pools**, not its type.
     ///
     /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
     /// tournament-detail page carries them.

@@ -6,6 +6,7 @@
 // here, but nothing crosses back at runtime.
 import type { MatchStatus } from '@/api/matches'
 
+import type { DrawType, DrawTypeOption } from './draw-types'
 import type { PredicateOp } from './options'
 import type { ScheduleSolve } from './solve'
 
@@ -13,12 +14,11 @@ export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 
 export type EventFormat = 'singles' | 'doubles' | 'teams'
 
-export type DrawType =
-  | 'single-elim'
-  | 'double-elim'
-  | 'round-robin'
-  | 'rr-then-ko'
-  | 'swiss'
+/** The draw-type vocabulary is declared **once**, next to its Zod schema and the
+ * catalogue parser (`./draw-types`), the way `./solve` declares its enums. Re-exported
+ * here so the domain modules that read every tournament type from `./types` keep doing
+ * so — there is no second declaration to drift. */
+export type { DrawType, DrawTypeOption }
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -117,8 +117,8 @@ export interface Pool {
  *   set after), and it is the match's *current* status read live, never a copy frozen at
  *   go-live.
  * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
- *   this is the KO stage of an rr-then-ko. When set, it names a `Pool` in this same
- *   event's `pools`.
+ *   this is the knockout stage of a combined draw type (#787, not an enum member today).
+ *   When set, it names a `Pool` in this same event's `pools`.
  * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
  *   to a table**. When set, it names a `TournamentTable` in the tournament's table
  *   catalogue — a string ref, the same pattern as `poolId`.
@@ -311,9 +311,10 @@ export interface FinishesResults {
  * returns its own shape; the BFF emits the `kind` tag; the client switches on it. A future
  * draw type is a type error until it declares its shape.
  *
- * On the event it is `null` for an event with **no draw** (nothing to stand) or one whose
- * draw type has no results strategy yet — an honest "no results", never an empty table that
- * would read as a played event with nobody in it.
+ * On the event it is `null` for an event with **no draw** — nothing to stand — an honest
+ * "no results", never an empty table that would read as a played event with nobody in it.
+ * Every draw type a director can pick reads out results of one shape or the other, so
+ * "cut, but no results block" is not a state.
  */
 export type EventResults = StandingsResults | FinishesResults
 
@@ -482,6 +483,18 @@ export interface Tournament {
    * the boundary by `./solve`; read it, never write it — a new row appears only
    * through `POST …/schedule/solves` (or the server's own triggers). */
   latestScheduleSolve: ScheduleSolve | null
+  /** The draw formats this server can actually run, in the order it wants them
+   * offered — the `draw_types` catalogue off the tournament-detail payload (ADR
+   * 20260726). It is what the event editor's draw-type picker renders and what every
+   * surface that shows a *stored* draw type resolves its label through; the client
+   * keeps no list of its own.
+   *
+   * **`null` means the payload did not carry one** — the LIST route withholds it, since
+   * a catalogue is page data for the one page that picks a draw type — and it is
+   * likewise `null` on a client-built draft that has never been fetched
+   * (`emptyTournament`). It is NOT "the server offers nothing": a detail payload always
+   * carries at least the two seeded rows. Parsed at the boundary by `./draw-types`. */
+  drawTypes: DrawTypeOption[] | null
   /** How far this tournament's venue is from the point the list query was given a
    * location for — a non-negative haversine distance in **miles** — or `null` when the
    * query sent no location (the default list, and the detail payload). The server

@@ -3,6 +3,7 @@ import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.facto
 import { simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
+type DrawTypeRead = components['schemas']['DrawTypeRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -345,6 +346,30 @@ export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
   return runs
 }
 
+/** The **snake** (`api/app/draws.py`): which entrants each pool is dealt, row by row
+ * across the pools and reversing every other row, so the top seeds land one per pool and
+ * pool sizes differ by at most one. Returns one member list per pool, in `poolIds` order,
+ * each preserving draw order.
+ *
+ * ONE declaration of the arithmetic, because two callers want two different things from
+ * it and used to compute it twice: `planRoundRobinFixtures` below wants the *members* to
+ * pair, and `planDraw`'s round-robin refusal wants the *sizes* — and that refusal is
+ * asked of the pools the snake actually produced, never of arithmetic on N and P, because
+ * it is the dealt pool that would have a lone entrant in it. */
+function snakedPools(
+  entryIds: readonly string[],
+  poolCount: number,
+): string[][] {
+  const pools: string[][] = Array.from({ length: poolCount }, () => [])
+  entryIds.forEach((entryId, index) => {
+    const row = Math.floor(index / poolCount)
+    const offset = index % poolCount
+    const column = row % 2 === 0 ? offset : poolCount - 1 - offset
+    pools[column].push(entryId)
+  })
+  return pools
+}
+
 /**
  * Plan a **round-robin** draw the way the API plans one (`api/app/draws.py`): snake the
  * ordered entrants across the pools, then pair each pool by the circle method — every
@@ -376,15 +401,12 @@ export function planRoundRobinFixtures(
 ): TournamentFixtureRead[] {
   const fixtures: TournamentFixtureRead[] = []
   let counter = 0
+  const dealt = snakedPools(entryIds, poolIds.length)
 
   for (const [poolIndex, poolId] of poolIds.entries()) {
-    // The snake: row-by-row across the pools, reversing every other row.
-    const members = entryIds.filter((_, index) => {
-      const row = Math.floor(index / poolIds.length)
-      const offset = index % poolIds.length
-      const column = row % 2 === 0 ? offset : poolIds.length - 1 - offset
-      return column === poolIndex
-    })
+    // The snake (`snakedPools` above): row-by-row across the pools, reversing every
+    // other row.
+    const members = dealt[poolIndex]
 
     // The circle method: pin the first seat, rotate the rest one step per round, and
     // pair across the circle. An odd pool gets a phantom (`null`) seat — the entrant
@@ -417,6 +439,232 @@ export function planRoundRobinFixtures(
   }
 
   return fixtures
+}
+
+/**
+ * The **standard single-elimination seeding order** for a bracket of `bracketSize` slots
+ * (a power of two): the 1-based seed positions top to bottom, so pairing the adjacent
+ * slots — (1st, 2nd), (3rd, 4th), … — gives round 1 and the top two seeds can only meet
+ * in the final.
+ *
+ * The API's `_seed_slots` (`api/app/draws.py`), transcribed: the classic recursion
+ * `[1, 2] → [1, 4, 3, 2] → [1, 8, 5, 4, 3, 6, 7, 2] → …`, each step replacing every slot
+ * `s` with the pair `(s, total − s)` where `total = 2·len + 1`. Strong-first on even
+ * indices and strong-second on odd, which threads the sequence into the familiar
+ * `1, 8, 5, 4, …` bracket order rather than a mirror of it.
+ *
+ * A pure function of seed *positions* — it never sees an entry id.
+ */
+function seedSlots(bracketSize: number): number[] {
+  let slots = [1]
+  while (slots.length < bracketSize) {
+    const total = 2 * slots.length + 1
+    const expanded: number[] = []
+    slots.forEach((seed, index) => {
+      const pair = index % 2 === 0 ? [seed, total - seed] : [total - seed, seed]
+      expanded.push(...pair)
+    })
+    slots = expanded
+  }
+  return slots
+}
+
+/** Which side of which next-round slot the winner of `(round, position)` goes to:
+ * slot `ceil(position / 2)`, side `a` for an odd `position` else `b` (`_successor`,
+ * `api/app/draws.py`).
+ *
+ * The whole of single-elimination's topology, kept as **arithmetic on the coordinates**
+ * rather than a stored `next_slot_id` (ADR-0786) — which is also what lets a byed seed be
+ * seated by the very same sum that will later seat a winner, so the two cannot disagree.
+ */
+function successorSlot(position: number): { position: number; side: 'a' | 'b' } {
+  return { position: Math.ceil(position / 2), side: position % 2 === 1 ? 'a' : 'b' }
+}
+
+/**
+ * Plan a **single-elimination** draw the way the API plans one
+ * (`SingleElimStrategy.plan_initial`, `api/app/draws.py`): pad the field to the next
+ * power of two, lay the seeds in by the standard recursive seeding, and emit every later
+ * round up front with its sides TBD.
+ *
+ * `entryIds` arrive in **draw order** (seed ascending, then registration order), so the
+ * entrant at index `k` is seed `k + 1` — the position the bracket is laid out by.
+ *
+ * Faithful rather than convenient, for the same reason the round-robin planner is: a stub
+ * that dealt a bracket any old way would still look like a draw on screen, and the panel
+ * built against it would be built against a shape the server never sends. The rules it
+ * mirrors, each visible on the bracket:
+ *
+ * - **A bye is the ABSENCE of a round-1 fixture** (ADR-0786), never a row with a `null`
+ *   side. The `B − N` byes fall on the top `B − N` seeds — a slot drawn against a phantom
+ *   seat past `N` — and the byed seed is seated *directly onto its round-2 side* at cut
+ *   time. So a five-entrant field has **one** round-1 fixture, not four with three empty
+ *   halves.
+ * - **`null` means TBD, and only TBD**: a later round whose feeder has not been played.
+ *   Three round-2 shapes therefore exist at the cut — both feeders played (both sides
+ *   null), one bye + one feeder (one side pre-filled), and both feeders byes (a
+ *   fully-known fixture that materializes at go-live like any other).
+ * - **`position` is the FULL-bracket slot index**, 1-based, never a contiguous
+ *   renumbering of the surviving matches: it is what makes the successor arithmetic feed
+ *   the right next-round slot, and a byed round-1 slot simply leaves a gap in it.
+ * - **`pool_id` is null throughout** — a bracket is un-pooled; the event's pools (if any)
+ *   are irrelevant to it, exactly as on the server.
+ *
+ * Returns fixtures in round → position order, as the wire does.
+ *
+ * ⚠️ Like the round-robin planner it does **not** enforce the API's refusal (a field of
+ * fewer than two). That is the *store's* to make, because it is an answer to a request
+ * rather than a shape of a payload — which is why nothing but the store should call this.
+ */
+export function planSingleElimFixtures(
+  entryIds: readonly string[],
+): TournamentFixtureRead[] {
+  const size = entryIds.length
+  /** Seeds are 1-based positions into the draw-ordered field. */
+  const seedEntry = (seed: number): string => entryIds[seed - 1]
+
+  // `bracket` = the smallest power of two ≥ N; `rounds` = its depth (log2).
+  let bracket = 1
+  while (bracket < size) bracket <<= 1
+  const rounds = Math.log2(bracket)
+  const slots = seedSlots(bracket)
+
+  const fixtures: TournamentFixtureRead[] = []
+  /** A byed seed, already seated on its round-2 side, keyed `position:side`. */
+  const seatedByBye = new Map<string, string>()
+
+  for (let pairIndex = 0; pairIndex < bracket / 2; pairIndex += 1) {
+    const position = pairIndex + 1
+    const first = slots[2 * pairIndex]
+    const second = slots[2 * pairIndex + 1]
+    const top = Math.min(first, second)
+    const bottom = Math.max(first, second)
+    if (bottom <= size) {
+      // Two real seeds: a genuine round-1 match. The top seat is `entry_a` for
+      // readability only — the successor side is decided by `position`, not by which
+      // seed is `a`.
+      fixtures.push(
+        buildTournamentFixtureRead({
+          id: `fx-se-r1-p${position}`,
+          pool_id: null,
+          round: 1,
+          position,
+          entry_a_id: seedEntry(top),
+          entry_b_id: seedEntry(bottom),
+        }),
+      )
+    } else {
+      // One phantom (`bottom` > N; two phantoms cannot happen when `bracket` is the
+      // SMALLEST power of two ≥ N). The real `top` seed byes straight into round 2 —
+      // and no round-1 row is emitted for it. That absence IS the bye.
+      const successor = successorSlot(position)
+      seatedByBye.set(`${successor.position}:${successor.side}`, seedEntry(top))
+    }
+  }
+
+  if (rounds >= 2) {
+    for (let position = 1; position <= bracket / 4; position += 1) {
+      fixtures.push(
+        buildTournamentFixtureRead({
+          id: `fx-se-r2-p${position}`,
+          pool_id: null,
+          round: 2,
+          position,
+          entry_a_id: seatedByBye.get(`${position}:a`) ?? null,
+          entry_b_id: seatedByBye.get(`${position}:b`) ?? null,
+        }),
+      )
+    }
+  }
+  for (let round = 3; round <= rounds; round += 1) {
+    for (let position = 1; position <= bracket >> round; position += 1) {
+      fixtures.push(
+        buildTournamentFixtureRead({
+          id: `fx-se-r${round}-p${position}`,
+          pool_id: null,
+          round,
+          position,
+          entry_a_id: null,
+          entry_b_id: null,
+        }),
+      )
+    }
+  }
+  return fixtures
+}
+
+/** A planned draw, or the server's sentence for why this event cannot be cut as it
+ * stands. ONE value for both, because they are the same decision: split in two, a
+ * refusal check could answer "nothing wrong here" for a shape the planner then has
+ * nothing to deal for. */
+export type DrawPlan =
+  | { ok: true; fixtures: TournamentFixtureRead[] }
+  | { ok: false; detail: string }
+
+/**
+ * Plan an event's draw exactly as the cut route does, or say why it cannot be — the
+ * planner's 422s, in the server's own words (`app/draws.py`), because for these the
+ * sentence IS the answer: it names the thing the director has to change.
+ *
+ * **One implementation for both stubs.** The MSW store (`src/mocks/tournaments-store.ts`)
+ * and the Playwright store (`e2e/page-objects/tournaments/tournaments-store.ts`) mirror
+ * each other on purpose, but this decision — which refusals exist, and the three
+ * server-authored sentences that carry them — is not a thing for them to mirror: two
+ * copies is two chances for a spec to be green against words the API never says. Each
+ * store still owns its own entrant ordering (it reads its own row shape) and hands the
+ * result in.
+ *
+ * `entryIds` arrive in **draw order** — seed ascending where one is set, then
+ * registration order (ADR-0786) — because that is the list the API's planner is handed.
+ *
+ * **Exhaustive over `DrawType`, with no default arm.** Every member of the enum has a
+ * server-side strategy by construction (ADR 20260726), so there is no "this type cannot
+ * be cut" refusal left to make — and adding a member tomorrow is a *type error* here
+ * until it is given a planner, rather than a stub that quietly refuses a draw the server
+ * would have dealt. Living in `src`, this `switch` is genuinely checked by `tsc -b`;
+ * the copy that used to sit in `e2e/` was not (`tsconfig.app.json` covers only `src`),
+ * which is the other reason there is one of these now.
+ */
+export function planDraw(
+  drawType: components['schemas']['DrawType'],
+  entryIds: readonly string[],
+  poolIds: readonly string[],
+): DrawPlan {
+  switch (drawType) {
+    case 'round-robin': {
+      if (poolIds.length === 0) {
+        return { ok: false, detail: 'A round-robin draw needs at least one pool.' }
+      }
+      // Asked of the DEALT pools, not of arithmetic on N and P — the refusal is about
+      // the pools the snake actually produced, and it names the numbers the director
+      // must change.
+      const dealt = snakedPools(entryIds, poolIds.length)
+      if (dealt.some((pool) => pool.length < 2)) {
+        return {
+          ok: false,
+          detail:
+            `${entryIds.length} entrants across ${poolIds.length} pool(s) would leave ` +
+            'a pool with fewer than 2 entrants, who would have nobody to play.',
+        }
+      }
+      return { ok: true, fixtures: planRoundRobinFixtures(entryIds, poolIds) }
+    }
+    case 'single-elim': {
+      // Round-robin's per-pool floor, one level up: a bracket of one has no fixtures and
+      // is not a competition. The event's POOLS are not consulted at all — a bracket is
+      // un-pooled, so a single-elim event with pools cuts perfectly well and a
+      // single-elim event with none is not refused, exactly as on the server.
+      if (entryIds.length < 2) {
+        return {
+          ok: false,
+          detail:
+            'A single-elimination draw needs at least 2 entrants — a bracket of ' +
+            'one has nobody to play.',
+        }
+      }
+      return { ok: true, fixtures: planSingleElimFixtures(entryIds) }
+    }
+  }
 }
 
 /** One wire standings row (`StandingRowRead`, ADR-0788): entry `entry-1`, 1st, a clean
@@ -583,7 +831,11 @@ export function buildTournamentEventRead(
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
     format: 'singles',
-    draw_type: 'rr-then-ko',
+    // Round-robin, and pooled to match: `DrawType` holds only the two types the server
+    // can actually plan (ADR 20260726), and a pooled event is what this fixture's single
+    // `Pool` describes. A fixture typed as something the API 422s is a fixture that
+    // proves nothing.
+    draw_type: 'round-robin',
     max_players: 64,
     entry_fee: 45,
     timezone: 'America/Chicago',
@@ -617,6 +869,46 @@ export function buildTournamentEventRead(
 }
 
 /**
+ * The **draw-type catalogue** the tournament-detail payload carries — the rows of the
+ * API's `draw_types` table, in `display_order` (ADR "a draw type is a seeded row, and
+ * the enum holds only what runs").
+ *
+ * A row means "this draw type has an implementation", so the set is exactly the members
+ * of `DrawType`, and it is **served, never hardcoded client-side**: the picker renders
+ * what the server sent, which is what makes "the table gates what a director can pick" a
+ * fact about the running system rather than two lists that happen to agree.
+ *
+ * ⚠️ The `name`/`description` strings are a **verbatim copy of the migration's
+ * `DRAW_TYPE_SEED`** (`api/migrations/versions/20260617_0000_0010_create_tournaments_table.py`),
+ * not copy invented here. They are the sentences a director actually reads when choosing
+ * between the two formats, so a mock that paraphrased them would let the picker be built
+ * against words the server never sends — and this copy is DB seed data, so a wording
+ * change is a migration and has to be re-copied here in the same change.
+ */
+export const DRAW_TYPE_CATALOGUE: DrawTypeRead[] = [
+  {
+    key: 'round-robin',
+    name: 'Round robin',
+    description:
+      'Everyone in a pool plays everyone else in that pool. Every entrant is ' +
+      'guaranteed the same number of matches and the final standings rank the ' +
+      'whole field, so it is the fairest read on form — but the match count ' +
+      'climbs quickly with pool size, and the event needs at least one pool.',
+    display_order: 1,
+  },
+  {
+    key: 'single-elim',
+    name: 'Single elimination',
+    description:
+      'A knockout bracket: lose once and you are out. It crowns a champion in ' +
+      'the fewest matches and the least table time, which suits a large field ' +
+      'or a tight schedule — but half the entrants are finished after one ' +
+      'match, and a field that is not a power of two gives the top seeds byes.',
+    display_order: 2,
+  },
+]
+
+/**
  * A venue name of **680 characters with not one break opportunity in it** — no
  * space, no hyphen, no slash. The pathological row the detail page has to survive
  * (#1199): unwrapped, this single word laid out ~5742px wide and took the
@@ -644,6 +936,10 @@ export const UNBREAKABLE_VENUE_NAME =
  * The published "Bay Area Open 2026" with a four-table catalogue and a single
  * Open Singles event, owned (editable) by the current user. The list and detail
  * endpoints both return this `TournamentDetailRead` shape.
+ *
+ * `draw_type_catalogue` defaults to the served catalogue, because this builds the
+ * **detail** payload — the LIST route sends `null` there (the catalogue is page data for
+ * the one page that picks a draw type), so a list fixture passes that explicitly.
  *
  * `league_id` is the ladder its eligibility rules are judged against (ADR-0783)
  * — the **default** league here, as an omitted one resolves to on the server.
@@ -688,6 +984,7 @@ export function buildTournamentDetailRead(
     // match) puts a run on the queue. A fixture that wants a solve on the strip
     // passes a `buildScheduleSolveRead()` override.
     latest_schedule_solve: null,
+    draw_type_catalogue: DRAW_TYPE_CATALOGUE,
     ...overrides,
   }
 }

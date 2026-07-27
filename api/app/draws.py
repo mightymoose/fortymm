@@ -25,9 +25,9 @@ Each :class:`~app.models.tournament.DrawType` is a strategy behind
 Two things the schema deliberately does not store, and this module therefore owns:
 
 - **Topology.** There is no ``next_slot_id``. Single-elim's successor is arithmetic
-  on ``(round, position)``, round-robin has no successor at all, and swiss cannot
-  know its next round until the current one finishes. ``advance()`` recomputes what
-  it needs from the rows.
+  on ``(round, position)``, round-robin has no successor at all, and a swiss draw
+  could not know its next round until the current one finished. ``advance()``
+  recomputes what it needs from the rows.
 - **Byes.** A bye is the *absence of a fixture row*, never a row with a ``NULL``
   side. ``NULL`` means exactly one thing — "TBD, ``advance()`` will fill it" — so an
   odd round-robin pool simply has fewer fixtures in some rounds.
@@ -66,17 +66,23 @@ class DrawError(Exception):
 
 
 class UnsupportedDrawType(DrawError):
-    """This draw type has no strategy yet.
+    """This draw type cannot be planned *here*.
 
-    Raised by :func:`strategy_for`, whose ``match`` is exhaustive with no catch-all —
-    so a new :class:`DrawType` member is a *type* error until it is handled here, and
-    a member that is handled-but-unimplemented is a catchable domain error rather than
-    a 500.
+    Not a "no strategy yet" marker any more: every :class:`DrawType` member has a
+    strategy by construction, because the enum holds only what runs (ADR "a draw type
+    is a seeded row, and the enum holds only what runs"), and :func:`strategy_for` is
+    total. What survives is the *caller-specific* refusal —
+    :mod:`app.schedule_preview` raises this for ``single_elim``, a fully supported draw
+    type, because the CP-SAT table scheduler is pool-based and a pool-less bracket has
+    no windows to solve over.
+
+    Carries the offending :class:`DrawType` **structurally**, so the HTTP/MCP layers
+    compose their own sentence from the fact rather than parsing a message.
     """
 
     def __init__(self, draw_type: DrawType) -> None:
         self.draw_type = draw_type
-        super().__init__(f"Draw type {draw_type.value!r} is not implemented yet.")
+        super().__init__(f"Draw type {draw_type.value!r} is not supported here yet.")
 
 
 class DegenerateDraw(DrawError):
@@ -161,13 +167,13 @@ class DrawConfig:
     (:func:`strategy_for`, which runs *before* this config is ever built), so a strategy
     reading it back off its own config would be a second source of truth for a decision
     already made — and a second source that can *disagree*: with a ``draw_type`` field
-    here, ``RoundRobinStrategy().plan_initial(DrawConfig(draw_type=DrawType.swiss, …))``
-    was a sentence you could write, and the field it named was read by nobody. (It was
-    genuinely dead: mutation-testing set it to ``None`` and killed no test, and no test
-    *could* have killed it.) The danger is not the dead field, it is the live one it
-    invites — the next strategy (rr-then-ko, swiss) branching on ``config.draw_type``
-    in the belief that it is authoritative, on an event whose real draw type is the one
-    that picked the strategy. Its absence is what makes that unsayable.
+    here, ``RoundRobinStrategy().plan_initial(DrawConfig(draw_type=DrawType.single_elim,
+    …))`` was a sentence you could write, and the field it named was read by nobody. (It
+    was genuinely dead: mutation-testing set it to ``None`` and killed no test, and no
+    test *could* have killed it.) The danger is not the dead field, it is the live one
+    it invites — the next strategy to land branching on ``config.draw_type`` in the
+    belief that it is authoritative, on an event whose real draw type is the one that
+    picked the strategy. Its absence is what makes that unsayable.
 
     ``pool_ids`` are the ids of the event's configured pools, **in the event's own pool
     order** — that order is what the snake seeds against, so it must not be re-sorted.
@@ -192,7 +198,8 @@ class PlannedFixture:
     It is *never* ``None`` to mean "bye": a bye is the absence of this object.
     """
 
-    #: ``None`` = the draw is un-pooled (or this is the KO stage of an rr-then-ko).
+    #: ``None`` = the draw is un-pooled — single-elim today, and the knockout stage of a
+    #: pools-then-knockout draw type once #787 adds one.
     pool_id: PoolId | None
     #: 1-based.
     round: int
@@ -527,20 +534,21 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
 def strategy_for(draw_type: DrawType) -> DrawStrategy:
     """The strategy that cuts and advances this draw type.
 
-    An exhaustive ``match`` with **no catch-all**: adding a member to
-    :class:`DrawType` makes this function fail to type-check until the member is
-    handled, so a new format cannot reach production silently unimplemented. The
-    formats that have no strategy yet raise :class:`UnsupportedDrawType` — a catchable
-    domain error the draw endpoint turns into a 422, not a 500 and not a ``None`` for
-    the caller to trip over.
+    **Total** — every :class:`DrawType` returns a strategy, and there is no refusal arm
+    left to reach. That is the whole point of holding only what runs in the enum (ADR
+    "a draw type is a seeded row, and the enum holds only what runs"): a slug with no
+    strategy is not a value this function can be handed, because Pydantic refuses it at
+    the request boundary.
+
+    Still an exhaustive ``match`` with **no catch-all**, and now with nowhere to park a
+    new member lazily: adding one to :class:`DrawType` fails to type-check here until
+    its strategy exists.
     """
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinStrategy()
         case DrawType.single_elim:
             return SingleElimStrategy()
-        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
-            raise UnsupportedDrawType(draw_type)
 
 
 def _snake(

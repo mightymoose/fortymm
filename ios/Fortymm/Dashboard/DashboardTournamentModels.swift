@@ -58,16 +58,27 @@ enum TournamentFixtureState: String, LenientRawDecodable {
     case unknown
 }
 
-/// Mirror of `app.models.tournament.DrawType`. Only `roundRobin` is implemented
-/// server-side today; the rest are enum stubs, so the panel keys its vocabulary
-/// ("Your matches" vs "Your path") off round-robin and treats everything else —
-/// including a draw type added later, which lands as `.unknown` — as a bracket.
+/// Mirror of `app.models.tournament.DrawType`, which is exactly these two —
+/// the server can neither emit nor accept another. (It once carried
+/// `double-elim` / `rr-then-ko` / `swiss` as unimplemented stubs; those were
+/// deleted server-side, so a build that still named them would be advertising
+/// draw types no payload can contain. `Generated/Types.swift`'s `DrawType` is
+/// the compiler-checked reference for the live pair.)
+///
+/// Dropping those three is decode-safe rather than merely unlikely-to-matter:
+/// `LenientRawDecodable`'s `init(from:)` turns *any* unrecognised raw string
+/// into `.unknown` instead of throwing, so even a stale server sending
+/// `"swiss"` degrades one label rather than failing the whole dashboard decode.
+/// That is also why `.unknown` stays: it is the app's forward-compat landing
+/// pad for a draw type added after this build shipped.
+///
+/// The panel keys its vocabulary ("Your matches" vs "Your path") off
+/// round-robin and treats everything else — a bracket, or an unrecognised
+/// value — as a bracket. See `isPooledDraw` in
+/// `DashboardTournamentPanelProjection.swift`.
 enum TournamentDrawType: String, LenientRawDecodable {
     case singleElim = "single-elim"
-    case doubleElim = "double-elim"
     case roundRobin = "round-robin"
-    case rrThenKo = "rr-then-ko"
-    case swiss
     case unknown
 }
 

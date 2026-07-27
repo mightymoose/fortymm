@@ -24,8 +24,13 @@ import { ApiError } from '@/api/client'
 import type { MatchStatus } from '@/api/matches'
 
 import { fallbackNotice, type Notice } from './notice'
-import { DRAW_TYPE_OPTIONS, labelFor } from './options'
-import type { Entrant, Fixture, TournamentEvent } from './types'
+import { labelFor } from './options'
+import type {
+  DrawTypeOption,
+  Entrant,
+  Fixture,
+  TournamentEvent,
+} from './types'
 
 /** A fixture side whose feeding fixture is not decided yet (`entryAId`/`entryBId` is
  * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one; a
@@ -116,11 +121,11 @@ export type DrawState =
       kind: 'drawn'
       /** The pools the draw actually used, in the event's own pool order. */
       pools: PoolDraw[]
-      /** Fixtures belonging to **no pool** — an un-pooled draw (single-elim), or the KO
-       * stage of an rr-then-ko (ADR-0786: `pool_id` is `null` for both). Empty today,
-       * because round-robin is the only draw type with a generator — but a fixture that
-       * has no pool must not be *dropped*, and a bracket renderer (#785) is where these
-       * eventually belong. Until then they are shown, honestly, outside the pools. */
+      /** Fixtures belonging to **no pool** — an un-pooled draw (single-elim), or the
+       * knockout stage of a combined draw type (#787; ADR-0786: `pool_id` is `null` for
+       * both). A fixture that has no pool must not be *dropped*: it is rendered as a
+       * bracket (#785), and anything a bracket cannot place is still shown, honestly,
+       * outside the pools. */
       unpooled: DrawRound[]
     }
 
@@ -317,16 +322,29 @@ export function poolSetFreeze(event: TournamentEvent): EditFreeze {
  * and no strategy would ever have produced.
  *
  * The reason names the type the fixtures were actually dealt as, in the words the select
- * shows ("Round robin", never `round-robin`).
+ * shows ("Round robin", never `round-robin`) — which is why it takes the **served**
+ * catalogue (`drawTypes`, ADR 20260726) rather than reading a list of its own: the
+ * sentence quotes the option the director is looking at, and there is now exactly one
+ * source for that copy.
+ *
+ * If the catalogue has no row for the stored type — a build that does not know the slug,
+ * or a surface handed an empty catalogue — the clause naming it is **dropped**, not
+ * filled with the raw key. "…dealt as a “round-robin” draw" would be the very leak
+ * `labelFor` exists to prevent, and the freeze reads perfectly well without it: what a
+ * stuck director needs is the way out, and that half never depended on the label.
  */
-export function drawTypeFreeze(event: TournamentEvent): EditFreeze {
+export function drawTypeFreeze(
+  event: TournamentEvent,
+  drawTypes: DrawTypeOption[],
+): EditFreeze {
   if (!hasDraw(event)) return { kind: 'open' }
-  const label = labelFor(DRAW_TYPE_OPTIONS, event.drawType, event.drawType)
+  const label = labelFor(drawTypes, event.drawType, null)
+  const dealtAs = label === null ? '' : ` — its fixtures were dealt as a “${label}” draw`
   return {
     kind: 'frozen',
     reason:
-      `This event’s draw is cut, so its draw type is frozen — its fixtures were dealt ` +
-      `as a “${label}” draw. Delete the draw to change the type, then cut it again.`,
+      `This event’s draw is cut, so its draw type is frozen${dealtAs}. ` +
+      `Delete the draw to change the type, then cut it again.`,
   }
 }
 
@@ -346,7 +364,7 @@ export type DrawNotice = Notice
  * **The 409 and the 422 carry the server's own sentence, verbatim.** They are the two
  * refusals a director actually meets, and for both of them the sentence is the *point*:
  * it names the thing they have to change ("5 entrants across 3 pool(s) would leave a
- * pool with fewer than 2 entrants…", "A swiss draw cannot be cut yet…"). It is authored
+ * pool with fewer than 2 entrants…", "A round-robin draw needs at least one pool."). It is authored
  * for them, on the server, where the numbers are; replacing it with a generic string of
  * ours would throw away the only actionable half of the refusal and leave the director
  * clicking Generate again. The client owns the *title* — the state, in a few words —

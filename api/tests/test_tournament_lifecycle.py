@@ -31,6 +31,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -476,7 +477,9 @@ async def _make_tournament_at(
             tournament_id=tournament.id,
             name="Open Singles",
             format=EventFormat.singles,
-            draw_type=DrawType.round_robin,
+            draw_settings=TournamentEventDrawSettings.for_draw_type(
+                DrawType.round_robin
+            ),
             max_players=None,
             entry_fee=Decimal("0.00"),
             timezone="America/Chicago",

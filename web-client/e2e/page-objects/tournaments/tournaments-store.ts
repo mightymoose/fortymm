@@ -18,9 +18,11 @@ import {
   buildTournamentDetailRead,
   buildTournamentEventRead,
   buildTournamentEntrantRead,
+  DRAW_TYPE_CATALOGUE,
   entryStateFor,
-  planRoundRobinFixtures,
+  planDraw,
   UNBREAKABLE_VENUE_NAME,
+  type DrawPlan,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
@@ -31,6 +33,10 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
+/** One row of the served **draw-type catalogue** (ADR 20260726). Its `key` is the
+ * generated schema's `DrawType`, so a spec cannot serve a slug the API's enum does not
+ * hold — the catalogue and the enum are the same set by construction. */
+type DrawTypeRead = components['schemas']['DrawTypeRead']
 type StandingsResultsRead = components['schemas']['StandingsResultsRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
@@ -136,6 +142,23 @@ export const EVENT = {
    * (ADR-0786: a bye is the ABSENCE of a fixture, and a scaffold that invented a "bye"
    * row would have to be caught here or nowhere). */
   POOLS: 'Pool Play Singles',
+  /** The **bracket** seed's cuttable event (`bracket: true`): singles, `single-elim`,
+   * five entrants and no pools — the one event in this suite whose draw type is not
+   * round-robin, and the only user-reachable path to the stub's bracket arm.
+   *
+   * Five, not four or eight, because a field that is not a power of two is where a
+   * bracket says something a pooled draw cannot: three of the eight slots are phantom,
+   * so seeds 1–3 bye into the semifinals and **round 1 holds exactly one fixture**. A
+   * planner that invented a "bye" row, or that padded round 1 to four fixtures with null
+   * sides, is caught here and nowhere else (ADR-0786: a bye is the ABSENCE of a
+   * fixture). */
+  BRACKET: 'Championship Singles',
+  /** The bracket seed's **uncuttable** event (`bracket: true`): `single-elim` with a
+   * LONE entrant, who has nobody to play. It exists so the stub's single-elim refusal
+   * — the `< 2 entrants` 422, the bracket twin of the pool-less one — has a permanent
+   * user-reachable path: without it that arm could be reverted to anything at all and
+   * this suite would stay green. */
+  LONE: 'Novice Singles',
 } as const
 
 /** How many people are already in the crowded event before I enter it. Comfortably
@@ -276,6 +299,10 @@ const PLAY_POOLS: Pool[] = [
  * across two pools snakes to 3 + 2 — see `EVENT.POOLS`. */
 const PLAY_FIELD = 5
 
+/** The field in `EVENT.BRACKET`. Five into a bracket of eight: three byes on the top
+ * three seeds, one round-1 fixture, two semifinals and a final — see `EVENT.BRACKET`. */
+const BRACKET_FIELD = 5
+
 /** The played-out result for `EVENT.JOURNEY` (`standings: true`): its one pool
  * (`p-journey-a`) decided, `player.1` over `player.2`, so it is complete with a champion.
  * The row entry ids are the JOURNEY event's own (`entry-1`, `entry-2`), so the FE's join to
@@ -320,7 +347,7 @@ const JOURNEY_RESULTS: StandingsResultsRead = buildEventResultsRead({
  * `JOURNEY` keeps its name, its cap and its two entrants, so the lifecycle specs' count
  * assertions (`2 / 64` → `3 / 64`) read the same here as in the default seed — the one
  * thing that changes about it is that its draw type is now one a draw can be cut for. */
-function drawableEvents(): TournamentEventRead[] {
+function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
       id: 'ev-open-singles',
@@ -339,6 +366,40 @@ function drawableEvents(): TournamentEventRead[] {
       max_players: 32,
       entrants: crowd(PLAY_FIELD),
       pools: PLAY_POOLS,
+    }),
+    ...(options.bracket ?? false ? bracketEvents() : []),
+  ]
+}
+
+/** The two `single-elim` events (`bracket: true`) — one cuttable, one refused. Opt-in,
+ * and added to the drawable seed rather than replacing it, because every count the
+ * lifecycle and go-live specs narrate is asserted against that seed's two round-robin
+ * events: a third and fourth event in the DEFAULT seed would move the tournament's
+ * Entries total and the work list a refused start prints.
+ *
+ * They are **un-pooled**. A bracket ignores its event's pools entirely — on the server
+ * and in `planDraw` alike — so giving them pools would suggest a relationship that does
+ * not exist. It also keeps `EVENT.LONE`'s refusal honest: the one thing wrong with it is
+ * its field of one, so the sentence it gets back can only be the bracket's. */
+function bracketEvents(): TournamentEventRead[] {
+  return [
+    buildTournamentEventRead({
+      id: 'ev-championship',
+      name: EVENT.BRACKET,
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 32,
+      entrants: crowd(BRACKET_FIELD),
+      pools: [],
+    }),
+    buildTournamentEventRead({
+      id: 'ev-novice',
+      name: EVENT.LONE,
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 16,
+      entrants: crowd(1),
+      pools: [],
     }),
   ]
 }
@@ -376,20 +437,30 @@ function addressOverride(
  * the journey spec asserts on. */
 function seed(options: TournamentsStoreOptions): TournamentDetailRead {
   const crowded = options.crowded ?? false
+  // The catalogue the DETAIL payload carries (ADR 20260726) — the rows the picker
+  // renders. It defaults to the factory's, which is a verbatim copy of the migration's
+  // seed, so the default is what the real server sends; a spec overrides it to prove the
+  // picker follows the *payload* rather than a list of its own.
+  const draw_type_catalogue = options.drawTypeCatalogue ?? DRAW_TYPE_CATALOGUE
   const address = addressOverride(options)
-  if (options.drawable ?? false) {
+  // `bracket` IMPLIES `drawable`: the bracket events extend the round-robin seed, and a
+  // `{ bracket: true }` that quietly seeded the default tournament instead would be a
+  // spec asserting against events that are not there — a silent no-op, not a red.
+  if ((options.drawable ?? false) || (options.bracket ?? false)) {
     return buildTournamentDetailRead({
       id: TOURNAMENT_ID,
       status: options.status ?? 'published',
       can_edit: options.canEdit ?? true,
+      draw_type_catalogue,
       ...address,
-      events: drawableEvents(),
+      events: drawableEvents(options),
     })
   }
   return buildTournamentDetailRead({
     id: TOURNAMENT_ID,
     status: options.status ?? 'published',
     can_edit: options.canEdit ?? true,
+    draw_type_catalogue,
     ...address,
     events: [
       buildTournamentEventRead({
@@ -403,6 +474,13 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         id: 'ev-u1500',
         name: EVENT.EMPTY,
         format: 'singles',
+        // The **refusal** fixture: a round-robin with NO POOLS, which is a 422 the real
+        // API genuinely emits ("A round-robin draw needs at least one pool."). Both
+        // halves are stated here rather than inherited, because the refusal specs rest
+        // on exactly this pair — a stub that refused a draw type the server can in fact
+        // cut (single-elim shipped in #785) would be asserting a sentence no server
+        // would ever send, which is the one thing a mirror of the API must not do.
+        draw_type: 'round-robin',
         max_players: 48,
         entrants: [],
         pools: [],
@@ -558,9 +636,29 @@ export interface TournamentsStoreOptions {
    * can ever cover either, so that tournament can never go live: a spec about the draw,
    * or about starting a tournament, needs a tournament that *could* be started. */
   drawable?: boolean
+  /** Add the two **single-elimination** events to the drawable seed — which it also
+   * turns on, since it extends that seed rather than the default one: `EVENT.BRACKET`,
+   * which cuts into a real bracket, and `EVENT.LONE`, which is refused for a field of
+   * one.
+   *
+   * Opt-in for the same reason `crowded` and `gated` are — its entrants would move the
+   * tournament-level Entries total the journey spec narrates, and a third and fourth
+   * uncut event would lengthen the work list a refused go-live prints. It is also the
+   * ONLY path in this suite to `planDraw`'s `single-elim` arm: without it that arm could
+   * be reverted to a refusal and every spec here would stay green. */
+  bracket?: boolean
+  /** The **draw-type catalogue** the detail payload carries (ADR 20260726) — the rows
+   * the event editor's draw-type picker renders, and the only source of the labels a
+   * director reads.
+   *
+   * Defaults to the factory's `DRAW_TYPE_CATALOGUE`, which mirrors the migration's seed.
+   * A spec overrides it to prove the picker is following *this payload*: an assertion
+   * against the seeded labels alone would pass just as happily against a client that
+   * still kept a hardcoded list, which is the thing the ADR deleted. */
+  drawTypeCatalogue?: DrawTypeRead[]
   /** Events whose draw is already CUT when the page loads — by name, and only from the
-   * drawable seed (a draw cannot be cut for an event whose draw type has no generator,
-   * and the stub refuses one exactly as the server does).
+   * drawable seed (the default seed's events are pool-less or empty, and the stub refuses
+   * to cut those exactly as the server does).
    *
    * Cut with the same planner the cut ROUTE uses, from the same entrants and the same
    * pools, so a seeded draw is one this stub could have dealt — never a hand-written
@@ -765,54 +863,23 @@ function drawOrder(entrants: TournamentEntrantRead[]): TournamentEntrantRead[] {
   )
 }
 
-/** The **snake**: which pool each entrant is dealt into (`api/app/draws.py`) — row by row
- * across the pools, reversing every other row, so the top seeds land one per pool and
- * pool sizes differ by at most one.
+/** Plan an event's draw exactly as the cut route does — from its entrants in draw order —
+ * or say why it cannot be. Used for BOTH the seeded draws (`drawn`) and the route, so a
+ * fixture on screen is always one this stub could have dealt.
  *
- * Only the SIZES are wanted here (the planner deals the fixtures itself), and they are
- * wanted because the 422 is asked of the pools the snake actually produced, never of
- * arithmetic on N and P: it is the dealt pool that would have a lone entrant in it. */
-function snakedSizes(count: number, poolCount: number): number[] {
-  const sizes = Array.from({ length: poolCount }, () => 0)
-  for (let index = 0; index < count; index += 1) {
-    const row = Math.floor(index / poolCount)
-    const offset = index % poolCount
-    const column = row % 2 === 0 ? offset : poolCount - 1 - offset
-    sizes[column] += 1
-  }
-  return sizes
-}
-
-/** Why this event cannot be cut as it stands, in the server's words — or `null` when it
- * can. The 422s are the planner's, and they are the ones a director actually meets:
- * an unsupported draw type (round-robin is the only generator today — single-elim is
- * #785), no pools to deal into, and a pool the snake would leave with fewer than two
- * entrants, who would have nobody to play. */
-function cutRefusal(event: TournamentEventRead): string | null {
-  if (event.draw_type !== 'round-robin') {
-    return (
-      `A ${event.draw_type} draw cannot be cut yet. ` +
-      "Change the event's draw type to one that can, or wait for support."
-    )
-  }
-  if (event.pools.length === 0) {
-    return 'A round-robin draw needs at least one pool.'
-  }
-  const sizes = snakedSizes(event.entrants.length, event.pools.length)
-  if (sizes.some((size) => size < 2)) {
-    return (
-      `${event.entrants.length} entrants across ${event.pools.length} pool(s) would ` +
-      'leave a pool with fewer than 2 entrants, who would have nobody to play.'
-    )
-  }
-  return null
-}
-
-/** Plan an event's draw exactly as the cut route does — from its entrants in draw order,
- * across its own pools. Used for BOTH the seeded draws (`drawn`) and the route, so a
- * fixture on screen is always one this stub could have dealt. */
-function planDraw(event: TournamentEventRead): TournamentFixtureRead[] {
-  return planRoundRobinFixtures(
+ * The decision itself — which draws are refused, and the server's own sentences for
+ * refusing them (`app/draws.py`, where for these 422s the sentence IS the answer) — is
+ * `planDraw` in `src/mocks/factories/tournaments/tournament.factory.ts`, shared with the
+ * MSW store. It used to be copied here, and that copy could not be trusted to stay in
+ * step: `tsconfig.app.json` includes only `src`, so no `tsc -b` ever reads this directory
+ * and Playwright transforms it without typechecking — its exhaustive `switch` over
+ * `DrawType` had no compile-time guarantee at all, and a new member would have red in the
+ * `src` store while silently falling through here. Behind the one checked declaration,
+ * both stubs get that guarantee. What is left local is only how a row is read into the
+ * planner's arguments. */
+function planEventDraw(event: TournamentEventRead): DrawPlan {
+  return planDraw(
+    event.draw_type,
     drawOrder(event.entrants).map((e) => e.id),
     event.pools.map((p) => p.id),
   )
@@ -905,9 +972,11 @@ export class TournamentsStore {
     // start a tournament would be refused for a reason it never asked for.
     for (const name of options.drawn ?? []) {
       const event = this.eventNamed(name)
-      const refusal = cutRefusal(event)
-      if (refusal) throw new Error(`cannot seed a draw for ${name}: ${refusal}`)
-      this.mutateEvent(event.id, (e) => ({ ...e, fixtures: planDraw(e) }))
+      const plan = planEventDraw(event)
+      if (!plan.ok) {
+        throw new Error(`cannot seed a draw for ${name}: ${plan.detail}`)
+      }
+      this.mutateEvent(event.id, (e) => ({ ...e, fixtures: plan.fixtures }))
     }
     // A tournament SEEDED live has been through go-live, so its ready fixtures are
     // `in_progress` matches already (#788) — a live seed whose fixtures stayed
@@ -966,6 +1035,18 @@ export class TournamentsStore {
 
   private readDetail(): TournamentDetailRead {
     return { ...this.detail, events: this.detail.events.map((e) => this.read(e)) }
+  }
+
+  /** One row of the LIST, which is the detail shape with the **draw-type catalogue
+   * withheld** (`draw_type_catalogue: null`, `api/app/tournament_list.py`).
+   *
+   * A catalogue is page data for the one page that picks a draw type, so the list route
+   * genuinely sends `null` rather than repeating global reference data on every row. It
+   * is not `[]`: an empty array would say "the server can run no draw types at all",
+   * which is a different — and false — claim, and a client that fell back to it would
+   * render an empty picker instead of the one it is meant to. */
+  private readListRow(): TournamentDetailRead {
+    return { ...this.readDetail(), draw_type_catalogue: null }
   }
 
   /** The active entrants of an event, by event name — for assertions that want
@@ -1197,7 +1278,7 @@ export class TournamentsStore {
     if (method !== 'GET' && this.gate) await this.gate
 
     if (method === 'GET' && path === '/v1/tournaments') {
-      return json(route, 200, [this.readDetail()])
+      return json(route, 200, [this.readListRow()])
     }
     if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}`) {
       // Walk any in-flight schedule solve one step per detail read — the read the
@@ -1358,10 +1439,10 @@ export class TournamentsStore {
     if (drawHasPlay(event)) {
       return json(route, 409, { detail: DRAW_UNDER_WAY_DETAIL })
     }
-    const refusal = cutRefusal(event)
-    if (refusal) return json(route, 422, { detail: refusal })
+    const plan = planEventDraw(event)
+    if (!plan.ok) return json(route, 422, { detail: plan.detail })
 
-    const fixtures = planDraw(event)
+    const fixtures = plan.fixtures
     this.mutateEvent(eventId, (e) => ({ ...e, fixtures }))
     // **201** with the fixtures, as the route is declared — the client parses them
     // (`parseFixtures`, `data/api.ts`) before it reconciles off the refetch, so a body

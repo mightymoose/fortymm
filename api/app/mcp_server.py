@@ -790,7 +790,7 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
                 select(User.username).where(User.id == tournament.created_by_user_id)
             )
         ).scalar_one()
-        # The identical six-statement batched composition + ``serialize_detail`` the
+        # The identical seven-statement batched composition + ``serialize_detail`` the
         # HTTP route runs — extracted into the shared ``tournament_detail`` reader,
         # so this tool and the page can never drift on how a tournament is read.
         return await tournament_detail(
@@ -1737,9 +1737,6 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
     A ``match`` over the error, not ``str(error)`` over whatever arrives, so each arm
     tells an agent which of *their* events cannot be cut and why:
 
-    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's draw
-      type has no generator yet (only round-robin does today), a fact to change on the
-      event, not a transient one to retry.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (an entry is one row per player, with nowhere to
       seat a partner or a team, ADR-0788), so the refusal names the event and is
@@ -1749,14 +1746,11 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       across 3 pool(s)"), passed through so the agent reads exactly what a director
       would.
     * The fallback arm is a generic sentence, never a future subclass's own message —
-      refusing vaguely is a bug report, leaking internals is a defect."""
+      refusing vaguely is a bug report, leaking internals is a defect. Covered by
+      ``test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_it``,
+      which invents a ``DrawError`` subclass carrying internals and asserts none of
+      them reach the client."""
     match error:
-        case UnsupportedDrawType():
-            return ToolError(
-                f"This event's {error.draw_type.value} draw can't be cut yet — only "
-                "round-robin draws are supported. Change the event's draw type to one "
-                "that can, or wait for support."
-            )
         case NonSinglesDraw():
             return ToolError(
                 f"A {error.event_format.value} event can't be given a draw — only "
@@ -1791,10 +1785,9 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     Raises a ``ToolError`` when no event has that id, when you are not the owner of the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
-    cannot produce a draw at all: its draw type has no generator yet (only round-robin
-    does today), it has no pools configured for a pooled draw type, or its field is too
-    small for its pools (a pool of fewer than two has nobody to play). The message names
-    what to change."""
+    cannot produce a draw at all: it is not a singles event, it has no pools configured
+    for a pooled draw type, or its field is too small for its pools (a pool of fewer
+    than two has nobody to play). The message names what to change."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
@@ -2019,8 +2012,14 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     and why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
 
     * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
-      draw type has no schedule generator yet (only round-robin does today), a fact
-      to change on the event, not a transient one to retry.
+      draw type has no schedule generator yet (only round-robin does today; single-elim
+      can be *cut* but not yet *placed*), a fact to change on the event, not a
+      transient one to retry. **This arm is the reason the mirror is not exact:**
+      ``_map_draw_refusal_tool_error`` has no ``UnsupportedDrawType`` arm, because on
+      the CUT path the error is unreachable (``strategy_for`` is total). On the PREVIEW
+      path it is genuinely raised — ``schedule_preview`` raises it for single-elim — so
+      the arm here is live code with its own coverage in
+      ``test_schedule_preview_snapshot``.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (ADR-0788), so it can never be previewed.
     * ``DegenerateDraw``'s message is domain-authored copy (the numbers the director
@@ -2086,10 +2085,10 @@ async def preview_schedule(
     ``archived`` tournament is refused (there is a real field and a real solve to
     look at, or it is over).
 
-    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (single- /
-    double-elim, swiss, rr-then-ko) refuses the WHOLE preview with an actionable
-    ``ToolError`` — never a partial grid — because a preview must not invent a
-    schedule for a format production cannot run.
+    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (today that
+    means single-elim) refuses the WHOLE preview with an actionable ``ToolError`` —
+    never a partial grid — because a preview must not invent a schedule for a format
+    production cannot run.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may preview), when the tournament is no

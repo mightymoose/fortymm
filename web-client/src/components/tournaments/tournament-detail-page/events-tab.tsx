@@ -27,6 +27,13 @@ export const EventsTab = ({
   onOpenEvent,
   onNewEvent,
 }: EventsTabProps) => {
+  // The draw formats the server offers (ADR 20260726), handed to each card so it can
+  // name the event's draw type in the server's words. Read off the tournament rather
+  // than taken as a prop of its own: a second prop carrying the same fact is a pair
+  // that can disagree, and only one of them is the payload. `null` means the catalogue
+  // never arrived (the list route withholds it), which a card renders as "no words for
+  // this slug" — never the raw slug.
+  const drawTypes = tournament.drawTypes ?? []
   // Who the viewer is, read once for the whole tab and handed to every card: the
   // roster needs it to pin the player's own chip into a truncated list (#781),
   // and "which entrant is me" is a join on the USERNAME — the session carries no
@@ -76,6 +83,7 @@ export const EventsTab = ({
               key={ev.id}
               event={ev}
               canEdit={canEdit}
+              drawTypes={drawTypes}
               username={username}
               onOpen={() => onOpenEvent(ev)}
               // Self-registration is a *player's* affordance, not the owner's:

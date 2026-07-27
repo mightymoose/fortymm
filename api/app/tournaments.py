@@ -441,9 +441,10 @@ async def get_tournament(
     if row is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
     tournament, username = row
-    # The six-statement batched composition — events, their entrants, their draws,
-    # the completed matches' games (standings), the caller's one ladder rating, and
-    # the newest solve — lives in the shared ``tournament_detail`` reader, which the
+    # The seven-statement batched composition — events, their entrants, their draws,
+    # the completed matches' games (standings), the caller's one ladder rating, the
+    # newest solve, and the selectable draw formats the event form's picker renders
+    # — lives in the shared ``tournament_detail`` reader, which the
     # MCP ``get_tournament`` tool composes too, so the two surfaces cannot drift. The
     # statement-count pin (tests/test_tournaments.py) is measured against this route,
     # which is the reader plus this one visibility-scoped load.
@@ -985,8 +986,8 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     """The 422 for a draw the domain will not produce — in words a director can read.
 
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
-    a competition (``DegenerateDraw``) or is not a format we can cut yet
-    (``UnsupportedDrawType``). So it is a 422 — the request is well-formed and
+    a competition (``DegenerateDraw``) or is not a shape a fixture can seat
+    (``NonSinglesDraw``). So it is a 422 — the request is well-formed and
     authorized, but its *content* (this event's pools, this event's field, this event's
     draw type) cannot be turned into a draw — rather than the 500 an uncaught exception
     would be, and rather than a 409, which would invite a retry that will fail
@@ -994,11 +995,10 @@ def _draw_refusal(error: DrawError) -> HTTPException:
 
     A ``match`` over the error, not ``str(error)`` over whatever arrives:
 
-    * ``UnsupportedDrawType`` carries the ``draw_type`` **structurally**, so the
-      sentence is composed here from the fact rather than parsed out of a message. Its
-      own ``str()`` ("… is not implemented yet") is written for the developer who has
-      to go implement it; the director needs to be told which of *their* events cannot
-      be cut, and that the rest of the tournament is unaffected.
+    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
+      is composed here from the fact rather than parsed out of a message written for a
+      developer — the director needs to be told which of *their* events cannot be cut,
+      and that the rest of the tournament is unaffected.
     * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
       it is passed through on purpose: only the strategy knows *which* degeneracy it hit
       — no pools at all, or a snake that would leave some pool with one player and
@@ -1006,6 +1006,15 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
       director reads.
+    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
+      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
+      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
+      with the **schedule-preview** route below, and ``app.schedule_preview`` still
+      raises it for ``single_elim``: the CP-SAT scheduler is round-robin-only, so a
+      pool-less bracket has no windows to solve over. A director previewing a bracket's
+      schedule must be told it is the *draw type* that cannot be previewed, not left
+      with the generic sentence, which says the event's own state is at fault and would
+      send them hunting through pools and entrants that are perfectly fine.
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking
@@ -1013,15 +1022,9 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       same way ``_registration_refusal_detail`` buys its totality.)
     """
     match error:
-        case UnsupportedDrawType():
-            detail = (
-                f"A {error.draw_type.value} draw cannot be cut yet. "
-                "Change the event's draw type to one that can, or wait for support."
-            )
         case NonSinglesDraw():
-            # Composed from the structural ``event_format``, like
-            # ``UnsupportedDrawType`` above: a doubles/teams event can never be cut in
-            # any state (an entry is
+            # Composed from the structural ``event_format``: a doubles/teams event can
+            # never be cut in any state (an entry is
             # one row per player, with nowhere to record a partner or a team, ADR-0788),
             # so a director is told which event is un-drawable and why — a permanent
             # fact, not a retryable one.
@@ -1032,6 +1035,15 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             )
         case DegenerateDraw():
             detail = str(error)
+        case UnsupportedDrawType():
+            # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
+            # ``strategy_for`` is total). Named from the structural ``draw_type`` so the
+            # sentence says which format cannot be previewed.
+            detail = (
+                f"A {error.draw_type.value} draw cannot be scheduled yet. The "
+                "scheduler places pooled draws over their pools' time windows, and a "
+                "bracket has none to place. Preview a round-robin event instead."
+            )
         case _:
             detail = "This event's draw cannot be cut as the event stands."
     return HTTPException(status_code=422, detail=detail)
@@ -1079,10 +1091,16 @@ async def cut_event_draw(
     a recorded winner, or any fixture that has become a real match. A re-cut would throw
     those away, and a draw must never silently eat a score.
 
-    Refused with a `422` when this event cannot produce a draw at all: its draw type has
-    no generator yet (only round-robin does today), it has **no pools** configured for a
-    pooled draw type, or its field is too small for the pools it has — a pool with fewer
-    than two players has nobody to play. The message names what to change.
+    Refused with a `422` when this event cannot produce a draw at all: it has
+    **no pools** configured for a pooled draw type, its field is too small for the
+    pools it has — a pool with fewer than two players has nobody to play — or a
+    bracket has fewer than two entrants. The message names what to change.
+
+    There is no longer a "this draw type has no generator" refusal here: every
+    draw type a director can pick is one that has a strategy, because the pickable
+    set *is* the seeded `draw_types` rows, and those are the types that run
+    (ADR 20260726). Every `422` this route can raise is now about the event's
+    **field or pools**, not its type.
 
     Owner-only. Fixtures come back in pool → round → position order, exactly as the
     tournament-detail page carries them.

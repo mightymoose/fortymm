@@ -18,13 +18,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import NonSinglesDraw, UnsupportedDrawType
+from app.draws import NonSinglesDraw
 from app.models import (
     League,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -101,7 +102,7 @@ async def _make_event(
         tournament_id=tournament.id,
         name="Open Singles",
         format=format,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",
@@ -316,25 +317,14 @@ async def test_a_non_singles_event_raises_non_singles_draw(
     assert await _fixture_rows(db_session, event_id) == []
 
 
-async def test_an_unimplemented_draw_type_raises_unsupported_draw_type(
-    db_session: AsyncSession,
-    default_league: League,
-) -> None:
-    owner = await make_user(db_session, "owner-rrko")
-    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    # ``rr-then-ko`` has no generator today (ADR-0786): the strategy is chosen before
-    # the field is read, so this is refused whatever the entrants.
-    event = await _make_event(db_session, tournament, draw_type=DrawType.rr_then_ko)
-    tournament_id, event_id = tournament.id, event.id
-    await _enter_field(db_session, event, 4, prefix="rrko")
-
-    await db_session.refresh(owner)
-    with pytest.raises(UnsupportedDrawType):
-        await cut_event_draw(
-            db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
-        )
-
-    assert await _fixture_rows(db_session, event_id) == []
+# ``test_an_unimplemented_draw_type_raises_unsupported_draw_type`` lived here. Its only
+# subject was an ``rr-then-ko`` event, which is no longer a ``DrawType`` member (ADR "a
+# draw type is a seeded row, and the enum holds only what runs"): every draw type this
+# verb can be handed now has a strategy, so ``cut_event_draw`` has no ``draw_type`` that
+# raises ``UnsupportedDrawType`` to re-point it at. The claim it protected — an
+# unimplemented draw type is refused — moved to the request boundary and is asserted
+# in ``test_tournaments`` (create-event 422) and in ``test_draws`` (``strategy_for``
+# is total).
 
 
 # ----- un-cut removes the fixtures -------------------------------------------

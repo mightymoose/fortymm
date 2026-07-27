@@ -123,8 +123,9 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     against.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with (``strategy_for(event.draw_type)``),
-    and it does so before this config exists; copying it in here as well gave the domain
+    is what ``cut_draw`` picks the *strategy* with
+    (``strategy_for(event.draw_settings.draw_type)``), and it does so before this config
+    exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
@@ -374,11 +375,11 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     open exactly that window.
 
     Raises :class:`~app.draws.DrawError` — the base the route turns into a 422 — and
-    writes nothing when it does. The strategy is chosen *first*, so an unimplemented
-    draw type is refused before the field is even read: there is no arrangement of
-    entrants that would make a swiss draw cuttable today. And the whole plan is made
-    *before* the DELETE, so a refused re-cut cannot leave a director with the draw they
-    had thrown away and none of the one they could not have.
+    writes nothing when it does. The format is judged *first*, so a non-singles event is
+    refused before the field is even read: there is no arrangement of entrants that
+    would make a doubles draw cuttable. And the whole plan is made *before* the DELETE,
+    so a refused re-cut cannot leave a director with the draw they had thrown away and
+    none of the one they could not have.
 
     That last property has **two** locks on it, and it is worth knowing that they are
     two, because a test can only ever see one of them fail: the ordering here, and the
@@ -397,13 +398,14 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     or teams event cannot be materialized — a fixture seats one entry per side, a match
     seats that entry's single user (ADR-0788) — so a draw that could never become
     playable is refused at the cut, the earliest and clearest point, rather than at
-    go-live. Checked here beside ``strategy_for`` so the two "this event cannot be cut"
-    refusals sit together and neither reads the field of an event that has no business
-    being cut.
+    go-live. Checked here, before ``strategy_for`` picks a strategy, so the refusal
+    lands without reading the field of an event that has no business being cut. It is
+    the only "this event cannot be cut" refusal left at this seam — ``strategy_for`` is
+    total now that the enum holds only what runs (ADR 20260726), so it refuses nothing.
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for(event.draw_type)
+    strategy = strategy_for(event.draw_settings.draw_type)
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )

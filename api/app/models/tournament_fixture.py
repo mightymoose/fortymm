@@ -29,9 +29,9 @@ class TournamentFixture(Base):
     One table holds every draw type's fixtures, because topology is the *strategy's*
     knowledge, not the schema's (ADR-0786). There is deliberately no ``next_slot_id``:
     single-elim's successor is arithmetic on ``(round, position)``, round-robin has no
-    successor at all, and swiss cannot know its next round until the current one
-    finishes. Storing the topology would be a second copy of the truth that churns on
-    every re-cut, so ``advance()`` recomputes it from these rows instead.
+    successor at all, and a swiss draw could not know its next round until the current
+    one finished. Storing the topology would be a second copy of the truth that churns
+    on every re-cut, so ``advance()`` recomputes it from these rows instead.
 
     **A ``NULL`` side means exactly one thing: TBD** — ``advance()`` will fill it when
     the feeding fixture is decided. Byes are *not* a NULL side; they are the **absence
@@ -43,8 +43,8 @@ class TournamentFixture(Base):
     ``pool_id`` is a **string ref, not a foreign key**: pools are JSONB value-objects
     on the event (``{id, name, slot, table_ids}`` — a slice of the venue), so there is
     no table to point at. Integrity is procedural: the event's pool *id set* freezes
-    while a draw exists. ``NULL`` means the draw is un-pooled (single-elim), or that
-    this is the KO stage of an rr-then-ko event.
+    while a draw exists. ``NULL`` means the draw is un-pooled — single-elim today, and
+    the knockout stage of a pools-then-knockout draw type once #787 adds one.
 
     The ``UNIQUE (event_id, pool_id, round, position)`` below is the identity a re-cut
     reconciles on, and it is declared **NULLS NOT DISTINCT** (Postgres 15+). Under the

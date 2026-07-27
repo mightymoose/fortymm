@@ -1,12 +1,16 @@
 // Select/segmented-control option lists and the eligibility predicate schema.
 // Shared by the event editor, the event cards, and the predicate formatter.
 
-import type { DrawType, EventFormat, MatchLength } from './types'
+import type { EventFormat, MatchLength } from './types'
 
 /** The label an option list gives `value`, or `fallback` when the list has no
- * entry for it. A viewer reads the option's label ("RR → KO"), never the enum
- * key it is stored under ("rr-then-ko"), so every surface that renders a stored
+ * entry for it. A viewer reads the option's label ("Round robin"), never the enum
+ * key it is stored under ("round-robin"), so every surface that renders a stored
  * value needs this lookup — it was hand-rolled five times before it lived here.
+ *
+ * The list need not be a hardcoded one: the draw-type catalogue arrives from the
+ * server (`./draw-types`) and is looked up through exactly this function, so a stored
+ * draw type is labelled by the same rule as a stored format.
  *
  * The fallback is an argument rather than a default because the two policies in
  * use differ deliberately: a read-only `Field` passes `null`, so an unknown key
@@ -26,13 +30,13 @@ export const FORMAT_OPTIONS: { value: EventFormat; label: string }[] = [
   { value: 'teams', label: 'Teams' },
 ]
 
-export const DRAW_TYPE_OPTIONS: { value: DrawType; label: string }[] = [
-  { value: 'single-elim', label: 'Single elimination' },
-  { value: 'double-elim', label: 'Double elimination' },
-  { value: 'round-robin', label: 'Round robin' },
-  { value: 'rr-then-ko', label: 'RR → KO' },
-  { value: 'swiss', label: 'Swiss' },
-]
+// ⚠️ There is deliberately **no `DRAW_TYPE_OPTIONS` here**, and there must not be one
+// again. The draw-type catalogue is SERVED — the tournament-detail payload's
+// `draw_type_catalogue`, parsed by `./draw-types` — because a hardcoded list is a
+// second copy of the server's `draw_types` table that has to be kept in agreement by
+// hand, and while it drifted a director could pick a format the server cannot plan
+// (ADR 20260726). The lists below stay hardcoded because their vocabularies are fixed
+// by the wire schema and carry no server-side copy to drift from.
 
 export const MATCH_LENGTH_OPTIONS: { value: MatchLength; label: string }[] = [
   { value: 1, label: 'Bo1' },
