@@ -414,6 +414,21 @@ the fixture). *Ready* is the state that ends the moment the match is created:
 _Avoid_: slot (a *Slot* is a window of time), tournament match (a fixture is
 the pre-play pairing; the match is the contest it becomes), tie.
 
+**Venue**:
+Where a tournament is played: a postal address, plus the coordinates it resolves
+to. A tournament **may have no venue at all**, at every status from draft to
+archived — and that is a first-class state, not missing data. It covers two
+situations that need no telling apart, because nothing behaves differently:
+the venue is not booked yet, and the venue is deliberately withheld (a small
+tournament at somebody's home, whose address should not be pinned on a public
+map). A tournament with no venue is simply never a result of a proximity
+search. When a venue *is* recorded its coordinates are always known — there is
+no venue whose location is a mystery.
+_Avoid_: "venue TBD" as a label (it promises a venue is coming, which is false
+for the withheld case — a tournament with no venue shows nothing, not a
+placeholder), location (ambiguous between the address and the coordinates),
+address (that is one *part* of a venue, not the whole).
+
 **Pool**:
 One concept with two faces, deliberately not split: a reserved slice of the
 venue (a set of tables for a window of time) *and*, once a round-robin draw is

@@ -24,6 +24,7 @@
 import { expect, test } from '@playwright/test'
 
 import { TournamentsListPage } from '../page-objects/tournaments/tournaments-list.page'
+import { UNRESOLVABLE_ADDRESS } from '../page-objects/tournaments/tournaments-store'
 import { expectAxeClean } from '../support/axe'
 
 /** The dialog's messages, hard-coded test-side (as the editor spec's are): importing
@@ -173,6 +174,60 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     await expect(pom.nameInput).toHaveValue('Spring Open 2026')
   })
 
+  /**
+   * "Preview location" with the venue boxes empty used to flash "Locating…", take
+   * a **422** off the endpoint's own `min_length` on `address`, and then revert to
+   * the button saying nothing at all.
+   *
+   * Only a browser can prove the half that matters: that **no request leaves**. A
+   * component test can be satisfied by a re-labelled error; the store here tallies
+   * every call the app really makes through the real fetch stack, with MSW off.
+   * The second half of the test then geocodes for real, so the tally is a live
+   * observation and not a counter that never moves.
+   */
+  test('previewing an empty venue hints — with no request, and never the red alert', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+    const geocodes = () =>
+      store.requests.filter((r) => r.path === '/v1/geocode').length
+
+    await pom.openWithName('Spring Open 2026')
+    await pom.previewLocationButton.click()
+
+    // Answered locally and at once: the neutral hint, no pin, and NOT the
+    // destructive "we couldn't locate that address" alert — a tournament with no
+    // venue is valid, so nothing here failed.
+    await expect(pom.previewLocationHint).toBeVisible()
+    await expect(pom.previewLocationHint).toContainText(
+      'Add a venue address to preview its location.',
+    )
+    await expect(pom.previewLocationError).toHaveCount(0)
+    await expect(page.getByTestId('location-map-fallback')).toHaveCount(0)
+    await expect(page.locator('body')).not.toContainText('Locating…')
+    // ⚠️ THE assertion: nothing was sent.
+    expect(geocodes()).toBe(0)
+
+    // New markup in a portalled dialog, whose contrast jsdom cannot see — and a
+    // muted "low-key" hint is exactly the kind that fails AA if hand-tinted.
+    await expectAxeClean(page, 'new tournament — the empty-venue preview hint', {
+      exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
+    })
+
+    // Now the genuine zero-results address: the request DOES go, and the red alert
+    // — not the hint — is what answers it.
+    await pom.venueInput.fill(UNRESOLVABLE_ADDRESS)
+    await pom.previewLocationButton.click()
+
+    await expect(pom.previewLocationError).toBeVisible()
+    await expect(pom.previewLocationHint).toHaveCount(0)
+    expect(geocodes()).toBe(1)
+
+    // Neither preview saved anything, and nothing fell through the stub.
+    expect(store.countOf('POST')).toBe(0)
+    expect(store.unhandled).toEqual([])
+  })
+
   test('creates a tournament and closes on success', async ({ page }) => {
     // The happy path, so the spec above is a claim about a *refusal* and not about a
     // dialog that never worked.
@@ -185,5 +240,48 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     expect(store.countOf('POST')).toBe(1)
     // The dialog's success navigation lands on the created tournament.
     await expect(page).toHaveURL(/\/tournaments\/[^/]+$/)
+  })
+
+  /**
+   * A tournament may be created with **no venue at all** (CONTEXT.md, "Venue"):
+   * announced before the room is booked, or held at somebody's home whose address
+   * is deliberately withheld. The dialog above leaves every venue box empty, and
+   * this is the assertion about what that PUT ON THE WIRE.
+   *
+   * It belongs here rather than in vitest because the claim is about the serialized
+   * request body, after the real `openapi-fetch` client with MSW off. A component
+   * test can only see the draft handed to the callback; `address: null` versus six
+   * empty strings plus a defaulted `country: "USA"` is a difference the server acts
+   * on — the latter is a venue, and it would get geocoded.
+   */
+  test('sends address: null when the venue boxes are left empty', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+
+    await pom.openWithName('Garage Invitational')
+    await pom.createButton.click()
+
+    await expect(pom.dialog).toBeHidden()
+    expect(store.createBodies).toHaveLength(1)
+    expect(store.createBodies[0].address).toBeNull()
+    expect(store.unhandled).toEqual([])
+  })
+
+  /** The positive control for the test above: a typed venue really is sent, so the
+   * `null` there is about the empty boxes and not about a dialog that stopped
+   * sending an address at all. */
+  test('sends the venue the organizer typed', async ({ page }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+
+    await pom.openWithName('Autumn Classic')
+    await pom.venueInput.fill('Berkeley TT Club')
+    await pom.createButton.click()
+
+    await expect(pom.dialog).toBeHidden()
+    expect(store.createBodies[0].address).toMatchObject({
+      venue: 'Berkeley TT Club',
+      country: 'USA',
+    })
   })
 })

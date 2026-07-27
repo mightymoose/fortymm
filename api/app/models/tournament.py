@@ -88,7 +88,24 @@ class Tournament(Base):
     )
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    address: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # SQL NULL means "this tournament has no venue" — a real state at every status
+    # (announced before the venue is booked, or deliberately withheld). When an
+    # address *is* stored it is always fully geocoded, so no reader ever meets a
+    # half-populated address. See the 2026-07-26 amendment to ADR
+    # ``20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null``.
+    #
+    # ``none_as_null=True`` is load-bearing, not decoration. A plain JSONB column
+    # serializes Python ``None`` into the JSON ``null`` *literal* — a present value of
+    # JSONB type ``null`` — so "no venue" would have TWO stored representations: the
+    # literal for rows the app wrote, and a true SQL NULL for rows written by hand or
+    # by a migration backfill. Both deserialize back to Python ``None``, which is
+    # exactly why the divergence is invisible from Python and stays invisible until a
+    # reader writes the obvious ``Tournament.address.is_(None)`` and silently matches
+    # zero rows. With this flag, ``None`` persists as a real SQL NULL and ``IS NULL``
+    # is the correct, only predicate for "has no venue".
+    address: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     table_catalogue: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )

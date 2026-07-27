@@ -25,7 +25,13 @@ import type {
 /** The seeded venue address. Every part is optional in the domain (blank =
  * `''`), so the partial and wholly-blank cases are expressed by overriding
  * parts to `''` — `buildAddress({ venue: '', city: '', region: '' })` — rather
- * than by hand-rolling a second literal at each call site. */
+ * than by hand-rolling a second literal at each call site.
+ *
+ * ⚠️ A tournament with **no venue at all** is a different thing, and is not built
+ * here: it is `buildTournament({ address: null })` (CONTEXT.md, "Venue"). An
+ * all-blank `Address` is an address whose parts happen to be empty — a state the
+ * server normalizes away on write — whereas `null` is the first-class "there is no
+ * venue", which is also the only one of the two that carries no coordinates. */
 export function buildAddress(overrides: Partial<Address> = {}): Address {
   return {
     venue: 'Berkeley TT Club',
@@ -640,6 +646,8 @@ export function buildTournament(
     startDate: '2026-06-13',
     endDate: '2026-06-14',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
+    // Venued by default. `buildTournament({ address: null })` is the venue-less
+    // tournament — no venue line, no pin, no map anywhere it is rendered.
     address: buildAddress(),
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [buildEvent()],

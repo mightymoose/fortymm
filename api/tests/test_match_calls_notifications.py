@@ -52,21 +52,30 @@ async def test_match_calls_category_is_in_the_enum():
 
 
 async def test_migration_seed_matches_the_conftest_labels():
-    """Migration 0015 can't import app code, so its hardcoded seed row is
+    """Migration 0009 can't import app code, so its hardcoded seed row is
     loaded here by path and pinned to the enum + labels the tests seed — the
-    same drift guard the taxonomy docstring describes for migration 0009."""
+    same drift guard the taxonomy docstring describes for the other categories.
+    (The row was seeded by a standalone 0015 until that migration was folded
+    back into 0009, which creates and seeds ``notification_types``.)"""
     path = (
         Path(__file__).parent.parent
         / "migrations"
         / "versions"
-        / "20260716_0002_0015_seed_match_calls_notification_category.py"
+        / "20260607_0001_0009_create_notification_tables.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_0015", path)
+    spec = importlib.util.spec_from_file_location("migration_0009", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    row_id, key, name, short, order = module.MATCH_CALLS_TYPE_SEED
+    # display_order is the 1-based position in the seed list (see the migration's
+    # ``enumerate(..., start=1)``), so the index is part of what's pinned here.
+    seed = list(module.NOTIFICATION_TYPE_SEED)
+    order, (row_id, key, name, short) = next(
+        (i, row)
+        for i, row in enumerate(seed, start=1)
+        if row[1] == NotificationCategory.MATCH_CALLS.value
+    )
     assert uuid.UUID(row_id) == uuid.UUID("33333333-3333-3333-3333-333333330006")
     assert key == NotificationCategory.MATCH_CALLS.value
     assert (name, short) == ("Match calls", "Calls")

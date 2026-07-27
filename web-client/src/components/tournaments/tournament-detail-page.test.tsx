@@ -21,7 +21,10 @@ vi.mock('@vis.gl/react-google-maps', () => ({
 import { ApiError } from '@/api/client'
 import { mockSessionEndpoint } from '@/mocks/endpoints/session/session.endpoint'
 import { mockTournamentTransitionEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
-import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildTournamentDetailRead,
+  UNBREAKABLE_VENUE_NAME,
+} from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
 import { PERM } from '@/lib/permissions'
 import { sessionResponse } from '@/test/factories'
@@ -73,6 +76,59 @@ describe('TournamentDetailPage', () => {
       // own meta — so this asserts the item, not the character.)
       expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
     })
+
+    // The real "no venue" state (CONTEXT.md, "Venue"): `address: null` — announced
+    // before the room is booked, or a home game whose address is withheld. The
+    // header shows the dates and nothing else where the venue would be.
+    it('renders nothing — no meta item, no "TBD" — for a tournament with NO VENUE', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: null }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
+      // Never a placeholder: "TBD" promises a venue is coming (false when it is
+      // withheld) and implies a private address is merely missing (#1206).
+      expect(document.body).not.toHaveTextContent(/TBD/i)
+      // …and the rest of the header is untouched — the dates are still there, so
+      // this is a missing venue row and not a page that failed to render.
+      expect(document.body).toHaveTextContent('Jun 13, 2026')
+    })
+
+    /**
+     * A 680-character venue name with no break opportunity in it (#1199).
+     *
+     * ⚠️ **This is a supplement, not the proof.** The defect is that the page
+     * scrolled sideways, and jsdom performs no layout: `scrollWidth` and
+     * `clientWidth` are `0` for every element here, so an overflow assertion
+     * written in this file would pass against the truncating version, the wrapping
+     * version, and a version that renders the name 5742px wide. What vitest CAN
+     * say is what the markup asks for and that nothing was dropped from it; the
+     * measurement lives in `e2e/tournaments/tournament-venue.spec.ts`.
+     */
+    it('renders an unbroken 680-character venue in full, asking for a wrap', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({
+            venue: UNBREAKABLE_VENUE_NAME,
+            city: '',
+            region: '',
+          }),
+        }),
+      })
+
+      const text = tournamentDetailPagePage.queryVenueText()
+      // Every character of it — the fix wraps the name, it does not hide it, so
+      // there is no truncation, no ellipsis and no clamp of the text itself.
+      expect(text).toHaveTextContent(UNBREAKABLE_VENUE_NAME)
+      // `wrap-anywhere` and not `truncate`: only `overflow-wrap: anywhere` lowers
+      // this flex item's min-content contribution, which is what stops it forcing
+      // the header wider than the viewport (see the comment at the call site).
+      expect(text).toHaveClass('wrap-anywhere')
+      expect(text).not.toHaveClass('truncate')
+      // No clamp either. Clamping would keep the page narrow while hiding the
+      // organizer's own venue, which is the wrong outcome, not a lesser fix.
+      expect(text?.className).not.toMatch(/line-clamp/)
+    })
   })
 
   // The display-only venue map (chore 4d): opening a tournament shows its venue on
@@ -119,6 +175,23 @@ describe('TournamentDetailPage', () => {
       })
 
       expect(tournamentDetailPagePage.queryVenueMapFallback()).toBeNull()
+    })
+
+    // `address: null` has no coordinates to pin at all. Rendering the map anyway
+    // would need a fallback pair, and the only one available is (0, 0) — which
+    // would put a tournament held at somebody's home in the Gulf of Guinea, on a
+    // public page, having been told not to show its address.
+    it('mounts NO map — and no marker — for a tournament with NO VENUE', () => {
+      vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-browser-key')
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: null }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueMapFallback()).toBeNull()
+      // The keyed branch too: no marker was ever asked for, so nothing was pinned
+      // at (0, 0). A fallback-only assertion would miss exactly that.
+      expect(markerProps).not.toHaveBeenCalled()
+      vi.unstubAllEnvs()
     })
   })
 

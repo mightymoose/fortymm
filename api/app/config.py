@@ -7,7 +7,25 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+from enum import StrEnum
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class GeocoderChoice(StrEnum):
+    """Which geocoding implementation this process uses — a closed set.
+
+    Selection is **explicit configuration**, never inferred from whether a key
+    happens to be present (ADR "a venue's coordinates are geocoded server-side
+    and not null", 2026-07-26 amendment). Inference failed silently open: an
+    environment meant to geocode for real, whose key was missing or rotated
+    out, quietly hashed addresses into pseudo-random coordinates and stored
+    them as though they were real.
+    """
+
+    GOOGLE = "google"
+    FAKE = "fake"
 
 
 class Settings(BaseSettings):
@@ -78,11 +96,18 @@ class Settings(BaseSettings):
     #: stream's ``realtime_max_stream_seconds`` finally expired.
     realtime_max_connections_per_user: int = 4
 
-    #: Google Geocoding API key. When set, a venue's coordinates are resolved
-    #: server-side by ``GoogleGeocoder`` on write (ADR "a venue's coordinates are
-    #: geocoded server-side and not null"). Unset — the default in local dev, CI,
-    #: and tests — selects the deterministic, network-free ``FakeGeocoder`` in
-    #: ``app.geocoding.dependencies.get_geocoder``.
+    #: Which geocoder resolves a venue's coordinates on write (ADR "a venue's
+    #: coordinates are geocoded server-side and not null"). **Defaults to
+    #: ``google``** and is validated below, so a process that says nothing gets
+    #: the real provider or refuses to start — the test double has to be asked
+    #: for by name (``GEOCODER=fake``). The asymmetry is the point: a config
+    #: mistake must not silently select a double that writes plausible-looking
+    #: nonsense into ``tournaments.address``.
+    geocoder: GeocoderChoice = GeocoderChoice.GOOGLE
+
+    #: Google Geocoding API key. Required when :attr:`geocoder` is ``google``
+    #: (enforced at construction by :meth:`_require_google_key`); ignored when
+    #: it is ``fake``.
     google_geocoding_api_key: str | None = None
 
     #: Base of the SSE ``retry:`` hint sent to the client, in milliseconds —
@@ -93,6 +118,25 @@ class Settings(BaseSettings):
     #: jitter is the point: without it every stream a restarting pod dropped
     #: reconnects in the same millisecond and the pod is stampeded awake.
     realtime_retry_spread_ms: int = 5000
+
+    @model_validator(mode="after")
+    def _require_google_key(self) -> "Settings":
+        """Refuse to construct a ``google`` configuration with no API key.
+
+        Deliberately on the **model**, not in
+        ``app.geocoding.dependencies.get_geocoder``: that provider is only the
+        FastAPI path, while the RQ worker, the retirement sweep and any script
+        construct ``Settings`` too. One guard here covers every entrypoint —
+        and because ``lifespan`` calls :func:`get_settings`, a misconfigured
+        deploy dies at boot rather than at its first geocode.
+        """
+        if self.geocoder is GeocoderChoice.GOOGLE and not self.google_geocoding_api_key:
+            raise ValueError(
+                "GEOCODER is 'google' but GOOGLE_GEOCODING_API_KEY is unset. "
+                "Set the key, or ask for the test double by name with "
+                "GEOCODER=fake."
+            )
+        return self
 
     @property
     def auth0_issuer(self) -> str:

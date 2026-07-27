@@ -1693,16 +1693,52 @@ export const handlers = [
   // ----- geocode (preview pin) -------------------------------------------
   // The "Preview location" lookup (`GET /v1/geocode`). Mirrors the server: a
   // normal address resolves to deterministic coords + a `formatted` label, while
-  // the `__unresolvable__` sentinel (or an empty address) is the coded 409 both
-  // the preview and the create/edit write path answer a zero-result address with
+  // the `__unresolvable__` sentinel is the coded 409 both the preview and the
+  // create/edit write path answer a zero-result address with
   // (`address_not_geocodable`). It shares the 409 status with the other tournament
   // refusals (league-not-editable, draw-under-way) but is told apart by its coded
   // `detail`. Deterministic per address, so the pin is stable across reloads and
   // testable in vitest.
+  //
+  // An **empty** `address` is a **422**, not that 409 — the endpoint's query param is
+  // `Annotated[str, Query(min_length=1)]`, so an empty one is refused by FastAPI's
+  // own validation and never reaches the geocoder. This mock used to answer it with
+  // the coded 409, which is inert for the shipped feature (the previewer
+  // short-circuits before sending an empty address) but told anyone reproducing the
+  // original bug in `npm run dev` the wrong story — a correct bug report about a 422
+  // would have looked wrong against a mock that 409s.
   http.get('*/v1/geocode', async ({ request }) => {
     await delay(200)
-    const address =
-      new URL(request.url).searchParams.get('address')?.trim() ?? ''
+    const raw = new URL(request.url).searchParams.get('address')
+    if (raw === null || raw.length === 0) {
+      // FastAPI's own request-validation body: `detail` is an ARRAY of errors, not
+      // the object a coded refusal carries.
+      return HttpResponse.json(
+        {
+          detail: [
+            raw === null
+              ? {
+                  type: 'missing',
+                  loc: ['query', 'address'],
+                  msg: 'Field required',
+                  input: null,
+                }
+              : {
+                  type: 'string_too_short',
+                  loc: ['query', 'address'],
+                  msg: 'String should have at least 1 character',
+                  input: '',
+                  ctx: { min_length: 1 },
+                },
+          ],
+        },
+        { status: 422 },
+      )
+    }
+    // Trimmed only AFTER the length check, as on the server: `min_length` counts
+    // the raw characters, so an all-whitespace address really does reach the
+    // geocoder — and resolves to nothing, which is the coded 409 below.
+    const address = raw.trim()
     if (!address || address.includes('__unresolvable__')) {
       return HttpResponse.json(
         {

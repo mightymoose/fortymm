@@ -1369,3 +1369,94 @@ describe('the schedule solve tick — calling on a live tournament', () => {
     expect(called.every((f) => f.call_notified_count === 1)).toBe(true)
   })
 })
+
+// The venue on a WRITE. A tournament may have none at all (CONTEXT.md, "Venue"),
+// and the server settles what that looks like on the wire at its own boundary
+// (`SubmittedAddress`): omitted, `null`, and an object whose six components are all
+// blank are ONE state — no venue — and none of them reaches the geocoder.
+//
+// The mock has to agree, in both directions. More permissive and `npm run dev`
+// would store a blank address and pin it in Berkeley; less permissive and clearing
+// the venue boxes would look like a bug in the form.
+describe('the venue on a create/update', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const venue = {
+    venue: 'Oakland Arena',
+    street: '7000 Coliseum Way',
+    city: 'Oakland',
+    region: 'CA',
+    postal: '94621',
+    country: 'USA',
+  }
+  const blank = {
+    venue: '',
+    street: '',
+    city: '',
+    region: '',
+    postal: '',
+    country: '',
+  }
+
+  const create = (address: typeof venue | null | undefined) =>
+    createTournament({
+      name: 'Written Cup',
+      description: null,
+      start_date: null,
+      end_date: null,
+      address,
+      table_catalogue: [],
+    })
+
+  it('creates with NO VENUE from an omitted, a null, and an all-blank address', () => {
+    expect(findTournament(create(undefined).id)!.address).toBeNull()
+    expect(findTournament(create(null).id)!.address).toBeNull()
+    expect(findTournament(create(blank).id)!.address).toBeNull()
+  })
+
+  // The positive control: the same path with a real address still geocodes and
+  // stores one, so the three nulls above are about the venue and not about a
+  // create that quietly stopped recording addresses.
+  it('creates WITH a venue — geocoded, as the server does at write time', () => {
+    const created = create(venue)
+
+    expect(findTournament(created.id)!.address).toMatchObject({
+      venue: 'Oakland Arena',
+      latitude: expect.any(Number),
+      longitude: expect.any(Number),
+    })
+  })
+
+  it('REMOVES the venue on a patch of null, and on a patch of six blanks', () => {
+    const withVenue = create(venue)
+    expect(updateTournament(withVenue.id, { address: null }).ok).toBe(true)
+    expect(findTournament(withVenue.id)!.address).toBeNull()
+
+    const alsoWithVenue = create(venue)
+    expect(updateTournament(alsoWithVenue.id, { address: blank }).ok).toBe(true)
+    expect(findTournament(alsoWithVenue.id)!.address).toBeNull()
+  })
+
+  // Omitted is NOT removed. The two are different edits on the server
+  // (`TournamentUpdate`: absent means unchanged), so a patch of some other field
+  // must leave the venue exactly where it was.
+  it('leaves the venue alone when the patch does not mention it', () => {
+    const created = create(venue)
+
+    expect(updateTournament(created.id, { name: 'Renamed Cup' }).ok).toBe(true)
+
+    expect(findTournament(created.id)!.address).toMatchObject({
+      venue: 'Oakland Arena',
+    })
+  })
+
+  it('gives a venue-less tournament one when the organizer finally books it', () => {
+    const created = create(null)
+
+    expect(updateTournament(created.id, { address: venue }).ok).toBe(true)
+
+    expect(findTournament(created.id)!.address).toMatchObject({
+      venue: 'Oakland Arena',
+    })
+  })
+})

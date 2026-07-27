@@ -10,6 +10,19 @@ const scoped = (container: Container) => ({
   getNameInput() {
     return container.getByLabelText(/Name/)
   },
+  /** The venue-name box. Addressed by its exact label, because `getNameInput`'s
+   * `/Name/` is capital-N and this row is "Venue name" — the two must not resolve
+   * to each other. */
+  getVenueInput() {
+    return container.getByLabelText('Venue name')
+  },
+  /** Any one of the dialog's five address boxes, by the label the organizer reads —
+   * so a spec can sweep all five rather than name only the one it remembers. The
+   * server's `AddressComponent` bound applies to every component, not just the
+   * venue name. */
+  getAddressInput(label: string) {
+    return container.getByLabelText(label)
+  },
   getCreateButton() {
     return container.getByRole('button', { name: /Create tournament/ })
   },
@@ -49,6 +62,14 @@ const scoped = (container: Container) => ({
   },
   findPreviewError() {
     return container.findByTestId('preview-location-error')
+  },
+  /** The preview's neutral "add a venue address" hint, shown when every venue
+   * field is blank; else null. Distinct from `queryPreviewError`. */
+  queryPreviewHint() {
+    return container.queryByTestId('preview-location-hint')
+  },
+  findPreviewHint() {
+    return container.findByTestId('preview-location-hint')
   },
 })
 

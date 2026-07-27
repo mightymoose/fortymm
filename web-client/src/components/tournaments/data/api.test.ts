@@ -18,6 +18,7 @@ import {
   eventToUpdateBody,
   tournamentToUpdateBody,
 } from './api'
+import { blankAddress } from './helpers'
 import type { Tournament, TournamentEvent } from './types'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -397,6 +398,28 @@ describe('apiToTournament', () => {
     expect(tournament.tableIds).toEqual(['t1', 't2', 't3', 't4'])
   })
 
+  // `address: null` is a tournament with NO VENUE (CONTEXT.md, "Venue") — a
+  // first-class state, so it is carried across untouched. Coalescing it to a blank
+  // `Address` (the way `description` is coalesced above, one test down) would erase
+  // the fact and hand every reader an address at (0, 0).
+  it('carries a null address through as null — no venue is a state, not a hole', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ address: null }),
+    )
+
+    expect(tournament.address).toBeNull()
+  })
+
+  it('carries a present address through with its geocoded coordinates', () => {
+    const tournament = apiToTournament(buildTournamentDetailRead())
+
+    expect(tournament.address).toMatchObject({
+      venue: 'Berkeley TT Club',
+      latitude: 37.8715,
+      longitude: -122.273,
+    })
+  })
+
   it('coalesces a null description to an empty string', () => {
     const tournament = apiToTournament(
       buildTournamentDetailRead({ description: null }),
@@ -530,6 +553,15 @@ describe('draftToCreateBody', () => {
     })
   })
 
+  // A tournament created with NO VENUE (CONTEXT.md, "Venue") sends `address: null`
+  // — the wire's word for it (`SubmittedAddress`), and the only spelling that does
+  // not hand the server something to geocode.
+  it('sends address: null for a draft with no venue', () => {
+    const body = draftToCreateBody({ ...draft, address: null })
+
+    expect(body.address).toBeNull()
+  })
+
   // ADR-0017: a tournament is born `draft` because the SERVER says so. The
   // create body carries no status at all — not even the right one — so there is
   // no status for a client to forge (the API 422s an extra key).
@@ -560,6 +592,78 @@ describe('tournamentToUpdateBody', () => {
       country: 'USA',
     })
     expect('events' in body).toBe(false)
+  })
+
+  // On a PATCH, an explicit `null` is what REMOVES the venue — omitting the field
+  // would mean "leave it as it is", which is a different edit. So a tournament the
+  // organizer has no venue for patches `address: null`, not an object of blanks.
+  it('sends address: null for a tournament with no venue', () => {
+    const tournament: Tournament = { ...draft, id: 't-1', address: null }
+    const body = tournamentToUpdateBody(tournament, [])
+
+    expect(body.address).toBeNull()
+    // Present-and-null, not absent: "removed" and "unchanged" are different edits.
+    expect('address' in body).toBe(true)
+  })
+
+  /**
+   * THE CLEAR-ALL PATH, pinned. This is the shape the **Details tab** actually hands
+   * this builder when the organizer empties all six venue boxes: not `null`, but an
+   * all-blank `Address` — because the tab has to keep six boxes on screen to be
+   * retyped into, so its draft holds `blankAddress()` (see `updateAddress` there).
+   *
+   * Both write verbs must put the SAME bytes on the wire for that one intent, and for
+   * a while they did not: the create modal sent `null` while this sent six empty
+   * strings, and only the server's own normalization made the two mean the same
+   * thing. `toAddressInput` applies `hasVenue` for both now, so the spelling is one.
+   *
+   * The placeholder coordinates are the other half of the claim — `blankAddress()`
+   * carries `0`/`0`, and (0, 0) is a real place in the Gulf of Guinea. Sending an
+   * address at all here would have been an invitation to geocode it.
+   */
+  it('sends address: null when the organizer clears all six venue boxes', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress(),
+    }
+    const body = tournamentToUpdateBody(tournament, [])
+
+    expect(body.address).toBeNull()
+    expect('address' in body).toBe(true)
+  })
+
+  /** Whitespace is not a venue either — the blankness test trims, so a box holding
+   * only spaces is as empty as one holding nothing. Without this, "clear the box"
+   * and "select-all and hit space" would be two different tournaments. */
+  it('sends address: null when the only content left is whitespace', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress({ venue: '   ', city: '\t\n' }),
+    }
+
+    expect(tournamentToUpdateBody(tournament, []).address).toBeNull()
+  })
+
+  /** The positive control for the three above. One non-blank component is a venue,
+   * and it must still travel — otherwise `address: null` would be what this builder
+   * always sends, and every assertion above would pass against a broken projector. */
+  it('still sends an address when a single component holds something', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress({ city: 'Oakland' }),
+    }
+
+    expect(tournamentToUpdateBody(tournament, []).address).toEqual({
+      venue: '',
+      street: '',
+      city: 'Oakland',
+      region: '',
+      postal: '',
+      country: '',
+    })
   })
 
   // ADR-0017: editing a tournament cannot move its lifecycle. The status the

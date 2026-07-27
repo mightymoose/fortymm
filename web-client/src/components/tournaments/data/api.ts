@@ -20,6 +20,7 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { entryRefusalNotice } from './entry-refusal'
+import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
 import {
@@ -195,6 +196,11 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     description: t.description ?? '',
     startDate: t.start_date,
     endDate: t.end_date,
+    // Carried across UNCHANGED, `null` included: a tournament may have no venue at
+    // all (CONTEXT.md, "Venue"), and that is a state to render — as nothing — not a
+    // hole to fill. Coalescing it to a blank `Address` here would erase the very
+    // fact the field exists to carry, and would hand every downstream reader an
+    // address at (0, 0).
     address: t.address,
     tableIds: t.table_catalogue.map((tbl) => tbl.id),
     events: t.events.map(apiToEvent),
@@ -217,8 +223,24 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
  * verb sends. Coordinates are geocoded server-side at write time and a client
  * NEVER supplies them — the write schema is `extra="forbid"`, so sending them
  * would 422. Picking the six text fields keeps the write path coord-free no
- * matter what the read side accreted. */
-function toAddressInput(a: Address): AddressInput {
+ * matter what the read side accreted.
+ *
+ * **No venue is `null`, not an object of six empty strings** — and that is decided
+ * HERE, for both verbs, rather than at each call site. On the write schemas
+ * `address` is `AddressInput | None`, and on a PATCH an explicit `null` is what
+ * *removes* the venue (an omitted field means "unchanged"). The server would
+ * normalize six blanks to `null` for us, so this is not a guard against a bad
+ * payload; it is what stops the two write surfaces putting **different bytes on the
+ * wire for the same intent**. They did: the create modal sent `null` while clearing
+ * all six boxes in the Details tab sent six empty strings, and only the server's
+ * normalization made those mean the same thing. One spelling, one place.
+ *
+ * Note what this does NOT do: decide whether a *default* the form filled in on the
+ * organizer's behalf counts as a venue. That question has to be answered before the
+ * default is folded in — see the modal's own `hasVenue` call, which is why one
+ * survives there. */
+function toAddressInput(a: Address | null): AddressInput | null {
+  if (a === null || !hasVenue(a)) return null
   return {
     venue: a.venue,
     street: a.street,

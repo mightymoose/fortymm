@@ -14,9 +14,9 @@ Three pieces live here:
 * ``GoogleGeocoder`` — the real implementation, calling the Google Geocoding
   API over an injected ``httpx.AsyncClient``. It never touches the network at
   construction time, only inside ``geocode``.
-* ``FakeGeocoder`` — a deterministic, network-free implementation for tests and
-  keyless environments (see its docstring for the stable mapping and the
-  unresolvable sentinel).
+* ``FakeGeocoder`` — a deterministic, network-free implementation, selected only
+  when an environment asks for it by name with ``GEOCODER=fake`` (see its
+  docstring for the stable mapping and the unresolvable sentinel).
 
 A lookup that resolves to zero candidates is an **expected** failure the caller
 turns into a ``422`` — it is raised as ``AddressNotGeocodableError`` and is the
@@ -188,7 +188,14 @@ class GoogleGeocoder:
 
 
 class FakeGeocoder:
-    """A deterministic, network-free geocoder for tests and keyless environments.
+    """A deterministic, network-free geocoder for tests and local environments.
+
+    Never selected by default — an environment gets this only by naming it,
+    ``GEOCODER=fake``. It stays in the codebase because requiring a real key in
+    deployed environments does not obviate the double: the suite needs stable
+    coordinates to assert on, :data:`UNRESOLVABLE_SENTINEL` exercises the
+    zero-result path with no network call, and CI would otherwise need a live
+    key, egress and quota per run — which PRs from forks cannot have.
 
     Determinism is the whole point: a given address always maps to the same
     coordinates, so later chores can assert exact values (the near-me e2e test

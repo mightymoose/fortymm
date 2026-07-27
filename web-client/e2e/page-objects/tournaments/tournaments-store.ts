@@ -20,11 +20,13 @@ import {
   buildTournamentEntrantRead,
   entryStateFor,
   planRoundRobinFixtures,
+  UNBREAKABLE_VENUE_NAME,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
+type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -93,6 +95,10 @@ const UNREAD_COUNT: UnreadCountResponse = { unread_count: 0 }
 // fetch. A slug here (the old `bay-area-open-2026`) would make every detail
 // navigation in this suite land on the not-found page instead of the tournament.
 export const TOURNAMENT_ID = 'b0a1e2a0-0000-4000-8000-000000000001'
+
+/** Type this into a venue box to make the geocode stub answer the coded 409 the
+ * real provider produces for an address with zero candidates. */
+export const UNRESOLVABLE_ADDRESS = '__unresolvable__'
 
 /** The events the specs drive, named so the specs never hard-code strings that
  * must agree with the seed below. */
@@ -337,6 +343,30 @@ function drawableEvents(): TournamentEventRead[] {
   ]
 }
 
+/** The `address` the seed carries, as a spread — three cases, and each has to be
+ * expressible independently of the factory's default:
+ *
+ * - nothing spread in → the factory's Berkeley venue,
+ * - `{ address: null }` → the tournament with NO venue (CONTEXT.md, "Venue"),
+ * - `{ address: {…, venue: <680 unbroken chars> } }` → the pathological row the
+ *   layout has to survive (#1199). It keeps the Berkeley coordinates and the rest
+ *   of the components, so the ONLY thing that differs from the happy path is the
+ *   length of one string — which is what makes an overflow measured against it
+ *   attributable.
+ *
+ * `venueless` wins if both are passed: "there is no venue" is not a venue name.
+ */
+function addressOverride(
+  options: TournamentsStoreOptions,
+): Partial<Pick<TournamentDetailRead, 'address'>> {
+  if (options.venueless ?? false) return { address: null }
+  if (!(options.longVenue ?? false)) return {}
+  const { address } = buildTournamentDetailRead()
+  // The factory's default address is never null; narrow rather than assert.
+  if (!address) return {}
+  return { address: { ...address, venue: UNBREAKABLE_VENUE_NAME } }
+}
+
 /** All three roster states (`listed` / `empty` / `entry-closed`) on one page, on
  * purpose: it is the real shape of an Events tab, and it lets one axe scan cover
  * every state the roster can be in.
@@ -346,11 +376,13 @@ function drawableEvents(): TournamentEventRead[] {
  * the journey spec asserts on. */
 function seed(options: TournamentsStoreOptions): TournamentDetailRead {
   const crowded = options.crowded ?? false
+  const address = addressOverride(options)
   if (options.drawable ?? false) {
     return buildTournamentDetailRead({
       id: TOURNAMENT_ID,
       status: options.status ?? 'published',
       can_edit: options.canEdit ?? true,
+      ...address,
       events: drawableEvents(),
     })
   }
@@ -358,6 +390,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
     id: TOURNAMENT_ID,
     status: options.status ?? 'published',
     can_edit: options.canEdit ?? true,
+    ...address,
     events: [
       buildTournamentEventRead({
         id: 'ev-open-singles',
@@ -492,6 +525,27 @@ export interface TournamentsStoreOptions {
    * offered the lifecycle buttons). `false` is the viewer: same page, no
    * transitions — the server 403s them, so the UI must not offer them. */
   canEdit?: boolean
+  /** Serve the tournament with **no venue** — `address: null` (CONTEXT.md,
+   * "Venue"), the state of one announced before its room is booked, or one at
+   * somebody's home whose address is deliberately withheld. Defaults to `false`
+   * (the seeded Berkeley venue).
+   *
+   * It is opt-in and stubbed HERE rather than asserted in vitest alone, because
+   * with MSW off this suite is the only place the real fetch stack decodes a
+   * `null` address off the wire — the generated schema made it nullable, and a
+   * page-object stub that could not produce one would leave that untested. */
+  venueless?: boolean
+  /** Serve the tournament with a **680-character venue name and no break
+   * opportunity in it** (`UNBREAKABLE_VENUE_NAME`) — the row that made the detail
+   * page scroll sideways (#1199).
+   *
+   * It has to be an e2e option and not a vitest fixture alone, because the claim
+   * is about **layout**: jsdom performs none, so `scrollWidth`/`clientWidth` are
+   * `0` there and an overflow assertion passes whether the page wraps, truncates,
+   * or runs 2000px off the right-hand edge. Only a browser can tell those apart.
+   *
+   * Ignored when `venueless` is set. */
+  longVenue?: boolean
   /** Events ME is already entered in when the page loads — by event name. The
    * only way to reach "an entered player on a *live* tournament", since entering
    * one through the UI is (rightly) refused. */
@@ -828,6 +882,13 @@ export class TournamentsStore {
    * unmocked call would otherwise fall through to a 404 and be read as an app
    * bug (or, without the catch-all, get `index.html` back from vite). */
   readonly unhandled: RecordedRequest[] = []
+  /** Every `POST /v1/tournaments` body, in order — what the dialog actually PUT ON
+   * THE WIRE, as opposed to what a component test saw it hand its callback.
+   *
+   * It exists for the venue: a tournament created with the venue boxes empty must
+   * send `address: null` (CONTEXT.md, "Venue"), and the only way to see that six
+   * empty strings did not go instead is to read the serialized body. */
+  readonly createBodies: TournamentCreate[] = []
 
   constructor(private readonly options: TournamentsStoreOptions = {}) {
     this.detail = seed(options)
@@ -1107,6 +1168,29 @@ export class TournamentsStore {
     // `unhandled` (`../../support/realtime`).
     if (path === STREAM_PATH) {
       return fulfillParkedStream(route)
+    }
+
+    // The "Preview location" lookup. Mirrors the server: a resolvable address
+    // gets coordinates plus a canonical label, an unresolvable one gets the coded
+    // 409 (`address_not_geocodable`) the write path also answers with. An EMPTY
+    // `address` is not modelled because the endpoint's `min_length` means it can
+    // never legitimately be sent — the client short-circuits before the request,
+    // and `requests` is what a spec asserts that on.
+    if (method === 'GET' && path === '/v1/geocode') {
+      const address = new URL(request.url()).searchParams.get('address') ?? ''
+      if (address.includes(UNRESOLVABLE_ADDRESS)) {
+        return json(route, 409, {
+          detail: {
+            code: 'address_not_geocodable',
+            message: 'We couldn’t locate that address.',
+          },
+        })
+      }
+      return json(route, 200, {
+        latitude: 37.8715,
+        longitude: -122.273,
+        formatted: address,
+      })
     }
 
     // Writes wait on the gate (reads never do) — see `holdWrites`.
@@ -1510,6 +1594,9 @@ export class TournamentsStore {
    * somewhere real.
    */
   private async createTournament(route: Route, body: unknown) {
+    // Recorded BEFORE the refusal branches: what the client sent is a fact
+    // whether or not this stub chose to accept it.
+    this.createBodies.push(body as TournamentCreate)
     if (this.faultingTournamentCreate) return serverFault(route)
     if (this.refusingTournamentCreate) return this.unprocessableName(route)
 

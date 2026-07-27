@@ -34,7 +34,7 @@ import {
   stepScheduleSolve,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
-import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
+import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
@@ -532,6 +532,61 @@ function seed(): StoredTournament[] {
       ],
     },
     {
+      // A tournament with NO VENUE — `address: null` (CONTEXT.md, "Venue").
+      //
+      // It is seeded, and seeded PUBLISHED, because this is a first-class state at
+      // every status and not an edge case: it is a small tournament in somebody's
+      // home, whose address is deliberately withheld, and it is equally the shape of
+      // an announced tournament whose room is not booked yet. `npm run dev` has to
+      // be able to show one — the header with no venue row and no map — or the rule
+      // ("a tournament with no venue renders NOTHING, never a placeholder") is a
+      // rule nobody can look at.
+      //
+      // It is also the store's proof that a venue-less row is dropped from a near-me
+      // search at ANY radius: with only venued rows in the seed, `listTournaments`
+      // could default a missing address to (0, 0) and every radius test would still
+      // pass.
+      //
+      // Owned by the dev user, so the Details tab opens editable and the six empty
+      // venue boxes are reachable.
+      id: 'garage-invitational-2026',
+      name: 'Garage Invitational',
+      description: 'Address shared with entrants after registration.',
+      status: 'published',
+      start_date: '2026-09-12',
+      end_date: '2026-09-12',
+      league_id: DEFAULT_LEAGUE_ID,
+      address: null,
+      table_catalogue: tables(2),
+      created_by_user_id: DEV_USER_ID,
+      created_by_username: DEV_USERNAME,
+      can_edit: true,
+      created_at: '2026-06-13T18:00:00Z',
+      updated_at: '2026-06-13T18:00:00Z',
+      latest_schedule_solve: null,
+      events: [
+        {
+          id: 'ev-garage-open',
+          tournament_id: 'garage-invitational-2026',
+          name: 'Garage Singles',
+          format: 'singles',
+          draw_type: 'round-robin',
+          max_players: 8,
+          entry_fee: 0,
+          timezone: 'America/Los_Angeles',
+          entrants: otherEntrants('ev-garage-open', 3),
+          slot: { date: '2026-09-12', start: '13:00', end: '17:00' },
+          match_settings: { rated: false, length_games: 3 },
+          predicates: [],
+          pools: [],
+          fixtures: [],
+          results: null,
+          created_at: '2026-06-13T18:01:00Z',
+          updated_at: '2026-06-13T18:01:00Z',
+        },
+      ],
+    },
+    {
       // Somebody else's DRAFT — the one row in the seed that is never served.
       //
       // The store is the database, not the route: the API's table really does hold
@@ -720,17 +775,32 @@ export function listTournaments(nearMe?: NearMeFilter): TournamentDetailRead[] {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(readDetail)
   if (!nearMe) return visible
-  return visible
-    .map((t) => ({
-      ...t,
-      distance_miles: haversineMiles(
-        nearMe.lat,
-        nearMe.lng,
-        t.address.latitude,
-        t.address.longitude,
-      ),
-    }))
-    .filter((t) => t.distance_miles <= nearMe.radiusMiles)
+  return (
+    visible
+      // A tournament with NO VENUE is never a proximity-search result, at any radius
+      // — there is nothing to measure to (CONTEXT.md, "Venue"). The server drops it
+      // the same way: its haversine is computed in SQL over the address JSONB's
+      // coordinates, and a NULL address yields no distance, so the row never
+      // survives the `<= radius` comparison. Mirrored here rather than defaulted to
+      // (0, 0), which would place every venue-less tournament off the coast of
+      // Africa and make it "near" anyone searching from there.
+      .flatMap((t) => {
+        const address = t.address
+        if (address === null) return []
+        return [
+          {
+            ...t,
+            distance_miles: haversineMiles(
+              nearMe.lat,
+              nearMe.lng,
+              address.latitude,
+              address.longitude,
+            ),
+          },
+        ]
+      })
+      .filter((t) => t.distance_miles <= nearMe.radiusMiles)
+  )
 }
 
 /** A single tournament's detail, or `undefined` if it is missing **or hidden**.
@@ -779,6 +849,32 @@ function geocodeAddress(input: AddressInput): Address {
   return { ...input, latitude: 37.8715, longitude: -122.273 }
 }
 
+/** The venue a write payload actually submitted — the mock's `SubmittedAddress`
+ * (`api/app/schemas/tournament.py`).
+ *
+ * `null`/absent is no venue, and so is an object whose six components are **all
+ * blank**: the server normalizes that to `None` at its own boundary, before the
+ * geocoder ever sees it, because six empty boxes are not an address. The mock
+ * normalizes identically, so a form that clears its venue fields removes the venue
+ * in `npm run dev` exactly as it does in production — rather than storing a blank
+ * address the store would then hand the geocoder and pin in Berkeley.
+ *
+ * The blankness test is `hasVenue` — the app's own, not a copy of it. The mock does
+ * restate several server behaviours in TypeScript on purpose (the near-me exclusion
+ * mirrors SQL semantics that have no TS equivalent; the `undefined`-vs-`null` PATCH
+ * branch mirrors a wire contract), but this is not one of them: "is any component
+ * non-blank" is a sweep over the six components, and the shared helper derives that
+ * sweep from a type-checked exhaustive literal (`BLANK_ADDRESS_TEXT`). A hand-listed
+ * copy here would be a seventh-component blind spot that no compiler could see, in
+ * the very code whose job is to catch that mistake before production does. */
+function submittedAddress(
+  input: AddressInput | null | undefined,
+): Address | null {
+  if (!input) return null
+  if (!hasVenue(input)) return null
+  return geocodeAddress(input)
+}
+
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
@@ -794,7 +890,10 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     // names the ladder it will be judged on — the caller only says which when it
     // is not the default. No client surface sends one yet.
     league_id: body.league_id ?? DEFAULT_LEAGUE_ID,
-    address: geocodeAddress(body.address),
+    // Omitted, `null`, or all-blank all mean the same thing: a tournament created
+    // with NO VENUE (CONTEXT.md, "Venue"), which is a state the server allows at
+    // every status and this store must be able to hold.
+    address: submittedAddress(body.address),
     table_catalogue: body.table_catalogue ?? [],
     created_by_user_id: DEV_USER_ID,
     created_by_username: DEV_USERNAME,
@@ -925,8 +1024,15 @@ export function updateTournament(
     start_date:
       patch.start_date === undefined ? existing.start_date : patch.start_date,
     end_date: patch.end_date === undefined ? existing.end_date : patch.end_date,
+    // OMITTED means unchanged; an explicit `null` — or an all-blank object, which
+    // `submittedAddress` normalizes to `null` — means REMOVE the venue. The two are
+    // different edits and the server tells them apart (`TournamentUpdate`), so the
+    // mock must too: conflating them would make clearing the venue boxes a silent
+    // no-op in `npm run dev` while it really removed the venue in production.
     address:
-      patch.address == null ? existing.address : geocodeAddress(patch.address),
+      patch.address === undefined
+        ? existing.address
+        : submittedAddress(patch.address),
     table_catalogue:
       patch.table_catalogue === undefined || patch.table_catalogue === null
         ? existing.table_catalogue

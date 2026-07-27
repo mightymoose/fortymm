@@ -122,8 +122,13 @@ async def _stored_address(
     db: AsyncSession, tournament_id: uuid.UUID
 ) -> dict[str, Any] | None:
     """The tournament's currently-stored ``address`` JSONB (six text fields plus the
-    geocoded coordinates), read **without** the row lock — or ``None`` if no such
-    tournament exists.
+    geocoded coordinates), read **without** the row lock — or ``None`` if the
+    tournament has no venue, or no such tournament exists.
+
+    Those two ``None``s are deliberately not told apart. The only question this read
+    answers is "is the submitted address the one already stored?", and the answer is
+    "no" in both cases: a venue-less tournament has nothing to match, and a tournament
+    this unlocked read cannot see is judged by the locked owner-load instead.
 
     Lock-free on purpose: it exists only to decide whether a submitted address is
     actually changing, and that decision must not hold the ``FOR UPDATE`` lock across
@@ -203,6 +208,15 @@ async def edit_tournament(
     maps it to a coded ``409``
     (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
 
+    **``address`` has three cases, and the value alone cannot tell them apart** (#1206;
+    the 2026-07-26 amendment to that ADR). Omitted ⇒ unchanged. An explicit ``null`` —
+    or an all-blank object, which :data:`~app.schemas.tournament.SubmittedAddress`
+    normalizes to ``null`` at the boundary — ⇒ **remove the venue**, writing SQL
+    ``NULL``, geocoding nothing. A real address ⇒ the change-detection above. Since
+    ``TournamentUpdate.address`` defaults to ``None``, "omitted" and "remove" share a
+    value, so both branches key on ``"address" in updates.model_fields_set``, never on
+    ``updates.address is not None``.
+
     Then it applies the remaining fields (``model_dump(exclude_unset=True)``
     already serialized the nested value-objects to plain dicts/lists, so one
     ``setattr`` loop covers the JSONB and scalar columns alike) and, when the
@@ -216,19 +230,31 @@ async def edit_tournament(
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
     """
+    # Whether the payload *carries* an ``address`` at all. This is the field-set, never
+    # the value: since #1206 ``updates.address is None`` is ambiguous — it is both "the
+    # key was omitted" (leave the venue alone) and "the key was an explicit ``null``, or
+    # an all-blank object ``SubmittedAddress`` normalized to one" (remove the venue).
+    # Only ``model_fields_set`` tells those apart, so both address branches below are
+    # keyed on it.
+    address_submitted = "address" in updates.model_fields_set
+
     # Geocode the changed address BEFORE taking the lock — never under it (see the
-    # docstring). ``updates.address`` is ``None`` unless the client sent an address (an
-    # explicit ``null`` is rejected by the schema), so this runs only when an address is
-    # on the payload; and even then only when its six text fields differ from what is
-    # stored, read lock-free. An unresolvable address raises here, before the lock is
-    # taken and before anything is written — the edit aborts atomically.
+    # docstring). There is something to geocode only when the payload carries an address
+    # AND that address is a real venue rather than a removal; and even then only when
+    # its six text fields differ from what is stored, read lock-free. An unresolvable
+    # address raises here, before the lock is taken and before anything is written, so
+    # the edit aborts atomically. A removal geocodes nothing: there is no text to
+    # resolve, which is why an all-blank address had to be normalized away at the
+    # boundary rather than composed into ``""`` and handed to the geocoder (it answers
+    # zero candidates, i.e. a coded 409, for the organizer who simply has no venue).
     geocoded_address: Address | None = None
-    if updates.address is not None:
+    if address_submitted and updates.address is not None:
         stored = await _stored_address(db, tournament_id)
         if stored is None or not _address_text_unchanged(updates.address, stored):
-            # A new venue — or a tournament this unlocked read cannot see, in which case
-            # the locked owner-load below is the authority and will 404/403 it, and this
-            # result is simply discarded. Either way the geocode is off the lock.
+            # A new venue — or a tournament that currently has none, or one this
+            # unlocked read cannot see, in which case the locked owner-load below is the
+            # authority and will 404/403 it and this result is simply discarded. Every
+            # way round, the geocode is off the lock.
             geocoded_address = await geocode_address(geocoder, updates.address)
 
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
@@ -251,25 +277,34 @@ async def edit_tournament(
             raise LeagueNotFoundError()
         tournament.league_id = league.id
 
-    # Write the pre-geocoded address, or leave the stored one untouched. The geocode
-    # decision was made before the lock (above); ``geocoded_address`` is set exactly
-    # when the submitted address differs from what was stored:
+    # Decide what the ``address`` column gets. ``model_dump`` put the submitted
+    # (coordinate-less, or ``None``) value in ``fields``; a submitted address is never
+    # written as-is, so this branch replaces it, clears it, or drops it — three cases,
+    # exhaustive over a payload that carries the key:
     #
-    #   * set ⇒ write it — the caller's requested venue, freshly geocoded. Correct even
-    #     if a concurrent edit changed the address between the lock-free read and this
-    #     locked write: this is the value the caller asked for, and it overwrites.
-    #   * unset (address submitted but unchanged, or not submitted) ⇒ do NOT write the
-    #     ``address`` column, so the stored value AND its coordinates stand. For a
-    #     resubmitted-but-identical address that is the whole point (no geocode,
-    #     coordinates preserved); and if a concurrent edit moved the venue in between, a
-    #     caller who submitted the value they had loaded is expressing no change, so
-    #     leaving the concurrent value is correct, not a lost update.
+    #   * an explicit removal (``null``, or an all-blank object the boundary normalized
+    #     to one) ⇒ write SQL ``NULL``. The organizer un-booked the venue; ``NULL`` is
+    #     the single representation of "no venue" (#1206).
+    #   * a changed venue (``geocoded_address`` set) ⇒ write it, freshly geocoded.
+    #     Correct even if a concurrent edit changed the address between the lock-free
+    #     read and this locked write: this is the value the caller asked for, and it
+    #     overwrites.
+    #   * submitted but unchanged ⇒ do NOT write the column at all, so the stored value
+    #     AND its coordinates stand. That is the whole point of the lock-free
+    #     comparison (no geocode, coordinates preserved); and if a concurrent edit moved
+    #     the venue in between, a caller who submitted the value they had loaded is
+    #     expressing no change, so leaving the concurrent value is correct rather than a
+    #     lost update.
     #
-    # ``updates`` rejects an explicit ``null`` for ``address``, so ``updates.address is
-    # not None`` is exactly "an address is on the payload"; ``model_dump`` put its
-    # coordinate-less dict in ``fields``, which we either replace or drop here.
-    if updates.address is not None:
-        if geocoded_address is not None:
+    # Keyed on ``address_submitted`` (the field-set), NOT on ``updates.address is not
+    # None``: that identity meant "an address is on the payload" only because the schema
+    # rejected an explicit ``null``, and it stopped being true the moment ``None``
+    # became a meaningful value (the ADR amendment names this trap by name). A payload
+    # that omits ``address`` skips this whole branch and ``fields`` never held the key.
+    if address_submitted:
+        if updates.address is None:
+            fields["address"] = None
+        elif geocoded_address is not None:
             fields["address"] = geocoded_address.model_dump()
         else:
             del fields["address"]

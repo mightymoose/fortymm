@@ -107,6 +107,20 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        # The pin facts (ADR 2026-07-16 "the schedule is solved, the call is
+        # pinned"). ``pinned_at`` is a ``timestamptz`` instant (TIMESTAMP WITH
+        # TIME ZONE) — the call's ``now`` — like the ``scheduled_start`` above
+        # it. The 2026-07-19 ADR "tournament times are timezone-aware instants"
+        # governs both. NULL = unpinned.
+        sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=True),
+        # How many times the players were told about this fixture's placement —
+        # the initial call plus every moved/cancelled correction. 0 = never.
+        sa.Column(
+            "call_notified_count",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         # The identity a re-cut reconciles on. NULLS NOT DISTINCT (Postgres 15+):
         # under the default, a NULL pool_id compares unequal to itself, which would
         # leave un-pooled draws (single-elim — every row has pool_id IS NULL) with no
