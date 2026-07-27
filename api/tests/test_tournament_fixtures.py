@@ -341,7 +341,8 @@ async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
     unordered read returns — a fixture seeded in the right order could not tell a broken
     ``order_by`` from a working one.
 
-    The un-pooled fixture (``pool_id`` NULL — an rr-then-ko event's KO stage) sorts
+    The un-pooled fixture (``pool_id`` NULL — single-elim today, a pools-then-knockout
+    draw type's KO stage once #787 adds one) sorts
     LAST, after the pools that feed it. NULL is a real value here ("this fixture belongs
     to no pool"), not a missing one, so it has a defined place in the order rather than
     wherever the dialect's default happens to put it.

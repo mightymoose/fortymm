@@ -256,8 +256,9 @@ async def fixtures_by_event(
     then round, then position — over columns that ``UNIQUE (event_id, pool_id, round,
     position)`` already guarantees are unique together, so the sequence is the same on
     every read and a client can render a bracket without sorting it first. A NULL
-    ``pool_id`` sorts LAST, which puts an rr-then-ko event's KO stage after the pools it
-    is fed from (and costs an un-pooled draw nothing — every row is NULL there, so round
+    ``pool_id`` sorts LAST, which would put a pools-then-knockout draw type's KO stage
+    after the pools it is fed from once #787 adds one (and costs an un-pooled draw
+    nothing today — every row is NULL there, so round
     and position decide it alone).
 
     Sorted in Postgres rather than in Python because a NULL is not comparable to a

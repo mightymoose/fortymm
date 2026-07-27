@@ -43,8 +43,8 @@ class TournamentFixture(Base):
     ``pool_id`` is a **string ref, not a foreign key**: pools are JSONB value-objects
     on the event (``{id, name, slot, table_ids}`` — a slice of the venue), so there is
     no table to point at. Integrity is procedural: the event's pool *id set* freezes
-    while a draw exists. ``NULL`` means the draw is un-pooled (single-elim), or that
-    this is the KO stage of an rr-then-ko event.
+    while a draw exists. ``NULL`` means the draw is un-pooled — single-elim today, and
+    the knockout stage of a pools-then-knockout draw type once #787 adds one.
 
     The ``UNIQUE (event_id, pool_id, round, position)`` below is the identity a re-cut
     reconciles on, and it is declared **NULLS NOT DISTINCT** (Postgres 15+). Under the

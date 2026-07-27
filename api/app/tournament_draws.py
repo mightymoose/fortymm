@@ -398,9 +398,10 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     or teams event cannot be materialized — a fixture seats one entry per side, a match
     seats that entry's single user (ADR-0788) — so a draw that could never become
     playable is refused at the cut, the earliest and clearest point, rather than at
-    go-live. Checked here beside ``strategy_for`` so the two "this event cannot be cut"
-    refusals sit together and neither reads the field of an event that has no business
-    being cut.
+    go-live. Checked here, before ``strategy_for`` picks a strategy, so the refusal
+    lands without reading the field of an event that has no business being cut. It is
+    the only "this event cannot be cut" refusal left at this seam — ``strategy_for`` is
+    total now that the enum holds only what runs (ADR 20260726), so it refuses nothing.
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)

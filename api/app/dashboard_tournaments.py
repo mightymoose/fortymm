@@ -362,7 +362,7 @@ def _build_event(
         # the table it sits beside; counted from the caller's own decided fixtures
         # otherwise. The fallback is not decoration: a single-elim event's results are
         # a **finishes** block with no per-pool standings row (ADR-0785), and
-        # ``event_results`` answers ``None`` for the still-unimplemented draw types, so
+        # ``event_results`` answers ``None`` for an event with no draw cut yet, so
         # hard-coding a zero here would show ``0–0`` to every player of a bracket event,
         # however many matches they had actually won — and nothing would catch it.
         wins=my_standing.wins if my_standing is not None else record_wins,

@@ -12,6 +12,7 @@ from app.draws import (
     DegenerateDraw,
     DrawError,
     NonSinglesDraw,
+    UnsupportedDrawType,
 )
 from app.geocoding import AddressNotGeocodableError, Geocoder
 from app.geocoding.dependencies import get_geocoder
@@ -1005,6 +1006,15 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
       director reads.
+    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
+      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
+      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
+      with the **schedule-preview** route below, and ``app.schedule_preview`` still
+      raises it for ``single_elim``: the CP-SAT scheduler is round-robin-only, so a
+      pool-less bracket has no windows to solve over. A director previewing a bracket's
+      schedule must be told it is the *draw type* that cannot be previewed, not left
+      with the generic sentence, which says the event's own state is at fault and would
+      send them hunting through pools and entrants that are perfectly fine.
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking
@@ -1025,6 +1035,15 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             )
         case DegenerateDraw():
             detail = str(error)
+        case UnsupportedDrawType():
+            # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
+            # ``strategy_for`` is total). Named from the structural ``draw_type`` so the
+            # sentence says which format cannot be previewed.
+            detail = (
+                f"A {error.draw_type.value} draw cannot be scheduled yet. The "
+                "scheduler places pooled draws over their pools' time windows, and a "
+                "bracket has none to place. Preview a round-robin event instead."
+            )
         case _:
             detail = "This event's draw cannot be cut as the event stands."
     return HTTPException(status_code=422, detail=detail)

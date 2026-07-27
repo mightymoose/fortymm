@@ -198,7 +198,8 @@ class PlannedFixture:
     It is *never* ``None`` to mean "bye": a bye is the absence of this object.
     """
 
-    #: ``None`` = the draw is un-pooled (or this is the KO stage of an rr-then-ko).
+    #: ``None`` = the draw is un-pooled — single-elim today, and the knockout stage of a
+    #: pools-then-knockout draw type once #787 adds one.
     pool_id: PoolId | None
     #: 1-based.
     round: int

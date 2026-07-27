@@ -113,8 +113,9 @@ start; the pure module holds its table to ``max(estimated end, now + bucket)``
 so an overrun keeps blocking. A real "match started" fact is a later drop-in
 that replaces one condition here.
 
-Un-pooled fixtures (``pool_id IS NULL`` — single-elim, an rr-then-ko KO
-stage) are not scheduled: the solver's windows come from pools (KO-stage
+Un-pooled fixtures (``pool_id IS NULL`` — single-elim today, and a pools-then-knockout
+draw type's KO stage once #787 adds one) are not scheduled: the solver's windows come
+from pools (KO-stage
 scheduling is a designed later layer, per the ADR). Fixtures with a TBD side
 cannot be placed and are left out of the snapshot; both still count toward the
 fingerprint, so their arrival or resolution is drift like any other.

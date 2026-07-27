@@ -278,9 +278,10 @@ class DashboardTournamentEvent(BaseModel):
     wins: int
     losses: int
     # The caller's 1-based rank in their pool, and how many players are in it.
-    # ``position`` is ``None`` when the event has no standings yet (no draw cut, or a
-    # draw type with no results strategy — only round-robin has one today), which is
-    # a fact, not a zero.
+    # ``position`` is ``None`` when the event has no POOL standings to rank the caller
+    # in: no draw cut yet, or a draw type whose results are not standings at all —
+    # single-elim reads out **finishes**, a placement list, not a per-pool table
+    # (ADR-0785). Either way a fact, not a zero.
     position: int | None
     field_size: int
     # e.g. ``"Group play"`` / ``"Group complete"``.

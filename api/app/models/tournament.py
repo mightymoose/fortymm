@@ -314,8 +314,9 @@ class TournamentEvent(Base):
     # bracket has one order, and there is no reader that wants the other one.
     #
     # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
-    # ``pool_id`` is a real value here ("this fixture belongs to no pool" — an
-    # rr-then-ko event's KO stage), and it belongs after the pools that feed it.
+    # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
+    # single-elim today, and the knockout stage of a pools-then-knockout draw type
+    # once #787 adds one), and it belongs after the pools that feed it.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",

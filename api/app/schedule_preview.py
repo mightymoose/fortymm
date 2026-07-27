@@ -208,8 +208,10 @@ def build_preview_snapshot(
     old hardcoded ``now_min = 0`` that could never trip the past-window guard.
 
     Persists nothing: no ``TournamentEntry`` / ``TournamentFixture`` row is
-    created. Raises :class:`~app.draws.UnsupportedDrawType` (from
-    :func:`app.draws.strategy_for`) if any event's draw type has no strategy, and
+    created. Raises :class:`~app.draws.UnsupportedDrawType` — itself, not from
+    :func:`app.draws.strategy_for`, which is total — for any event this SCHEDULER
+    cannot place, today meaning single-elim: a bracket has no pools, and pools are
+    where the solver's windows come from. Also raises
     :class:`~app.draws.DegenerateDraw` if a synthesized field is too small for
     the event's pools — a clear domain error either way, never a partial
     snapshot. An event with no pools configured is one such case: the

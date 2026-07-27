@@ -212,9 +212,10 @@ def _draw_type_frozen_detail(current: DrawType) -> str:
 
     It says *how* to get unstuck, because the alternative is a stuck director: the
     draw type chose the strategy that dealt these fixtures, so an event that is
-    ``single-elim`` while holding pooled round-robin fixtures cannot even be re-cut
-    back into agreement with itself (``single-elim`` has no strategy, so the re-cut
-    is a 422). The refusal names the way out instead — remove the draw, then re-cut.
+    ``single-elim`` while holding pooled round-robin fixtures is claiming a shape its
+    own draw does not have: the fixtures carry a ``pool_id`` that a bracket has no
+    pools to name. The refusal names the way out — remove the draw, then re-cut, and
+    the new strategy deals fixtures that match the type.
     """
     return (
         f"This event's draw is already cut, so its draw type is frozen: its "

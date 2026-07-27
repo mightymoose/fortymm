@@ -311,9 +311,10 @@ export interface FinishesResults {
  * returns its own shape; the BFF emits the `kind` tag; the client switches on it. A future
  * draw type is a type error until it declares its shape.
  *
- * On the event it is `null` for an event with **no draw** (nothing to stand) or one whose
- * draw type has no results strategy yet — an honest "no results", never an empty table that
- * would read as a played event with nobody in it.
+ * On the event it is `null` for an event with **no draw** — nothing to stand — an honest
+ * "no results", never an empty table that would read as a played event with nobody in it.
+ * Every draw type a director can pick reads out results of one shape or the other, so
+ * "cut, but no results block" is not a state.
  */
 export type EventResults = StandingsResults | FinishesResults
 
