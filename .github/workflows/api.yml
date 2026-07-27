@@ -25,6 +25,17 @@ defaults:
   run:
     working-directory: api
 
+# Venue geocoding provider for everything this workflow runs. CI asks for the
+# deterministic, network-free FakeGeocoder BY NAME rather than getting it by
+# having no Google key: inferring from key presence fails silently open, so an
+# environment meant to geocode for real quietly stores hash-derived
+# coordinates. CI could not hold a real key anyway — fork PRs get no secrets,
+# and a live key would mean egress and quota per run. See
+# docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
+# ("The geocoder is selected by explicit config, not inferred from key presence").
+env:
+  GEOCODER: fake
+
 jobs:
   pytest:
     runs-on: ubuntu-latest

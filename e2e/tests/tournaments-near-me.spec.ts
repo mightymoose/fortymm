@@ -23,12 +23,21 @@ import {
 //
 // ## Where the coordinates come from — why nothing is hardcoded
 //
-// The compose stack sets no `GOOGLE_GEOCODING_API_KEY`, so venue coordinates are
-// produced by the deterministic, network-free `FakeGeocoder`, which maps the
-// composed address string to stable lat/lng by SHA-256. That mapping is stable
-// but not something a spec should reproduce — so the spec seeds two *distinct*
-// addresses, reads back each venue's stored coordinates (`getVenueCoords`), and
-// derives its query point and radii from those real numbers using the SAME
+// The e2e compose stack declares `GEOCODER: fake` on its api and worker
+// (`docker-compose.e2e.yml`), so venue coordinates are produced by the
+// deterministic, network-free `FakeGeocoder`, which maps the composed address
+// string to stable lat/lng by SHA-256. The selection is explicit, never inferred
+// from whether a `GOOGLE_GEOCODING_API_KEY` happens to be set — adding a key to
+// the stack would NOT silently switch this spec onto live Google results; only
+// changing `GEOCODER` would, and that would invalidate this premise. See
+// docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
+// ("The geocoder is selected by explicit config, not inferred from key
+// presence").
+//
+// That SHA-256 mapping is stable but not something a spec should reproduce — so
+// the spec seeds two *distinct* addresses, reads back each venue's stored
+// coordinates (`getVenueCoords`), and derives its query point and radii from
+// those real numbers using the SAME
 // haversine (Earth radius 3958.8 mi) the API computes with. The query point is
 // placed AT the near venue (distance 0, unconditionally inside); the radius is
 // half the near→far separation, so the far venue (a full separation away) is

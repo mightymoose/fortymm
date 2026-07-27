@@ -128,9 +128,9 @@ async def _geocoded_address(address: dict[str, str]) -> dict[str, object]:
     fields the client sent plus the coordinates the server geocoded on write (NOT NULL,
     ADR "a venue's coordinates are geocoded server-side ... and are NOT NULL").
 
-    Computed through the very ``FakeGeocoder`` the keyless test env resolves with (
-    ``get_geocoder`` returns it with no ``GOOGLE_GEOCODING_API_KEY``), so the expected
-    coordinates cannot drift from what the write path actually produced."""
+    Computed through the very ``FakeGeocoder`` the test env resolves with (the suite
+    pins ``GEOCODER=fake`` in ``tests/__init__.py``, so ``get_geocoder`` returns it),
+    so the expected coordinates cannot drift from what the write path produced."""
     result = await FakeGeocoder().geocode(compose_address(**address))
     return {**address, "latitude": result.latitude, "longitude": result.longitude}
 
@@ -246,8 +246,8 @@ async def test_geocode_preview_resolves_an_address(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    # Assert against the very ``FakeGeocoder`` the keyless test env resolves with,
-    # so the preview's coordinates cannot drift from the seam's output.
+    # Assert against the very ``FakeGeocoder`` the suite's ``GEOCODER=fake`` resolves
+    # with, so the preview's coordinates cannot drift from the seam's output.
     expected = await FakeGeocoder().geocode(query)
     assert body == {
         "latitude": expected.latitude,

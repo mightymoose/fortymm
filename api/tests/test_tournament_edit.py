@@ -47,8 +47,8 @@ from app.tournament_errors import (
 )
 from tests._helpers import make_user
 
-# The keyless deterministic geocoder the edit verb re-geocodes a changed address with
-# (the same one ``get_geocoder`` hands out with no ``GOOGLE_GEOCODING_API_KEY``). A
+# The deterministic geocoder the edit verb re-geocodes a changed address with (the
+# same one ``get_geocoder`` hands out under the suite's ``GEOCODER=fake``). A
 # service-layer test builds it directly, exactly as it constructs the raw session.
 _GEOCODER = FakeGeocoder()
 

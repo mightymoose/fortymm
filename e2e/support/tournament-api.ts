@@ -48,9 +48,12 @@ export interface TableSpec {
 
 /** A venue's six free-text address components (`AddressInput` on the wire). The
  * server geocodes these to coordinates at write time via the injected
- * `Geocoder` — the compose stack sets no `GOOGLE_GEOCODING_API_KEY`, so that is
- * the deterministic, network-free `FakeGeocoder`, which maps the composed
- * address string to stable coords by SHA-256. Two *different* addresses
+ * `Geocoder` — the e2e compose stack declares `GEOCODER: fake`
+ * (`docker-compose.e2e.yml`), so that is the deterministic, network-free
+ * `FakeGeocoder`, which maps the composed address string to stable coords by
+ * SHA-256. The choice is explicit config, not inferred from the absence of a
+ * `GOOGLE_GEOCODING_API_KEY`, so adding a key to the stack does not quietly put
+ * these helpers on live Google results. Two *different* addresses
  * therefore geocode to two different, stable points — which is exactly what the
  * near-me filter spec needs to place a venue at a known distance from another. */
 export interface AddressInput {
