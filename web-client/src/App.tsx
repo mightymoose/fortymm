@@ -484,7 +484,7 @@ function FeatRun() {
           schedule that respects every one.
         </p>
         <ul className="fp-list">
-          <li>Round-robin, single-elim, double-elim, Swiss</li>
+          <li>Round-robin and single-elimination draws</li>
           <li>Live scoring from the scorers' table</li>
           <li>Public bracket link for spectators</li>
         </ul>
@@ -988,7 +988,7 @@ function FAQ() {
     },
     {
       q: 'Can I run a tournament with this?',
-      a: "Yes — that's half the product. Round-robin, single-elim, double-elim, Swiss, custom. Our scheduler treats your constraints (courts, breaks, back-to-backs) as rules and finds a schedule that respects all of them. Free for any club, any size, any country.",
+      a: "Yes — that's half the product. Round-robin and single-elimination draws. Our scheduler treats your constraints (courts, breaks, back-to-backs) as rules and finds a schedule that respects all of them. Free for any club, any size, any country.",
     },
     {
       q: 'How do you make money?',
