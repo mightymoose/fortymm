@@ -397,6 +397,28 @@ describe('apiToTournament', () => {
     expect(tournament.tableIds).toEqual(['t1', 't2', 't3', 't4'])
   })
 
+  // `address: null` is a tournament with NO VENUE (CONTEXT.md, "Venue") — a
+  // first-class state, so it is carried across untouched. Coalescing it to a blank
+  // `Address` (the way `description` is coalesced above, one test down) would erase
+  // the fact and hand every reader an address at (0, 0).
+  it('carries a null address through as null — no venue is a state, not a hole', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ address: null }),
+    )
+
+    expect(tournament.address).toBeNull()
+  })
+
+  it('carries a present address through with its geocoded coordinates', () => {
+    const tournament = apiToTournament(buildTournamentDetailRead())
+
+    expect(tournament.address).toMatchObject({
+      venue: 'Berkeley TT Club',
+      latitude: 37.8715,
+      longitude: -122.273,
+    })
+  })
+
   it('coalesces a null description to an empty string', () => {
     const tournament = apiToTournament(
       buildTournamentDetailRead({ description: null }),
@@ -530,6 +552,15 @@ describe('draftToCreateBody', () => {
     })
   })
 
+  // A tournament created with NO VENUE (CONTEXT.md, "Venue") sends `address: null`
+  // — the wire's word for it (`SubmittedAddress`), and the only spelling that does
+  // not hand the server something to geocode.
+  it('sends address: null for a draft with no venue', () => {
+    const body = draftToCreateBody({ ...draft, address: null })
+
+    expect(body.address).toBeNull()
+  })
+
   // ADR-0017: a tournament is born `draft` because the SERVER says so. The
   // create body carries no status at all — not even the right one — so there is
   // no status for a client to forge (the API 422s an extra key).
@@ -560,6 +591,18 @@ describe('tournamentToUpdateBody', () => {
       country: 'USA',
     })
     expect('events' in body).toBe(false)
+  })
+
+  // On a PATCH, an explicit `null` is what REMOVES the venue — omitting the field
+  // would mean "leave it as it is", which is a different edit. So a tournament the
+  // organizer has no venue for patches `address: null`, not an object of blanks.
+  it('sends address: null for a tournament with no venue', () => {
+    const tournament: Tournament = { ...draft, id: 't-1', address: null }
+    const body = tournamentToUpdateBody(tournament, [])
+
+    expect(body.address).toBeNull()
+    // Present-and-null, not absent: "removed" and "unchanged" are different edits.
+    expect('address' in body).toBe(true)
   })
 
   // ADR-0017: editing a tournament cannot move its lifecycle. The status the

@@ -25,6 +25,7 @@ import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
+type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -350,11 +351,15 @@ function drawableEvents(): TournamentEventRead[] {
  * the journey spec asserts on. */
 function seed(options: TournamentsStoreOptions): TournamentDetailRead {
   const crowded = options.crowded ?? false
+  // `undefined` keeps the factory's Berkeley venue; `null` IS the venue-less
+  // tournament, so it must be spread in rather than passed unconditionally.
+  const address = (options.venueless ?? false) ? { address: null } : {}
   if (options.drawable ?? false) {
     return buildTournamentDetailRead({
       id: TOURNAMENT_ID,
       status: options.status ?? 'published',
       can_edit: options.canEdit ?? true,
+      ...address,
       events: drawableEvents(),
     })
   }
@@ -362,6 +367,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
     id: TOURNAMENT_ID,
     status: options.status ?? 'published',
     can_edit: options.canEdit ?? true,
+    ...address,
     events: [
       buildTournamentEventRead({
         id: 'ev-open-singles',
@@ -496,6 +502,16 @@ export interface TournamentsStoreOptions {
    * offered the lifecycle buttons). `false` is the viewer: same page, no
    * transitions — the server 403s them, so the UI must not offer them. */
   canEdit?: boolean
+  /** Serve the tournament with **no venue** — `address: null` (CONTEXT.md,
+   * "Venue"), the state of one announced before its room is booked, or one at
+   * somebody's home whose address is deliberately withheld. Defaults to `false`
+   * (the seeded Berkeley venue).
+   *
+   * It is opt-in and stubbed HERE rather than asserted in vitest alone, because
+   * with MSW off this suite is the only place the real fetch stack decodes a
+   * `null` address off the wire — the generated schema made it nullable, and a
+   * page-object stub that could not produce one would leave that untested. */
+  venueless?: boolean
   /** Events ME is already entered in when the page loads — by event name. The
    * only way to reach "an entered player on a *live* tournament", since entering
    * one through the UI is (rightly) refused. */
@@ -832,6 +848,13 @@ export class TournamentsStore {
    * unmocked call would otherwise fall through to a 404 and be read as an app
    * bug (or, without the catch-all, get `index.html` back from vite). */
   readonly unhandled: RecordedRequest[] = []
+  /** Every `POST /v1/tournaments` body, in order — what the dialog actually PUT ON
+   * THE WIRE, as opposed to what a component test saw it hand its callback.
+   *
+   * It exists for the venue: a tournament created with the venue boxes empty must
+   * send `address: null` (CONTEXT.md, "Venue"), and the only way to see that six
+   * empty strings did not go instead is to read the serialized body. */
+  readonly createBodies: TournamentCreate[] = []
 
   constructor(private readonly options: TournamentsStoreOptions = {}) {
     this.detail = seed(options)
@@ -1537,6 +1560,9 @@ export class TournamentsStore {
    * somewhere real.
    */
   private async createTournament(route: Route, body: unknown) {
+    // Recorded BEFORE the refusal branches: what the client sent is a fact
+    // whether or not this stub chose to accept it.
+    this.createBodies.push(body as TournamentCreate)
     if (this.faultingTournamentCreate) return serverFault(route)
     if (this.refusingTournamentCreate) return this.unprocessableName(route)
 

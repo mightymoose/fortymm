@@ -61,6 +61,30 @@ describe('TournamentCard', () => {
       // Not "a bare · , " — the card is left with no punctuation to strand.
       expect(document.body).not.toHaveTextContent('·')
     })
+
+    // The real "no venue" state (CONTEXT.md, "Venue"): `address: null`, not an
+    // address whose parts happen to be blank. A tournament announced before its
+    // room is booked, or one at somebody's home withholding the address.
+    //
+    // The card shows NOTHING — no line, no pin, and above all no "Venue TBD",
+    // which would promise a venue that may never come and would imply a private
+    // address is merely missing (#1206).
+    it('renders nothing — no line, no pin, no "TBD" — for a tournament with NO VENUE', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({
+          name: 'Garage Invitational',
+          address: null,
+        }),
+      })
+
+      expect(tournamentCardPage.queryVenueLine()).toBeNull()
+      expect(document.body).not.toHaveTextContent('·')
+      expect(document.body).not.toHaveTextContent(/TBD/i)
+      // The card still renders the tournament it is a card for.
+      expect(
+        tournamentCardPage.getOpenButton('Garage Invitational'),
+      ).toBeInTheDocument()
+    })
   })
 
   // The distance is `null`/absent unless the list query carried a location, so

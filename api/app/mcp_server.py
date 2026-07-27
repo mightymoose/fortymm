@@ -1031,11 +1031,20 @@ async def edit_tournament(
     surfaces can never drift on what a valid edit is.
 
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
-    field replaces the current value. ``name``, ``address``, ``table_catalogue``
-    and ``league_id`` back NOT NULL columns, so an explicit ``null`` for any of
-    them is rejected (send them only to set a real value);
-    ``description`` / ``start_date`` / ``end_date`` are nullable and may be cleared
-    with ``null``. ``table_catalogue`` replaces wholesale when present.
+    field replaces the current value. ``name``, ``table_catalogue`` and ``league_id``
+    back NOT NULL columns, so an explicit ``null`` for any of them is rejected (send
+    them only to set a real value); ``description`` / ``start_date`` / ``end_date``
+    are nullable and may be cleared with ``null``.
+
+    ``address`` (the venue) has THREE cases, so read this before sending one: OMIT it
+    to leave the current venue and its coordinates untouched; send a real address to
+    move the venue (it is re-geocoded only if its text actually changed); send ``null``
+    — or an object whose six components are all blank — to REMOVE the venue entirely.
+    A tournament with no venue is a legitimate state (announced before the venue is
+    booked, or a private tournament withholding its address), so do not invent a
+    placeholder address to fill the field.
+
+    ``table_catalogue`` replaces wholesale when present.
     ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
     published the ladder is settled. ``status`` is not editable here (it moves only
     across the guarded lifecycle transitions). Returns the updated
@@ -1045,8 +1054,9 @@ async def edit_tournament(
     the tournament's owner (only the creator may edit it), when you try to change
     the league of a tournament that has left ``draft``, when ``league_id`` names
     no league, or when a changed venue ``address`` cannot be geocoded (the
-    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side on
-    write and are NOT NULL).
+    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side, and
+    an address that has them cannot be stored without them). Removing the venue
+    geocodes nothing and so can never raise that one.
     """
     user_id = _authenticated_user_id()
     # The geocoder is built from ``Settings`` (Google when keyed, else the keyless
@@ -1103,14 +1113,23 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
     empty. Returns the created ``TournamentRead`` from the creator's perspective
     (``can_edit`` is always true).
 
+    The venue ``address`` is OPTIONAL too: omit it (or send one whose six components
+    are all blank) to create a tournament with NO venue — the ordinary state of a
+    tournament announced before its venue is booked, or of a private tournament whose
+    address is deliberately withheld. Do not invent a placeholder address to fill the
+    field; an omitted address is geocoded not at all and stored as null, and the venue
+    can be set later with ``edit_tournament``. A tournament with no venue simply never
+    matches a proximity ("near me") search.
+
     Gated on the same ``tournament.create`` permission the HTTP ``POST /v1/tournaments``
     requires.
 
     Raises a ``ToolError`` when you lack ``tournament.create``, when ``league_id`` names
-    no league, when the venue ``address`` cannot be geocoded (the
-    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side on write
-    and are NOT NULL), or (a broken deployment) when no ``league_id`` is given and there
-    is no default league.
+    no league, when a supplied venue ``address`` cannot be geocoded (the
+    ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side, and an
+    address cannot be stored without them), or (a broken deployment) when no
+    ``league_id`` is given and there is no default league. Creating with no address
+    geocodes nothing and so can never raise that one.
     """
     user_id = _authenticated_user_id()
     # The geocoder is built from ``Settings`` (Google when keyed, else the keyless

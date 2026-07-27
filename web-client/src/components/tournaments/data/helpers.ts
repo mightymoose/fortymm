@@ -119,6 +119,61 @@ export function fmtTimeWindow(
 const joinPresent = (parts: string[], sep: string): string =>
   parts.map((p) => p.trim()).filter(Boolean).join(sep)
 
+/** The six free-text components of a venue address — the shape a write surface's
+ * boxes hold. Coordinates are excluded because a client never collects them: they
+ * are geocoded server-side at write time and only ever ride on the read model. */
+export type AddressText = Omit<Address, 'latitude' | 'longitude'>
+
+/** The six text keys, once. Iterated rather than re-typed, so a component added to
+ * `Address` is a compile error here instead of a field this module silently stops
+ * looking at. */
+const ADDRESS_TEXT_KEYS: readonly (keyof AddressText)[] = [
+  'venue',
+  'street',
+  'city',
+  'region',
+  'postal',
+  'country',
+]
+
+/** An address with every component blank and the read model's placeholder
+ * coordinates — what an edit surface puts in its boxes for a tournament that has
+ * **no** venue, so the organizer can start typing one.
+ *
+ * The `0`/`0` are placeholders and never reach the wire: the write shape
+ * (`AddressInput`) is coordinate-free, and `toAddressInput` (`./api`) drops them.
+ * They are not a location, and nothing may render them as one. */
+export function blankAddress(overrides: Partial<Address> = {}): Address {
+  return {
+    venue: '',
+    street: '',
+    city: '',
+    region: '',
+    postal: '',
+    country: '',
+    latitude: 0,
+    longitude: 0,
+    ...overrides,
+  }
+}
+
+/** Is there a venue here at all — does ANY component hold something other than
+ * whitespace?
+ *
+ * The client's copy of the server's `SubmittedAddress` rule ("an all-blank address
+ * is not a venue — normalize it to `None`"), asked by a write surface *before* it
+ * decides whether its body carries an address or `null`. The server normalizes too,
+ * so this is not a guard against a bad payload: it is what stops a form INVENTING a
+ * venue out of a default it filled in on the organizer's behalf (a lone `country`
+ * they never typed would otherwise be a venue, and the server would go and geocode
+ * it). */
+export function hasVenue(
+  address: Partial<AddressText> | null | undefined,
+): boolean {
+  if (!address) return false
+  return ADDRESS_TEXT_KEYS.some((key) => (address[key] ?? '').trim() !== '')
+}
+
 /** A tournament's venue line — `Berkeley TT Club · Berkeley, CA` — built by
  * filtering the address parts and joining the survivors, NOT by interpolating
  * each part into a template with its separator baked in (#994, #972).
@@ -128,11 +183,19 @@ const joinPresent = (parts: string[], sep: string): string =>
  * anything to punctuate: a venue-less tournament read as a bare `· ,` and a
  * venue with no city as `BETAVENUE · ,`. Punctuation is not data.
  *
+ * **A `null` address — a tournament with no venue at all (CONTEXT.md, "Venue") —
+ * is the same answer, `''`, and deliberately so.** It is not a second mechanism
+ * and not a placeholder: "no venue" and "a venue with nothing displayable in it"
+ * both mean there is no line to draw, and every caller already renders no row for
+ * `''`. A "Venue TBD" here would be a lie in the withheld case, and would leak the
+ * fact that a private home game *has* an address it is not showing (#1206).
+ *
  * Returns `''` when nothing is present — a caller must render NO venue line at
  * all in that case (no icon, no empty row), which is why this is not the
  * em-dash that `ReadOnlyValue` and the formatters above use: those label a
  * field whose row exists regardless; this one decides whether the row exists. */
-export function fmtVenueLine(address: Address): string {
+export function fmtVenueLine(address: Address | null | undefined): string {
+  if (!address) return ''
   const locality = joinPresent([address.city, address.region], ', ')
   return joinPresent([address.venue, locality], ' · ')
 }
@@ -315,20 +378,14 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     startDate: null,
     endDate: null,
     description: '',
-    // `Tournament` is the READ model, so its `Address` carries the geocoded
-    // coordinates; a blank draft has none yet, so they seed at 0. The write path
-    // (`draftToCreateBody`) drops them — a client never sends coordinates — so
-    // these placeholders never reach the wire.
-    address: {
-      venue: '',
-      street: '',
-      city: '',
-      region: '',
-      postal: '',
-      country: 'USA',
-      latitude: 0,
-      longitude: 0,
-    },
+    // NO VENUE — `null`, not six empty strings. A tournament may have none at all
+    // (CONTEXT.md, "Venue"), and a blank draft is the clearest case of it: nothing
+    // has been typed. Seeding an all-blank `Address` here instead would make every
+    // create body carry an address the organizer never entered — and, once a default
+    // country was folded in, one the server would take for a real venue and go and
+    // geocode. A write surface builds an `Address` only when the organizer types one
+    // (`hasVenue` above).
+    address: null,
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [],
     // A brand-new tournament has never been solved — and `Tournament` is the READ

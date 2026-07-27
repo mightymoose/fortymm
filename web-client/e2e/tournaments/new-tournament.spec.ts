@@ -241,4 +241,47 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     // The dialog's success navigation lands on the created tournament.
     await expect(page).toHaveURL(/\/tournaments\/[^/]+$/)
   })
+
+  /**
+   * A tournament may be created with **no venue at all** (CONTEXT.md, "Venue"):
+   * announced before the room is booked, or held at somebody's home whose address
+   * is deliberately withheld. The dialog above leaves every venue box empty, and
+   * this is the assertion about what that PUT ON THE WIRE.
+   *
+   * It belongs here rather than in vitest because the claim is about the serialized
+   * request body, after the real `openapi-fetch` client with MSW off. A component
+   * test can only see the draft handed to the callback; `address: null` versus six
+   * empty strings plus a defaulted `country: "USA"` is a difference the server acts
+   * on — the latter is a venue, and it would get geocoded.
+   */
+  test('sends address: null when the venue boxes are left empty', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+
+    await pom.openWithName('Garage Invitational')
+    await pom.createButton.click()
+
+    await expect(pom.dialog).toBeHidden()
+    expect(store.createBodies).toHaveLength(1)
+    expect(store.createBodies[0].address).toBeNull()
+    expect(store.unhandled).toEqual([])
+  })
+
+  /** The positive control for the test above: a typed venue really is sent, so the
+   * `null` there is about the empty boxes and not about a dialog that stopped
+   * sending an address at all. */
+  test('sends the venue the organizer typed', async ({ page }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+
+    await pom.openWithName('Autumn Classic')
+    await pom.venueInput.fill('Berkeley TT Club')
+    await pom.createButton.click()
+
+    await expect(pom.dialog).toBeHidden()
+    expect(store.createBodies[0].address).toMatchObject({
+      venue: 'Berkeley TT Club',
+      country: 'USA',
+    })
+  })
 })

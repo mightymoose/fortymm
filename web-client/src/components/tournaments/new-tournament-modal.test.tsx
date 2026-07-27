@@ -52,6 +52,39 @@ describe('NewTournamentModal', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  // A tournament may be created with NO VENUE at all (CONTEXT.md, "Venue"):
+  // organizers announce before the room is booked, and a tournament at somebody's
+  // home withholds its address on purpose. The dialog must submit that, and must
+  // submit it as `null` — six empty strings plus a default country is a VENUE, and
+  // the server would take it at its word and go and geocode "USA".
+  it('sends NO VENUE — null, not six empty strings — when the venue boxes are blank', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Garage Invitational')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(onCreate.mock.calls[0][0].address).toBeNull()
+  })
+
+  it('starts a venue from ANY single box the organizer fills in', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    // Not the venue name — the least likely box, so this cannot pass by looking at
+    // one field and calling it the venue.
+    await userEvent.type(screen.getByLabelText('Postal'), '94703')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(onCreate.mock.calls[0][0].address).toMatchObject({
+      postal: '94703',
+      venue: '',
+      country: 'USA',
+    })
+  })
+
   it('blocks an empty name with an inline error and does not submit', async () => {
     const onCreate = vi.fn()
     newTournamentModalPage.render({ onCreate })

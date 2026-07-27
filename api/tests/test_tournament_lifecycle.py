@@ -17,7 +17,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.geocoding import FakeGeocoder
+from app.geocoding import FakeGeocoder, GeocodeResult
 from app.models import (
     DrawType,
     EventFormat,
@@ -51,12 +51,37 @@ from app.tournament_lifecycle import (
     delete_tournament,
     transition_tournament,
 )
-from tests._helpers import make_user
+from tests._helpers import assert_tournament_address_is_sql_null, make_user
 
 # The deterministic geocoder the create verb resolves the venue address with (the
 # same one ``get_geocoder`` hands out under the suite's ``GEOCODER=fake``). A
 # service-layer test builds it directly, exactly as it constructs the raw session.
 _GEOCODER = FakeGeocoder()
+
+
+class _CountingGeocoder:
+    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
+    the deterministic ``FakeGeocoder`` so results stay stable.
+
+    Mirrors the double of the same name in ``test_tournament_edit.py``. Here it exists
+    for the *negative* claim: a create with no venue must not call the geocoder **at
+    all**. Asserting only "the request succeeded" would not distinguish that from a
+    geocode that happened to resolve — and the whole reason no-venue was unreachable is
+    that a blank address composed to ``""`` and was refused by the geocoder, so "was the
+    geocoder asked" is the question with the history behind it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = FakeGeocoder()
+
+    async def geocode(self, address: str) -> GeocodeResult:
+        self.calls += 1
+        return await self._inner.geocode(address)
+
+
+#: The six free-text components of the venue value-object, named once so an all-blank
+#: address is built from the shape rather than by hand.
+_ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
 
 
 @pytest_asyncio.fixture
@@ -199,6 +224,165 @@ async def test_create_without_a_league_and_no_default_raises(
         await create_tournament(
             db_session, actor=actor, payload=_payload(), geocoder=_GEOCODER
         )
+
+
+# ----- create with NO venue -------------------------------------------------
+
+
+async def test_create_with_an_omitted_address_stores_no_venue_and_never_geocodes(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A tournament announced before its venue is booked is created with the ``address``
+    key simply absent — and that must reach the column as SQL ``NULL`` without the
+    geocoder being consulted at all (#1206).
+
+    The geocode-call count is the load-bearing assertion, not the 201-equivalent. The
+    state was unreachable precisely *because* the write path always geocoded: an absent
+    or blank address composes to ``""``, which resolves to zero candidates and is
+    refused as a coded 409. A test that only asserted "the create returned a tournament"
+    would stay green against a verb that geocoded ``""`` and got lucky.
+    """
+    actor = await make_user(db_session, "lifecycle-create-no-venue")
+    counting = _CountingGeocoder()
+
+    tournament = await create_tournament(
+        db_session,
+        actor=actor,
+        payload=TournamentCreate(name="Announced, Venue TBC"),
+        geocoder=counting,
+    )
+    tournament_id = tournament.id
+
+    assert counting.calls == 0
+    assert tournament.address is None
+
+    # Persisted as SQL NULL, not merely returned as ``None`` — and specifically not as
+    # the JSONB ``null`` literal, which reads back as ``None`` just the same. The
+    # docstring's claim is about the *encoding*, so the assertion has to be too;
+    # ``row.address is None`` alone cannot see the difference (see the helper).
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.address is None
+    await assert_tournament_address_is_sql_null(db_session, tournament_id)
+
+
+async def test_a_tournament_with_no_venue_is_found_by_a_sql_is_null_predicate(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The venue-less tournament the create verb just wrote is matched by
+    ``Tournament.address.is_(None)`` — the predicate any "has no venue" read path will
+    reach for first.
+
+    This guards a footgun rather than a feature. Before ``none_as_null=True`` this query
+    returned **zero rows** against a table where every tournament had no venue, and did
+    so silently: the column stored the JSONB ``null`` literal, which ``IS NULL`` does
+    not match, while every Python-side ``t.address is None`` said otherwise. A read
+    built on that would ship an empty list with nothing to debug from. Written from the
+    consumer's side deliberately — the encoding is only interesting because of the
+    predicate it does or doesn't satisfy — and paired here with a venue-bearing row so a
+    predicate that matched *everything* would red too.
+    """
+    actor = await make_user(db_session, "lifecycle-is-null-predicate")
+
+    venueless = await create_tournament(
+        db_session,
+        actor=actor,
+        payload=TournamentCreate(name="Venue TBC"),
+        geocoder=_GEOCODER,
+    )
+    with_venue = await create_tournament(
+        db_session,
+        actor=actor,
+        payload=TournamentCreate(name="Bay Area Open", address=_address()),
+        geocoder=_GEOCODER,
+    )
+    # Read the ids off before expiring, so the queries below are the only IO.
+    actor_id, venueless_id, with_venue_id = actor.id, venueless.id, with_venue.id
+
+    db_session.expire_all()
+    matched = (
+        (
+            await db_session.execute(
+                select(Tournament.id)
+                .where(Tournament.created_by_user_id == actor_id)
+                .where(Tournament.address.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert list(matched) == [venueless_id]
+
+    # ...and its complement, so "has a venue" is reachable by the mirror predicate too.
+    matched_not_null = (
+        (
+            await db_session.execute(
+                select(Tournament.id)
+                .where(Tournament.created_by_user_id == actor_id)
+                .where(Tournament.address.is_not(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert list(matched_not_null) == [with_venue_id]
+
+
+@pytest.mark.parametrize(
+    "blank",
+    [
+        dict.fromkeys(_ADDRESS_COMPONENTS, ""),
+        dict(zip(_ADDRESS_COMPONENTS, (" ", "\t", "\n", "  ", " ", " "), strict=True)),
+    ],
+    ids=["six-empty-strings", "whitespace-only"],
+)
+async def test_create_with_an_all_blank_address_stores_no_venue_and_never_geocodes(
+    db_session: AsyncSession,
+    default_league: League,
+    blank: dict[str, str],
+) -> None:
+    """The same claim through the gesture a **browser** organizer can actually make.
+
+    The web form submits six controlled text inputs; it has no way to omit the
+    ``address`` key. So the all-blank submission is the one that matters for the bug
+    #1206 is about, and it must behave identically to an omission — normalized to "no
+    venue" at the boundary, before the geocoder is asked. Whitespace counts as blank: a
+    stray space in one of six boxes is not a venue.
+
+    "Identically to an omission" is asserted down to the *encoding*: the same true SQL
+    NULL, not the JSONB ``null`` literal, so both gestures land on the one stored
+    representation of "no venue" rather than on two that merely read back alike.
+    """
+    actor = await make_user(db_session, "lifecycle-create-blank-venue")
+    counting = _CountingGeocoder()
+
+    tournament = await create_tournament(
+        db_session,
+        actor=actor,
+        payload=TournamentCreate(name="Private Tournament", address=blank),
+        geocoder=counting,
+    )
+    tournament_id = tournament.id
+
+    assert counting.calls == 0
+    assert tournament.address is None
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one()
+    assert row.address is None
+    await assert_tournament_address_is_sql_null(db_session, tournament_id)
 
 
 # ----- delete --------------------------------------------------------------

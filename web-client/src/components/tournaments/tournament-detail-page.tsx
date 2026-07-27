@@ -95,10 +95,16 @@ export const TournamentDetailPage = ({
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
-  // Empty when venue, city, and region are all blank — and then the meta item
-  // is not rendered at all, pin included. Punctuation with nothing to punctuate
-  // ("· ,") is a rendering bug, not a placeholder (#994).
-  const venue = fmtVenueLine(tournament.address)
+  // `null` when the tournament has NO VENUE at all — a first-class state
+  // (CONTEXT.md, "Venue"), and the reason the map below is gated on the address
+  // itself and not only on the line: there are no coordinates to pin.
+  const address = tournament.address
+  // Empty for a null address, and empty when venue, city, and region are all blank
+  // — and then the meta item is not rendered at all, pin included. Punctuation with
+  // nothing to punctuate ("· ,") is a rendering bug, not a placeholder (#994); and
+  // "Venue TBD" would be worse than either, since no venue is not a promise of one
+  // (#1206).
+  const venue = fmtVenueLine(address)
 
   const openEvent = (ev: TournamentEvent) => {
     setEditorEvent(ev)
@@ -166,13 +172,15 @@ export const TournamentDetailPage = ({
         </div>
 
         {/* Display-only venue map at the tournament's server-geocoded coordinates
-            (read `Address` carries non-null lat/lng). Gated on the same `venue`
-            presence as the meta line so an address-less tournament shows nothing;
-            keyless (dev/CI/e2e) it degrades to a text fallback of the venue line. */}
-        {venue && (
+            (a stored `Address` carries non-null lat/lng). Gated on the ADDRESS as
+            well as on the venue line: a tournament with no venue has no coordinates
+            to pin, and a map at (0, 0) would put a private home game in the Gulf of
+            Guinea. Keyless (dev/CI/e2e) it degrades to a text fallback of the venue
+            line. */}
+        {address && venue && (
           <LocationMap
-            latitude={tournament.address.latitude}
-            longitude={tournament.address.longitude}
+            latitude={address.latitude}
+            longitude={address.longitude}
             label={venue}
             className="mb-5 h-44 max-w-md"
           />

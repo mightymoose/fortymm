@@ -73,6 +73,23 @@ describe('TournamentDetailPage', () => {
       // own meta — so this asserts the item, not the character.)
       expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
     })
+
+    // The real "no venue" state (CONTEXT.md, "Venue"): `address: null` — announced
+    // before the room is booked, or a home game whose address is withheld. The
+    // header shows the dates and nothing else where the venue would be.
+    it('renders nothing — no meta item, no "TBD" — for a tournament with NO VENUE', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: null }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
+      // Never a placeholder: "TBD" promises a venue is coming (false when it is
+      // withheld) and implies a private address is merely missing (#1206).
+      expect(document.body).not.toHaveTextContent(/TBD/i)
+      // …and the rest of the header is untouched — the dates are still there, so
+      // this is a missing venue row and not a page that failed to render.
+      expect(document.body).toHaveTextContent('Jun 13, 2026')
+    })
   })
 
   // The display-only venue map (chore 4d): opening a tournament shows its venue on
@@ -119,6 +136,23 @@ describe('TournamentDetailPage', () => {
       })
 
       expect(tournamentDetailPagePage.queryVenueMapFallback()).toBeNull()
+    })
+
+    // `address: null` has no coordinates to pin at all. Rendering the map anyway
+    // would need a fallback pair, and the only one available is (0, 0) — which
+    // would put a tournament held at somebody's home in the Gulf of Guinea, on a
+    // public page, having been told not to show its address.
+    it('mounts NO map — and no marker — for a tournament with NO VENUE', () => {
+      vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-browser-key')
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: null }),
+      })
+
+      expect(tournamentDetailPagePage.queryVenueMapFallback()).toBeNull()
+      // The keyed branch too: no marker was ever asked for, so nothing was pinned
+      // at (0, 0). A fallback-only assertion would miss exactly that.
+      expect(markerProps).not.toHaveBeenCalled()
+      vi.unstubAllEnvs()
     })
   })
 

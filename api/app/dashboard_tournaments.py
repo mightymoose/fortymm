@@ -26,12 +26,14 @@ today); ``match_id: None`` on a scheduled row means the fixture has not material
 values to be filled in later, and none may be flattened to a zero or an empty string.
 """
 
+import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import date
 from typing import assert_never
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,6 +75,8 @@ from app.tournament_queries import (
     game_counts_by_match,
 )
 from app.tournament_serialization import event_results
+
+log = logging.getLogger(__name__)
 
 
 async def build_tournament_panels(
@@ -635,10 +639,54 @@ def _subtitle(tournament: Tournament) -> str:
 
     Composed here rather than on the client because it is three optional facts folded
     into one sentence, and every client that folded them itself would fold them
-    slightly differently."""
-    address = Address.model_validate(tournament.address)
-    parts = [part for part in (address.venue, _date_range(tournament)) if part]
+    slightly differently.
+
+    Every part is optional, including the venue (:func:`_venue`), so this degrades all
+    the way down: a dated tournament with no venue is ``"Jul 24–25"``, and one with
+    neither is the empty string."""
+    parts = [part for part in (_venue(tournament), _date_range(tournament)) if part]
     return " · ".join(parts)
+
+
+def _venue(tournament: Tournament) -> str | None:
+    """The venue's display name for the subtitle, or ``None`` when there is none to
+    show.
+
+    Two quite different situations answer ``None`` here, and only one of them is a
+    problem — which is why they are separate branches rather than one ``try``.
+
+    **No address is a normal, expected state.** A tournament may have no venue at all,
+    at every status from draft to archived: announced before the room is booked, or
+    deliberately withheld (CONTEXT.md, "Venue"; the 2026-07-26 amendment to ADR "a
+    venue's coordinates are geocoded server-side ..."). Nothing is logged — it is a
+    first-class state, not missing data, and a line per dashboard load would teach the
+    reader to tune this logger out, which is exactly the attention the *other* branch
+    needs.
+
+    **An address that does not parse is data corruption**, and is logged at ERROR
+    against the tournament id. It is contained rather than raised because the blast
+    radius is wildly disproportionate: this runs while building ONE panel, but the
+    exception escapes the whole ``GET /v1/dashboard`` — one bad venue string would deny
+    the caller their matches, their rating chart and their notifications, panels with
+    nothing to do with tournaments. Contained, that tournament shows its dates and the
+    page renders.
+
+    **The log line is what keeps containment from becoming silence.** A quiet fallback
+    would swallow a serialization bug of *ours* just as happily as a corrupt row: were
+    the nullable-address encoding subtly wrong somewhere, every dashboard would render
+    no venue, all tests green, and nothing would say so."""
+    stored = tournament.address
+    if stored is None:
+        return None
+    try:
+        return Address.model_validate(stored).venue
+    except ValidationError:
+        log.exception(
+            "Tournament %s has an address that does not parse; its dashboard panel "
+            "falls back to dates alone",
+            tournament.id,
+        )
+        return None
 
 
 def _date_range(tournament: Tournament) -> str | None:

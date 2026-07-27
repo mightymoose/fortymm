@@ -66,10 +66,23 @@ export interface AddressInput {
 }
 
 /** A venue's stored coordinates as geocoded server-side and read back off the
- * tournament's `address` value-object — both NOT NULL by the ADR. */
+ * tournament's `address` value-object — both NOT NULL *within* an address.
+ *
+ * The outer invariant is weaker than the coordinates one: a tournament may carry
+ * **no address at all** (`address: null`), so the thing that can be missing is the
+ * whole venue, never one half of a located one. See the 2026-07-26 amendment to
+ * docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md. */
 export interface Coords {
   readonly latitude: number
   readonly longitude: number
+}
+
+/** A tournament's stored venue as the detail read carries it: the six free-text
+ * components the organizer typed plus the coordinates the server geocoded them to.
+ * Only `venue` is named here beyond the coordinates — it is the one component a
+ * spec asserts on; the rest ride along untyped because no spec reads them. */
+export interface StoredAddress extends Coords {
+  readonly venue: string
 }
 
 /** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
@@ -89,10 +102,19 @@ export interface SeedTournamentOptions {
    * over-the-cap `unknown`. */
   readonly maxPlayers?: number
   /** The venue address the server geocodes to the tournament's coordinates.
-   * Defaults to a single fixed address (so existing specs are untouched); the
-   * near-me spec passes two *distinct* addresses so the two tournaments land at
-   * two different, stable `FakeGeocoder` points. */
-  readonly address?: AddressInput
+   *
+   * Omitted defaults to a single fixed address (so existing specs are untouched);
+   * the near-me spec passes two *distinct* addresses so the two tournaments land
+   * at two different, stable `FakeGeocoder` points.
+   *
+   * **`null` seeds a tournament with NO VENUE** — a first-class state (CONTEXT.md,
+   * "Venue"): announced before the room is booked, or deliberately withheld. It
+   * sends the create payload with the `address` key **absent**, which is what a
+   * non-browser caller does; the browser's own route to the same state is an
+   * explicit `address: null` from a form whose six venue boxes are all blank, and
+   * `tournament-no-venue.spec.ts` drives that one through the UI. Both land on the
+   * same SQL NULL, which is the single representation of "no venue". */
+  readonly address?: AddressInput | null
 }
 
 /** A seeded tournament and the ids a spec needs to address it and its event. */
@@ -125,20 +147,31 @@ export async function seedTournament(
 ): Promise<SeededTournament> {
   const slot = options.slot ?? { date: '2026-08-01', start: '09:00', end: '17:00' }
   const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
-  const address = options.address ?? {
-    venue: 'Test Arena',
-    street: '1 Test Way',
-    city: 'Testville',
-    region: 'TS',
-    postal: '00000',
-    country: 'Testland',
-  }
+  // `??` would be wrong here: `null` is a MEANINGFUL value for this option ("no
+  // venue"), and `null ?? default` would silently give it a venue. Only an
+  // *omitted* option falls back to the default address.
+  const address =
+    options.address === undefined
+      ? {
+          venue: 'Test Arena',
+          street: '1 Test Way',
+          city: 'Testville',
+          region: 'TS',
+          postal: '00000',
+          country: 'Testland',
+        }
+      : options.address
 
   const tournamentRes = await director.ctx.post(`${API}/tournaments`, {
     headers: { [CSRF_HEADER]: director.csrf },
     data: {
       name,
-      address,
+      // No venue = the `address` key is simply absent from the payload. Sending
+      // it as `null` would work too (both mean "no venue" on create), but the
+      // absent key is the shape a non-browser caller produces, and keeping the
+      // two routes distinct is deliberate: the browser's explicit `null` is
+      // covered through the UI in `tournament-no-venue.spec.ts`.
+      ...(address === null ? {} : { address }),
       // The pool references these tables by id, so the catalogue must carry them.
       table_catalogue: tables,
     },
@@ -429,6 +462,27 @@ export async function callFixture(
 }
 
 /**
+ * Read back a tournament's stored venue off the detail read (`GET
+ * /v1/tournaments/{id}`) — the whole `address` value-object, or **`null` for a
+ * tournament with no venue**.
+ *
+ * The null is the point of returning the object rather than just the coordinates:
+ * `address` is nullable on the wire (#1206), so "this tournament really has no
+ * venue stored" is a fact a spec has to be able to read, not merely infer from a
+ * page that rendered nothing.
+ */
+export async function getStoredAddress(
+  viewer: Guest,
+  tournamentId: string,
+): Promise<StoredAddress | null> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  return ((await res.json()) as { address: StoredAddress | null }).address
+}
+
+/**
  * Read back the coordinates the server geocoded a tournament's venue to, off the
  * detail read's `address` value-object (`GET /v1/tournaments/{id}`).
  *
@@ -438,16 +492,21 @@ export async function callFixture(
  * the coordinates back* here and computes its query point/radius from the real,
  * stored numbers. That keeps the assertion robust to the actual coords rather
  * than a guessed literal.
+ *
+ * Throws on a tournament with **no** venue: a caller asking for coordinates has
+ * assumed a located venue, and a silent `(0, 0)` or a `null` threaded onward would
+ * turn that mistaken assumption into a bewildering assertion failure elsewhere.
  */
 export async function getVenueCoords(
   viewer: Guest,
   tournamentId: string,
 ): Promise<Coords> {
-  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
-  if (!res.ok()) {
-    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  const address = await getStoredAddress(viewer, tournamentId)
+  if (address === null) {
+    throw new Error(
+      `tournament ${tournamentId} has NO venue — it has no coordinates to read`,
+    )
   }
-  const { address } = (await res.json()) as { address: Coords }
   return { latitude: address.latitude, longitude: address.longitude }
 }
 
@@ -476,6 +535,25 @@ export async function listTournamentsRaw(
   params: Record<string, string | number>,
 ): Promise<APIResponse> {
   return viewer.ctx.get(`${API}/tournaments`, { params })
+}
+
+/**
+ * List every tournament visible to `viewer`, **unfiltered** — no near-me triple,
+ * so every row's `distance_miles` is `null`.
+ *
+ * The control for a "not in the radius result" assertion: it establishes that the
+ * tournament exists and is visible to this caller, so its absence from a near-me
+ * listing is the venue filter doing its job and not a tournament that was never
+ * there to find.
+ */
+export async function listTournaments(
+  viewer: Guest,
+): Promise<ReadonlyArray<NearMeListing>> {
+  const res = await listTournamentsRaw(viewer, {})
+  if (!res.ok()) {
+    throw new Error(`tournament list failed: ${res.status()} ${await res.text()}`)
+  }
+  return (await res.json()) as ReadonlyArray<NearMeListing>
 }
 
 /**

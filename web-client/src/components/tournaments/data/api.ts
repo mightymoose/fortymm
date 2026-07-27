@@ -195,6 +195,11 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     description: t.description ?? '',
     startDate: t.start_date,
     endDate: t.end_date,
+    // Carried across UNCHANGED, `null` included: a tournament may have no venue at
+    // all (CONTEXT.md, "Venue"), and that is a state to render — as nothing — not a
+    // hole to fill. Coalescing it to a blank `Address` here would erase the very
+    // fact the field exists to carry, and would hand every downstream reader an
+    // address at (0, 0).
     address: t.address,
     tableIds: t.table_catalogue.map((tbl) => tbl.id),
     events: t.events.map(apiToEvent),
@@ -217,8 +222,15 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
  * verb sends. Coordinates are geocoded server-side at write time and a client
  * NEVER supplies them — the write schema is `extra="forbid"`, so sending them
  * would 422. Picking the six text fields keeps the write path coord-free no
- * matter what the read side accreted. */
-function toAddressInput(a: Address): AddressInput {
+ * matter what the read side accreted.
+ *
+ * **No venue is `null`, not an object of six empty strings.** On the write schemas
+ * `address` is `AddressInput | None`, and on a PATCH an explicit `null` is what
+ * *removes* the venue (an omitted field means "unchanged"). The server would
+ * normalize six blanks to `null` for us — but saying it plainly is what makes the
+ * update body's intent legible, and it is the one spelling both verbs share. */
+function toAddressInput(a: Address | null): AddressInput | null {
+  if (a === null) return null
   return {
     venue: a.venue,
     street: a.street,

@@ -117,6 +117,15 @@ Specs live in `tests/*.spec.ts`; page objects in `page-objects/`
   points at.
 - **`down -v` wipes the stack's volumes** on teardown. Set `E2E_KEEP_STACK=1` to
   keep the stack (and its data) up for manual inspection after a run.
+- **Tear a kept stack down before the next default run.** `up --build` mints a
+  fresh image id every time (BuildKit writes new provenance/attestation
+  manifests even when every layer is cached), so a second run *recreates* api,
+  worker and web-client while leaving the already-healthy **nginx** untouched —
+  and nginx resolved the api's container IP at startup. Setup then fails its
+  second gate with a **persistent** `status 502` that no amount of waiting cures.
+  `docker compose … restart nginx` unwedges an existing stack; starting from no
+  stack at all avoids it, which is why the normal `down -v` teardown means you
+  never see this.
 - **Don't edit these gates away.** The two `waitForReady` probes in `global-setup`
   exist for specific documented races (nginx 502 window, `solver` worker
   subscription). Deleting them makes the suite flake on cold starts.

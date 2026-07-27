@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
+import { blankAddress } from '../data/helpers'
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
@@ -61,8 +62,19 @@ export const DetailsTab = ({
 
   const update = (patch: Partial<Tournament>) =>
     setDraft((d) => ({ ...d, ...patch }))
+  /** What the six venue boxes show. A tournament with NO venue (CONTEXT.md,
+   * "Venue" — `address: null`) is a valid, first-class state, and this is the one
+   * place it becomes six empty boxes: an editor needs somewhere to type. The blank
+   * stand-in is display state only — it is not written back into the draft unless
+   * the organizer actually types (`updateAddress`), so opening the tab does not
+   * silently give a venue-less tournament a venue. */
+  const address = draft.address ?? blankAddress()
+  // Typing into a box on a venue-less tournament STARTS a venue, on the blank
+  // stand-in above. Clearing every box again leaves an all-blank `Address`, which
+  // the server normalizes back to "no venue" at its own boundary
+  // (`SubmittedAddress`) — the client does not have to, and must not refuse it.
   const updateAddress = (patch: Partial<Address>) =>
-    setDraft((d) => ({ ...d, address: { ...d.address, ...patch } }))
+    setDraft((d) => ({ ...d, address: { ...(d.address ?? blankAddress()), ...patch } }))
   const save = () => onUpdate(draft)
 
   /** The address rows are the same shape six times over: an `Input` over the
@@ -81,14 +93,14 @@ export const DetailsTab = ({
       label={label}
       key={key}
       readOnly={!canEdit}
-      value={draft.address[key]}
+      value={address[key]}
       valueClassName={className}
     >
       {(id) => (
         <Input
           id={id}
           className={className}
-          value={draft.address[key]}
+          value={address[key]}
           onChange={(e) => updateAddress({ [key]: e.target.value })}
         />
       )}
@@ -174,7 +186,7 @@ export const DetailsTab = ({
                 drops a pin. An editor-only affordance (ADR 0015 — hide mutating
                 affordances, never disable them) and display-only: it adds no
                 coordinates to the update payload (the server geocodes on save). */}
-            {canEdit && <PreviewLocation address={draft.address} />}
+            {canEdit && <PreviewLocation address={address} />}
           </div>
         </Card>
       </div>

@@ -49,6 +49,28 @@ export class TournamentDetailPage {
     return this.page.locator('[data-slot=card]').filter({ hasText: eventName })
   }
 
+  // ----- the venue (CONTEXT.md, "Venue") -----------------------------------
+  //
+  // A tournament may have NO venue at all, and then the header shows NOTHING where
+  // the venue would be: no line, no pin, no map — never a "Venue TBD" placeholder,
+  // which would promise a venue that may never come and would imply a deliberately
+  // withheld home address is merely missing.
+
+  /** The header's venue meta item — pin icon and the venue line. Absent entirely
+   * when the tournament has no venue. */
+  get venueLine(): Locator {
+    return this.page.getByTestId('tournament-venue-line')
+  }
+
+  /** The venue map. Both branches, because which one renders depends on whether a
+   * Google Maps key is configured — and this suite runs keyless, which is exactly
+   * the environment in which a "no map" assertion could pass for the wrong reason. */
+  get venueMap(): Locator {
+    return this.page.locator(
+      '[data-testid=location-map], [data-testid=location-map-fallback]',
+    )
+  }
+
   // ----- the lifecycle header (ADR-0017) -----------------------------------
 
   /** The status pill in the detail hero. Its text IS the status, in the words the

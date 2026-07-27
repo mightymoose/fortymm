@@ -17,7 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
-import { emptyTournament } from './data/helpers'
+import { blankAddress, emptyTournament, hasVenue } from './data/helpers'
 import {
   TOURNAMENT_SAVE_TARGET,
   saveFailure,
@@ -57,6 +57,16 @@ const schema = z.object({
 })
 
 type FormValues = z.infer<typeof schema>
+
+/** The country a venue typed in this dialog is assumed to be in. The dialog has no
+ * country box (the edit form does), so a venue created here would otherwise reach
+ * the geocoder without one.
+ *
+ * It is applied ONLY to a venue the organizer actually typed. Folded in
+ * unconditionally it would turn "no venue" into a venue whose sole content is the
+ * word USA — an address the server would dutifully geocode, pinning a tournament
+ * with no venue at the middle of the country. */
+const DEFAULT_COUNTRY = 'USA'
 
 const DEFAULT_VALUES: FormValues = {
   name: '',
@@ -141,18 +151,26 @@ export const NewTournamentModal = ({
     // Last attempt's banner belongs to last attempt (a field's red clears itself:
     // `mode: 'onChange'` re-validates the box as it is retyped).
     form.clearErrors('root')
+    const typed = {
+      venue: values.venue.trim(),
+      street: values.street.trim(),
+      city: values.city.trim(),
+      region: values.region.trim(),
+      postal: values.postal.trim(),
+    }
     try {
       await onCreate({
         ...base,
         name: values.name,
-        address: {
-          ...base.address,
-          venue: values.venue.trim(),
-          street: values.street.trim(),
-          city: values.city.trim(),
-          region: values.region.trim(),
-          postal: values.postal.trim(),
-        },
+        // ALL FIVE BOXES BLANK IS NOT A VENUE — it is the first-class "no venue"
+        // state (CONTEXT.md, "Venue"), and this dialog must be able to submit it:
+        // organizers announce before the room is booked, and a tournament at
+        // somebody's home withholds its address on purpose. So the draft carries
+        // `null`, and `draftToCreateBody` sends `address: null` rather than six
+        // empty strings dressed up with a default country.
+        address: hasVenue(typed)
+          ? blankAddress({ ...typed, country: DEFAULT_COUNTRY })
+          : null,
       })
       onOpenChange(false)
     } catch (err) {
