@@ -13,12 +13,15 @@ export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 
 export type EventFormat = 'singles' | 'doubles' | 'teams'
 
-export type DrawType =
-  | 'single-elim'
-  | 'double-elim'
-  | 'round-robin'
-  | 'rr-then-ko'
-  | 'swiss'
+/** The draw types the API accepts — **exactly two**, and deliberately not a
+ * roadmap (ADR 20260726 "a draw type is a seeded row"): a member exists iff the
+ * server has a strategy that can plan it, so `double-elim`, `rr-then-ko` and
+ * `swiss` were removed from the API's enum and are a 422 at the boundary now.
+ *
+ * Pinned to the generated `components['schemas']['DrawType']` by a compile-time
+ * assertion in `data/options.test.ts`, so this hand-written union cannot drift
+ * back into offering a director something the server would refuse. */
+export type DrawType = 'single-elim' | 'round-robin'
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -117,8 +120,8 @@ export interface Pool {
  *   set after), and it is the match's *current* status read live, never a copy frozen at
  *   go-live.
  * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
- *   this is the KO stage of an rr-then-ko. When set, it names a `Pool` in this same
- *   event's `pools`.
+ *   this is the knockout stage of a combined draw type (#787, not an enum member today).
+ *   When set, it names a `Pool` in this same event's `pools`.
  * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
  *   to a table**. When set, it names a `TournamentTable` in the tournament's table
  *   catalogue — a string ref, the same pattern as `poolId`.

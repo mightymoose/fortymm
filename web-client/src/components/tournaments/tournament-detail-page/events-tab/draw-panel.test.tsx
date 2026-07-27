@@ -290,20 +290,22 @@ describe('DrawPanel', () => {
 
     it('shows the 422 for a draw type nothing can cut yet', async () => {
       const detail =
-        'A swiss draw cannot be cut yet. ' +
+        'A single-elim draw cannot be cut yet. ' +
         "Change the event's draw type to one that can, or wait for support."
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
       )
       page.render({
         event: buildEvent({
-          id: 'ev-swiss',
-          name: 'Swiss Singles',
-          drawType: 'swiss',
+          id: 'ev-bracket',
+          name: 'Championship Singles',
+          drawType: 'single-elim',
+          // Un-pooled — a bracket has no pools (ADR-0786).
+          pools: [],
         }),
       })
 
-      await userEvent.click(await page.findGenerateButton('Swiss Singles'))
+      await userEvent.click(await page.findGenerateButton('Championship Singles'))
 
       const notice = await page.findNoticeText()
       expect(notice).toContain("This event can't be drawn yet")

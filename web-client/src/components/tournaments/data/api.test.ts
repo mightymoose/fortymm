@@ -593,7 +593,7 @@ const event: TournamentEvent = {
   id: 'ev-1',
   name: 'U1500 Singles',
   format: 'singles',
-  drawType: 'rr-then-ko',
+  drawType: 'round-robin',
   maxPlayers: 48,
   entryFee: 30,
   timezone: 'America/Chicago',
@@ -633,7 +633,7 @@ describe('eventToCreateBody', () => {
   it('maps the event to a snake_case create body, excluding server-managed entered', () => {
     const body = eventToCreateBody(event)
 
-    expect(body.draw_type).toBe('rr-then-ko')
+    expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
     // The IANA timezone anchors the windows (ADR 20260719) — carried on the create
@@ -719,7 +719,7 @@ describe('eventToUpdateBody', () => {
   it('maps the same snake_case fields as create', () => {
     const body = eventToUpdateBody(event)
 
-    expect(body.draw_type).toBe('rr-then-ko')
+    expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
     expect(body.timezone).toBe('America/Chicago')

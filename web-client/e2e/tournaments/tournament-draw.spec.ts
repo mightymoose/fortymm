@@ -58,9 +58,14 @@ const SAY = {
   noDraw: 'No draw yet.',
   /** The title over a refused *cut*; the sentence beneath it is the server's. */
   cannotDraw: "This event can't be drawn yet",
-  /** …and the server's sentence, for the one draw type that has a generator today.
-   * Round-robin is it; single-elim is #785. */
-  unsupported: 'A rr-then-ko draw cannot be cut yet.',
+  /** …and the server's sentence, verbatim, for the refusal this suite drives: a
+   * round-robin with no pools has nowhere to deal its field.
+   *
+   * Deliberately NOT "A <type> draw cannot be cut yet" — every member of `DrawType` now
+   * has a strategy behind it (ADR 20260726), so a stub that answered with that sentence
+   * would be putting words in the server's mouth that it can no longer say. This one it
+   * emits for real, and permanently. */
+  noPools: 'A round-robin draw needs at least one pool.',
   /** The title over a refused **start** — named after the edge the director clicked,
    * never after the wire call. */
   cannotStart: "Couldn't start the tournament",
@@ -202,18 +207,23 @@ test.describe('Tournaments · cutting the draw', () => {
   test('a draw type with no generator is REFUSED (422), in the panel, in the server’s words', async ({
     page,
   }) => {
-    // The default seed's Open Singles is an `rr-then-ko` event, and round-robin is the
-    // only draw type with a generator today (#785 is the bracket). The server refuses the
-    // cut before it even looks at the field — no arrangement of entrants would make a
-    // knockout cuttable — and the sentence is the *answer*: it names what to change.
+    // The default seed's U1500 Singles is a round-robin with NO POOLS, so there is
+    // nowhere to deal the field: the refusal lands before the entrants are even looked
+    // at, and the sentence is the *answer* — it names what to change.
+    //
+    // The subject used to be Open Singles, refused for having a draw type nothing could
+    // plan. That refusal is gone at the source: `DrawType` now holds only types the
+    // server has a strategy for (ADR 20260726), so no valid event can be in that state.
+    // A pool-less draw is the refusal that replaces it, and unlike the old one it is
+    // permanent.
     const { pom, store } = await TournamentDetailPage.navigateTo(page)
-    const event = EVENT.JOURNEY
+    const event = EVENT.EMPTY
 
     await pom.generateDrawButton(event).click()
 
     await expect(pom.drawNotice(event)).toBeVisible()
     await expect(pom.drawNotice(event)).toContainText(SAY.cannotDraw)
-    await expect(pom.drawNotice(event)).toContainText(SAY.unsupported)
+    await expect(pom.drawNotice(event)).toContainText(SAY.noPools)
     // Told once, not twice: the panel's mutations carry no global toast, because this
     // notice is their error surface (`web-client/CLAUDE.md`, ## Forms).
     await expect(pom.toasts).toHaveCount(0)
@@ -458,8 +468,11 @@ test.describe('Tournaments · the draw · accessibility', () => {
   test('is axe-clean with the draw refusal on screen', async ({ page }) => {
     const { pom } = await TournamentDetailPage.navigateTo(page)
 
-    await pom.generateDrawButton(EVENT.JOURNEY).click()
-    await expect(pom.drawNotice(EVENT.JOURNEY)).toBeVisible()
+    // Same subject as the refusal spec above, for the same reason: `EVENT.EMPTY` is the
+    // pool-less round-robin, i.e. the one event in the default seed whose Generate click
+    // puts a real server refusal on screen for axe to scan.
+    await pom.generateDrawButton(EVENT.EMPTY).click()
+    await expect(pom.drawNotice(EVENT.EMPTY)).toBeVisible()
 
     await expectAxeClean(page, 'tournament detail — the refused draw notice')
   })

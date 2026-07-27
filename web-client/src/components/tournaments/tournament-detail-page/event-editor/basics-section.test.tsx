@@ -282,7 +282,7 @@ describe('BasicsSection', () => {
         event: buildEvent({
           name: 'Open Singles',
           format: 'doubles',
-          drawType: 'rr-then-ko',
+          drawType: 'single-elim',
           maxPlayers: 64,
           entryFee: 45,
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
@@ -298,7 +298,7 @@ describe('BasicsSection', () => {
         'Doubles',
       )
       expect(basicsSectionPage.getFieldValue('Draw type')).toHaveTextContent(
-        'RR → KO',
+        'Single elimination',
       )
       expect(basicsSectionPage.getFieldValue('Player limit')).toHaveTextContent(
         '64',

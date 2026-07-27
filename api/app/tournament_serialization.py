@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import EntryId, PoolId
 from app.models import (
-    DrawType,
     MatchStatus,
     ScheduleSolve,
     Tournament,
@@ -206,29 +205,19 @@ def event_results(
     (ADR-0785): ``kind: "standings"`` for a round-robin (ADR-0788), ``kind: "finishes"``
     for a single-elimination bracket.
 
-    ``None`` in two cases, both meaning "no results here" rather than an empty table: a
-    draw type with no results strategy yet (``results_for`` raises for it — only
-    round-robin and single-elim have one today), and an event whose draw has not been
-    cut (no fixtures to stand). Everything else is a real results block, whose table is
-    empty of *decided* rows but full of *seated* ones while the event is still played.
+    ``None`` in exactly one case, meaning "no results here" rather than an empty table:
+    an event whose draw has not been cut (no fixtures to stand). There used to be a
+    second — a draw type with no results strategy — but every ``DrawType`` has one now
+    that the enum holds only what runs (ADR "a draw type is a seeded row, and the enum
+    holds only what runs"), so that guard has no input left to reject. Everything else
+    is a real results block, whose table is empty of *decided* rows but full of
+    *seated* ones while the event is still played.
 
     The projection is the fixed materialization convention read backwards (#788): side 1
     is ``entry_a`` and side 2 is ``entry_b``, so the ``(side_1, side_2)`` game counts
     are the ``(entry_a, entry_b)`` game counts, and the winner is whichever took more
     games — derived from the live match, never from the fixture's written-back
     ``winner_entry_id`` (which no read reads, for correction-safety)."""
-    match e.draw_type:
-        case DrawType.round_robin | DrawType.single_elim:
-            pass  # has a results strategy; the dispatch on ``strategy`` below shapes it
-        case DrawType.double_elim | DrawType.rr_then_ko | DrawType.swiss:
-            # No results strategy for these yet (``results_for`` raises for them too).
-            # Spelled as a checked dispatch with an ``assert_never`` catch-all rather
-            # than a bare ``in (...)``, so a new ``DrawType`` is a type error here until
-            # its projection is written — the same guarantee
-            # ``strategy_for``/``results_for`` give (ADR-0788).
-            return None
-        case _:
-            assert_never(e.draw_type)
     if not fixtures:
         return None
     # ``results_for`` returns the union of the two implemented strategies; narrow it

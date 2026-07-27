@@ -320,7 +320,7 @@ describe('drawRefusalNotice', () => {
 
   it('shows the server’s sentence for an unsupported draw type', () => {
     const detail =
-      'A swiss draw cannot be cut yet. ' +
+      'A single-elim draw cannot be cut yet. ' +
       "Change the event's draw type to one that can, or wait for support."
 
     const notice = drawRefusalNotice(

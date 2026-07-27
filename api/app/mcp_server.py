@@ -1715,8 +1715,10 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
     tells an agent which of *their* events cannot be cut and why:
 
     * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's draw
-      type has no generator yet (only round-robin does today), a fact to change on the
-      event, not a transient one to retry.
+      type has no generator, a fact to change on the event, not a transient one to
+      retry. No cut can raise it today (``strategy_for`` is total now the enum holds
+      only draw types that run), but it is still a ``DrawError``, so the arm stays
+      rather than letting a future raiser fall through to the generic sentence.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (an entry is one row per player, with nowhere to
       seat a partner or a team, ADR-0788), so the refusal names the event and is
@@ -1730,9 +1732,8 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
     match error:
         case UnsupportedDrawType():
             return ToolError(
-                f"This event's {error.draw_type.value} draw can't be cut yet — only "
-                "round-robin draws are supported. Change the event's draw type to one "
-                "that can, or wait for support."
+                f"This event's {error.draw_type.value} draw can't be cut yet. Change "
+                "the event's draw type to one that can, or wait for support."
             )
         case NonSinglesDraw():
             return ToolError(
@@ -1768,10 +1769,9 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     Raises a ``ToolError`` when no event has that id, when you are not the owner of the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
-    cannot produce a draw at all: its draw type has no generator yet (only round-robin
-    does today), it has no pools configured for a pooled draw type, or its field is too
-    small for its pools (a pool of fewer than two has nobody to play). The message names
-    what to change."""
+    cannot produce a draw at all: it is not a singles event, it has no pools configured
+    for a pooled draw type, or its field is too small for its pools (a pool of fewer
+    than two has nobody to play). The message names what to change."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
@@ -1996,8 +1996,9 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     and why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
 
     * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
-      draw type has no schedule generator yet (only round-robin does today), a fact
-      to change on the event, not a transient one to retry.
+      draw type has no schedule generator yet (only round-robin does today; single-elim
+      can be *cut* but not yet *placed*), a fact to change on the event, not a
+      transient one to retry.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (ADR-0788), so it can never be previewed.
     * ``DegenerateDraw``'s message is domain-authored copy (the numbers the director
@@ -2063,10 +2064,10 @@ async def preview_schedule(
     ``archived`` tournament is refused (there is a real field and a real solve to
     look at, or it is over).
 
-    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (single- /
-    double-elim, swiss, rr-then-ko) refuses the WHOLE preview with an actionable
-    ``ToolError`` — never a partial grid — because a preview must not invent a
-    schedule for a format production cannot run.
+    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (today that
+    means single-elim) refuses the WHOLE preview with an actionable ``ToolError`` —
+    never a partial grid — because a preview must not invent a schedule for a format
+    production cannot run.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may preview), when the tournament is no

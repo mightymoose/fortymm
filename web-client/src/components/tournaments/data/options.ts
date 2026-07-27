@@ -4,8 +4,8 @@
 import type { DrawType, EventFormat, MatchLength } from './types'
 
 /** The label an option list gives `value`, or `fallback` when the list has no
- * entry for it. A viewer reads the option's label ("RR → KO"), never the enum
- * key it is stored under ("rr-then-ko"), so every surface that renders a stored
+ * entry for it. A viewer reads the option's label ("Round robin"), never the enum
+ * key it is stored under ("round-robin"), so every surface that renders a stored
  * value needs this lookup — it was hand-rolled five times before it lived here.
  *
  * The fallback is an argument rather than a default because the two policies in
@@ -26,12 +26,19 @@ export const FORMAT_OPTIONS: { value: EventFormat; label: string }[] = [
   { value: 'teams', label: 'Teams' },
 ]
 
+/** The draw types a director may pick — **exactly the ones the API accepts**, which
+ * is exactly the ones it can plan (ADR 20260726). It listed five until the enum
+ * shrank, so a director could pick "Swiss", create the event, enter a field, and only
+ * discover at the moment they cut the draw that it was never possible; three of these
+ * entries are now a 422 at the request boundary, so they are gone from the picker too.
+ *
+ * `DrawType` keys it, and `data/options.test.ts` pins that type to the generated
+ * `schema.d.ts` enum — so an option the server would refuse cannot be added here
+ * without a compile error. (Serving this catalogue from the tournament payload
+ * instead of hardcoding it is the follow-up the same ADR calls for.) */
 export const DRAW_TYPE_OPTIONS: { value: DrawType; label: string }[] = [
   { value: 'single-elim', label: 'Single elimination' },
-  { value: 'double-elim', label: 'Double elimination' },
   { value: 'round-robin', label: 'Round robin' },
-  { value: 'rr-then-ko', label: 'RR → KO' },
-  { value: 'swiss', label: 'Swiss' },
 ]
 
 export const MATCH_LENGTH_OPTIONS: { value: MatchLength; label: string }[] = [

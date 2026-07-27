@@ -110,13 +110,11 @@ const poolSchema: z.ZodType<Pool, Pool> = z.object({
 export const eventSchema = z.object({
   name: nameSchema,
   format: z.enum(['singles', 'doubles', 'teams']),
-  drawType: z.enum([
-    'single-elim',
-    'double-elim',
-    'round-robin',
-    'rr-then-ko',
-    'swiss',
-  ]),
+  // Exactly the API's `DrawType` (ADR 20260726): a member exists iff the server can
+  // plan it, and the three that could not are a 422 at the request boundary now. Pinned
+  // to the domain `DrawType` — and through it to the generated schema — by a
+  // compile-time assertion in `data/options.test.ts`.
+  drawType: z.enum(['single-elim', 'round-robin']),
   maxPlayers: maxPlayersSchema,
   entryFee: entryFeeSchema,
   // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`

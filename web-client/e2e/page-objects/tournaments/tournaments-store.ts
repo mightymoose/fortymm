@@ -370,6 +370,13 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         id: 'ev-u1500',
         name: EVENT.EMPTY,
         format: 'singles',
+        // The **refusal** fixture: a round-robin with NO POOLS, which is a 422 the real
+        // API genuinely emits ("A round-robin draw needs at least one pool."). Both
+        // halves are stated here rather than inherited, because the refusal specs rest
+        // on exactly this pair — a stub that refused a draw type the server can in fact
+        // cut (single-elim shipped in #785) would be asserting a sentence no server
+        // would ever send, which is the one thing a mirror of the API must not do.
+        draw_type: 'round-robin',
         max_players: 48,
         entrants: [],
         pools: [],
@@ -505,8 +512,8 @@ export interface TournamentsStoreOptions {
    * or about starting a tournament, needs a tournament that *could* be started. */
   drawable?: boolean
   /** Events whose draw is already CUT when the page loads — by name, and only from the
-   * drawable seed (a draw cannot be cut for an event whose draw type has no generator,
-   * and the stub refuses one exactly as the server does).
+   * drawable seed (the default seed's events are pool-less or empty, and the stub refuses
+   * to cut those exactly as the server does).
    *
    * Cut with the same planner the cut ROUTE uses, from the same entrants and the same
    * pools, so a seeded draw is one this stub could have dealt — never a hand-written
@@ -730,10 +737,15 @@ function snakedSizes(count: number, poolCount: number): number[] {
 }
 
 /** Why this event cannot be cut as it stands, in the server's words — or `null` when it
- * can. The 422s are the planner's, and they are the ones a director actually meets:
- * an unsupported draw type (round-robin is the only generator today — single-elim is
- * #785), no pools to deal into, and a pool the snake would leave with fewer than two
- * entrants, who would have nobody to play. */
+ * can. Two of these three are the planner's real 422s, and they are the ones a director
+ * actually meets: no pools to deal into, and a pool the snake would leave with fewer
+ * than two entrants, who would have nobody to play.
+ *
+ * The FIRST arm is different, and no spec should rest on it: it is a gap in this stub
+ * (round-robin is the only draw this stub can plan), not a refusal the API makes — the
+ * server has cut single-elim since #785, and every member of `DrawType` now has a
+ * strategy behind it by construction (ADR 20260726). It goes when the stub grows a
+ * bracket planner. */
 function cutRefusal(event: TournamentEventRead): string | null {
   if (event.draw_type !== 'round-robin') {
     return (

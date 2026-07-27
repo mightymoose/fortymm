@@ -1409,7 +1409,7 @@ def _event_payload() -> dict[str, object]:
     return {
         "name": "Open Singles",
         "format": "singles",
-        "draw_type": "rr-then-ko",
+        "draw_type": "single-elim",
         "max_players": 64,
         "entry_fee": 45,
         "timezone": "America/Chicago",
@@ -2348,22 +2348,16 @@ async def test_build_cut_non_singles_event_raises_readable_tool_error(
     assert remaining == []
 
 
-async def test_build_cut_unsupported_draw_type_raises_readable_tool_error(
-    db_session: AsyncSession,
-    default_league: League,
-) -> None:
-    """An ``rr-then-ko`` event has no generator yet (ADR-0786): ``build_cut`` surfaces
-    the ``UnsupportedDrawType`` refusal as a readable ``ToolError`` that names
-    round-robin as the supported type."""
-    owner = await make_user(db_session, "mcp-draw-rrko-owner")
-    raw = await _mint(db_session, owner)
-    _, event = await _seed_drawable_tournament(
-        db_session, owner, default_league, draw_type=DrawType.rr_then_ko
-    )
-
-    async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="round-robin"):
-            await client.call_tool("build_cut", {"event_id": str(event.id)})
+# ``test_build_cut_unsupported_draw_type_raises_readable_tool_error`` lived here. Its
+# only subject was an ``rr-then-ko`` event — a draw type that is no longer a
+# ``DrawType`` member (ADR "a draw type is a seeded row, and the enum holds only what
+# runs"), and ``strategy_for`` is now total, so no event ``build_cut`` can be handed
+# raises ``UnsupportedDrawType``. There is no live subject to re-point it at: the
+# refusal that replaced it is asserted in ``test_tournaments`` (create-event 422) and
+# ``test_draws`` (``strategy_for`` is total). The ``UnsupportedDrawType`` arm of
+# ``_map_draw_refusal_tool_error`` survives for a future raiser; the preview's own
+# ``UnsupportedDrawType`` path (single-elim) keeps its coverage in
+# ``test_schedule_preview_snapshot``.
 
 
 async def test_uncut_non_owner_raises_tool_error(

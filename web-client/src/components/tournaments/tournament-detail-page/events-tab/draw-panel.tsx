@@ -213,8 +213,8 @@ const DrawBody = ({
           {state.pools.map((pool) => (
             <PoolDraw key={pool.id} pool={pool} />
           ))}
-          {/* Fixtures belonging to no pool — a single-elim bracket (or the KO stage of an
-              rr-then-ko). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
+          {/* Fixtures belonging to no pool — a single-elim bracket (or the knockout stage
+              of a combined draw type, #787). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
               replaces the flat `RoundList` here; pools above keep `RoundList`. Shown both
               pre-live (the director reviews the seeded round-1 pairings and byes) and
               live. */}

@@ -583,7 +583,11 @@ export function buildTournamentEventRead(
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
     format: 'singles',
-    draw_type: 'rr-then-ko',
+    // Round-robin, and pooled to match: `DrawType` holds only the two types the server
+    // can actually plan (ADR 20260726), and a pooled event is what this fixture's single
+    // `Pool` describes. A fixture typed as something the API 422s is a fixture that
+    // proves nothing.
+    draw_type: 'round-robin',
     max_players: 64,
     entry_fee: 45,
     timezone: 'America/Chicago',

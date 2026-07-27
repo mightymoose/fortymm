@@ -129,7 +129,10 @@ export function buildEvent(
     id: 'ev-open-singles',
     name: 'Open Singles',
     format: 'singles',
-    drawType: 'rr-then-ko',
+    // Round-robin, and pooled to match — see the wire-side twin in
+    // `mocks/factories/tournaments/tournament.factory.ts`. `DrawType` holds only the two
+    // types the server can plan (ADR 20260726).
+    drawType: 'round-robin',
     maxPlayers: 64,
     entryFee: 45,
     timezone: 'America/Chicago',

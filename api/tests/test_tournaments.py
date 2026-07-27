@@ -155,7 +155,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": "Open Singles",
         "format": "singles",
-        "draw_type": "rr-then-ko",
+        "draw_type": "single-elim",
         "max_players": 64,
         "entry_fee": 45,
         "timezone": "America/Chicago",
@@ -539,7 +539,7 @@ async def test_create_event_round_trips_jsonb(
     assert body["name"] == "Open Singles"
     # Enum wire values keep the hyphenated prototype strings.
     assert body["format"] == "singles"
-    assert body["draw_type"] == "rr-then-ko"
+    assert body["draw_type"] == "single-elim"
     assert body["max_players"] == 64
     # entry_fee is emitted as a JSON number, not a Decimal string.
     assert body["entry_fee"] == 45
@@ -1078,7 +1078,7 @@ async def test_detail_lists_created_event(
 
     detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
     assert [e["id"] for e in detail["events"]] == [event["id"]]
-    assert detail["events"][0]["draw_type"] == "rr-then-ko"
+    assert detail["events"][0]["draw_type"] == "single-elim"
 
 
 async def test_patch_event_by_creator_updates_jsonb(
@@ -4129,7 +4129,7 @@ async def test_an_events_draw_comes_back_in_pool_round_position_order(
     in the right order could not tell the two apart, and would pass against a read with
     no ORDER BY at all.
 
-    The un-pooled fixture (``pool_id`` NULL — the KO stage of this rr-then-ko event)
+    The un-pooled fixture (``pool_id`` NULL — as a knockout stage's fixtures are)
     sorts LAST, after the pools that feed it. NULL is a real value in this domain ("this
     fixture belongs to no pool"), not a missing one, so it has a defined place in the
     order rather than an incidental one.
@@ -4425,12 +4425,12 @@ POOL_B: dict[str, Any] = {
 
 
 def _rr_payload(*pools: dict[str, Any], **overrides: Any) -> dict[str, Any]:
-    """A **round-robin** event over ``pools`` — the one draw type that has a strategy
-    today (ADR-0786). The shared ``_event_payload`` is deliberately an ``rr-then-ko``,
-    which has none, so a draw test that used it would be testing the 422.
+    """A **round-robin** event over ``pools`` — the pooled draw type (ADR-0786). The
+    shared ``_event_payload`` is deliberately a ``single-elim``, which is un-pooled, so
+    a pooled-draw test that used it would be testing the wrong shape.
 
-    ``draw_type`` is overridable (the unimplemented-type tests need exactly this event
-    with a different generator on it), so it goes through ``overrides``."""
+    ``draw_type`` is overridable (a test may want exactly this event with a different
+    generator on it), so it goes through ``overrides``."""
     return _event_payload(
         **{"draw_type": "round-robin", "pools": list(pools), **overrides}
     )
@@ -4963,36 +4963,44 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
 
 
 @pytest.mark.parametrize("draw_type", ["double-elim", "rr-then-ko", "swiss"])
-async def test_cutting_an_unimplemented_draw_type_is_422(
+async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_boundary(
     authed_client: tuple[AsyncClient, User],
-    db_session: AsyncSession,
     draw_type: str,
 ) -> None:
-    """Round-robin and single-elim have strategies today (ADR-0786, ADR-0785); these
-    three remain enum stubs — a designed 422 that NAMES the draw type, not a 500
-    from an unhandled exception, and not an empty draw the director would have to notice
-    was empty.
+    """An unimplemented draw type is refused by REQUEST VALIDATION, at create — not
+    accepted and refused later at cut time (ADR "a draw type is a seeded row, and the
+    enum holds only what runs").
 
-    422, because the request is well-formed and authorized: it is this event's *content*
-    — the draw type it was configured with — that cannot become a draw. Nothing is
-    written, and the field is left alone.
+    This is the ticket's actual complaint (#1086) fixed at the layer that made it. It
+    used to be ``test_cutting_an_unimplemented_draw_type_is_422``: a director could
+    configure a ``swiss`` event, enter a field, and only discover it was never possible
+    at the moment they cut the draw. ``DrawType`` now holds exactly the two types that
+    run, so Pydantic rejects the slug at the edge with a 422 that NAMES the valid
+    values, no custom validator required — and no event row is written at all.
+
+    The parametrized subjects are deliberately the three ex-members: they are the
+    values a stale client (or a stale hardcoded picker) would still send.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B, draw_type=draw_type)
-    )
-    await _seed_field(db_session, event["id"], 4)
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
-    response = await client.post(_draw_url(tournament_id, event["id"]))
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_rr_payload(POOL_A, POOL_B, draw_type=draw_type),
+    )
 
     assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert draw_type in detail, detail
-    # The sentence is for the director, and it says what to do about it. It is NOT the
-    # exception's own ("… is not implemented yet"), which is written for the developer
-    # who has to go implement it.
-    assert "cannot be cut yet" in detail, detail
-    assert await _fixture_rows(db_session, event["id"]) == []
+    body = response.json()
+    (error,) = [e for e in body["detail"] if e["loc"][-1] == "draw_type"]
+    # The 422 names the two slugs that run, and nothing else — a client reading it
+    # learns exactly what it may send.
+    assert set(error["ctx"]["expected"].replace("'", "").split(" or ")) == {
+        "round-robin",
+        "single-elim",
+    }, error
+    # Refused at the boundary means refused before persistence: no event exists.
+    detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert detail["events"] == []
 
 
 @pytest.mark.parametrize("event_format", ["doubles", "teams"])

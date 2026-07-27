@@ -4229,10 +4229,7 @@ internal enum Components {
         /// - Remark: Generated from `#/components/schemas/DrawType`.
         internal enum DrawType: String, Codable, Hashable, Sendable, CaseIterable {
             case singleElim = "single-elim"
-            case doubleElim = "double-elim"
             case roundRobin = "round-robin"
-            case rrThenKo = "rr-then-ko"
-            case swiss = "swiss"
         }
         /// The event holds ``max_players`` active entrants already, so nobody may enter it
         /// — the one arm of this union that says nothing about who is asking.
@@ -9405,7 +9402,8 @@ internal enum Components {
         ///
         /// ``champion`` is the leader of a **complete, single-pool** event — a pure
         /// round-robin's winner. A multi-pool round-robin has no single champion without a
-        /// knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+        /// knockout stage to join its pool winners (a pools-then-knockout draw type, a later
+        /// slice), so it is
         /// ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
         /// played.
         ///
@@ -10515,7 +10513,8 @@ internal enum Components {
         ///   state without a per-slot round-trip; it is the match's *current* status, read
         ///   live, not a copy frozen at go-live.
         /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-        ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+        ///   un-pooled (single-elim), or this is the knockout stage of a future
+        ///   pools-then-knockout draw type. When
         ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
         ///   JSONB, not a foreign key, because pools are value-objects with no table.
         /// * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means

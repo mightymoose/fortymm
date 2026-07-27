@@ -1430,7 +1430,9 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
   /** The seed's ONE cuttable event: round-robin (the only draw type with a generator),
    * two pools, nine entrants — and seeded already drawn. */
   const DRAWN = 'ev-u1200'
-  /** Seeded `rr-then-ko` with no pools and nobody entered — the event a cut REFUSES. */
+  /** Seeded round-robin with **no pools** and nobody entered — the event a cut REFUSES,
+   * and (ADR 20260726) the refusal that survives: an unplannable draw type left the enum,
+   * a pool-less round-robin has nowhere to deal the field forever. */
   const UNCUTTABLE = 'ev-u1500'
 
   it('the seeded draw arrives on the detail read, pooled, with no draw on the other events', async () => {
@@ -1497,11 +1499,12 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
   })
 
-  it('refuses to cut an event that cannot be planned — an unsupported draw type is a 422', async () => {
+  it('refuses to cut an event that cannot be planned — a pool-less draw is a 422', async () => {
     const { wrapper } = setupClient()
     const { result } = renderHookRaw(() => useCutDraw(TOURNAMENT), { wrapper })
 
-    // `ev-u1500` is `rr-then-ko`, which has no generator yet — the refusal a director
+    // `ev-u1500` is a round-robin with no pools — there is nowhere to deal the field, so
+    // the cut is refused before the entrants are even looked at. The refusal a director
     // meets today, and the one the mock must not be more permissive about than the API.
     result.current.mutate(UNCUTTABLE)
 

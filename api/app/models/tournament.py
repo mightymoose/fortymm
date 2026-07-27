@@ -41,14 +41,24 @@ class EventFormat(enum.Enum):
 
 
 class DrawType(enum.Enum):
+    # The draw types that RUN — nothing else (ADR "a draw type is a seeded row, and the
+    # enum holds only what runs"). A member exists here if and only if
+    # ``app.draws.strategy_for`` dispatches it to a strategy and
+    # ``app.results.results_for`` reads it back out. That is what makes an unimplemented
+    # draw type a 422 at the REQUEST BOUNDARY, named by Pydantic with the valid values,
+    # rather than an event a director configures, enters players into, and only
+    # discovers is impossible at the moment they cut it. Adding a format is a member
+    # *plus* its strategies: the exhaustive ``match`` at every dispatch site is a type
+    # error until all of them are written.
+    #
+    # No docstring on purpose: Pydantic emits an enum's ``__doc__`` as the OpenAPI
+    # ``description``, so prose here would cross the wire into both generated clients.
+    #
     # Member names use underscores; the persisted *values* keep the hyphenated
     # wire strings from the front-end prototype (values_callable on the column
     # makes Postgres store the value, not the member name).
     single_elim = "single-elim"
-    double_elim = "double-elim"
     round_robin = "round-robin"
-    rr_then_ko = "rr-then-ko"
-    swiss = "swiss"
 
 
 class Tournament(Base):

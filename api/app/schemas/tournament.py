@@ -661,7 +661,8 @@ class TournamentFixtureRead(BaseModel):
       state without a per-slot round-trip; it is the match's *current* status, read
       live, not a copy frozen at go-live.
     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-      un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+      un-pooled (single-elim), or this is the knockout stage of a future
+      pools-then-knockout draw type. When
       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
       JSONB, not a foreign key, because pools are value-objects with no table.
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
@@ -875,7 +876,8 @@ class StandingsResultsRead(BaseModel):
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
-    knockout stage to join its pool winners (``rr_then_ko``, a later slice), so it is
+    knockout stage to join its pool winners (a pools-then-knockout draw type, a later
+    slice), so it is
     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
     played."""
 

@@ -271,11 +271,32 @@ private func projectMatch(
     )
 }
 
+/// Whether the draw seats players in a *pool* — a group with a standings table
+/// and a fixture per opponent — as opposed to a bracket, where a player has a
+/// path through rounds and no standing at all. This is the only distinction the
+/// panel's wording turns on, at all three sites below.
+///
+/// Written as an exhaustive `switch` rather than the `== .roundRobin` this used
+/// to be so that adding a case to `TournamentDrawType` stops the build *here*,
+/// where that draw type's vocabulary has to be chosen deliberately, instead of
+/// silently inheriting the bracket wording. `.unknown` is grouped with the
+/// brackets on purpose: it's the lenient decoder's landing pad for a value this
+/// build doesn't know, and "path"/"Position" is the reading that doesn't claim
+/// a pool and a standings table that may not exist.
+private func isPooledDraw(_ drawType: TournamentDrawType) -> Bool {
+    switch drawType {
+    case .roundRobin:
+        return true
+    case .singleElim, .unknown:
+        return false
+    }
+}
+
 private func projectStats(_ event: DashboardTournamentEvent) -> TournamentStatsView {
     TournamentStatsView(
         wins: event.wins,
         losses: event.losses,
-        positionLabel: event.drawType == .roundRobin ? "Group position" : "Position",
+        positionLabel: isPooledDraw(event.drawType) ? "Group position" : "Position",
         // No standings is not a zeroth place: both tiles go quiet together.
         positionValue: event.position.map(ordinal),
         positionSuffix: event.position.map { _ in "of \(event.fieldSize)" },
@@ -293,7 +314,7 @@ private func projectTab(
         live: event.isLive,
         stats: projectStats(event),
         match: event.match.map { projectMatch($0, youName: youName) },
-        pathHeading: event.drawType == .roundRobin ? "Your matches" : "Your path",
+        pathHeading: isPooledDraw(event.drawType) ? "Your matches" : "Your path",
         path: event.fixtures.enumerated().map { index, fixture in
             TournamentPathRowView(
                 id: "\(event.id.uuidString)-\(index)",
@@ -314,7 +335,7 @@ private func projectTab(
 /// bracket. Keyed off every tab because the header link is per-tournament — and
 /// "View draw" reads correctly for a mixed tournament either way.
 private func destinationLabel(_ events: [DashboardTournamentEvent]) -> String {
-    events.allSatisfy { $0.drawType == .roundRobin }
+    events.allSatisfy { isPooledDraw($0.drawType) }
         ? "View group & standings"
         : "View draw"
 }

@@ -203,7 +203,7 @@ function seed(): StoredTournament[] {
           tournament_id: 'bay-area-open-2026',
           name: 'Open Singles',
           format: 'singles',
-          draw_type: 'rr-then-ko',
+          draw_type: 'round-robin',
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
@@ -236,11 +236,18 @@ function seed(): StoredTournament[] {
         {
           // Deliberately empty: the designed empty entrants state, and the event
           // whose count a dev demo ticks from 0 to 1.
+          //
+          // It is ALSO the seed's **uncuttable** event, and it stays uncuttable for a
+          // reason that survives (ADR 20260726): round-robin with **NO POOLS**. It used
+          // to be `rr-then-ko`, refused because nothing could plan that type — but that
+          // slug left the enum, and "an unplannable type" is no longer a state a valid
+          // event can be in. `pools: []` is the refusal that replaces it, and it is
+          // permanent: "A round-robin draw needs at least one pool." Do not give it pools.
           id: 'ev-u1500',
           tournament_id: 'bay-area-open-2026',
           name: 'U1500 Singles',
           format: 'singles',
-          draw_type: 'rr-then-ko',
+          draw_type: 'round-robin',
           max_players: 48,
           entry_fee: 30,
           timezone: 'America/Los_Angeles',
@@ -284,10 +291,11 @@ function seed(): StoredTournament[] {
           // card reads back out of the event's own `predicates`. Not derivable from
           // the event alone (there is no ladder in a mock), so it is seeded.
           //
-          // It is ALSO the seed's one **drawn** event (ADR-0786), and it is the only
-          // event that could be: round-robin is the one draw type with a generator
-          // today, so every other seeded event's draw type would be refused with a 422
-          // by the very endpoint this store mirrors. Nine entrants across two pools
+          // It is ALSO the seed's one **drawn** event (ADR-0786) — the only one that
+          // arrives with fixtures already, so `npm run dev` can show a cut draw without
+          // anyone clicking Generate. Round-robin is the one draw type this store can
+          // plan (single-elim's planner is a follow-up), so it is the only type a seeded
+          // draw could have been dealt as. Nine entrants across two pools
           // (5 + 4 by the snake) — an ODD pool, so Pool A's rounds have a player
           // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
           // not a fixture with an empty side.
@@ -1372,10 +1380,12 @@ function drawTypeFrozenDetail(
  * changed the whole plan is re-made, pool sizes and seeding included.
  *
  * The 422s are the planner's, and they are the ones a director actually meets:
- * - **an unsupported draw type.** Round-robin is the only type with a generator today
- *   (single-elim is #785), so every other type is refused — *before* the field is even
- *   looked at, exactly as the server refuses it, because no arrangement of entrants
- *   would make a swiss draw cuttable.
+ * - **a draw type this store cannot plan.** Round-robin is the only one with a generator
+ *   here, so single-elim is refused — *before* the field is even looked at, because no
+ *   arrangement of entrants would make an unplannable type cuttable. This arm is now a
+ *   gap in the MOCK rather than a refusal the API still makes (ADR 20260726: every enum
+ *   member has a server-side strategy), and it goes when the store grows a bracket
+ *   planner of its own.
  * - **no pools**, on a pooled draw type. There is nowhere to deal the field.
  * - **a pool that would get fewer than two entrants** — a lone entrant has nobody to
  *   play, so the draw is refused rather than silently emitting a pool of one. */

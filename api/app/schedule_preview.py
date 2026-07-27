@@ -34,14 +34,15 @@ source of truth production's own ``cut_draw`` uses:
 * **round-robin** — the whole draw is planned;
 * **every other draw type** — refused loud with
   :class:`~app.draws.UnsupportedDrawType`, so the whole preview fails rather than
-  producing a partial, misleading snapshot. double-elim / swiss / rr-then-ko are
-  enum stubs :func:`app.draws.strategy_for` still refuses outright; single-elim now
+  producing a partial, misleading snapshot. Today that means **single-elim**, which
   *has* a draw strategy (#785) — its bracket can be cut — but the table scheduler is
   pool-based and cannot place a pool-less bracket yet, so this builder gates it
-  explicitly (an exhaustive ``match`` on ``DrawType`` that plans only round-robin)
-  and refuses it the same way. A preview must run the *same* engine as production and
-  cannot invent a schedule for a format the solver cannot place. (When single-elim
-  scheduling lands, that gate is where it opens up.)
+  explicitly (an exhaustive ``match`` on ``DrawType`` that plans only round-robin).
+  A preview must run the *same* engine as production and cannot invent a schedule
+  for a format the solver cannot place. (When single-elim scheduling lands, that gate
+  is where it opens up.) This is the only surviving raiser of
+  ``UnsupportedDrawType``: :func:`app.draws.strategy_for` is total, because the enum
+  holds only draw types that run (ADR).
 
 The per-event :class:`EventFieldSummary` (the count used) is returned alongside
 the snapshot so :mod:`app.schedule_preview_solve` composes the preview's
@@ -242,23 +243,19 @@ def build_preview_snapshot(
         ]
         next_entrant += field_size
         # The real draw, dispatched exactly as production's ``cut_draw`` does. The table
-        # scheduler is round-robin-only (ADR): single-elim now *has* a draw strategy
-        # (#785) — its bracket can be cut — but a pool-less bracket has no windows to
-        # solve over yet, so the preview refuses every non-round-robin type loud, the
-        # same ``UnsupportedDrawType`` it raised before single-elim had one, rather
-        # than invent a grid the solver cannot place. (double-elim / swiss / rr-then-ko
-        # still raise from ``strategy_for`` itself.)
+        # scheduler is round-robin-only (ADR): single-elim *has* a draw strategy (#785)
+        # — its bracket can be cut — but a pool-less bracket has no windows to solve
+        # over yet, so the preview refuses it loud with ``UnsupportedDrawType`` rather
+        # than invent a grid the solver cannot place. This is now the only place that
+        # exception is raised: ``strategy_for`` is total (ADR "the enum holds only what
+        # runs"), so the refusal is this builder's, about scheduling, not the domain's
+        # about planning.
         match event.draw_type:
             case DrawType.round_robin:
                 fixtures = strategy_for(event.draw_type).plan_initial(
                     draw_config(event), ordered_entrants
                 )
-            case (
-                DrawType.single_elim
-                | DrawType.double_elim
-                | DrawType.rr_then_ko
-                | DrawType.swiss
-            ):
+            case DrawType.single_elim:
                 raise UnsupportedDrawType(event.draw_type)
             case _:
                 assert_never(event.draw_type)

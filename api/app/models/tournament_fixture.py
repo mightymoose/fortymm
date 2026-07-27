@@ -29,9 +29,9 @@ class TournamentFixture(Base):
     One table holds every draw type's fixtures, because topology is the *strategy's*
     knowledge, not the schema's (ADR-0786). There is deliberately no ``next_slot_id``:
     single-elim's successor is arithmetic on ``(round, position)``, round-robin has no
-    successor at all, and swiss cannot know its next round until the current one
-    finishes. Storing the topology would be a second copy of the truth that churns on
-    every re-cut, so ``advance()`` recomputes it from these rows instead.
+    successor at all, and a swiss draw could not know its next round until the current
+    one finished. Storing the topology would be a second copy of the truth that churns
+    on every re-cut, so ``advance()`` recomputes it from these rows instead.
 
     **A ``NULL`` side means exactly one thing: TBD** — ``advance()`` will fill it when
     the feeding fixture is decided. Byes are *not* a NULL side; they are the **absence

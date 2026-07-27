@@ -29,7 +29,6 @@ from app.draws import (
     Side,
     SideFill,
     SingleElimStrategy,
-    UnsupportedDrawType,
     order_entrants,
     ready_fixtures,
     strategy_for,
@@ -199,42 +198,21 @@ class TestStrategyRegistry:
         assert isinstance(strategy_for(DrawType.round_robin), RoundRobinStrategy)
 
     def test_single_elim_resolves_to_the_single_elim_strategy(self) -> None:
-        # The second implemented arm (ADR-0785): single-elim is no longer in the raising
-        # branch below.
+        # The second implemented arm (ADR-0785).
         assert isinstance(strategy_for(DrawType.single_elim), SingleElimStrategy)
 
-    @pytest.mark.parametrize(
-        "draw_type",
-        [
-            DrawType.double_elim,
-            DrawType.rr_then_ko,
-            DrawType.swiss,
-        ],
-    )
-    def test_unimplemented_types_raise_a_typed_catchable_domain_error(
-        self, draw_type: DrawType
-    ) -> None:
-        with pytest.raises(UnsupportedDrawType) as excinfo:
-            strategy_for(draw_type)
+    def test_every_draw_type_resolves_to_a_strategy_and_none_refuses(self) -> None:
+        """``strategy_for`` is **total** — the enum holds only draw types that run (ADR
+        "a draw type is a seeded row, and the enum holds only what runs"), so there is
+        no refusal arm left to reach and nothing may resolve to ``None``.
 
-        # The route needs to know *which* type it refused, to say so in the 422.
-        assert excinfo.value.draw_type is draw_type
-        # And it must be catchable as the one domain base a route handler switches on.
-        assert isinstance(excinfo.value, DrawError)
-        # Its ``str()`` is the *developer's* sentence — the director's is composed by
-        # the route from ``draw_type`` — but it still has to name the type, or the log
-        # line and the traceback say only that something, somewhere, is unimplemented.
-        assert draw_type.value in str(excinfo.value)
-        assert "not implemented yet" in str(excinfo.value)
-
-    def test_every_draw_type_is_handled_one_way_or_the_other(self) -> None:
-        # The match has no catch-all, so an unhandled member would fall through and
-        # return None. Nothing may resolve to None — it must be a strategy or a refusal.
+        This is the assertion that reds if a member is ever added to ``DrawType``
+        without a strategy — alongside the type error the catch-all-free ``match``
+        already is. It replaces the old "unimplemented types raise": that refusal has
+        no input any more, because Pydantic rejects an un-backed slug at the request
+        boundary instead."""
         for draw_type in DrawType:
-            try:
-                assert strategy_for(draw_type) is not None
-            except UnsupportedDrawType:
-                pass
+            assert strategy_for(draw_type) is not None
 
     def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
         self,
@@ -246,15 +224,15 @@ class TestStrategyRegistry:
 
         A second source of truth for a settled decision, and one that could contradict
         the strategy holding it: ``RoundRobinStrategy().plan_initial(DrawConfig(
-        draw_type=DrawType.swiss, …))`` was a sentence you could write, and nothing
-        anywhere would notice. Nothing *could*: mutation testing set that field to
-        ``None`` and killed no test, because no line of production code read it.
+        draw_type=DrawType.single_elim, …))`` was a sentence you could write, and
+        nothing anywhere would notice. Nothing *could*: mutation testing set the field
+        to ``None`` and killed no test, because no production code read it.
 
         So this asserts on the config's **shape**, not on a behaviour — there is no
         behaviour to assert on, which is precisely the finding. It is the only assertion
         that can fail when the field comes back, and it is what stops the next strategy
-        (rr-then-ko, swiss) from branching on ``config.draw_type`` in the belief that it
-        is authoritative.
+        to land from branching on ``config.draw_type`` in the belief that it is
+        authoritative.
         """
         assert [field.name for field in dataclasses.fields(DrawConfig)] == ["pool_ids"]
 

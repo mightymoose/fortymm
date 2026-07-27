@@ -1073,8 +1073,8 @@ describe('cutting and un-cutting a draw', () => {
   })
 
   it('refuses a pooled draw with NO pools — there is nowhere to deal the field', () => {
-    // `ev-open-singles` is `rr-then-ko`, so make it the one type that CAN be cut and
-    // leave its pools empty: the refusal must be about the pools, not the type.
+    // `ev-open-singles` is a pooled round-robin in the seed; empty its pools and keep the
+    // type, so the refusal can only be about the pools.
     updateEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', pools: [] })
 
     const result = cutDraw(TOURNAMENT, FULLISH_SINGLES)

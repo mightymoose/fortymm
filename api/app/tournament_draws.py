@@ -374,11 +374,11 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     open exactly that window.
 
     Raises :class:`~app.draws.DrawError` — the base the route turns into a 422 — and
-    writes nothing when it does. The strategy is chosen *first*, so an unimplemented
-    draw type is refused before the field is even read: there is no arrangement of
-    entrants that would make a swiss draw cuttable today. And the whole plan is made
-    *before* the DELETE, so a refused re-cut cannot leave a director with the draw they
-    had thrown away and none of the one they could not have.
+    writes nothing when it does. The format is judged *first*, so a non-singles event is
+    refused before the field is even read: there is no arrangement of entrants that
+    would make a doubles draw cuttable. And the whole plan is made *before* the DELETE,
+    so a refused re-cut cannot leave a director with the draw they had thrown away and
+    none of the one they could not have.
 
     That last property has **two** locks on it, and it is worth knowing that they are
     two, because a test can only ever see one of them fail: the ordering here, and the

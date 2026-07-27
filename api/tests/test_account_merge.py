@@ -942,9 +942,9 @@ async def _make_rr_event(
     tournament: Tournament | None = None,
     name: str = "Open Singles",
 ) -> TournamentEvent:
-    """A **cuttable** event: round-robin with one pool. ``_make_event`` above is
-    single-elim, whose strategy is not implemented yet (``UnsupportedDrawType``),
-    so a draw cannot be cut from it.
+    """A **cuttable-into-pools** event: round-robin with one pool. ``_make_event`` above
+    is single-elim, which cuts an un-pooled bracket instead — no pool for every entrant
+    to meet every other in.
 
     One pool, not two, so that *every* entrant is seated in a fixture against every
     other — which is what makes "the guest's entry is in this draw" true by

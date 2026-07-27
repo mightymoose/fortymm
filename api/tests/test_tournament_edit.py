@@ -153,7 +153,7 @@ async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.rr_then_ko,
+        draw_type=DrawType.single_elim,
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",

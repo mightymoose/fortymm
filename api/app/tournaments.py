@@ -996,9 +996,12 @@ def _draw_refusal(error: DrawError) -> HTTPException:
 
     * ``UnsupportedDrawType`` carries the ``draw_type`` **structurally**, so the
       sentence is composed here from the fact rather than parsed out of a message. Its
-      own ``str()`` ("… is not implemented yet") is written for the developer who has
-      to go implement it; the director needs to be told which of *their* events cannot
-      be cut, and that the rest of the tournament is unaffected.
+      own ``str()`` ("… is not supported here yet") is written for the developer; the
+      director needs to be told which of *their* events cannot be cut, and that the
+      rest of the tournament is unaffected. (No cut can raise it today —
+      ``strategy_for`` is total now the enum holds only what runs — but it remains a
+      ``DrawError``, so the arm stays rather than letting a future raiser fall through
+      to the generic sentence.)
     * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
       it is passed through on purpose: only the strategy knows *which* degeneracy it hit
       — no pools at all, or a snake that would leave some pool with one player and

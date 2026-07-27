@@ -65,7 +65,7 @@ def _event_payload(**overrides: Any) -> TournamentEventCreate:
     body: dict[str, Any] = {
         "name": "Open Singles",
         "format": "singles",
-        "draw_type": "rr-then-ko",
+        "draw_type": "single-elim",
         "max_players": 64,
         "entry_fee": 45,
         "timezone": "America/Chicago",

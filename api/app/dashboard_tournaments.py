@@ -572,15 +572,10 @@ def _round_label(draw_type: DrawType, round_number: int) -> str:
     match draw_type:
         case DrawType.round_robin:
             return f"Group match {round_number}"
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
-            # No draw strategy exists for these yet (``strategy_for`` refuses them), so
-            # no fixture of one can reach here today. A neutral label rather than a
-            # bracket word invented ahead of the bracket that would have to mean it.
+        case DrawType.single_elim:
+            # A neutral ordinal rather than a bracket word ("Quarter-final"), which
+            # cannot be composed from the round number alone — it needs the bracket's
+            # depth, which this helper is not given.
             return f"Round {round_number}"
         case _:
             assert_never(draw_type)
@@ -590,12 +585,7 @@ def _stage_label(draw_type: DrawType, *, complete: bool) -> str:
     match draw_type:
         case DrawType.round_robin:
             return "Group complete" if complete else "Group play"
-        case (
-            DrawType.single_elim
-            | DrawType.double_elim
-            | DrawType.rr_then_ko
-            | DrawType.swiss
-        ):
+        case DrawType.single_elim:
             return "Complete" if complete else "In play"
         case _:
             assert_never(draw_type)
