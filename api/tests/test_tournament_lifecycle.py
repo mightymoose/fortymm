@@ -17,7 +17,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.geocoding import FakeGeocoder, GeocodeResult
+from app.geocoding import FakeGeocoder
 from app.models import (
     DrawType,
     EventFormat,
@@ -51,37 +51,17 @@ from app.tournament_lifecycle import (
     delete_tournament,
     transition_tournament,
 )
-from tests._helpers import assert_tournament_address_is_sql_null, make_user
+from tests._helpers import (
+    CountingGeocoder,
+    assert_tournament_address_is_sql_null,
+    blank_addresses,
+    make_user,
+)
 
 # The deterministic geocoder the create verb resolves the venue address with (the
 # same one ``get_geocoder`` hands out under the suite's ``GEOCODER=fake``). A
 # service-layer test builds it directly, exactly as it constructs the raw session.
 _GEOCODER = FakeGeocoder()
-
-
-class _CountingGeocoder:
-    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
-    the deterministic ``FakeGeocoder`` so results stay stable.
-
-    Mirrors the double of the same name in ``test_tournament_edit.py``. Here it exists
-    for the *negative* claim: a create with no venue must not call the geocoder **at
-    all**. Asserting only "the request succeeded" would not distinguish that from a
-    geocode that happened to resolve — and the whole reason no-venue was unreachable is
-    that a blank address composed to ``""`` and was refused by the geocoder, so "was the
-    geocoder asked" is the question with the history behind it."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self._inner = FakeGeocoder()
-
-    async def geocode(self, address: str) -> GeocodeResult:
-        self.calls += 1
-        return await self._inner.geocode(address)
-
-
-#: The six free-text components of the venue value-object, named once so an all-blank
-#: address is built from the shape rather than by hand.
-_ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
 
 
 @pytest_asyncio.fixture
@@ -227,6 +207,13 @@ async def test_create_without_a_league_and_no_default_raises(
 
 
 # ----- create with NO venue -------------------------------------------------
+#
+# The ``CountingGeocoder`` below is here for the *negative* claim: a create with no
+# venue must not call the geocoder **at all**. Asserting only "the create returned a
+# tournament" would not distinguish that from a geocode that happened to resolve — and
+# the whole reason no-venue was unreachable is that a blank address composed to ``""``
+# and was refused by the geocoder, so "was the geocoder asked" is the question with the
+# history behind it.
 
 
 async def test_create_with_an_omitted_address_stores_no_venue_and_never_geocodes(
@@ -244,7 +231,7 @@ async def test_create_with_an_omitted_address_stores_no_venue_and_never_geocodes
     would stay green against a verb that geocoded ``""`` and got lucky.
     """
     actor = await make_user(db_session, "lifecycle-create-no-venue")
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
 
     tournament = await create_tournament(
         db_session,
@@ -336,14 +323,7 @@ async def test_a_tournament_with_no_venue_is_found_by_a_sql_is_null_predicate(
     assert list(matched_not_null) == [with_venue_id]
 
 
-@pytest.mark.parametrize(
-    "blank",
-    [
-        dict.fromkeys(_ADDRESS_COMPONENTS, ""),
-        dict(zip(_ADDRESS_COMPONENTS, (" ", "\t", "\n", "  ", " ", " "), strict=True)),
-    ],
-    ids=["six-empty-strings", "whitespace-only"],
-)
+@blank_addresses
 async def test_create_with_an_all_blank_address_stores_no_venue_and_never_geocodes(
     db_session: AsyncSession,
     default_league: League,
@@ -362,7 +342,7 @@ async def test_create_with_an_all_blank_address_stores_no_venue_and_never_geocod
     representation of "no venue" rather than on two that merely read back alike.
     """
     actor = await make_user(db_session, "lifecycle-create-blank-venue")
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
 
     tournament = await create_tournament(
         db_session,

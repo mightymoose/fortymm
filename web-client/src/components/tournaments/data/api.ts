@@ -20,6 +20,7 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { entryRefusalNotice } from './entry-refusal'
+import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
 import {
@@ -224,13 +225,22 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
  * would 422. Picking the six text fields keeps the write path coord-free no
  * matter what the read side accreted.
  *
- * **No venue is `null`, not an object of six empty strings.** On the write schemas
+ * **No venue is `null`, not an object of six empty strings** — and that is decided
+ * HERE, for both verbs, rather than at each call site. On the write schemas
  * `address` is `AddressInput | None`, and on a PATCH an explicit `null` is what
  * *removes* the venue (an omitted field means "unchanged"). The server would
- * normalize six blanks to `null` for us — but saying it plainly is what makes the
- * update body's intent legible, and it is the one spelling both verbs share. */
+ * normalize six blanks to `null` for us, so this is not a guard against a bad
+ * payload; it is what stops the two write surfaces putting **different bytes on the
+ * wire for the same intent**. They did: the create modal sent `null` while clearing
+ * all six boxes in the Details tab sent six empty strings, and only the server's
+ * normalization made those mean the same thing. One spelling, one place.
+ *
+ * Note what this does NOT do: decide whether a *default* the form filled in on the
+ * organizer's behalf counts as a venue. That question has to be answered before the
+ * default is folded in — see the modal's own `hasVenue` call, which is why one
+ * survives there. */
 function toAddressInput(a: Address | null): AddressInput | null {
-  if (a === null) return null
+  if (a === null || !hasVenue(a)) return null
   return {
     venue: a.venue,
     street: a.street,

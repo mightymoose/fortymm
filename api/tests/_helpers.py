@@ -16,6 +16,7 @@ from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
+from app.geocoding import FakeGeocoder, GeocodeResult
 from app.main import app as fastapi_app
 from app.models import (
     League,
@@ -160,6 +161,53 @@ async def assert_tournament_address_is_sql_null(
         "JSON null *literal*, i.e. Tournament.address has lost none_as_null=True and "
         "'no venue' again has two stored representations (#1206)"
     )
+
+
+class CountingGeocoder:
+    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
+    the deterministic ``FakeGeocoder`` so results stay stable.
+
+    Structurally satisfies the ``Geocoder`` protocol, so it is injected exactly where
+    the real geocoder would be. Shared by the create- and edit-verb tests because that
+    protocol is *structural*: a second copy of this double could go on satisfying an
+    older shape of ``Geocoder.geocode`` with nothing to point at it.
+
+    The call count is what lets a test assert something no status code can — that a
+    write geocoded, or did not. Each caller's reason for caring is a comment on the
+    tests that use it.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = FakeGeocoder()
+
+    async def geocode(self, address: str) -> GeocodeResult:
+        self.calls += 1
+        return await self._inner.geocode(address)
+
+
+#: The six free-text components of the venue value-object, named once so an all-blank
+#: address is built from the shape rather than by hand — and so a seventh component
+#: cannot be added without every all-blank test blanking it too.
+ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
+
+#: Parametrizes ``blank`` over the two all-blank address gestures a web form can make:
+#: six empty strings, and six whitespace-only strings (a stray space in one of six boxes
+#: is not a venue). Shared by the schema boundary tests and both write verbs' tests, so
+#: "all blank means no venue" is pinned from the same one definition of "all blank".
+#:
+#: ``strict=True`` on the zip is deliberate: add a seventh component to
+#: ``ADDRESS_COMPONENTS`` and this raises at collection rather than quietly leaving the
+#: new component un-blanked — the failure mode the ids "six-empty-strings" would
+#: otherwise keep cheerfully claiming was covered.
+blank_addresses = pytest.mark.parametrize(
+    "blank",
+    [
+        dict.fromkeys(ADDRESS_COMPONENTS, ""),
+        dict(zip(ADDRESS_COMPONENTS, (" ", "\t", "\n", "  ", " ", " "), strict=True)),
+    ],
+    ids=["six-empty-strings", "whitespace-only"],
+)
 
 
 async def grant_permissions(

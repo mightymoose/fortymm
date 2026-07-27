@@ -18,6 +18,7 @@ import {
   eventToUpdateBody,
   tournamentToUpdateBody,
 } from './api'
+import { blankAddress } from './helpers'
 import type { Tournament, TournamentEvent } from './types'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -603,6 +604,66 @@ describe('tournamentToUpdateBody', () => {
     expect(body.address).toBeNull()
     // Present-and-null, not absent: "removed" and "unchanged" are different edits.
     expect('address' in body).toBe(true)
+  })
+
+  /**
+   * THE CLEAR-ALL PATH, pinned. This is the shape the **Details tab** actually hands
+   * this builder when the organizer empties all six venue boxes: not `null`, but an
+   * all-blank `Address` — because the tab has to keep six boxes on screen to be
+   * retyped into, so its draft holds `blankAddress()` (see `updateAddress` there).
+   *
+   * Both write verbs must put the SAME bytes on the wire for that one intent, and for
+   * a while they did not: the create modal sent `null` while this sent six empty
+   * strings, and only the server's own normalization made the two mean the same
+   * thing. `toAddressInput` applies `hasVenue` for both now, so the spelling is one.
+   *
+   * The placeholder coordinates are the other half of the claim — `blankAddress()`
+   * carries `0`/`0`, and (0, 0) is a real place in the Gulf of Guinea. Sending an
+   * address at all here would have been an invitation to geocode it.
+   */
+  it('sends address: null when the organizer clears all six venue boxes', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress(),
+    }
+    const body = tournamentToUpdateBody(tournament, [])
+
+    expect(body.address).toBeNull()
+    expect('address' in body).toBe(true)
+  })
+
+  /** Whitespace is not a venue either — the blankness test trims, so a box holding
+   * only spaces is as empty as one holding nothing. Without this, "clear the box"
+   * and "select-all and hit space" would be two different tournaments. */
+  it('sends address: null when the only content left is whitespace', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress({ venue: '   ', city: '\t\n' }),
+    }
+
+    expect(tournamentToUpdateBody(tournament, []).address).toBeNull()
+  })
+
+  /** The positive control for the three above. One non-blank component is a venue,
+   * and it must still travel — otherwise `address: null` would be what this builder
+   * always sends, and every assertion above would pass against a broken projector. */
+  it('still sends an address when a single component holds something', () => {
+    const tournament: Tournament = {
+      ...draft,
+      id: 't-1',
+      address: blankAddress({ city: 'Oakland' }),
+    }
+
+    expect(tournamentToUpdateBody(tournament, []).address).toEqual({
+      venue: '',
+      street: '',
+      city: 'Oakland',
+      region: '',
+      postal: '',
+      country: '',
+    })
   })
 
   // ADR-0017: editing a tournament cannot move its lifecycle. The status the

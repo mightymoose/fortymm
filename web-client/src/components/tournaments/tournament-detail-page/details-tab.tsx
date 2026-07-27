@@ -7,15 +7,14 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
-import { MAX_ADDRESS_COMPONENT, blankAddress } from '../data/helpers'
+import {
+  MAX_ADDRESS_COMPONENT,
+  type AddressText,
+  blankAddress,
+} from '../data/helpers'
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
-
-/** The address's six free-text components — everything the edit form touches.
- * `latitude`/`longitude` are geocoded server-side and never edited here, so they
- * are excluded from the keys the form can address. */
-type AddressTextField = Exclude<keyof Address, 'latitude' | 'longitude'>
 
 export interface DetailsTabProps {
   tournament: Tournament
@@ -70,9 +69,11 @@ export const DetailsTab = ({
    * silently give a venue-less tournament a venue. */
   const address = draft.address ?? blankAddress()
   // Typing into a box on a venue-less tournament STARTS a venue, on the blank
-  // stand-in above. Clearing every box again leaves an all-blank `Address`, which
-  // the server normalizes back to "no venue" at its own boundary
-  // (`SubmittedAddress`) — the client does not have to, and must not refuse it.
+  // stand-in above. Clearing every box again leaves an all-blank `Address` in the
+  // DRAFT — which is right, because the boxes must stay on screen to be retyped into
+  // — and `toAddressInput` (`../data/api`) turns it back into `address: null` on the
+  // way to the wire, the same spelling the create modal sends. The server normalizes
+  // too (`SubmittedAddress`), so this is one intent said once rather than a guard.
   const updateAddress = (patch: Partial<Address>) =>
     setDraft((d) => ({ ...d, address: { ...(d.address ?? blankAddress()), ...patch } }))
   const save = () => onUpdate(draft)
@@ -90,9 +91,14 @@ export const DetailsTab = ({
    * is the only place the organizer meets it before the 422 (#1199). It caps the
    * *typing*, not the value: a row that already holds a 680-character venue from
    * before the bound still renders it in full, and can still be shortened. */
+  // `keyof AddressText` — the address's six free-text components, which is exactly
+  // "everything the edit form touches": `AddressText` is defined as `Address` minus
+  // the coordinates, and those are geocoded server-side and never edited here. The
+  // local `Exclude<keyof Address, 'latitude' | 'longitude'>` that used to sit at the
+  // top of this file was the same type spelled a second time.
   const addressField = (
     label: string,
-    key: AddressTextField,
+    key: keyof AddressText,
     className?: string,
   ) => (
     <Field

@@ -28,11 +28,12 @@ from app.schemas.tournament import (
     TournamentRead,
     TournamentUpdate,
 )
+from tests._helpers import ADDRESS_COMPONENTS, blank_addresses
 
-#: The six free-text components, named once. Parametrizing over them is what makes the
-#: length bound a property of *the address* rather than of ``venue``, which is the only
-#: one anybody ever types into by hand in a test.
-ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
+# ``ADDRESS_COMPONENTS`` is the six free-text components, named once for the whole
+# suite. Parametrizing over them is what makes the length bound a property of *the
+# address* rather than of ``venue``, which is the only one anybody ever types into by
+# hand in a test.
 
 
 def _blank_address(**overrides: str) -> dict[str, str]:
@@ -109,20 +110,8 @@ def test_read_still_carries_a_present_address_with_its_coordinates():
 # ----- all-blank normalizes to "no venue", before anything geocodes ---------
 
 
-@pytest.mark.parametrize(
-    ("blank", "label"),
-    [
-        (_blank_address(), "six empty strings"),
-        (
-            _blank_address(
-                venue=" ", street="\t", city="\n", region="  ", postal=" ", country=" "
-            ),
-            "whitespace only",
-        ),
-    ],
-    ids=lambda value: value if isinstance(value, str) else "",
-)
-def test_an_all_blank_create_address_is_no_venue(blank: dict[str, str], label: str):
+@blank_addresses
+def test_an_all_blank_create_address_is_no_venue(blank: dict[str, str]):
     """An all-blank address parses to ``None``, not to an object of six empty strings.
 
     This is the rule that makes "no venue" reachable at all. The web form submits six

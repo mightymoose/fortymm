@@ -165,6 +165,46 @@ describe('NewTournamentModal', () => {
   })
 
   /**
+   * …and the same for the other four, because the bound is the server's
+   * `AddressComponent` and it applies to **all six** components — not to the one box
+   * we imagined somebody would paste into.
+   *
+   * The four used to carry `maxLength` and no Zod bound at all, justified as "none of
+   * them is a field someone pastes an essay into". That is a claim about user
+   * behaviour holding up a data bound, and `maxLength` is exactly the mechanism it
+   * does not cover: it caps typing and pasting, and does nothing about autofill, a
+   * password manager, or a restored draft — which is why this sweeps with
+   * `fireEvent.change`, the programmatic set those all amount to.
+   *
+   * Swept as a table so a sixth box cannot be added with only the DOM attribute:
+   * each names itself, so the sentence lands under the right one.
+   */
+  it.each([
+    ['Street', 'Street must be 255 characters or fewer.'],
+    ['City', 'City must be 255 characters or fewer.'],
+    ['Region', 'Region must be 255 characters or fewer.'],
+    ['Postal', 'Postal must be 255 characters or fewer.'],
+  ])(
+    'refuses an over-long %s inline rather than letting the server 422 it',
+    async (label, message) => {
+      const onCreate = vi.fn()
+      newTournamentModalPage.render({ onCreate })
+
+      const input = newTournamentModalPage.getAddressInput(label)
+      // The hard stop is still there for typing/pasting…
+      expect(input).toHaveAttribute('maxlength', '255')
+      // …and the Zod bound catches the value that got in some other way.
+      fireEvent.change(input, { target: { value: UNBREAKABLE_VENUE_NAME } })
+      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+
+      expect(await newTournamentModalPage.findError(message)).toBeVisible()
+      expect(input).toHaveAttribute('aria-invalid', 'true')
+      expect(onCreate).not.toHaveBeenCalled()
+    },
+  )
+
+  /**
    * THE regression (#783 QA, round two). The dialog did
    * `form.setError('name', { message: err.detail })`, so a 422 printed Pydantic's
    * sentence under the box — the same violation the event editor's banner had, in its

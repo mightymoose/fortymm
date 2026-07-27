@@ -124,17 +124,27 @@ const joinPresent = (parts: string[], sep: string): string =>
  * are geocoded server-side at write time and only ever ride on the read model. */
 export type AddressText = Omit<Address, 'latitude' | 'longitude'>
 
-/** The six text keys, once. Iterated rather than re-typed, so a component added to
- * `Address` is a compile error here instead of a field this module silently stops
- * looking at. */
-const ADDRESS_TEXT_KEYS: readonly (keyof AddressText)[] = [
-  'venue',
-  'street',
-  'city',
-  'region',
-  'postal',
-  'country',
-]
+/** The six text components, blank — the one place their names are written down, and
+ * the shape both `blankAddress` and `hasVenue` are derived from.
+ *
+ * It is an **object literal annotated `AddressText`**, and that is the whole point:
+ * an object literal checked against a non-partial type is exhaustive, so a seventh
+ * component added to `Address` is a compile error *here* until it is given a blank —
+ * and `hasVenue`, which iterates these keys, starts looking at it in the same commit.
+ *
+ * A `readonly (keyof AddressText)[]` of the same six names does NOT do this, and used
+ * to sit here claiming it did: an array type constrains each element to be *a* valid
+ * key, never that *every* key is present. A seventh component would have left this
+ * list typechecking at six, `hasVenue` blind to the only box the organizer filled in,
+ * and both write surfaces sending `address: null` for a venue they had been given. */
+const BLANK_ADDRESS_TEXT: AddressText = {
+  venue: '',
+  street: '',
+  city: '',
+  region: '',
+  postal: '',
+  country: '',
+}
 
 /**
  * The longest one component of a venue address may be **on the way in** — the
@@ -165,12 +175,7 @@ export const MAX_ADDRESS_COMPONENT = 255
  * They are not a location, and nothing may render them as one. */
 export function blankAddress(overrides: Partial<Address> = {}): Address {
   return {
-    venue: '',
-    street: '',
-    city: '',
-    region: '',
-    postal: '',
-    country: '',
+    ...BLANK_ADDRESS_TEXT,
     latitude: 0,
     longitude: 0,
     ...overrides,
@@ -181,17 +186,28 @@ export function blankAddress(overrides: Partial<Address> = {}): Address {
  * whitespace?
  *
  * The client's copy of the server's `SubmittedAddress` rule ("an all-blank address
- * is not a venue — normalize it to `None`"), asked by a write surface *before* it
- * decides whether its body carries an address or `null`. The server normalizes too,
- * so this is not a guard against a bad payload: it is what stops a form INVENTING a
- * venue out of a default it filled in on the organizer's behalf (a lone `country`
- * they never typed would otherwise be a venue, and the server would go and geocode
- * it). */
+ * is not a venue — normalize it to `None`"). The server normalizes too, so this is
+ * not a guard against a bad payload: it is what stops a form INVENTING a venue out
+ * of a default it filled in on the organizer's behalf (a lone `country` they never
+ * typed would otherwise be a venue, and the server would go and geocode it).
+ *
+ * Three callers, and they are asking the same question at three different moments:
+ * - `toAddressInput` (`./api`) — the wire. Both write verbs go through it, so create
+ *   and update put the SAME bytes on the wire for "no venue".
+ * - `NewTournamentModal` — *before* folding in its `DEFAULT_COUNTRY`, which is the
+ *   whole reason a second call survives there (see the comment at that call site).
+ * - `tournaments-store` (MSW) — mirroring the server's own boundary, and inheriting
+ *   the exhaustiveness of `BLANK_ADDRESS_TEXT` rather than hand-listing six names. */
 export function hasVenue(
   address: Partial<AddressText> | null | undefined,
 ): boolean {
   if (!address) return false
-  return ADDRESS_TEXT_KEYS.some((key) => (address[key] ?? '').trim() !== '')
+  // The keys come from `BLANK_ADDRESS_TEXT`, so this sweep is as exhaustive as that
+  // literal is — which the type checker enforces. Re-typing the six names here
+  // instead would be a second list to forget.
+  return (Object.keys(BLANK_ADDRESS_TEXT) as (keyof AddressText)[]).some(
+    (key) => (address[key] ?? '').trim() !== '',
+  )
 }
 
 /** A tournament's venue line — `Berkeley TT Club · Berkeley, CA` — built by

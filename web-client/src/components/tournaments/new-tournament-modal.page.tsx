@@ -16,6 +16,13 @@ const scoped = (container: Container) => ({
   getVenueInput() {
     return container.getByLabelText('Venue name')
   },
+  /** Any one of the dialog's five address boxes, by the label the organizer reads —
+   * so a spec can sweep all five rather than name only the one it remembers. The
+   * server's `AddressComponent` bound applies to every component, not just the
+   * venue name. */
+  getAddressInput(label: string) {
+    return container.getByLabelText(label)
+  },
   getCreateButton() {
     return container.getByRole('button', { name: /Create tournament/ })
   },

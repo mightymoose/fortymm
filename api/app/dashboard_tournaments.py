@@ -674,7 +674,20 @@ def _venue(tournament: Tournament) -> str | None:
     **The log line is what keeps containment from becoming silence.** A quiet fallback
     would swallow a serialization bug of *ours* just as happily as a corrupt row: were
     the nullable-address encoding subtly wrong somewhere, every dashboard would render
-    no venue, all tests green, and nothing would say so."""
+    no venue, all tests green, and nothing would say so.
+
+    **This containment is deliberately NOT applied to the other readers**, and the
+    asymmetry is the point rather than an oversight. ``TournamentRead`` validates the
+    same column on the list and detail endpoints with no equivalent guard, so a corrupt
+    row still fails those loudly. That is wanted: those endpoints are *about*
+    tournaments, so failing on an unreadable tournament is on-topic, and
+    ``.claude/rules/parse-at-boundaries.md`` asks a malformed value to fail at the edge
+    rather than be quietly rendered as absent everywhere. What makes the dashboard
+    different is not that its blast radius is bigger but that it is **off-topic**: it
+    folds unrelated panels into one response, so a venue string can deny a caller their
+    matches and their rating chart. Widening this to every reader would trade a loud,
+    localized failure for silent partial data across the app — a different decision,
+    with a different trade-off, not a tidy-up of this one."""
     stored = tournament.address
     if stored is None:
         return None

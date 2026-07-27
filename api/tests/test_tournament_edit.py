@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.geocoding import (
     AddressNotGeocodableError,
     FakeGeocoder,
-    GeocodeResult,
     compose_address,
 )
 from app.models import (
@@ -45,31 +44,17 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
-from tests._helpers import assert_tournament_address_is_sql_null, make_user
+from tests._helpers import (
+    CountingGeocoder,
+    assert_tournament_address_is_sql_null,
+    blank_addresses,
+    make_user,
+)
 
 # The deterministic geocoder the edit verb re-geocodes a changed address with (the
 # same one ``get_geocoder`` hands out under the suite's ``GEOCODER=fake``). A
 # service-layer test builds it directly, exactly as it constructs the raw session.
 _GEOCODER = FakeGeocoder()
-
-
-class _CountingGeocoder:
-    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
-    the deterministic ``FakeGeocoder`` so results stay stable.
-
-    Lets a test assert the edit verb geocodes **only** when the address text actually
-    changes — a name-only edit, or one that resubmits the identical address, must never
-    pay for a geocode (and, in production, must never hold the row lock across the
-    network call). Structurally satisfies the ``Geocoder`` protocol, so it is injected
-    exactly where the real geocoder would be."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self._inner = FakeGeocoder()
-
-    async def geocode(self, address: str) -> GeocodeResult:
-        self.calls += 1
-        return await self._inner.geocode(address)
 
 
 async def _geocoded(address: dict[str, str]) -> dict[str, object]:
@@ -117,11 +102,6 @@ def _stored_address() -> dict[str, object]:
     # The stored/read shape a ``Tournament`` row holds: the write fields plus the
     # NOT NULL geocoded coordinates.
     return {**_address(), "latitude": 37.8703, "longitude": -122.2731}
-
-
-#: The six free-text components of the venue value-object, named once so an all-blank
-#: address is built from the shape rather than by hand.
-_ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
 
 
 async def _make_tournament(
@@ -282,6 +262,12 @@ async def test_unresolvable_new_address_raises_and_writes_nothing(
 
 
 # ----- geocode ONLY when the address text actually changes -------------------
+#
+# The ``CountingGeocoder`` call count below is what makes these claims: the edit verb
+# must geocode **only** when the address text actually changes — a name-only edit, or
+# one that resubmits the identical address, must never pay for a geocode (and, in
+# production, must never hold the row lock across the network call). A 200-equivalent
+# cannot distinguish that from a geocode that happened to resolve.
 
 
 async def test_name_only_edit_does_not_geocode(
@@ -294,7 +280,7 @@ async def test_name_only_edit_does_not_geocode(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     await edit_tournament(
         db_session,
         tournament_id=tournament_id,
@@ -327,7 +313,7 @@ async def test_resubmitting_the_identical_address_does_not_geocode(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     await edit_tournament(
         db_session,
         tournament_id=tournament_id,
@@ -363,7 +349,7 @@ async def test_changed_address_geocodes_exactly_once(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     new_address = {**_address(), "venue": "Palo Alto Community Center"}
     result = await edit_tournament(
         db_session,
@@ -427,7 +413,7 @@ async def test_an_explicit_null_address_removes_the_venue(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     result = await edit_tournament(
         db_session,
         tournament_id=tournament_id,
@@ -442,14 +428,7 @@ async def test_an_explicit_null_address_removes_the_venue(
     await assert_tournament_address_is_sql_null(db_session, tournament_id)
 
 
-@pytest.mark.parametrize(
-    "blank",
-    [
-        dict.fromkeys(_ADDRESS_COMPONENTS, ""),
-        dict(zip(_ADDRESS_COMPONENTS, (" ", "\t", "\n", "  ", " ", " "), strict=True)),
-    ],
-    ids=["six-empty-strings", "whitespace-only"],
-)
+@blank_addresses
 async def test_an_all_blank_address_removes_the_venue(
     db_session: AsyncSession,
     default_league: League,
@@ -467,7 +446,7 @@ async def test_an_all_blank_address_removes_the_venue(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     result = await edit_tournament(
         db_session,
         tournament_id=tournament_id,
@@ -530,7 +509,7 @@ async def test_giving_a_venue_to_a_tournament_that_has_none_geocodes_it(
     tournament_id = tournament.id
     assert tournament.address is None
 
-    counting = _CountingGeocoder()
+    counting = CountingGeocoder()
     result = await edit_tournament(
         db_session,
         tournament_id=tournament_id,

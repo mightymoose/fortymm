@@ -72,9 +72,14 @@ config:
   # WHEN UAT GETS A REAL KEY (#1205): flip this to `google`, put the key in
   # .env, drop `optional: true` from the GOOGLE_GEOCODING_API_KEY secretKeyRef
   # in templates/api.yaml, and re-geocode the rows written while this said
-  # `fake`. Note the precedence trap: templates consume the api-config
-  # ConfigMap *before* the .env-backed Secret in envFrom, so a stray
-  # `GEOCODER=` line in the operator's .env silently wins over this value.
+  # `fake`.
+  #
+  # This value is only authoritative because .env carries no `GEOCODER` line —
+  # redeploy-uat.sh syncs .env into the fortymm-uat-env Secret, and appEnvFrom
+  # applies that Secret *after* the api-config ConfigMap, so anything set there
+  # silently outranks this. That is why .env.example deliberately does not define
+  # it and says so. If a `GEOCODER=` line ever reappears in an operator's .env,
+  # this line stops meaning anything — with no error.
   GEOCODER: fake
 
 postgres:

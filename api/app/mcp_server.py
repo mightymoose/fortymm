@@ -1059,9 +1059,11 @@ async def edit_tournament(
     geocodes nothing and so can never raise that one.
     """
     user_id = _authenticated_user_id()
-    # The geocoder is built from ``Settings`` (Google when keyed, else the keyless
-    # deterministic fake) — the MCP surface has no ``Depends``, so it constructs the
-    # same seam the HTTP route resolves with ``Depends(get_geocoder)``.
+    # The geocoder is built from ``Settings`` (the ``GEOCODER`` setting names it —
+    # ``google`` or the deterministic ``fake``; a keyless ``google`` is refused at
+    # ``Settings`` construction rather than falling back) — the MCP surface has no
+    # ``Depends``, so it constructs the same seam the HTTP route resolves with
+    # ``Depends(get_geocoder)``.
     geocoder = get_geocoder(get_settings())
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
@@ -1132,9 +1134,11 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
     geocodes nothing and so can never raise that one.
     """
     user_id = _authenticated_user_id()
-    # The geocoder is built from ``Settings`` (Google when keyed, else the keyless
-    # deterministic fake) — the MCP surface has no ``Depends``, so it constructs the
-    # same seam the HTTP route resolves with ``Depends(get_geocoder)``.
+    # The geocoder is built from ``Settings`` (the ``GEOCODER`` setting names it —
+    # ``google`` or the deterministic ``fake``; a keyless ``google`` is refused at
+    # ``Settings`` construction rather than falling back) — the MCP surface has no
+    # ``Depends``, so it constructs the same seam the HTTP route resolves with
+    # ``Depends(get_geocoder)``.
     geocoder = get_geocoder(get_settings())
     async with mcp_session() as db:
         # Permission first, through the same shared gate the HTTP ``require_create``

@@ -46,6 +46,28 @@ export interface NewTournamentModalProps {
 // bare 422 (#614).
 const NAME_MAX = 255
 
+/**
+ * One address component, bounded — the client's mirror of the server's
+ * `AddressComponent` (255), which applies to **all six** components and not just
+ * the venue name.
+ *
+ * It is the *only* client-side statement of that bound, because the generated
+ * schema drops `maxLength` entirely (`MAX_ADDRESS_COMPONENT`). Without it the
+ * organizer's feedback on an over-long component is a nested-address 422 that this
+ * form cannot even pin to a box (`FORM_FIELD` maps `name` alone), i.e. the banner
+ * (#1199).
+ *
+ * Every box gets one, not just `venue`. The `maxLength` DOM attribute below is a
+ * hard stop for **typing and pasting** only; a value that arrives by any other
+ * route — browser autofill, a draft restored by the password manager, a
+ * programmatic fill — sails straight past it. "None of these is a field someone
+ * pastes an essay into" is a claim about user behaviour, and a data bound may not
+ * rest on one. Each box names itself, so the sentence lands under the right one. */
+const addressComponent = (label: string) =>
+  z.string().max(MAX_ADDRESS_COMPONENT, {
+    message: `${label} must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
+  })
+
 const schema = z.object({
   name: z
     .string()
@@ -54,19 +76,11 @@ const schema = z.object({
     .max(NAME_MAX, {
       message: `Name must be ${NAME_MAX} characters or fewer.`,
     }),
-  // Mirrors the server's `AddressComponent` bound (255) the same way `name`
-  // mirrors `tournaments.name` — and it is the *only* client-side statement of
-  // it, since the generated schema drops `maxLength` entirely
-  // (`MAX_ADDRESS_COMPONENT`). Without it the organizer's feedback on an
-  // over-long venue is a nested-address 422 that this form cannot even pin to a
-  // box (`FORM_FIELD` maps `name` alone), i.e. the banner (#1199).
-  venue: z.string().max(MAX_ADDRESS_COMPONENT, {
-    message: `Venue name must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
-  }),
-  street: z.string(),
-  city: z.string(),
-  region: z.string(),
-  postal: z.string(),
+  venue: addressComponent('Venue name'),
+  street: addressComponent('Street'),
+  city: addressComponent('City'),
+  region: addressComponent('Region'),
+  postal: addressComponent('Postal'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -178,9 +192,16 @@ export const NewTournamentModal = ({
         // ALL FIVE BOXES BLANK IS NOT A VENUE — it is the first-class "no venue"
         // state (CONTEXT.md, "Venue"), and this dialog must be able to submit it:
         // organizers announce before the room is booked, and a tournament at
-        // somebody's home withholds its address on purpose. So the draft carries
-        // `null`, and `draftToCreateBody` sends `address: null` rather than six
-        // empty strings dressed up with a default country.
+        // somebody's home withholds its address on purpose.
+        //
+        // `toAddressInput` (`./data/api`) now applies that rule for BOTH write
+        // verbs, so this ternary is no longer what puts `null` on the wire. What
+        // it is still for — and the reason the ORDER here is load-bearing — is
+        // `DEFAULT_COUNTRY`: the blankness test has to be asked of what the
+        // organizer TYPED, before the default is folded in. Fold first and every
+        // venue-less create carries an address whose sole content is the word USA,
+        // which passes `hasVenue`, and the server geocodes it to the middle of the
+        // country.
         address: hasVenue(typed)
           ? blankAddress({ ...typed, country: DEFAULT_COUNTRY })
           : null,
@@ -276,45 +297,64 @@ export const NewTournamentModal = ({
             </Field>
             {/* The other four components share the venue box's server bound —
                 `AddressComponent` applies to all six — so they carry the same
-                hard stop. Only `venue` also carries a Zod message today; the
-                remaining four would each need their own sentence, and none of
-                them is the field an organizer pastes an essay into. */}
-            <Field label="Street">
+                hard stop AND the same Zod bound, each with its own sentence
+                under its own box (`addressComponent`). */}
+            <Field
+              label="Street"
+              error={!!errors.street}
+              hint={errors.street?.message}
+            >
               {(id) => (
                 <Input
                   id={id}
                   maxLength={MAX_ADDRESS_COMPONENT}
+                  aria-invalid={!!errors.street}
                   placeholder="2727 Milvia St"
                   {...register('street')}
                 />
               )}
             </Field>
             <div className="grid grid-cols-[2fr_1fr_1fr] gap-3">
-              <Field label="City">
+              <Field
+                label="City"
+                error={!!errors.city}
+                hint={errors.city?.message}
+              >
                 {(id) => (
                   <Input
                     id={id}
                     maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.city}
                     placeholder="Berkeley"
                     {...register('city')}
                   />
                 )}
               </Field>
-              <Field label="Region">
+              <Field
+                label="Region"
+                error={!!errors.region}
+                hint={errors.region?.message}
+              >
                 {(id) => (
                   <Input
                     id={id}
                     maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.region}
                     placeholder="CA"
                     {...register('region')}
                   />
                 )}
               </Field>
-              <Field label="Postal">
+              <Field
+                label="Postal"
+                error={!!errors.postal}
+                hint={errors.postal?.message}
+              >
                 {(id) => (
                   <Input
                     id={id}
                     maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.postal}
                     placeholder="94703"
                     className="font-mono"
                     {...register('postal')}

@@ -34,7 +34,7 @@ import {
   stepScheduleSolve,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
-import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
+import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
@@ -857,20 +857,21 @@ function geocodeAddress(input: AddressInput): Address {
  * geocoder ever sees it, because six empty boxes are not an address. The mock
  * normalizes identically, so a form that clears its venue fields removes the venue
  * in `npm run dev` exactly as it does in production — rather than storing a blank
- * address the store would then hand the geocoder and pin in Berkeley. */
+ * address the store would then hand the geocoder and pin in Berkeley.
+ *
+ * The blankness test is `hasVenue` — the app's own, not a copy of it. The mock does
+ * restate several server behaviours in TypeScript on purpose (the near-me exclusion
+ * mirrors SQL semantics that have no TS equivalent; the `undefined`-vs-`null` PATCH
+ * branch mirrors a wire contract), but this is not one of them: "is any component
+ * non-blank" is a sweep over the six components, and the shared helper derives that
+ * sweep from a type-checked exhaustive literal (`BLANK_ADDRESS_TEXT`). A hand-listed
+ * copy here would be a seventh-component blind spot that no compiler could see, in
+ * the very code whose job is to catch that mistake before production does. */
 function submittedAddress(
   input: AddressInput | null | undefined,
 ): Address | null {
   if (!input) return null
-  const parts = [
-    input.venue,
-    input.street,
-    input.city,
-    input.region,
-    input.postal,
-    input.country,
-  ]
-  if (!parts.some((part) => part.trim())) return null
+  if (!hasVenue(input)) return null
   return geocodeAddress(input)
 }
 
