@@ -18,7 +18,15 @@ import app.models  # noqa: F401  -- ensures models register on Base.metadata
 from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
-from app.models import League, LeagueVisibility, NotificationType, RatingStrategy, Role
+from app.models import (
+    DrawType,
+    DrawTypeOption,
+    League,
+    LeagueVisibility,
+    NotificationType,
+    RatingStrategy,
+    Role,
+)
 from app.models import NotificationChannel as NotificationChannelModel
 from app.notifications.taxonomy import (
     CHANNEL_AVAILABLE,
@@ -272,6 +280,54 @@ async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrateg
     db_session.add_all([glicko2, manual])
     await db_session.commit()
     return {"glicko2": glicko2, "manual": manual}
+
+
+# Display copy mirrors migration 0010's DRAW_TYPE_SEED. Keyed by the enum
+# member, not the slug, so a new ``DrawType`` without seed copy is a KeyError in
+# the fixture below rather than a silently missing lookup row.
+DRAW_TYPE_SEED: dict[DrawType, tuple[str, str, int]] = {
+    DrawType.round_robin: (
+        "Round robin",
+        "Everyone in a pool plays everyone else in that pool. Every entrant is "
+        "guaranteed the same number of matches and the final standings rank the "
+        "whole field, so it is the fairest read on form — but the match count "
+        "climbs quickly with pool size, and the event needs at least one pool.",
+        1,
+    ),
+    DrawType.single_elim: (
+        "Single elimination",
+        "A knockout bracket: lose once and you are out. It crowns a champion in "
+        "the fewest matches and the least table time, which suits a large field "
+        "or a tight schedule — but half the entrants are finished after one "
+        "match, and a field that is not a power of two gives the top seeds byes.",
+        2,
+    ),
+}
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def draw_types(db_session: AsyncSession) -> list[DrawTypeOption]:
+    """Seed the draw type lookup rows (one per ``DrawType`` member).
+
+    Seeded FROM the enum so the rows and the code-level closed set cannot
+    drift — a row exists exactly when a draw type has a strategy. Autouse
+    because the FK on the event's ``draw_type_key`` requires the parent rows to
+    exist whenever a test builds a tournament event, which is most of the suite.
+    Migration 0010 inserts these in real deployments; tests build via
+    ``Base.metadata.create_all`` so we re-seed here.
+    """
+    rows = [
+        DrawTypeOption(
+            key=draw_type.value,
+            name=DRAW_TYPE_SEED[draw_type][0],
+            description=DRAW_TYPE_SEED[draw_type][1],
+            display_order=DRAW_TYPE_SEED[draw_type][2],
+        )
+        for draw_type in DrawType
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    return rows
 
 
 # Display labels mirror the migration seeds — 0009 for the original five

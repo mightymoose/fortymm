@@ -6,6 +6,14 @@ Create Date: 2026-06-17 00:00:00.000000
 
 Per the pre-deploy convention in api/CLAUDE.md, edits to this migration
 happen in place. No backfill — assumes a fresh / empty DB.
+
+The ``draw_types`` lookup table is created and seeded here, first, for the same
+reason 0009 creates and seeds ``notification_types`` ahead of the tables that
+reference it: it is the FK target for the tournament event's draw settings, so
+it has to exist before the event tables in this very migration. Adding it in
+place — rather than as a chained ALTER at the head of the chain — is what keeps
+that ordering true; a later revision would land *after* the tables that point at
+it. Revision ids and the ``down_revision`` chain stay frozen.
 """
 from typing import Sequence, Union
 
@@ -51,11 +59,77 @@ draw_type_enum = postgresql.ENUM(
 )
 
 
+# Seeded lookup rows: the draw types that RUN. A row means "this draw type has
+# an implementation" — the set is exactly what ``app.draws.strategy_for``
+# dispatches, which is also exactly the members of ``app.models.DrawType``.
+# Migrations must stay self-contained (no app imports), so this list is a
+# deliberate hand-copy of the enum; a test asserts the two agree.
+# (key, name, description, display_order)
+DRAW_TYPE_SEED = [
+    (
+        "round-robin",
+        "Round robin",
+        "Everyone in a pool plays everyone else in that pool. Every entrant is "
+        "guaranteed the same number of matches and the final standings rank the "
+        "whole field, so it is the fairest read on form — but the match count "
+        "climbs quickly with pool size, and the event needs at least one pool.",
+        1,
+    ),
+    (
+        "single-elim",
+        "Single elimination",
+        "A knockout bracket: lose once and you are out. It crowns a champion in "
+        "the fewest matches and the least table time, which suits a large field "
+        "or a tight schedule — but half the entrants are finished after one "
+        "match, and a field that is not a power of two gives the top seeds byes.",
+        2,
+    ),
+]
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     tournament_status_enum.create(bind, checkfirst=True)
     event_format_enum.create(bind, checkfirst=True)
     draw_type_enum.create(bind, checkfirst=True)
+
+    # The slug is the primary key — no surrogate id, unlike notification_types.
+    # It is the FK target for the event's draw settings, so changing a slug is a
+    # migration. No ``is_active`` column on purpose: an unimplemented draw type
+    # has no row, which is what makes that FK the enforcement (see the ADR).
+    draw_types = op.create_table(
+        "draw_types",
+        sa.Column("key", sa.String(length=32), primary_key=True),
+        sa.Column("name", sa.String(length=128), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column(
+            "display_order", sa.Integer(), nullable=False, server_default=sa.text("0")
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+    )
+    op.bulk_insert(
+        draw_types,
+        [
+            {
+                "key": key,
+                "name": name,
+                "description": description,
+                "display_order": display_order,
+            }
+            for key, name, description, display_order in DRAW_TYPE_SEED
+        ],
+    )
 
     op.create_table(
         "tournaments",
@@ -206,6 +280,10 @@ def downgrade() -> None:
         "ix_tournaments_created_by_user_id_created_at", table_name="tournaments"
     )
     op.drop_table("tournaments")
+
+    # Dropped last, mirroring its create-first position: the tables that will
+    # reference it must go first.
+    op.drop_table("draw_types")
 
     bind = op.get_bind()
     draw_type_enum.drop(bind, checkfirst=True)

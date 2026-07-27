@@ -1,4 +1,5 @@
 from app.models.device_token import DeviceToken
+from app.models.draw_type import DrawTypeOption
 from app.models.league import League, LeagueVisibility
 from app.models.league_membership import LeagueMembership
 from app.models.match import Match, MatchStatus
@@ -43,6 +44,7 @@ from app.models.user_token import UserToken
 __all__ = [
     "DeviceToken",
     "DrawType",
+    "DrawTypeOption",
     "EventFormat",
     "League",
     "LeagueMembership",
