@@ -2,6 +2,14 @@
 # The dev file publishes ports for local developer convenience; for e2e we
 # only need nginx reachable from the host, on a port that won't collide with
 # anything the developer is already running (including the dev nginx on 8080).
+#
+# The api/worker services also pin GEOCODER=fake here rather than inheriting
+# dev's value. The suite depends on the FakeGeocoder's determinism —
+# tournaments-near-me.spec.ts asserts exact venue coordinates — and CI must
+# never make a network geocoding call, so the e2e stack states its own choice
+# instead of following dev if dev ever gets a real Google key. See
+# docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
+# ("The geocoder is selected by explicit config, not inferred from key presence").
 services:
   postgres:
     ports: !reset []
@@ -9,6 +17,11 @@ services:
     ports: !reset []
   api:
     ports: !reset []
+    environment:
+      GEOCODER: fake
+  worker:
+    environment:
+      GEOCODER: fake
   web-client:
     ports: !reset []
   nginx:

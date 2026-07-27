@@ -75,10 +75,19 @@ def _venue_coordinate(key: str) -> ColumnElement[float]:
     """The venue's ``latitude``/``longitude`` lifted out of the ``address`` JSONB as a
     real ``float`` column, for the haversine and the bounding box to compute on.
 
-    Both keys are NOT NULL inside the value-object (they are geocoded server-side on
-    every write, ADR "a venue's coordinates are geocoded server-side ... and are NOT
-    NULL"), so the cast never meets a null — there is no "tournament with no
-    coordinates" row to defend against here."""
+    **The cast does meet a null, and that is the wanted behaviour.** A tournament may
+    have no venue at all (CONTEXT.md, "Venue"), in which case ``address`` is SQL NULL,
+    this expression is NULL, and every comparison against it is NULL — so the bounding
+    box excludes the row and an address-less tournament is simply never a result of a
+    proximity search. Nothing is defended against here because there is nothing to
+    defend: the SQL degrades exactly the way the domain wants.
+
+    What survives is the *inner* invariant: when an address IS present both keys are
+    there and NOT NULL, geocoded server-side on every write, so there is no
+    half-located venue whose latitude casts to NULL while its longitude does not. (This
+    docstring used to assert the stronger "the cast never meets a null" — that was
+    narrowed by the 2026-07-26 amendment to ADR "a venue's coordinates are geocoded
+    server-side ... and are NOT NULL", which made ``tournaments.address`` nullable.)"""
     return cast(Tournament.address[key].astext, Float)
 
 

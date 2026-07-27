@@ -7,14 +7,14 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
+import {
+  MAX_ADDRESS_COMPONENT,
+  type AddressText,
+  blankAddress,
+} from '../data/helpers'
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
-
-/** The address's six free-text components — everything the edit form touches.
- * `latitude`/`longitude` are geocoded server-side and never edited here, so they
- * are excluded from the keys the form can address. */
-type AddressTextField = Exclude<keyof Address, 'latitude' | 'longitude'>
 
 export interface DetailsTabProps {
   tournament: Tournament
@@ -61,8 +61,21 @@ export const DetailsTab = ({
 
   const update = (patch: Partial<Tournament>) =>
     setDraft((d) => ({ ...d, ...patch }))
+  /** What the six venue boxes show. A tournament with NO venue (CONTEXT.md,
+   * "Venue" — `address: null`) is a valid, first-class state, and this is the one
+   * place it becomes six empty boxes: an editor needs somewhere to type. The blank
+   * stand-in is display state only — it is not written back into the draft unless
+   * the organizer actually types (`updateAddress`), so opening the tab does not
+   * silently give a venue-less tournament a venue. */
+  const address = draft.address ?? blankAddress()
+  // Typing into a box on a venue-less tournament STARTS a venue, on the blank
+  // stand-in above. Clearing every box again leaves an all-blank `Address` in the
+  // DRAFT — which is right, because the boxes must stay on screen to be retyped into
+  // — and `toAddressInput` (`../data/api`) turns it back into `address: null` on the
+  // way to the wire, the same spelling the create modal sends. The server normalizes
+  // too (`SubmittedAddress`), so this is one intent said once rather than a guard.
   const updateAddress = (patch: Partial<Address>) =>
-    setDraft((d) => ({ ...d, address: { ...d.address, ...patch } }))
+    setDraft((d) => ({ ...d, address: { ...(d.address ?? blankAddress()), ...patch } }))
   const save = () => onUpdate(draft)
 
   /** The address rows are the same shape six times over: an `Input` over the
@@ -71,24 +84,36 @@ export const DetailsTab = ({
    * Keyed by the six **text** components only — never `latitude`/`longitude`.
    * Coordinates are geocoded server-side at write time and are read-only on the
    * client (the read `Address` carries them; the write shape does not), so the
-   * edit form neither shows nor submits them. */
+   * edit form neither shows nor submits them.
+   *
+   * Every one of the six is capped at `MAX_ADDRESS_COMPONENT` — the server's
+   * `AddressComponent` bound, which the generated schema cannot express, so this
+   * is the only place the organizer meets it before the 422 (#1199). It caps the
+   * *typing*, not the value: a row that already holds a 680-character venue from
+   * before the bound still renders it in full, and can still be shortened. */
+  // `keyof AddressText` — the address's six free-text components, which is exactly
+  // "everything the edit form touches": `AddressText` is defined as `Address` minus
+  // the coordinates, and those are geocoded server-side and never edited here. The
+  // local `Exclude<keyof Address, 'latitude' | 'longitude'>` that used to sit at the
+  // top of this file was the same type spelled a second time.
   const addressField = (
     label: string,
-    key: AddressTextField,
+    key: keyof AddressText,
     className?: string,
   ) => (
     <Field
       label={label}
       key={key}
       readOnly={!canEdit}
-      value={draft.address[key]}
+      value={address[key]}
       valueClassName={className}
     >
       {(id) => (
         <Input
           id={id}
           className={className}
-          value={draft.address[key]}
+          maxLength={MAX_ADDRESS_COMPONENT}
+          value={address[key]}
           onChange={(e) => updateAddress({ [key]: e.target.value })}
         />
       )}
@@ -174,7 +199,7 @@ export const DetailsTab = ({
                 drops a pin. An editor-only affordance (ADR 0015 — hide mutating
                 affordances, never disable them) and display-only: it adds no
                 coordinates to the update payload (the server geocodes on save). */}
-            {canEdit && <PreviewLocation address={draft.address} />}
+            {canEdit && <PreviewLocation address={address} />}
           </div>
         </Card>
       </div>

@@ -36,6 +36,13 @@ else
     fi
     UVICORN="$ROOT/api/.venv/bin/uvicorn"
   fi
+  # Ask for the deterministic, network-free FakeGeocoder BY NAME. GEOCODER
+  # defaults to `google`, and a `google` with no GOOGLE_GEOCODING_API_KEY makes
+  # Settings raise at construction — which `lifespan` would hit at boot. This
+  # throwaway server exists only to serve /openapi.json for a type regen; it
+  # never geocodes anything, and a developer with no Google key must not have a
+  # routine `mise run regen-api-types` fail on a config guard.
+  GEOCODER="${GEOCODER:-fake}" \
   "$UVICORN" app.main:app --host "$API_HOST" --port "$API_PORT" \
     --app-dir "$ROOT/api" >/tmp/fortymm-api.log 2>&1 &
   API_PID=$!

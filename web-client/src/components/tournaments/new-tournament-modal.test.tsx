@@ -1,9 +1,12 @@
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { screen, waitFor } from '@/test/utilities'
+import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
+import { server } from '@/mocks/server'
+import { fireEvent, screen, waitFor } from '@/test/utilities'
 
 import { newTournamentModalPage } from './new-tournament-modal.page'
 
@@ -50,6 +53,39 @@ describe('NewTournamentModal', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  // A tournament may be created with NO VENUE at all (CONTEXT.md, "Venue"):
+  // organizers announce before the room is booked, and a tournament at somebody's
+  // home withholds its address on purpose. The dialog must submit that, and must
+  // submit it as `null` — six empty strings plus a default country is a VENUE, and
+  // the server would take it at its word and go and geocode "USA".
+  it('sends NO VENUE — null, not six empty strings — when the venue boxes are blank', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Garage Invitational')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(onCreate.mock.calls[0][0].address).toBeNull()
+  })
+
+  it('starts a venue from ANY single box the organizer fills in', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    // Not the venue name — the least likely box, so this cannot pass by looking at
+    // one field and calling it the venue.
+    await userEvent.type(screen.getByLabelText('Postal'), '94703')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(onCreate.mock.calls[0][0].address).toMatchObject({
+      postal: '94703',
+      venue: '',
+      country: 'USA',
+    })
+  })
+
   it('blocks an empty name with an inline error and does not submit', async () => {
     const onCreate = vi.fn()
     newTournamentModalPage.render({ onCreate })
@@ -82,6 +118,91 @@ describe('NewTournamentModal', () => {
     ).toBeVisible()
     expect(onCreate).not.toHaveBeenCalled()
   })
+
+  /**
+   * The venue box carries the server's `AddressComponent` bound (#1199).
+   *
+   * It has to be re-stated on the client at all because the generated schema drops
+   * it: `openapi-typescript` has no TypeScript construct for a string length, so
+   * `maxLength` appears **nowhere** in `src/api/schema.d.ts`. Nothing between the
+   * organizer and the API knows about the 255 except this.
+   */
+  it('caps the venue box at the 255 characters the server accepts', async () => {
+    newTournamentModalPage.render()
+
+    const input = newTournamentModalPage.getVenueInput()
+    expect(input).toHaveAttribute('maxlength', '255')
+
+    // Pasting the pathological 680-character name in — the realistic way an
+    // over-long venue gets typed — leaves 255 in the box, not 680.
+    await userEvent.click(input)
+    await userEvent.paste(UNBREAKABLE_VENUE_NAME)
+    expect((input as HTMLInputElement).value).toHaveLength(255)
+  })
+
+  it('refuses an over-long venue inline rather than letting the server 422 it', async () => {
+    const onCreate = vi.fn()
+    newTournamentModalPage.render({ onCreate })
+
+    // `fireEvent.change`, deliberately: `maxLength` already stops typing and
+    // pasting, so the only way a 680-character venue reaches the form is a
+    // programmatic set — autofill, a password manager, a restored draft. The Zod
+    // bound is what catches THAT, and this is the only way to exercise it. Without
+    // it the organizer's feedback is a nested-address 422 the form cannot even pin
+    // to a box (`FORM_FIELD` maps `name` alone), i.e. the banner.
+    fireEvent.change(newTournamentModalPage.getVenueInput(), {
+      target: { value: UNBREAKABLE_VENUE_NAME },
+    })
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(
+      await newTournamentModalPage.findError(
+        'Venue name must be 255 characters or fewer.',
+      ),
+    ).toBeVisible()
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  /**
+   * …and the same for the other four, because the bound is the server's
+   * `AddressComponent` and it applies to **all six** components — not to the one box
+   * we imagined somebody would paste into.
+   *
+   * The four used to carry `maxLength` and no Zod bound at all, justified as "none of
+   * them is a field someone pastes an essay into". That is a claim about user
+   * behaviour holding up a data bound, and `maxLength` is exactly the mechanism it
+   * does not cover: it caps typing and pasting, and does nothing about autofill, a
+   * password manager, or a restored draft — which is why this sweeps with
+   * `fireEvent.change`, the programmatic set those all amount to.
+   *
+   * Swept as a table so a sixth box cannot be added with only the DOM attribute:
+   * each names itself, so the sentence lands under the right one.
+   */
+  it.each([
+    ['Street', 'Street must be 255 characters or fewer.'],
+    ['City', 'City must be 255 characters or fewer.'],
+    ['Region', 'Region must be 255 characters or fewer.'],
+    ['Postal', 'Postal must be 255 characters or fewer.'],
+  ])(
+    'refuses an over-long %s inline rather than letting the server 422 it',
+    async (label, message) => {
+      const onCreate = vi.fn()
+      newTournamentModalPage.render({ onCreate })
+
+      const input = newTournamentModalPage.getAddressInput(label)
+      // The hard stop is still there for typing/pasting…
+      expect(input).toHaveAttribute('maxlength', '255')
+      // …and the Zod bound catches the value that got in some other way.
+      fireEvent.change(input, { target: { value: UNBREAKABLE_VENUE_NAME } })
+      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+
+      expect(await newTournamentModalPage.findError(message)).toBeVisible()
+      expect(input).toHaveAttribute('aria-invalid', 'true')
+      expect(onCreate).not.toHaveBeenCalled()
+    },
+  )
 
   /**
    * THE regression (#783 QA, round two). The dialog did
@@ -305,6 +426,27 @@ describe('NewTournamentModal', () => {
     )
     expect(newTournamentModalPage.queryPreviewError()).toBeNull()
     expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  it('hints, and fires no geocode, when Preview is clicked with the venue blank', async () => {
+    // The write surface renders the shared affordance, so the empty-form
+    // short-circuit has to hold here too: no request, a neutral hint, and none
+    // of the destructive "we couldn't locate that address" alert.
+    let geocodeCalls = 0
+    server.use(
+      http.get('*/v1/geocode', () => {
+        geocodeCalls += 1
+        return new HttpResponse(null, { status: 500 })
+      }),
+    )
+    newTournamentModalPage.render()
+
+    await userEvent.click(newTournamentModalPage.getPreviewButton())
+
+    expect(await newTournamentModalPage.findPreviewHint()).toBeVisible()
+    expect(geocodeCalls).toBe(0)
+    expect(newTournamentModalPage.queryPreviewPin()).toBeNull()
+    expect(newTournamentModalPage.queryPreviewError()).toBeNull()
   })
 
   it('surfaces an inline error and no pin for an unresolvable address', async () => {

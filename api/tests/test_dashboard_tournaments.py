@@ -7,6 +7,7 @@ through the real tournament routes (create → enter → cut → go live → cal
 what the panel projects is what the product actually writes.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.dashboard_tournaments import build_tournament_panels
@@ -21,6 +23,7 @@ from app.match_voiding import void_match
 from app.models import (
     Match,
     MatchStatus,
+    Tournament,
     TournamentEntryStatus,
     TournamentStatus,
     User,
@@ -579,6 +582,121 @@ async def test_the_panel_names_the_tournament_and_its_venue(
     assert panel["name"] == "Riverside Summer Slam"
     assert panel["subtitle"].endswith("Jul 24–25"), (
         f"a same-month range collapses to one month name: {panel['subtitle']}"
+    )
+
+
+_PANEL_LOGGER = "app.dashboard_tournaments"
+
+
+def _panel_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Only this module's own records, so unrelated log noise from elsewhere in the
+    request cannot make an "it logged" assertion pass — or an "it stayed quiet" one
+    fail."""
+    return [record for record in caplog.records if record.name == _PANEL_LOGGER]
+
+
+async def test_a_tournament_with_no_venue_is_a_panel_of_dates_alone(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tournament with no venue — announced before the room is booked, or
+    deliberately withheld (CONTEXT.md, "Venue") — is a first-class state at every
+    status, so its panel simply drops the venue half of the subtitle and shows the
+    dates.
+
+    And it logs **nothing**. This is the expected state, not a degradation: a line per
+    dashboard load would train the reader to tune out the logger that the *corrupt*
+    case (below) depends on being read."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A),
+        name="Unbooked Open",
+        address=None,
+        start_date="2026-07-24",
+        end_date="2026-07-25",
+    )
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    with caplog.at_level(logging.ERROR, logger=_PANEL_LOGGER):
+        (panel,) = await _panels(client)
+
+    assert panel["name"] == "Unbooked Open"
+    assert panel["subtitle"] == "Jul 24–25", (
+        "no venue means the dates alone — not a leading separator, an empty segment, "
+        "or a 'venue TBD' placeholder"
+    )
+    assert _panel_logs(caplog) == [], (
+        "a venue-less tournament is normal and must not be reported as a problem"
+    )
+
+
+async def test_a_tournament_whose_stored_venue_is_corrupt_degrades_and_says_so(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An address that does not parse must not take the dashboard down with it.
+
+    The blast radius is what makes this worth a branch: the subtitle is one line of one
+    panel, but a ``ValidationError`` here escapes the whole ``GET /v1/dashboard`` — one
+    bad venue string would deny the caller their matches, their rating chart and their
+    notifications. So the panel falls back to the dates and the page renders.
+
+    **Both halves are asserted on purpose.** Containment alone would be satisfied by a
+    bare ``except: pass``, which is precisely what we do not want: a silent fallback
+    would swallow a serialization bug of *ours* — the nullable-address encoding going
+    subtly wrong — and every dashboard would render no venue, green. So the ERROR, and
+    the tournament id inside it, are part of the contract.
+
+    The corrupt row is written directly, because no write path can produce one: create
+    and edit both geocode, so a stored address always has its coordinates. This is a
+    row that got that way by some other means, which is the only way it ever happens.
+    """
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A),
+        name="Corrupted Venue Open",
+        start_date="2026-07-24",
+        end_date="2026-07-25",
+    )
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+    # Venue text but no coordinates: the half-populated address the schema exists to
+    # rule out, so `Address` refuses it.
+    await db_session.execute(
+        update(Tournament)
+        .where(Tournament.id == uuid.UUID(tournament_id))
+        .values(address={"venue": "Riverside TTC"})
+    )
+    await db_session.commit()
+
+    with caplog.at_level(logging.ERROR, logger=_PANEL_LOGGER):
+        response = await client.get("/v1/dashboard")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # The panels that have nothing to do with tournaments still came back — the point
+    # of containing this rather than letting it escape.
+    assert "rating" in body and "recent_results" in body
+
+    (panel,) = body["tournaments"]
+    assert panel["subtitle"] == "Jul 24–25", (
+        "an unreadable venue degrades to the dates, exactly like having no venue"
+    )
+
+    records = _panel_logs(caplog)
+    assert len(records) == 1, (
+        "containment must not become silence — a bare `except: pass` would satisfy "
+        f"every assertion above this one; got {records}"
+    )
+    (record,) = records
+    assert record.levelno == logging.ERROR
+    assert tournament_id in record.getMessage(), (
+        "the log must name WHICH tournament is corrupt, or it cannot be acted on"
     )
 
 

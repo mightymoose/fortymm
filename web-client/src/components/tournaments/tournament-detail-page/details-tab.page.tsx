@@ -13,6 +13,14 @@ const scoped = (container: Container) => ({
   getNameInput() {
     return container.getByLabelText(/Name/)
   },
+  /** The six venue boxes, in the order the Venue & address card lays them out.
+   * A tournament with NO VENUE (`address: null`) still gets all six — empty — so
+   * the organizer has somewhere to type one. */
+  getVenueInputs() {
+    return ['Venue name', 'Street', 'City', 'Region', 'Postal', 'Country'].map(
+      (label) => container.getByLabelText(label, { exact: true }),
+    )
+  },
   /** The "Name" field's label row, as `textContent` — which is where the
    * required asterisk actually shows up ("Name*"). It cannot be asserted through
    * the *query*: `getByText` matches a node's direct text children only, and the

@@ -473,7 +473,24 @@ export interface Tournament {
   startDate: string | null
   endDate: string | null
   description: string
-  address: Address
+  /** This tournament's **venue**, or `null` when it has none (CONTEXT.md, "Venue").
+   *
+   * `null` is a FIRST-CLASS state, not missing data, and it is reachable at every
+   * status from draft to archived. It covers two situations that need no telling
+   * apart, because nothing behaves differently: the venue is not booked yet, and the
+   * venue is deliberately withheld — a small tournament at somebody's home, whose
+   * address should not be pinned on a public map.
+   *
+   * ⚠️ **A tournament with no venue renders NOTHING** — no venue line, no pin, no
+   * map, and emphatically never a "Venue TBD" placeholder. That copy promises a
+   * venue is coming, which is false for the withheld case, and for a home game it
+   * implies the address is merely missing rather than private. `fmtVenueLine`
+   * (`./helpers`) takes the `null` and answers `''`, which is every caller's cue to
+   * render no row at all.
+   *
+   * It is also never a proximity-search result: a venue-less tournament is dropped
+   * from a near-me list at any radius, on the server and in the mock alike. */
+  address: Address | null
   tableIds: string[]
   events: TournamentEvent[]
   /** The latest run of the schedule solver — the ledger row the Schedule tab's

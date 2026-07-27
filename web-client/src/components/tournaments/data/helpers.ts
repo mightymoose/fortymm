@@ -119,6 +119,97 @@ export function fmtTimeWindow(
 const joinPresent = (parts: string[], sep: string): string =>
   parts.map((p) => p.trim()).filter(Boolean).join(sep)
 
+/** The six free-text components of a venue address — the shape a write surface's
+ * boxes hold. Coordinates are excluded because a client never collects them: they
+ * are geocoded server-side at write time and only ever ride on the read model. */
+export type AddressText = Omit<Address, 'latitude' | 'longitude'>
+
+/** The six text components, blank — the one place their names are written down, and
+ * the shape both `blankAddress` and `hasVenue` are derived from.
+ *
+ * It is an **object literal annotated `AddressText`**, and that is the whole point:
+ * an object literal checked against a non-partial type is exhaustive, so a seventh
+ * component added to `Address` is a compile error *here* until it is given a blank —
+ * and `hasVenue`, which iterates these keys, starts looking at it in the same commit.
+ *
+ * A `readonly (keyof AddressText)[]` of the same six names does NOT do this, and used
+ * to sit here claiming it did: an array type constrains each element to be *a* valid
+ * key, never that *every* key is present. A seventh component would have left this
+ * list typechecking at six, `hasVenue` blind to the only box the organizer filled in,
+ * and both write surfaces sending `address: null` for a venue they had been given. */
+const BLANK_ADDRESS_TEXT: AddressText = {
+  venue: '',
+  street: '',
+  city: '',
+  region: '',
+  postal: '',
+  country: '',
+}
+
+/**
+ * The longest one component of a venue address may be **on the way in** — the
+ * client's mirror of the server's `MAX_ADDRESS_COMPONENT`
+ * (`api/app/schemas/tournament.py`), which bounds all six components of
+ * `AddressInput` at 255 and 422s anything longer.
+ *
+ * It has to be re-stated here because **the generated clients do not carry it**:
+ * `openapi-typescript` has no TypeScript construct for a string length, so
+ * `maxLength` appears nowhere in `src/api/schema.d.ts` (nor in the iOS
+ * `Types.swift`). This constant, and the write surfaces that apply it, are the
+ * only client-side enforcement that exists — without it the organizer's only
+ * feedback on an over-long venue is a bare 4xx.
+ *
+ * It is deliberately a **write-side** bound only, exactly as on the server: the
+ * stored/read `Address` is unbounded so rows predating the limit still serialize,
+ * which is why the detail page has to render a 680-character venue rather than
+ * assume one cannot exist (#1199).
+ */
+export const MAX_ADDRESS_COMPONENT = 255
+
+/** An address with every component blank and the read model's placeholder
+ * coordinates — what an edit surface puts in its boxes for a tournament that has
+ * **no** venue, so the organizer can start typing one.
+ *
+ * The `0`/`0` are placeholders and never reach the wire: the write shape
+ * (`AddressInput`) is coordinate-free, and `toAddressInput` (`./api`) drops them.
+ * They are not a location, and nothing may render them as one. */
+export function blankAddress(overrides: Partial<Address> = {}): Address {
+  return {
+    ...BLANK_ADDRESS_TEXT,
+    latitude: 0,
+    longitude: 0,
+    ...overrides,
+  }
+}
+
+/** Is there a venue here at all — does ANY component hold something other than
+ * whitespace?
+ *
+ * The client's copy of the server's `SubmittedAddress` rule ("an all-blank address
+ * is not a venue — normalize it to `None`"). The server normalizes too, so this is
+ * not a guard against a bad payload: it is what stops a form INVENTING a venue out
+ * of a default it filled in on the organizer's behalf (a lone `country` they never
+ * typed would otherwise be a venue, and the server would go and geocode it).
+ *
+ * Three callers, and they are asking the same question at three different moments:
+ * - `toAddressInput` (`./api`) — the wire. Both write verbs go through it, so create
+ *   and update put the SAME bytes on the wire for "no venue".
+ * - `NewTournamentModal` — *before* folding in its `DEFAULT_COUNTRY`, which is the
+ *   whole reason a second call survives there (see the comment at that call site).
+ * - `tournaments-store` (MSW) — mirroring the server's own boundary, and inheriting
+ *   the exhaustiveness of `BLANK_ADDRESS_TEXT` rather than hand-listing six names. */
+export function hasVenue(
+  address: Partial<AddressText> | null | undefined,
+): boolean {
+  if (!address) return false
+  // The keys come from `BLANK_ADDRESS_TEXT`, so this sweep is as exhaustive as that
+  // literal is — which the type checker enforces. Re-typing the six names here
+  // instead would be a second list to forget.
+  return (Object.keys(BLANK_ADDRESS_TEXT) as (keyof AddressText)[]).some(
+    (key) => (address[key] ?? '').trim() !== '',
+  )
+}
+
 /** A tournament's venue line — `Berkeley TT Club · Berkeley, CA` — built by
  * filtering the address parts and joining the survivors, NOT by interpolating
  * each part into a template with its separator baked in (#994, #972).
@@ -128,11 +219,19 @@ const joinPresent = (parts: string[], sep: string): string =>
  * anything to punctuate: a venue-less tournament read as a bare `· ,` and a
  * venue with no city as `BETAVENUE · ,`. Punctuation is not data.
  *
+ * **A `null` address — a tournament with no venue at all (CONTEXT.md, "Venue") —
+ * is the same answer, `''`, and deliberately so.** It is not a second mechanism
+ * and not a placeholder: "no venue" and "a venue with nothing displayable in it"
+ * both mean there is no line to draw, and every caller already renders no row for
+ * `''`. A "Venue TBD" here would be a lie in the withheld case, and would leak the
+ * fact that a private home game *has* an address it is not showing (#1206).
+ *
  * Returns `''` when nothing is present — a caller must render NO venue line at
  * all in that case (no icon, no empty row), which is why this is not the
  * em-dash that `ReadOnlyValue` and the formatters above use: those label a
  * field whose row exists regardless; this one decides whether the row exists. */
-export function fmtVenueLine(address: Address): string {
+export function fmtVenueLine(address: Address | null | undefined): string {
+  if (!address) return ''
   const locality = joinPresent([address.city, address.region], ', ')
   return joinPresent([address.venue, locality], ' · ')
 }
@@ -315,20 +414,14 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     startDate: null,
     endDate: null,
     description: '',
-    // `Tournament` is the READ model, so its `Address` carries the geocoded
-    // coordinates; a blank draft has none yet, so they seed at 0. The write path
-    // (`draftToCreateBody`) drops them — a client never sends coordinates — so
-    // these placeholders never reach the wire.
-    address: {
-      venue: '',
-      street: '',
-      city: '',
-      region: '',
-      postal: '',
-      country: 'USA',
-      latitude: 0,
-      longitude: 0,
-    },
+    // NO VENUE — `null`, not six empty strings. A tournament may have none at all
+    // (CONTEXT.md, "Venue"), and a blank draft is the clearest case of it: nothing
+    // has been typed. Seeding an all-blank `Address` here instead would make every
+    // create body carry an address the organizer never entered — and, once a default
+    // country was folded in, one the server would take for a real venue and go and
+    // geocode. A write surface builds an `Address` only when the organizer types one
+    // (`hasVenue` above).
+    address: null,
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [],
     // A brand-new tournament has never been solved — and `Tournament` is the READ

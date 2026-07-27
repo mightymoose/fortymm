@@ -42,6 +42,39 @@ export class TournamentDetailPage {
     return new ScheduleTabPage(this.page)
   }
 
+  // ----- the hero (header) --------------------------------------------------
+
+  /** The page's `h1` — the tournament's name. A spec asserts on it to establish
+   * that the page RENDERED, which is what stops the venue absences below from
+   * passing vacuously against a blank or crashed screen. */
+  get title(): Locator {
+    return this.page.getByRole('heading', { level: 1 })
+  }
+
+  /** The status pill in the hero ("Draft", "Live") — a second, independent sign
+   * that the header really rendered. */
+  get statusBadge(): Locator {
+    return this.page.getByTestId('tournament-status-badge')
+  }
+
+  /** The hero's venue meta item: the pin icon and the venue line. **Absent
+   * entirely** — not empty — for a tournament with no venue (CONTEXT.md,
+   * "Venue"), which is a first-class state and never a "Venue TBD" placeholder. */
+  get venueLine(): Locator {
+    return this.page.getByTestId('tournament-venue-line')
+  }
+
+  /** The hero's venue map, **either branch**. `LocationMap` renders the Google map
+   * when `VITE_GOOGLE_MAPS_API_KEY` is configured and a labelled text fallback
+   * when it is not — and this stack is keyless, which is exactly the environment
+   * where a "there is no map" assertion could pass for the wrong reason. Matching
+   * both means the assertion is about the venue, not about the API key. */
+  get venueMap(): Locator {
+    return this.page
+      .getByTestId('location-map')
+      .or(this.page.getByTestId('location-map-fallback'))
+  }
+
   // ----- lifecycle (header) -------------------------------------------------
 
   /** `draft → published`. Present only for the owner, only while `draft`. */

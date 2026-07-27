@@ -21,6 +21,8 @@ vi.mock('@vis.gl/react-google-maps', () => ({
 }))
 
 // Imported after the mock is declared (vi.mock is hoisted above all imports).
+import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
+
 import { locationMapPage } from './location-map.page'
 
 const KEY = 'VITE_GOOGLE_MAPS_API_KEY'
@@ -44,6 +46,20 @@ describe('LocationMap', () => {
         '1001 Broadway, Oakland, CA 94607',
       )
       expect(locationMapPage.queryMap()).toBeNull()
+    })
+
+    /** A venue line can be one unbroken 680-character word — the read shape bounds
+     * no address component — and unwrapped it paints straight out of this box and
+     * takes the whole page's scroll width with it (#1199).
+     *
+     * A markup supplement only: jsdom does no layout, so nothing here can measure
+     * the overflow. `e2e/tournaments/tournament-venue.spec.ts` does. */
+    it('asks the label to wrap, so an unbroken venue name cannot overflow it', () => {
+      locationMapPage.render({ label: UNBREAKABLE_VENUE_NAME })
+
+      const label = locationMapPage.getFallbackLabel()
+      expect(label).toHaveTextContent(UNBREAKABLE_VENUE_NAME)
+      expect(label).toHaveClass('wrap-anywhere')
     })
 
     it('does not load the Google Maps library', () => {

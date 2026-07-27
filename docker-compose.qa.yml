@@ -88,6 +88,13 @@ services:
       # request_solve() reads this to size the RQ job_timeout, so the api
       # service needs it too, not just the worker that runs the solve itself.
       SOLVER_TIME_CAP_S: ${SOLVER_TIME_CAP_S:-10}
+      # Venue geocoding provider. QA asks for the deterministic, network-free
+      # FakeGeocoder BY NAME: selecting it by the absence of a Google key fails
+      # silently open, so an environment meant to geocode for real quietly
+      # stores hash-derived coordinates instead. See
+      # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
+      # ("The geocoder is selected by explicit config, not inferred from key presence").
+      GEOCODER: fake
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +127,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       # Wall-clock cap (seconds) on the CP-SAT tournament solve (issue #1103).
       SOLVER_TIME_CAP_S: ${SOLVER_TIME_CAP_S:-10}
+      # The worker builds its own Settings, so it needs the same explicit
+      # geocoder choice as the api service above.
+      GEOCODER: fake
     depends_on:
       redis:
         condition: service_healthy
@@ -139,6 +149,8 @@ services:
       <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
+      # Also a Settings-building api process — same explicit geocoder choice.
+      GEOCODER: fake
     depends_on:
       postgres:
         condition: service_healthy

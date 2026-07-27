@@ -1638,6 +1638,17 @@ export interface components {
          *     This is the shape on the *read* schemas (:class:`TournamentRead` and the
          *     detail/dashboard reads); the write schemas take :class:`AddressInput`, which
          *     has no coordinates.
+         *
+         *     The six components here are plain ``str`` — **unbounded on purpose**, unlike the
+         *     255-character :data:`AddressComponent` the write shape uses. This model's job is to
+         *     make stored history readable, not to re-litigate it: a length bound here would make
+         *     a single over-long row unserializable and take down every page that reads it. See
+         *     :data:`AddressComponent`.
+         *
+         *     A tournament may have **no** address at all (``Address | None`` on the reads) — an
+         *     announced-but-unbooked or deliberately-withheld venue is a first-class state
+         *     (CONTEXT.md, "Venue"). What this model rules out is the *half*-populated address:
+         *     when there is a venue, its coordinates are known.
          */
         Address: {
             /** Venue */
@@ -1667,9 +1678,17 @@ export interface components {
          *     that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
          *     rather than an unverified number the server would have to trust or re-check.
          *
+         *     Each component is bounded at :data:`MAX_ADDRESS_COMPONENT` characters
+         *     (:data:`AddressComponent`); the stored :class:`Address` is deliberately unbounded,
+         *     for the reason given there.
+         *
          *     The write verbs geocode this input and construct the stored :class:`Address`
          *     (with coordinates) before persisting; this is the shape on the *request*
          *     schemas, and :class:`Address` is the shape on the *read* schemas.
+         *
+         *     An instance of this model whose six components are **all blank** is not a venue —
+         *     the write schemas normalize it to ``None`` at the boundary
+         *     (:data:`SubmittedAddress`), so it never reaches the geocoder or the column.
          */
         AddressInput: {
             /** Venue */
@@ -4443,7 +4462,7 @@ export interface components {
             start_date?: string | null;
             /** End Date */
             end_date?: string | null;
-            address: components["schemas"]["AddressInput"];
+            address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][];
             /** League Id */
@@ -4465,7 +4484,7 @@ export interface components {
             start_date: string | null;
             /** End Date */
             end_date: string | null;
-            address: components["schemas"]["Address"];
+            address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
             /**
@@ -4833,7 +4852,7 @@ export interface components {
             start_date: string | null;
             /** End Date */
             end_date: string | null;
-            address: components["schemas"]["Address"];
+            address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
             /**
@@ -4900,12 +4919,19 @@ export interface components {
         /**
          * TournamentUpdate
          * @description Partial update. A field that is *absent* is left unchanged; an explicit
-         *     value replaces the current one. The columns backing ``name``, ``address``,
-         *     and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+         *     value replaces the current one. The columns backing ``name`` and
+         *     ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
          *     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
          *     are different. ``description``/``start_date``/``end_date`` are nullable
          *     columns and may be cleared. ``table_catalogue`` replaces wholesale when
          *     present.
+         *
+         *     ``address`` is nullable too, as of #1206: **omitted means unchanged; ``null`` — or
+         *     an all-blank object, which :data:`SubmittedAddress` normalizes to ``null`` — means
+         *     remove the venue.** It used to be in the rejected-``null`` set on the stated grounds
+         *     that it "maps to a NOT NULL column"; that is simply no longer true of
+         *     ``tournaments.address``, and keeping the rejection would have enforced a constraint
+         *     the database does not have — leaving an organizer no way to un-book a venue.
          *
          *     ``status`` is **not** updatable and is absent here on purpose: the lifecycle
          *     runs forward only across guarded edges, so the one way it moves is

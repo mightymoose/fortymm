@@ -1,8 +1,9 @@
 import userEvent from '@testing-library/user-event'
 
+import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
 import { screen } from '@/test/utilities'
 
-import { buildTournament } from '../data/seed.factory'
+import { buildAddress, buildTournament } from '../data/seed.factory'
 import { detailsTabPage } from './details-tab.page'
 
 describe('DetailsTab', () => {
@@ -130,6 +131,121 @@ describe('DetailsTab', () => {
       'USA',
     ])
     expect(detailsTabPage.querySaveButton()).toBeNull()
+  })
+
+  // A tournament may have NO VENUE at all (CONTEXT.md, "Venue") — `address: null`.
+  // The edit surface must not refuse it, must not crash on it, and must not turn
+  // opening the tab into an accidental venue.
+  describe('a tournament with NO VENUE', () => {
+    it('offers six empty venue boxes for the organizer to start one in', () => {
+      detailsTabPage.render({ tournament: buildTournament({ address: null }) })
+
+      for (const input of detailsTabPage.getVenueInputs()) {
+        expect(input).toHaveValue('')
+      }
+      // Nothing was saved by merely looking: the blank boxes are display state, so
+      // the tab is not dirty and Save is not offered.
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+    })
+
+    it('starts a venue from the first character typed, leaving the rest blank', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({
+        tournament: buildTournament({ address: null }),
+        onUpdate,
+      })
+
+      await userEvent.type(screen.getByLabelText('City'), 'Oakland')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: expect.objectContaining({ city: 'Oakland', venue: '' }),
+        }),
+      )
+    })
+
+    // Clearing every box is how an organizer REMOVES a venue. The form must let
+    // them: the server normalizes an all-blank address to "no venue" at its own
+    // boundary, so what matters here is that nothing refuses the submit.
+    it('lets the organizer clear a venue back out again', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+
+      for (const input of detailsTabPage.getVenueInputs()) {
+        await userEvent.clear(input)
+      }
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: expect.objectContaining({
+            venue: '',
+            street: '',
+            city: '',
+            region: '',
+            postal: '',
+            country: '',
+          }),
+        }),
+      )
+    })
+
+    it('reads as six em-dashes for a non-creator — never a "TBD"', () => {
+      detailsTabPage.render({
+        tournament: buildTournament({
+          name: 'Garage Invitational',
+          description: 'Address shared with entrants.',
+          address: null,
+        }),
+        canEdit: false,
+      })
+
+      expect(detailsTabPage.getReadOnlyValues()).toEqual([
+        'Garage Invitational',
+        'Address shared with entrants.',
+        // The six venue rows: unset, which on a row that exists is the em-dash
+        // (ADR 0015, rule 3) — the header is where the row itself disappears.
+        '—',
+        '—',
+        '—',
+        '—',
+        '—',
+        '—',
+      ])
+      expect(detailsTabPage.getFormElements()).toHaveLength(0)
+    })
+  })
+
+  /**
+   * The organizer meets the server's `AddressComponent` bound here, not at the
+   * 422 (#1199). The generated schema cannot carry it — `openapi-typescript` has
+   * no TypeScript construct for a string length, so `maxLength` appears nowhere
+   * in `src/api/schema.d.ts` — which makes this the only statement of it on the
+   * edit surface.
+   */
+  it('caps every venue box at the 255 characters the server accepts', () => {
+    detailsTabPage.render({ tournament: buildTournament() })
+
+    for (const input of detailsTabPage.getVenueInputs()) {
+      expect(input).toHaveAttribute('maxlength', '255')
+    }
+  })
+
+  /** The bound is on the way IN only, exactly as on the server: a row stored
+   * before it existed still has to be editable, not silently rewritten. */
+  it('still shows a stored 680-character venue in full, so it can be shortened', () => {
+    detailsTabPage.render({
+      tournament: buildTournament({
+        address: buildAddress({ venue: UNBREAKABLE_VENUE_NAME }),
+      }),
+    })
+
+    const [venue] = detailsTabPage.getVenueInputs()
+    expect(venue).toHaveValue(UNBREAKABLE_VENUE_NAME)
   })
 
   it('renders an em-dash for a field the organizer left empty', () => {

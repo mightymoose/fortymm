@@ -116,11 +116,20 @@ async def create_tournament(
       injected ``geocoder``): the client sends the six free-text components
       (:class:`~app.schemas.tournament.AddressInput`, no coordinates) and this verb
       persists the stored :class:`~app.schemas.tournament.Address` that carries the
-      resolved ``latitude`` / ``longitude`` (ADR "a venue's coordinates are geocoded
-      server-side at write time and are NOT NULL"). An unresolvable address raises
+      resolved ``latitude`` / ``longitude`` (the ADR's narrowed invariant: an address,
+      *when present*, has NOT NULL coordinates). An unresolvable address raises
       :class:`~app.geocoding.AddressNotGeocodableError` **before** anything is written,
       so a write that cannot produce coordinates commits nothing; the caller maps it to
       a coded ``409`` (:data:`~app.tournament_geocoding.ADDRESS_NOT_GEOCODABLE_CODE`).
+    * The ``address`` is **optional**: omitted — or sent with all six components blank,
+      which :data:`~app.schemas.tournament.SubmittedAddress` normalizes to ``None`` at
+      the boundary — creates a tournament with **no venue**, storing SQL ``NULL`` and
+      **never calling the geocoder** (#1206). Announcing before the venue is booked, and
+      a private tournament that withholds its address, are both ordinary; requiring one
+      here made them impossible through every write path. The geocode is skipped rather
+      than attempted-and-forgiven precisely because a blank address composes to ``""``,
+      which resolves to zero candidates — an organizer with no venue would otherwise be
+      told their nonexistent venue could not be found.
     * The value-objects (``address``, ``table_catalogue``) persist as plain JSONB;
       the dicts ``model_dump`` produces don't propagate beyond this write boundary.
     * **No** ``status`` is set: it isn't on the create schema (ADR-0017), so a
@@ -139,13 +148,22 @@ async def create_tournament(
     league = await _resolve_league_strict(db, payload.league_id)
     # Geocode before constructing the row, so an unresolvable address fails at the edge
     # and never reaches ``db.add``/``commit`` — the write is atomic (writes nothing).
-    address = await geocode_address(geocoder, payload.address)
+    #
+    # ``payload.address`` is ``None`` when the caller sent no venue, or sent one whose
+    # six components were all blank (``SubmittedAddress`` normalizes that at the
+    # boundary). There is nothing to geocode then, and the column stores SQL ``NULL`` —
+    # the single representation of "this tournament has no venue" (#1206).
+    address = (
+        await geocode_address(geocoder, payload.address)
+        if payload.address is not None
+        else None
+    )
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
         start_date=payload.start_date,
         end_date=payload.end_date,
-        address=address.model_dump(),
+        address=address.model_dump() if address is not None else None,
         table_catalogue=[t.model_dump() for t in payload.table_catalogue],
         league_id=league.id,
         created_by_user_id=actor.id,

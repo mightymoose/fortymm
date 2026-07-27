@@ -56,6 +56,30 @@ export class TournamentsListPage {
     return this.dialog.getByLabel('Postal')
   }
 
+  get venueInput(): Locator {
+    return this.dialog.getByLabel('Venue name')
+  }
+
+  /** The shared "Preview location" affordance. Its label flips to "Locating…"
+   * while a geocode is in flight, so the name matches both — a locator that
+   * matched only the resting label would go "missing" mid-lookup. */
+  get previewLocationButton(): Locator {
+    return this.dialog.getByRole('button', { name: /Preview location|Locating/ })
+  }
+
+  /** The NEUTRAL "add a venue address" hint — what a click with every venue box
+   * blank says. Kept distinct from `previewLocationError` on purpose: a blank
+   * venue is a valid tournament, not a failure. */
+  get previewLocationHint(): Locator {
+    return this.page.getByTestId('preview-location-hint')
+  }
+
+  /** The DESTRUCTIVE "we couldn't locate that address" alert — the genuine
+   * zero-results case, and only that. */
+  get previewLocationError(): Locator {
+    return this.page.getByTestId('preview-location-error')
+  }
+
   get createButton(): Locator {
     return this.dialog.getByRole('button', { name: 'Create tournament' })
   }

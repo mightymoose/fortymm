@@ -9,6 +9,17 @@ on:
     branches: [main]
   pull_request:
 
+# The `verify` / `verify-ios` jobs boot the API (scripts/ensure-api-up.sh) to
+# dump its openapi.json, so they need a geocoder choice like any other API
+# process. They ask for the deterministic, network-free FakeGeocoder BY NAME
+# rather than getting it by having no Google key: inferring from key presence
+# fails silently open, and CI could not hold a real key anyway (fork PRs get no
+# secrets). See
+# docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
+# ("The geocoder is selected by explicit config, not inferred from key presence").
+env:
+  GEOCODER: fake
+
 jobs:
   # Housed in this workflow on purpose: it is the repo's cross-cutting
   # "consistency" workflow — the only one that isn't scoped to a single

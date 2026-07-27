@@ -17,7 +17,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { PreviewLocation } from '@/components/maps/preview-location'
 
-import { emptyTournament } from './data/helpers'
+import {
+  MAX_ADDRESS_COMPONENT,
+  blankAddress,
+  emptyTournament,
+  hasVenue,
+} from './data/helpers'
 import {
   TOURNAMENT_SAVE_TARGET,
   saveFailure,
@@ -41,6 +46,28 @@ export interface NewTournamentModalProps {
 // bare 422 (#614).
 const NAME_MAX = 255
 
+/**
+ * One address component, bounded — the client's mirror of the server's
+ * `AddressComponent` (255), which applies to **all six** components and not just
+ * the venue name.
+ *
+ * It is the *only* client-side statement of that bound, because the generated
+ * schema drops `maxLength` entirely (`MAX_ADDRESS_COMPONENT`). Without it the
+ * organizer's feedback on an over-long component is a nested-address 422 that this
+ * form cannot even pin to a box (`FORM_FIELD` maps `name` alone), i.e. the banner
+ * (#1199).
+ *
+ * Every box gets one, not just `venue`. The `maxLength` DOM attribute below is a
+ * hard stop for **typing and pasting** only; a value that arrives by any other
+ * route — browser autofill, a draft restored by the password manager, a
+ * programmatic fill — sails straight past it. "None of these is a field someone
+ * pastes an essay into" is a claim about user behaviour, and a data bound may not
+ * rest on one. Each box names itself, so the sentence lands under the right one. */
+const addressComponent = (label: string) =>
+  z.string().max(MAX_ADDRESS_COMPONENT, {
+    message: `${label} must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
+  })
+
 const schema = z.object({
   name: z
     .string()
@@ -49,14 +76,24 @@ const schema = z.object({
     .max(NAME_MAX, {
       message: `Name must be ${NAME_MAX} characters or fewer.`,
     }),
-  venue: z.string(),
-  street: z.string(),
-  city: z.string(),
-  region: z.string(),
-  postal: z.string(),
+  venue: addressComponent('Venue name'),
+  street: addressComponent('Street'),
+  city: addressComponent('City'),
+  region: addressComponent('Region'),
+  postal: addressComponent('Postal'),
 })
 
 type FormValues = z.infer<typeof schema>
+
+/** The country a venue typed in this dialog is assumed to be in. The dialog has no
+ * country box (the edit form does), so a venue created here would otherwise reach
+ * the geocoder without one.
+ *
+ * It is applied ONLY to a venue the organizer actually typed. Folded in
+ * unconditionally it would turn "no venue" into a venue whose sole content is the
+ * word USA — an address the server would dutifully geocode, pinning a tournament
+ * with no venue at the middle of the country. */
+const DEFAULT_COUNTRY = 'USA'
 
 const DEFAULT_VALUES: FormValues = {
   name: '',
@@ -141,18 +178,33 @@ export const NewTournamentModal = ({
     // Last attempt's banner belongs to last attempt (a field's red clears itself:
     // `mode: 'onChange'` re-validates the box as it is retyped).
     form.clearErrors('root')
+    const typed = {
+      venue: values.venue.trim(),
+      street: values.street.trim(),
+      city: values.city.trim(),
+      region: values.region.trim(),
+      postal: values.postal.trim(),
+    }
     try {
       await onCreate({
         ...base,
         name: values.name,
-        address: {
-          ...base.address,
-          venue: values.venue.trim(),
-          street: values.street.trim(),
-          city: values.city.trim(),
-          region: values.region.trim(),
-          postal: values.postal.trim(),
-        },
+        // ALL FIVE BOXES BLANK IS NOT A VENUE — it is the first-class "no venue"
+        // state (CONTEXT.md, "Venue"), and this dialog must be able to submit it:
+        // organizers announce before the room is booked, and a tournament at
+        // somebody's home withholds its address on purpose.
+        //
+        // `toAddressInput` (`./data/api`) now applies that rule for BOTH write
+        // verbs, so this ternary is no longer what puts `null` on the wire. What
+        // it is still for — and the reason the ORDER here is load-bearing — is
+        // `DEFAULT_COUNTRY`: the blankness test has to be asked of what the
+        // organizer TYPED, before the default is folded in. Fold first and every
+        // venue-less create carries an address whose sole content is the word USA,
+        // which passes `hasVenue`, and the server geocodes it to the middle of the
+        // country.
+        address: hasVenue(typed)
+          ? blankAddress({ ...typed, country: DEFAULT_COUNTRY })
+          : null,
       })
       onOpenChange(false)
     } catch (err) {
@@ -224,29 +276,85 @@ export const NewTournamentModal = ({
               <span className="h-px flex-1 bg-[color:var(--border-subtle)]" />
             </div>
 
-            <Field label="Venue name">
+            <Field
+              label="Venue name"
+              error={!!errors.venue}
+              hint={errors.venue?.message}
+            >
               {(id) => (
-                <Input id={id} placeholder="Berkeley TT Club" {...register('venue')} />
+                <Input
+                  id={id}
+                  // The hard stop, and the schema above is the guarantee: typing
+                  // and pasting are capped here, while the Zod bound still catches
+                  // a value that arrived some other way (autofill, a restored
+                  // draft) and says so under the box instead of at the server.
+                  maxLength={MAX_ADDRESS_COMPONENT}
+                  aria-invalid={!!errors.venue}
+                  placeholder="Berkeley TT Club"
+                  {...register('venue')}
+                />
               )}
             </Field>
-            <Field label="Street">
+            {/* The other four components share the venue box's server bound —
+                `AddressComponent` applies to all six — so they carry the same
+                hard stop AND the same Zod bound, each with its own sentence
+                under its own box (`addressComponent`). */}
+            <Field
+              label="Street"
+              error={!!errors.street}
+              hint={errors.street?.message}
+            >
               {(id) => (
-                <Input id={id} placeholder="2727 Milvia St" {...register('street')} />
+                <Input
+                  id={id}
+                  maxLength={MAX_ADDRESS_COMPONENT}
+                  aria-invalid={!!errors.street}
+                  placeholder="2727 Milvia St"
+                  {...register('street')}
+                />
               )}
             </Field>
             <div className="grid grid-cols-[2fr_1fr_1fr] gap-3">
-              <Field label="City">
-                {(id) => (
-                  <Input id={id} placeholder="Berkeley" {...register('city')} />
-                )}
-              </Field>
-              <Field label="Region">
-                {(id) => <Input id={id} placeholder="CA" {...register('region')} />}
-              </Field>
-              <Field label="Postal">
+              <Field
+                label="City"
+                error={!!errors.city}
+                hint={errors.city?.message}
+              >
                 {(id) => (
                   <Input
                     id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.city}
+                    placeholder="Berkeley"
+                    {...register('city')}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Region"
+                error={!!errors.region}
+                hint={errors.region?.message}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.region}
+                    placeholder="CA"
+                    {...register('region')}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Postal"
+                error={!!errors.postal}
+                hint={errors.postal?.message}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    maxLength={MAX_ADDRESS_COMPONENT}
+                    aria-invalid={!!errors.postal}
                     placeholder="94703"
                     className="font-mono"
                     {...register('postal')}

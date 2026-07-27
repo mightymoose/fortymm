@@ -10,9 +10,11 @@
 //   • Bay Area Open  — Berkeley   (37.8715, -122.273)   published, owned  → visible
 //   • Summer Slam    — Palo Alto  (37.4419, -122.143)   draft,     owned  → visible
 //   • Club Champs    — San Jose   (37.3382, -121.8863)  published, foreign→ visible
+//   • Garage Invit.  — NO VENUE   (address: null)       published, owned  → visible
 //   • League Office  — San Jose   draft, foreign                          → HIDDEN
 // From Berkeley: Palo Alto ≈ 30.5 mi, San Jose ≈ 42.5 mi. So a 10-mile radius isolates
-// Berkeley, a 35-mile one adds Palo Alto, and a wide one returns all three visible rows.
+// Berkeley, a 35-mile one adds Palo Alto, and a wide one returns all four visible rows —
+// except that the venue-less one is never a near-me result at all (see the last test).
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -28,6 +30,9 @@ const BERKELEY = { lat: 37.8715, lng: -122.273 }
 const BAY_AREA = 'bay-area-open-2026' // Berkeley
 const SUMMER_SLAM = 'summer-slam-2026' // Palo Alto, ~30.5 mi
 const CLUB_CHAMPS = 'club-champs-2026' // San Jose, ~42.5 mi
+/** The seed's venue-less tournament (`address: null`) — visible in the plain list,
+ * and never in a near-me one. */
+const GARAGE = 'garage-invitational-2026'
 
 async function listTournaments(query = ''): Promise<{
   status: number
@@ -82,12 +87,41 @@ describe('GET /v1/tournaments — the near-me filter', () => {
     const { status, body } = await listTournaments()
 
     expect(status).toBe(200)
-    // All three VISIBLE rows (the foreign draft stays hidden regardless), each with the
-    // designed "no location asked about" distance.
-    expect(idsOf(body).sort()).toEqual([BAY_AREA, CLUB_CHAMPS, SUMMER_SLAM].sort())
+    // All four VISIBLE rows (the foreign draft stays hidden regardless), each with the
+    // designed "no location asked about" distance — the venue-less one INCLUDED: having
+    // no venue keeps a tournament out of proximity searches, not out of the list.
+    expect(idsOf(body).sort()).toEqual(
+      [BAY_AREA, CLUB_CHAMPS, GARAGE, SUMMER_SLAM].sort(),
+    )
     for (const t of body) {
       expect(t.distance_miles).toBeNull()
     }
+  })
+
+  // A tournament with NO VENUE is never a proximity-search result, at any radius
+  // (CONTEXT.md, "Venue"): there is nothing to measure to. The server's SQL haversine
+  // reads the address JSONB's coordinates, so a NULL address yields no distance and the
+  // row never survives the radius comparison — and the mock must not be more generous,
+  // or a venue-less tournament would appear in `npm run dev`'s near-me list (at a
+  // defaulted (0, 0), i.e. thousands of miles out) and vanish in production.
+  //
+  // The radius is deliberately absurd: at 20 000 miles every point on Earth is inside
+  // it, so the only thing that can still exclude this row is the rule under test.
+  it('never returns a VENUE-LESS tournament from a near-me search, at any radius', async () => {
+    const { body: tight } = await listTournaments(
+      `?lat=${BERKELEY.lat}&lng=${BERKELEY.lng}&radius_miles=10`,
+    )
+    expect(idsOf(tight)).not.toContain(GARAGE)
+
+    const { body: wholeEarth } = await listTournaments(
+      `?lat=${BERKELEY.lat}&lng=${BERKELEY.lng}&radius_miles=20000`,
+    )
+    expect(idsOf(wholeEarth)).not.toContain(GARAGE)
+    // …while every VENUED row is inside a radius that large — so the assertion above
+    // is about the missing venue and not about a filter that dropped everything.
+    expect(idsOf(wholeEarth).sort()).toEqual(
+      [BAY_AREA, CLUB_CHAMPS, SUMMER_SLAM].sort(),
+    )
   })
 
   it('422s a PARTIAL triple — the location filter is all-or-nothing, as on the server', async () => {

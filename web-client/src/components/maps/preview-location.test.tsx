@@ -53,6 +53,90 @@ describe('PreviewLocation', () => {
     expect(toast.error).not.toHaveBeenCalled()
   })
 
+  it('hints instead of geocoding — and fires NO request — when every venue field is blank', async () => {
+    // Count every `GET /v1/geocode`. The assertion that matters is that this
+    // number stays at 0: the endpoint requires a non-empty `address`, so an
+    // empty form used to flash "Locating…", take a 422, and revert to the
+    // button with nothing said. The fix must stop *sending*, not re-label.
+    let geocodeCalls = 0
+    server.use(
+      http.get('*/v1/geocode', () => {
+        geocodeCalls += 1
+        return new HttpResponse(null, { status: 500 })
+      }),
+    )
+    previewLocationPage.render({
+      address: { venue: '', street: '', city: '', region: '', postal: '' },
+    })
+
+    await userEvent.click(previewLocationPage.getPreviewButton())
+
+    expect(await previewLocationPage.findHint()).toBeVisible()
+    expect(previewLocationPage.queryHint()).toHaveTextContent(
+      'Add a venue address to preview its location.',
+    )
+    expect(geocodeCalls).toBe(0)
+    // A blank venue is a valid tournament, not a failure: no pin, and NOT the
+    // destructive "we couldn't locate that address" alert (nor a toast).
+    expect(previewLocationPage.queryPin()).toBeNull()
+    expect(previewLocationPage.queryError()).toBeNull()
+    expect(toast.error).not.toHaveBeenCalled()
+    // No round trip means no "Locating…" to sit through — the button never
+    // leaves its resting state.
+    expect(previewLocationPage.getPreviewButton()).toBeEnabled()
+    expect(previewLocationPage.getPreviewButton()).toHaveTextContent(
+      'Preview location',
+    )
+  })
+
+  it('whitespace-only venue fields are blank too — hint, no request', async () => {
+    // `composeAddress` trims and drops blanks, so "   " composes to "" just as
+    // "" does. Same short-circuit, same hint.
+    let geocodeCalls = 0
+    server.use(
+      http.get('*/v1/geocode', () => {
+        geocodeCalls += 1
+        return new HttpResponse(null, { status: 500 })
+      }),
+    )
+    previewLocationPage.render({
+      address: {
+        venue: '  ',
+        street: '',
+        city: '\t',
+        region: '',
+        postal: ' ',
+        country: '  ',
+      },
+    })
+
+    await userEvent.click(previewLocationPage.getPreviewButton())
+
+    expect(await previewLocationPage.findHint()).toBeVisible()
+    expect(geocodeCalls).toBe(0)
+    expect(previewLocationPage.queryError()).toBeNull()
+  })
+
+  it('keeps the neutral hint and the destructive alert distinct', async () => {
+    // The unresolvable address gets the red alert and NOT the hint — the two
+    // messages are independently addressable, so a later edit can't collapse
+    // "nothing typed yet" into "we looked and found nothing".
+    previewLocationPage.render({
+      address: {
+        venue: '__unresolvable__',
+        street: '',
+        city: '',
+        region: '',
+        postal: '',
+      },
+    })
+
+    await userEvent.click(previewLocationPage.getPreviewButton())
+
+    expect(await previewLocationPage.findError()).toBeVisible()
+    expect(previewLocationPage.queryHint()).toBeNull()
+  })
+
   it('resolves its pending state — never a permanent spinner', async () => {
     previewLocationPage.render()
 

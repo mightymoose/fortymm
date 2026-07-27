@@ -33,6 +33,14 @@ NOTIFICATION_TYPE_SEED = [
     ("33333333-3333-3333-3333-333333330003", "tournament", "Tournament news", "Tourney"),
     ("33333333-3333-3333-3333-333333330004", "opponent", "Challenges & friends", "Social"),
     ("33333333-3333-3333-3333-333333330005", "result_confirm", "Score acceptances", "Scores"),
+    # A ``notification_types`` row *is* a preference category (one prefs-matrix
+    # row per seeded key), so the three call message kinds — ``match_called``,
+    # ``match_call_moved``, ``match_call_cancelled`` — share this single
+    # ``match_calls`` category; their copy lives in typed template builders
+    # (``app.notifications.match_calls``), mirroring how ``result_confirm``
+    # carries multiple message shapes under one category. See the 2026-07-16
+    # ADR "the schedule is solved; the call is pinned".
+    ("33333333-3333-3333-3333-333333330006", "match_calls", "Match calls", "Calls"),
 ]
 
 NOTIFICATION_CHANNEL_SEED = [

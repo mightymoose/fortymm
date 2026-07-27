@@ -67,6 +67,12 @@ const scoped = (container: Container) => ({
   queryVenueLine() {
     return container.queryByTestId('tournament-venue-line')
   },
+  /** The venue line's **text**, without the pin beside it. Separate from
+   * `queryVenueLine` because the wrapping treatment (#1199) is on this span, and
+   * an assertion about the row's classes would say nothing about it. */
+  queryVenueText() {
+    return container.queryByTestId('tournament-venue-text')
+  },
   /** The venue `LocationMap`'s text fallback — the branch rendered when no Google
    * Maps key is configured (dev/CI/vitest all run keyless). Its text is the venue
    * line. Absent when the tournament has no address. */

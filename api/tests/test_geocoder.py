@@ -1,7 +1,7 @@
 """Unit tests for the geocoding seam (chore 1a).
 
 None of these touch the network or a database: they exercise the deterministic
-``FakeGeocoder`` and the key-driven provider selection directly, and drive
+``FakeGeocoder`` and the config-driven provider selection directly, and drive
 ``GoogleGeocoder`` through an ``httpx`` mock transport.
 """
 
@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import GeocoderChoice, Settings
 from app.geocoding.dependencies import get_geocoder
 from app.geocoding.geocoder import (
     UNRESOLVABLE_SENTINEL,
@@ -22,27 +23,73 @@ from app.geocoding.geocoder import (
 )
 
 A_NORMAL_ADDRESS = "1600 Amphitheatre Parkway, Mountain View, CA 94043, USA"
+A_KEY = "a-real-looking-key"
 
 
-# --- provider selection -----------------------------------------------------
+# --- the setting: the safe choice is the default ----------------------------
+#
+# ``tests/__init__.py`` pins ``GEOCODER=fake`` for the suite, so a test about
+# what an *unconfigured* process does has to remove it first — otherwise it
+# would be reading the suite's own pin back rather than the field default.
 
 
-def test_provider_returns_google_geocoder_when_key_is_set() -> None:
-    settings = Settings(google_geocoding_api_key="a-real-looking-key")
-    geocoder = get_geocoder(settings=settings)
-    assert isinstance(geocoder, GoogleGeocoder)
+def test_geocoder_setting_defaults_to_google(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Silence selects the real provider, never the double."""
+    monkeypatch.delenv("GEOCODER", raising=False)
+    assert Settings(google_geocoding_api_key=A_KEY).geocoder is GeocoderChoice.GOOGLE
 
 
-def test_provider_returns_fake_geocoder_when_no_key() -> None:
-    settings = Settings(google_geocoding_api_key=None)
-    geocoder = get_geocoder(settings=settings)
-    assert isinstance(geocoder, FakeGeocoder)
+def test_settings_refuses_to_construct_google_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A keyless ``google`` raises at construction rather than falling back.
+
+    This is the whole defect: it used to boot happily and silently start
+    hashing addresses into pseudo-random coordinates.
+    """
+    monkeypatch.delenv("GEOCODER", raising=False)
+    monkeypatch.delenv("GOOGLE_GEOCODING_API_KEY", raising=False)
+    with pytest.raises(ValidationError, match="GOOGLE_GEOCODING_API_KEY"):
+        Settings()
 
 
-def test_provider_treats_empty_string_key_as_unconfigured() -> None:
-    settings = Settings(google_geocoding_api_key="")
-    geocoder = get_geocoder(settings=settings)
-    assert isinstance(geocoder, FakeGeocoder)
+def test_settings_treats_an_empty_key_as_no_key_under_google() -> None:
+    with pytest.raises(ValidationError, match="GOOGLE_GEOCODING_API_KEY"):
+        Settings(geocoder=GeocoderChoice.GOOGLE, google_geocoding_api_key="")
+
+
+def test_settings_accepts_fake_without_a_key() -> None:
+    settings = Settings(geocoder=GeocoderChoice.FAKE, google_geocoding_api_key=None)
+    assert settings.geocoder is GeocoderChoice.FAKE
+
+
+def test_geocoder_setting_is_a_closed_enum(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo'd or unrecognised value is a config error, not a silent fallback."""
+    monkeypatch.setenv("GEOCODER", "mapbox")
+    monkeypatch.setenv("GOOGLE_GEOCODING_API_KEY", A_KEY)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+# --- provider selection reads the setting, not the key ----------------------
+
+
+def test_provider_returns_google_geocoder_when_the_setting_says_google() -> None:
+    settings = Settings(geocoder=GeocoderChoice.GOOGLE, google_geocoding_api_key=A_KEY)
+    assert isinstance(get_geocoder(settings=settings), GoogleGeocoder)
+
+
+def test_provider_returns_fake_geocoder_when_the_setting_says_fake() -> None:
+    settings = Settings(geocoder=GeocoderChoice.FAKE)
+    assert isinstance(get_geocoder(settings=settings), FakeGeocoder)
+
+
+def test_provider_honours_fake_even_when_a_key_is_present() -> None:
+    """The setting decides, not the key's presence — the old inference is gone."""
+    settings = Settings(geocoder=GeocoderChoice.FAKE, google_geocoding_api_key=A_KEY)
+    assert isinstance(get_geocoder(settings=settings), FakeGeocoder)
 
 
 # --- FakeGeocoder: determinism ----------------------------------------------

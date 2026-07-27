@@ -1,15 +1,15 @@
-"""create schedule solves table and pin columns on fixtures
+"""create schedule solves table
 
 Revision ID: 0013
 Revises: 0012
 Create Date: 2026-07-16 00:00:00.000000
 
-The solve ledger and the pin facts (ADR "the schedule is solved, the call is
-pinned"): every solver run is a row in ``schedule_solves`` — the admin page
-reads the ledger verbatim — and a *called* fixture carries ``pinned_at`` (the
-promise) plus ``call_notified_count`` (how many times the players were told).
-Per the pre-deploy convention in api/CLAUDE.md, edits to this migration happen
-in place. No backfill — assumes a fresh / empty DB.
+The solve ledger (ADR "the schedule is solved, the call is pinned"): every
+solver run is a row in ``schedule_solves`` and the admin page reads the ledger
+verbatim. The matching pin facts on the fixture itself (``pinned_at``,
+``call_notified_count``) live in 0012, which creates that table. Per the
+pre-deploy convention in api/CLAUDE.md, edits to this migration happen in
+place. No backfill — assumes a fresh / empty DB.
 """
 from typing import Sequence, Union
 
@@ -121,6 +121,27 @@ def upgrade() -> None:
         # here, parsed into Pydantic at a later boundary. NULL on every other
         # status.
         sa.Column("infeasibility_reasons", postgresql.JSONB(), nullable=True),
+        # The coalesced enqueue's second arm: a trigger that lands while a solve
+        # is *running* cannot be absorbed by the queued row (there isn't one) and
+        # must not enqueue a second job (one solve in flight per tournament) — so
+        # it sets this flag on the running row, and the job clears it at finish
+        # and immediately re-queues (trigger ``rerun``). No trigger is ever lost
+        # to timing.
+        sa.Column(
+            "rerun_requested",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+        # A solve's *resolved* in-progress-vs-in-progress placement conflicts
+        # (ADR "overlapping in-progress matches are tolerated and reported").
+        # Parallel to ``infeasibility_reasons`` but orthogonal to the verdict:
+        # two matches recorded on one table (or one human in two) are
+        # contradictory data the solver tolerates rather than letting them blank
+        # the board (#1144), and a fully-placed ``optimal``/``feasible`` solve can
+        # still carry them. Written on any verdict where the solver ran (``[]``
+        # when there were none), NULL only before a solve reaches its apply.
+        sa.Column("placement_conflicts", postgresql.JSONB(), nullable=True),
     )
     # The admin page's one read: "this tournament's solves, newest first".
     op.create_index(
@@ -129,32 +150,9 @@ def upgrade() -> None:
         ["tournament_id", sa.text("requested_at DESC")],
     )
 
-    # The pin facts on the fixture itself. ``pinned_at`` is a ``timestamptz``
-    # instant (TIMESTAMP WITH TIME ZONE) — the call's ``now`` — like the
-    # ``scheduled_start`` beside it. The 2026-07-19 ADR "tournament times are
-    # timezone-aware instants" supersedes ADR-0790's naive exemption and moves
-    # both onto timezone-aware instants. NULL = unpinned.
-    op.add_column(
-        "tournament_fixtures",
-        sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    # How many times the players were told about this fixture's placement —
-    # the initial call plus every moved/cancelled correction. 0 = never.
-    op.add_column(
-        "tournament_fixtures",
-        sa.Column(
-            "call_notified_count",
-            sa.Integer(),
-            nullable=False,
-            server_default=sa.text("0"),
-        ),
-    )
 
 
 def downgrade() -> None:
-    op.drop_column("tournament_fixtures", "call_notified_count")
-    op.drop_column("tournament_fixtures", "pinned_at")
-
     op.drop_index(
         "ix_schedule_solves_tournament_id_requested_at", table_name="schedule_solves"
     )

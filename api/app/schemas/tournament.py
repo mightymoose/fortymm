@@ -144,6 +144,26 @@ too — which is a feature. A rule the client can express is a rule the organize
 under the field instead of in a 422."""
 
 
+MAX_ADDRESS_COMPONENT = 255
+
+AddressComponent = Annotated[str, Field(max_length=MAX_ADDRESS_COMPONENT)]
+"""One free-text component of a venue address **as submitted** — bounded at 255.
+
+The bound is stated once, here, and shared by all six components of
+:class:`AddressInput`, for the same reason ``EventMaxPlayers`` is shared by the create
+and the patch schemas: a value that cannot be created must not be reachable by editing.
+255 is the conventional ceiling for a postal-address line; nothing shorter fits a real
+venue name, and nothing longer is an address rather than an essay.
+
+**This alias is deliberately absent from :class:`Address`, the stored/read shape**, and
+that asymmetry is the whole point. A write boundary tightens: it may refuse input the
+system has never accepted. A *read* boundary must stay permissive about history — rows
+predating a bound still exist, and a ``max_length`` on the read model would turn each
+one into a ``ValidationError`` at serialize time. One over-long row would then take out
+every list and dashboard that reads it, converting a cosmetic data-quality issue into an
+outage. So the bound goes on the way in only."""
+
+
 class AddressInput(BaseModel):
     """The venue address a client **sends** on a write (create/edit).
 
@@ -153,18 +173,26 @@ class AddressInput(BaseModel):
     that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
     rather than an unverified number the server would have to trust or re-check.
 
+    Each component is bounded at :data:`MAX_ADDRESS_COMPONENT` characters
+    (:data:`AddressComponent`); the stored :class:`Address` is deliberately unbounded,
+    for the reason given there.
+
     The write verbs geocode this input and construct the stored :class:`Address`
     (with coordinates) before persisting; this is the shape on the *request*
-    schemas, and :class:`Address` is the shape on the *read* schemas."""
+    schemas, and :class:`Address` is the shape on the *read* schemas.
+
+    An instance of this model whose six components are **all blank** is not a venue —
+    the write schemas normalize it to ``None`` at the boundary
+    (:data:`SubmittedAddress`), so it never reaches the geocoder or the column."""
 
     model_config = ConfigDict(extra="forbid")
 
-    venue: str
-    street: str
-    city: str
-    region: str
-    postal: str
-    country: str
+    venue: AddressComponent
+    street: AddressComponent
+    city: AddressComponent
+    region: AddressComponent
+    postal: AddressComponent
+    country: AddressComponent
 
 
 class Address(BaseModel):
@@ -180,7 +208,18 @@ class Address(BaseModel):
 
     This is the shape on the *read* schemas (:class:`TournamentRead` and the
     detail/dashboard reads); the write schemas take :class:`AddressInput`, which
-    has no coordinates."""
+    has no coordinates.
+
+    The six components here are plain ``str`` — **unbounded on purpose**, unlike the
+    255-character :data:`AddressComponent` the write shape uses. This model's job is to
+    make stored history readable, not to re-litigate it: a length bound here would make
+    a single over-long row unserializable and take down every page that reads it. See
+    :data:`AddressComponent`.
+
+    A tournament may have **no** address at all (``Address | None`` on the reads) — an
+    announced-but-unbooked or deliberately-withheld venue is a first-class state
+    (CONTEXT.md, "Venue"). What this model rules out is the *half*-populated address:
+    when there is a venue, its coordinates are known."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -192,6 +231,53 @@ class Address(BaseModel):
     country: str
     latitude: float
     longitude: float
+
+
+def _blank_address_is_no_venue(value: AddressInput | None) -> AddressInput | None:
+    """Normalize an all-blank submitted address to ``None`` — "this tournament has no
+    venue" — before anything downstream sees it.
+
+    A tournament with no venue is a real state (CONTEXT.md, "Venue"), and SQL ``NULL``
+    is its **one** representation. Six empty strings would be a second one: a stored
+    object that is an address in shape and nothing in content, which every reader would
+    have to test for. So it is collapsed here, at the boundary, rather than defended
+    against downstream (parse-at-boundaries).
+
+    Without this, "no venue" would be unreachable from the web form, which submits six
+    controlled text inputs and has no gesture meaning "omit the ``address`` key" — the
+    browser organizer who has not booked a venue yet would be refused. And it must run
+    **before** the geocoder: a blank address resolves to zero candidates, which is a
+    coded 409 ("we couldn't locate that address"), so an organizer leaving the venue
+    empty would otherwise be told their nonexistent venue could not be found.
+
+    Whitespace counts as blank — a stray space typed into one of six boxes is not a
+    venue, and treating it as one would make the difference between "no venue" and "a
+    venue named ``' '``" depend on an invisible character.
+    """
+    if value is None:
+        return None
+    components = (
+        value.venue,
+        value.street,
+        value.city,
+        value.region,
+        value.postal,
+        value.country,
+    )
+    if not any(component.strip() for component in components):
+        return None
+    return value
+
+
+SubmittedAddress = Annotated[
+    AddressInput | None, AfterValidator(_blank_address_is_no_venue)
+]
+"""The venue address on a **write** payload: an :class:`AddressInput`, or ``None`` for
+"no venue" — with an all-blank input normalized to ``None``
+(:func:`_blank_address_is_no_venue`).
+
+Shared by :class:`TournamentCreate` and :class:`TournamentUpdate` so the two verbs
+cannot disagree about what an empty venue box means."""
 
 
 class GeocodePreview(BaseModel):
@@ -1060,7 +1146,12 @@ class TournamentRead(BaseModel):
     status: TournamentStatus
     start_date: date | None
     end_date: date | None
-    address: Address
+    # ``null`` means **this tournament has no venue** — a first-class state, not
+    # missing data (CONTEXT.md, "Venue"; the ADR's 2026-07-26 amendment). It covers
+    # both the not-booked-yet and the deliberately-withheld cases, which nothing
+    # downstream needs to tell apart: such a tournament simply never matches a
+    # proximity search. When an address IS present its coordinates are always known.
+    address: Address | None
     table_catalogue: list[TournamentTable]
     # The league whose rating ladder this tournament's eligibility rules are judged
     # on (ADR-0783). Never null: a tournament created without one is run on the
@@ -1139,19 +1230,31 @@ class TournamentCreate(BaseModel):
     # The write shape: six free-text components, no coordinates. The verb geocodes
     # it into a stored ``Address`` (with coordinates) before persisting (ADR "a
     # venue's coordinates are geocoded server-side ... and are NOT NULL").
-    address: AddressInput
+    #
+    # **Optional**: omitted — or sent all-blank, which ``SubmittedAddress`` normalizes
+    # to ``None`` — creates a tournament with no venue. Organizers announce before the
+    # venue is booked, and a private tournament may withhold its address deliberately;
+    # requiring one here made both impossible through every write path (#1206).
+    address: SubmittedAddress = None
     table_catalogue: list[TournamentTable] = Field(default_factory=list)
     league_id: uuid.UUID | None = None
 
 
 class TournamentUpdate(BaseModel):
     """Partial update. A field that is *absent* is left unchanged; an explicit
-    value replaces the current one. The columns backing ``name``, ``address``,
-    and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+    value replaces the current one. The columns backing ``name`` and
+    ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
     are different. ``description``/``start_date``/``end_date`` are nullable
     columns and may be cleared. ``table_catalogue`` replaces wholesale when
     present.
+
+    ``address`` is nullable too, as of #1206: **omitted means unchanged; ``null`` — or
+    an all-blank object, which :data:`SubmittedAddress` normalizes to ``null`` — means
+    remove the venue.** It used to be in the rejected-``null`` set on the stated grounds
+    that it "maps to a NOT NULL column"; that is simply no longer true of
+    ``tournaments.address``, and keeping the rejection would have enforced a constraint
+    the database does not have — leaving an organizer no way to un-book a venue.
 
     ``status`` is **not** updatable and is absent here on purpose: the lifecycle
     runs forward only across guarded edges, so the one way it moves is
@@ -1173,18 +1276,25 @@ class TournamentUpdate(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     # The write shape: six free-text components, no coordinates (see
-    # ``TournamentCreate.address``). An explicit ``null`` is rejected below; an
-    # omitted key leaves the stored address (and its coordinates) unchanged.
-    address: AddressInput | None = None
+    # ``TournamentCreate.address``). An omitted key leaves the stored address (and its
+    # coordinates) unchanged; an explicit ``null`` (or an all-blank object) removes the
+    # venue. Note that this makes ``address is None`` ambiguous between "absent" and
+    # "remove" — the disambiguator is ``"address" in updates.model_fields_set``, never
+    # the value.
+    address: SubmittedAddress = None
     table_catalogue: list[TournamentTable] | None = None
     league_id: uuid.UUID | None = None
 
-    @field_validator("name", "address", "table_catalogue", "league_id", mode="before")
+    @field_validator("name", "table_catalogue", "league_id", mode="before")
     @classmethod
     def _reject_explicit_null(cls, value: Any) -> Any:
         # These map to NOT NULL columns. ``mode="before"`` runs even when the
         # client sends an explicit ``null``; omitting the key entirely skips
         # the validator and keeps the default (the "absent" case).
+        #
+        # ``address`` is deliberately NOT in this list: its column is nullable
+        # (#1206), so ``null`` there is a legitimate "remove the venue", not a
+        # constraint violation dressed up as a 422.
         if value is None:
             raise ValueError("must not be null")
         return value

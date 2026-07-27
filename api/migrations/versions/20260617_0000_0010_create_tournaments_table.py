@@ -182,7 +182,22 @@ def upgrade() -> None:
         ),
         sa.Column("start_date", sa.Date(), nullable=True),
         sa.Column("end_date", sa.Date(), nullable=True),
-        sa.Column("address", postgresql.JSONB(), nullable=False),
+        # Nullable: a tournament may have no venue at all, at every status
+        # (announced before the venue is booked; a private tournament whose
+        # address is deliberately withheld). Per the 2026-07-26 amendment to
+        # ADR ``20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null``
+        # the invariant is "an address, *when present*, has NOT NULL
+        # coordinates" — so SQL NULL is the single representation of "no venue"
+        # and a stored address is always fully geocoded. Nullability relaxed
+        # here in place per the pre-deploy convention, not as a chained ALTER.
+        #
+        # ``jsonb NULL`` is the whole of the DDL side; there is no ``none_as_null``
+        # to express here. That flag (see ``Tournament.address``) is a SQLAlchemy
+        # *bind* processor — it decides whether Python ``None`` is sent as SQL NULL
+        # or as the JSON ``null`` literal, which this column would accept either
+        # way. The single-representation invariant is therefore enforced by the
+        # model, not by this schema.
+        sa.Column("address", postgresql.JSONB(), nullable=True),
         sa.Column(
             "table_catalogue",
             postgresql.JSONB(),

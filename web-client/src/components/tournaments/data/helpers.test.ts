@@ -1,15 +1,18 @@
 import { afterEach, vi } from 'vitest'
 
 import {
+  blankAddress,
   browserTimezone,
   conjoinWithAnd,
   daysBetween,
   effectiveDateRange,
   emptyEvent,
+  emptyTournament,
   fmtDateRange,
   fmtTimeWindow,
   fmtVenueLine,
   formatPredicate,
+  hasVenue,
   predicateSentence,
   findPoolConflicts,
   isUnrated,
@@ -166,6 +169,57 @@ describe('fmtVenueLine', () => {
       fmtVenueLine(buildAddress({ venue: '  ', city: '\t', region: ' \n ' })),
     ).toBe('')
     expect(fmtVenueLine(buildAddress({ venue: ' ' }))).toBe('Berkeley, CA')
+  })
+
+  // A tournament may have NO VENUE at all (CONTEXT.md, "Venue") — announced before
+  // the room is booked, or a home game withholding its address. That is a `null`
+  // address, and it reaches this same function rather than a second mechanism: the
+  // answer is `''`, the caller's existing cue to render no row.
+  //
+  // The negative assertions are the requirement, not decoration. "Venue TBD"
+  // promises a venue is coming, which is false for the withheld case; an em-dash
+  // labels a row that exists, and this row must not (#1206).
+  it('is empty for a tournament with NO VENUE — never a "TBD" placeholder', () => {
+    expect(fmtVenueLine(null)).toBe('')
+    expect(fmtVenueLine(undefined)).toBe('')
+    expect(fmtVenueLine(null)).not.toContain('TBD')
+    expect(fmtVenueLine(null)).not.toContain('—')
+  })
+})
+
+// The client's copy of the server's `SubmittedAddress` rule: six blank boxes are
+// not a venue. A write surface asks this BEFORE deciding whether to send an address
+// or `null`, which is what stops a form inventing a venue out of a default country
+// the organizer never typed.
+describe('hasVenue', () => {
+  it('is false for no address at all, and for an all-blank one', () => {
+    expect(hasVenue(null)).toBe(false)
+    expect(hasVenue(undefined)).toBe(false)
+    expect(hasVenue(blankAddress())).toBe(false)
+  })
+
+  it('is false when every component is only whitespace', () => {
+    expect(hasVenue(blankAddress({ venue: '  ', city: '\t', country: '\n' }))).toBe(
+      false,
+    )
+  })
+
+  it('is true when ANY component holds something — including one nobody sees', () => {
+    expect(hasVenue(blankAddress({ venue: 'Berkeley TT Club' }))).toBe(true)
+    // The trap this guards: `country` alone is still an address, and the server
+    // would geocode it. A form must therefore not default it in unconditionally.
+    expect(hasVenue(blankAddress({ country: 'USA' }))).toBe(true)
+    expect(hasVenue(blankAddress({ postal: '94703' }))).toBe(true)
+  })
+})
+
+describe('emptyTournament', () => {
+  // NOT six empty strings, and emphatically not a default country: a blank draft
+  // has no venue, and the create body must say so (`address: null`). With an
+  // all-blank `Address` here, every tournament created from the modal would carry
+  // an address the organizer never typed.
+  it('starts with NO VENUE at all', () => {
+    expect(emptyTournament().address).toBeNull()
   })
 })
 

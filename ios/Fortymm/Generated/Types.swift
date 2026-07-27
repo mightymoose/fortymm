@@ -2530,6 +2530,17 @@ internal enum Components {
         /// detail/dashboard reads); the write schemas take :class:`AddressInput`, which
         /// has no coordinates.
         ///
+        /// The six components here are plain ``str`` — **unbounded on purpose**, unlike the
+        /// 255-character :data:`AddressComponent` the write shape uses. This model's job is to
+        /// make stored history readable, not to re-litigate it: a length bound here would make
+        /// a single over-long row unserializable and take down every page that reads it. See
+        /// :data:`AddressComponent`.
+        ///
+        /// A tournament may have **no** address at all (``Address | None`` on the reads) — an
+        /// announced-but-unbooked or deliberately-withheld venue is a first-class state
+        /// (CONTEXT.md, "Venue"). What this model rules out is the *half*-populated address:
+        /// when there is a venue, its coordinates are known.
+        ///
         /// - Remark: Generated from `#/components/schemas/Address`.
         internal struct Address: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Address/venue`.
@@ -2642,9 +2653,17 @@ internal enum Components {
         /// that tries to send ``latitude``/``longitude`` gets a 422 — ``extra="forbid"`` —
         /// rather than an unverified number the server would have to trust or re-check.
         ///
+        /// Each component is bounded at :data:`MAX_ADDRESS_COMPONENT` characters
+        /// (:data:`AddressComponent`); the stored :class:`Address` is deliberately unbounded,
+        /// for the reason given there.
+        ///
         /// The write verbs geocode this input and construct the stored :class:`Address`
         /// (with coordinates) before persisting; this is the shape on the *request*
         /// schemas, and :class:`Address` is the shape on the *read* schemas.
+        ///
+        /// An instance of this model whose six components are **all blank** is not a venue —
+        /// the write schemas normalize it to ``None`` at the boundary
+        /// (:data:`SubmittedAddress`), so it never reaches the geocoder or the column.
         ///
         /// - Remark: Generated from `#/components/schemas/AddressInput`.
         internal struct AddressInput: Codable, Hashable, Sendable {
@@ -9605,7 +9624,25 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/end_date`.
             internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/address`.
-            internal var address: Components.Schemas.AddressInput
+            internal struct AddressPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentCreate/address/value1`.
+                internal var value1: Components.Schemas.AddressInput
+                /// Creates a new `AddressPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.AddressInput) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentCreate/address`.
+            internal var address: Components.Schemas.TournamentCreate.AddressPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/league_id`.
@@ -9625,7 +9662,7 @@ internal enum Components {
                 description: Swift.String? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
-                address: Components.Schemas.AddressInput,
+                address: Components.Schemas.TournamentCreate.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable]? = nil,
                 leagueId: Swift.String? = nil
             ) {
@@ -9664,8 +9701,8 @@ internal enum Components {
                     Swift.String.self,
                     forKey: .endDate
                 )
-                self.address = try container.decode(
-                    Components.Schemas.AddressInput.self,
+                self.address = try container.decodeIfPresent(
+                    Components.Schemas.TournamentCreate.AddressPayload.self,
                     forKey: .address
                 )
                 self.tableCatalogue = try container.decodeIfPresent(
@@ -9702,7 +9739,25 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/end_date`.
             internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address`.
-            internal var address: Components.Schemas.Address
+            internal struct AddressPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address/value1`.
+                internal var value1: Components.Schemas.Address
+                /// Creates a new `AddressPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.Address) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address`.
+            internal var address: Components.Schemas.TournamentDetailRead.AddressPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/league_id`.
@@ -9771,7 +9826,7 @@ internal enum Components {
                 status: Components.Schemas.TournamentStatus,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
-                address: Components.Schemas.Address,
+                address: Components.Schemas.TournamentDetailRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
                 createdByUserId: Swift.String,
@@ -10798,7 +10853,25 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentRead/end_date`.
             internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentRead/address`.
-            internal var address: Components.Schemas.Address
+            internal struct AddressPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentRead/address/value1`.
+                internal var value1: Components.Schemas.Address
+                /// Creates a new `AddressPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.Address) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/address`.
+            internal var address: Components.Schemas.TournamentRead.AddressPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentRead/table_catalogue`.
             internal var tableCatalogue: [Components.Schemas.TournamentTable]
             /// - Remark: Generated from `#/components/schemas/TournamentRead/league_id`.
@@ -10837,7 +10910,7 @@ internal enum Components {
                 status: Components.Schemas.TournamentStatus,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
-                address: Components.Schemas.Address,
+                address: Components.Schemas.TournamentRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
                 createdByUserId: Swift.String,
@@ -10976,12 +11049,19 @@ internal enum Components {
             }
         }
         /// Partial update. A field that is *absent* is left unchanged; an explicit
-        /// value replaces the current one. The columns backing ``name``, ``address``,
-        /// and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+        /// value replaces the current one. The columns backing ``name`` and
+        /// ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
         /// rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
         /// are different. ``description``/``start_date``/``end_date`` are nullable
         /// columns and may be cleared. ``table_catalogue`` replaces wholesale when
         /// present.
+        ///
+        /// ``address`` is nullable too, as of #1206: **omitted means unchanged; ``null`` — or
+        /// an all-blank object, which :data:`SubmittedAddress` normalizes to ``null`` — means
+        /// remove the venue.** It used to be in the rejected-``null`` set on the stated grounds
+        /// that it "maps to a NOT NULL column"; that is simply no longer true of
+        /// ``tournaments.address``, and keeping the rejection would have enforced a constraint
+        /// the database does not have — leaving an organizer no way to un-book a venue.
         ///
         /// ``status`` is **not** updatable and is absent here on purpose: the lifecycle
         /// runs forward only across guarded edges, so the one way it moves is

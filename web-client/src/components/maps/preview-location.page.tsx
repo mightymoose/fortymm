@@ -21,6 +21,15 @@ const scoped = (container: Container) => ({
   findError() {
     return container.findByTestId('preview-location-error')
   },
+  /** The neutral "add a venue address" hint — present only when every venue
+   * field is blank; else null. Distinct from `queryError`, which is the
+   * destructive "we couldn't locate that address" alert. */
+  queryHint() {
+    return container.queryByTestId('preview-location-hint')
+  },
+  findHint() {
+    return container.findByTestId('preview-location-hint')
+  },
 })
 
 /**

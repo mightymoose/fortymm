@@ -4,6 +4,7 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
+import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -11,10 +12,11 @@ from dataclasses import dataclass
 import pytest
 from httpx import ASGITransport, AsyncClient, Request
 from rq import Queue
-from sqlalchemy import event, select
+from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
+from app.geocoding import FakeGeocoder, GeocodeResult
 from app.main import app as fastapi_app
 from app.models import (
     League,
@@ -117,6 +119,95 @@ async def make_user(db_session: AsyncSession, username: str) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def assert_tournament_address_is_sql_null(
+    db_session: AsyncSession, tournament_id: uuid.UUID
+) -> None:
+    """Assert **at the SQL level** that a tournament's ``address`` is a true SQL NULL,
+    and specifically not the JSONB ``null`` literal.
+
+    ``row.address is None`` cannot make this distinction and must not be trusted for it.
+    A JSONB column deserializes *both* encodings into Python ``None``, so an ORM-level
+    identity check is green either way — which is exactly how ``tournaments.address``
+    came to store the ``'null'`` literal on every app-written no-venue row while the
+    comments around it, and a docstring claiming the value "must reach the column as SQL
+    NULL", all said otherwise. The cost of that divergence is that
+    ``Tournament.address.is_(None)`` matched **zero** of them, silently. Postgres is the
+    only witness that can tell them apart:
+
+    ==================  =============  ===========================
+    stored value        ``IS NULL``    ``jsonb_typeof(address)``
+    ==================  =============  ===========================
+    SQL NULL            ``True``       SQL NULL → Python ``None``
+    JSONB ``'null'``    ``False``      ``'null'``
+    ==================  =============  ===========================
+
+    Both are asserted together so a failure names *which* encoding was found rather than
+    merely "not null".
+    """
+    sql_null, json_type = (
+        await db_session.execute(
+            text(
+                "SELECT address IS NULL, jsonb_typeof(address) "
+                "FROM tournaments WHERE id = :id"
+            ),
+            {"id": tournament_id},
+        )
+    ).one()
+    assert (sql_null, json_type) == (True, None), (
+        f"tournaments.address is not a SQL NULL: IS NULL={sql_null}, "
+        f"jsonb_typeof={json_type!r} — jsonb_typeof='null' means the column holds the "
+        "JSON null *literal*, i.e. Tournament.address has lost none_as_null=True and "
+        "'no venue' again has two stored representations (#1206)"
+    )
+
+
+class CountingGeocoder:
+    """A ``Geocoder`` that records how many times it was asked to geocode, delegating to
+    the deterministic ``FakeGeocoder`` so results stay stable.
+
+    Structurally satisfies the ``Geocoder`` protocol, so it is injected exactly where
+    the real geocoder would be. Shared by the create- and edit-verb tests because that
+    protocol is *structural*: a second copy of this double could go on satisfying an
+    older shape of ``Geocoder.geocode`` with nothing to point at it.
+
+    The call count is what lets a test assert something no status code can — that a
+    write geocoded, or did not. Each caller's reason for caring is a comment on the
+    tests that use it.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = FakeGeocoder()
+
+    async def geocode(self, address: str) -> GeocodeResult:
+        self.calls += 1
+        return await self._inner.geocode(address)
+
+
+#: The six free-text components of the venue value-object, named once so an all-blank
+#: address is built from the shape rather than by hand — and so a seventh component
+#: cannot be added without every all-blank test blanking it too.
+ADDRESS_COMPONENTS = ("venue", "street", "city", "region", "postal", "country")
+
+#: Parametrizes ``blank`` over the two all-blank address gestures a web form can make:
+#: six empty strings, and six whitespace-only strings (a stray space in one of six boxes
+#: is not a venue). Shared by the schema boundary tests and both write verbs' tests, so
+#: "all blank means no venue" is pinned from the same one definition of "all blank".
+#:
+#: ``strict=True`` on the zip is deliberate: add a seventh component to
+#: ``ADDRESS_COMPONENTS`` and this raises at collection rather than quietly leaving the
+#: new component un-blanked — the failure mode the ids "six-empty-strings" would
+#: otherwise keep cheerfully claiming was covered.
+blank_addresses = pytest.mark.parametrize(
+    "blank",
+    [
+        dict.fromkeys(ADDRESS_COMPONENTS, ""),
+        dict(zip(ADDRESS_COMPONENTS, (" ", "\t", "\n", "  ", " ", " "), strict=True)),
+    ],
+    ids=["six-empty-strings", "whitespace-only"],
+)
 
 
 async def grant_permissions(

@@ -102,10 +102,16 @@ export const TournamentDetailPage = ({
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
-  // Empty when venue, city, and region are all blank — and then the meta item
-  // is not rendered at all, pin included. Punctuation with nothing to punctuate
-  // ("· ,") is a rendering bug, not a placeholder (#994).
-  const venue = fmtVenueLine(tournament.address)
+  // `null` when the tournament has NO VENUE at all — a first-class state
+  // (CONTEXT.md, "Venue"), and the reason the map below is gated on the address
+  // itself and not only on the line: there are no coordinates to pin.
+  const address = tournament.address
+  // Empty for a null address, and empty when venue, city, and region are all blank
+  // — and then the meta item is not rendered at all, pin included. Punctuation with
+  // nothing to punctuate ("· ,") is a rendering bug, not a placeholder (#994); and
+  // "Venue TBD" would be worse than either, since no venue is not a promise of one
+  // (#1206).
+  const venue = fmtVenueLine(address)
 
   const openEvent = (ev: TournamentEvent) => {
     setEditorEvent(ev)
@@ -167,19 +173,50 @@ export const TournamentDetailPage = ({
           </MetaItem>
           {venue && (
             <MetaItem icon={<MapPin size={14} />} testId="tournament-venue-line">
-              <span className="truncate text-[color:var(--fg-1)]">{venue}</span>
+              {/* WRAPS — it does not truncate, and it must not clamp (#1199).
+                  A venue name is one free-text component the *read* shape leaves
+                  unbounded on purpose (`api/app/schemas/tournament.py`: the bound
+                  goes on the way in only, so historical rows still serialize), so
+                  the page has to survive one that is already 680 characters long.
+                  Hiding it is the wrong answer twice over — the organizer's own
+                  venue is what the reader came for, and an ellipsis would not have
+                  stopped the overflow anyway.
+
+                  `wrap-anywhere` (overflow-wrap: anywhere), not `break-words`:
+                  this span is a FLEX ITEM, and only `anywhere` shrinks the item's
+                  **min-content contribution** down to one character.
+                  `overflow-wrap: break-word` leaves min-content at the width of
+                  the whole unbroken word — the item then refuses to shrink, paints
+                  straight out of the header and takes the document with it.
+                  Measured against the 680-character fixture: the span lays out
+                  5236px wide and `html` reports a 3146px scroll width inside a
+                  1280px viewport. `min-w-0` says
+                  the same thing through the other mechanism (flex items default to
+                  `min-width: auto`); both, because the two are cheap and the failure
+                  is invisible in jsdom, which performs no layout. */}
+              {/* Its own test id, separate from the meta item's: the overflow
+                  assertions have to measure the TEXT box, not the row that
+                  contains an icon as well. */}
+              <span
+                data-testid="tournament-venue-text"
+                className="min-w-0 wrap-anywhere text-[color:var(--fg-1)]"
+              >
+                {venue}
+              </span>
             </MetaItem>
           )}
         </div>
 
         {/* Display-only venue map at the tournament's server-geocoded coordinates
-            (read `Address` carries non-null lat/lng). Gated on the same `venue`
-            presence as the meta line so an address-less tournament shows nothing;
-            keyless (dev/CI/e2e) it degrades to a text fallback of the venue line. */}
-        {venue && (
+            (a stored `Address` carries non-null lat/lng). Gated on the ADDRESS as
+            well as on the venue line: a tournament with no venue has no coordinates
+            to pin, and a map at (0, 0) would put a private home game in the Gulf of
+            Guinea. Keyless (dev/CI/e2e) it degrades to a text fallback of the venue
+            line. */}
+        {address && venue && (
           <LocationMap
-            latitude={tournament.address.latitude}
-            longitude={tournament.address.longitude}
+            latitude={address.latitude}
+            longitude={address.longitude}
             label={venue}
             className="mb-5 h-44 max-w-md"
           />

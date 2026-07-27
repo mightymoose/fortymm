@@ -58,6 +58,29 @@ config:
   # reflect the public origin, not the internal mount):
   MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
   MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
+  # --- Venue geocoding ---
+  # UAT is on the FAKE geocoder ON PURPOSE, because it has no Google Geocoding
+  # key yet (issue #1205). This is a decision, not an oversight: the provider
+  # used to be inferred from key presence, which failed silently open — UAT was
+  # meant to geocode for real, the key was never added, and it spent that time
+  # storing hash-derived coordinates as though they were real (a Chicago
+  # address resolved to Antarctica). Saying `fake` out loud makes the state
+  # visible and makes UAT's existing coordinates honest: they are what a fake
+  # geocoder produces in an environment that says it uses one. See
+  # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
+  #
+  # WHEN UAT GETS A REAL KEY (#1205): flip this to `google`, put the key in
+  # .env, drop `optional: true` from the GOOGLE_GEOCODING_API_KEY secretKeyRef
+  # in templates/api.yaml, and re-geocode the rows written while this said
+  # `fake`.
+  #
+  # This value is only authoritative because .env carries no `GEOCODER` line —
+  # redeploy-uat.sh syncs .env into the fortymm-uat-env Secret, and appEnvFrom
+  # applies that Secret *after* the api-config ConfigMap, so anything set there
+  # silently outranks this. That is why .env.example deliberately does not define
+  # it and says so. If a `GEOCODER=` line ever reappears in an operator's .env,
+  # this line stops meaning anything — with no error.
+  GEOCODER: fake
 
 postgres:
   user: postgres
@@ -69,8 +92,9 @@ postgres:
 
 # Pre-created out-of-band by scripts/redeploy-uat.sh from .env and secrets/.
 # The api Deployment pulls GOOGLE_GEOCODING_API_KEY from `env` (below) as an
-# optional key — supply it via .env for UAT/prod (real Google geocoding), or
-# leave it out and the API falls back to the keyless FakeGeocoder. No real key
+# optional key. It is only needed when config.GEOCODER is `google`; UAT is
+# deliberately on `fake` today (see the comment on that value), so the key is
+# absent and `optional: true` is what lets the pod boot without it. No real key
 # is ever committed here; the operator provides it out of band in .env.
 secrets:
   env: fortymm-uat-env

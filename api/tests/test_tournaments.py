@@ -82,6 +82,7 @@ from app.tournaments import (
 )
 from tests._helpers import (
     accept_standing_result,
+    assert_tournament_address_is_sql_null,
     counted_statements,
     grant_permissions,
     make_client,
@@ -129,9 +130,9 @@ async def _geocoded_address(address: dict[str, str]) -> dict[str, object]:
     fields the client sent plus the coordinates the server geocoded on write (NOT NULL,
     ADR "a venue's coordinates are geocoded server-side ... and are NOT NULL").
 
-    Computed through the very ``FakeGeocoder`` the keyless test env resolves with (
-    ``get_geocoder`` returns it with no ``GOOGLE_GEOCODING_API_KEY``), so the expected
-    coordinates cannot drift from what the write path actually produced."""
+    Computed through the very ``FakeGeocoder`` the test env resolves with (the suite
+    pins ``GEOCODER=fake`` in ``tests/__init__.py``, so ``get_geocoder`` returns it),
+    so the expected coordinates cannot drift from what the write path produced."""
     result = await FakeGeocoder().geocode(compose_address(**address))
     return {**address, "latitude": result.latitude, "longitude": result.longitude}
 
@@ -247,8 +248,8 @@ async def test_geocode_preview_resolves_an_address(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    # Assert against the very ``FakeGeocoder`` the keyless test env resolves with,
-    # so the preview's coordinates cannot drift from the seam's output.
+    # Assert against the very ``FakeGeocoder`` the suite's ``GEOCODER=fake`` resolves
+    # with, so the preview's coordinates cannot drift from the seam's output.
     expected = await FakeGeocoder().geocode(query)
     assert body == {
         "latitude": expected.latitude,
@@ -472,15 +473,132 @@ async def test_patch_with_a_status_is_422_and_leaves_the_status_unchanged(
     assert await _status_of(client, created["id"]) == "draft"
 
 
-async def test_patch_explicit_null_address_returns_422(
+async def test_patch_explicit_null_address_removes_the_venue(
     authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
 ):
+    """``address: null`` is a legitimate patch body — it used to be a 422 — and it
+    **clears the stored venue**.
+
+    ``tournaments.address`` is nullable (#1206): a tournament may have no venue, so an
+    explicit ``null`` is "remove the venue", not a constraint violation. The rejection
+    that lived on ``TournamentUpdate`` was justified as "these map to NOT NULL columns",
+    which stopped being true of this one.
+
+    Asserting the real outcome, not merely ``!= 422``: a "not a 422" assertion stays
+    green on a 500, which is precisely what a nullable column and a NOT NULL-shaped
+    write path would produce. And it re-reads the row rather than trusting the response
+    body, since a 200 that had not actually written NULL would pass a body-only check.
+    """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    assert created["address"] is not None
+
     response = await client.patch(
         f"/v1/tournaments/{created['id']}", json={"address": None}
     )
-    assert response.status_code == 422
+
+    assert response.status_code == 200, response.text
+    assert response.json()["address"] is None
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(created["id"]))
+        )
+    ).scalar_one()
+    assert row.address is None
+
+
+async def test_create_without_an_address_returns_201_with_no_venue(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """Creating a tournament with the ``address`` key absent is a 201 carrying a null
+    venue — the announced-before-the-venue-is-booked case (#1206).
+
+    The wire-level twin of the service test in ``test_tournament_lifecycle.py``: this
+    one pins that the *whole* HTTP path — request schema, verb, response schema — admits
+    a venue-less tournament. Before #1206 the request would have been a 422 at the
+    schema (``address`` was required), and had it got past that, a 409 from the geocoder
+    refusing ``""``.
+    """
+    client, _ = authed_client
+    payload = _create_payload()
+    del payload["address"]
+
+    response = await client.post("/v1/tournaments", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["address"] is None
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(response.json()["id"]))
+        )
+    ).scalar_one()
+    assert row.address is None
+
+
+async def test_create_with_an_all_blank_address_returns_201_with_no_venue(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """The same, through the gesture the web form can actually make: six empty boxes.
+
+    The form has no way to omit the ``address`` key, so this — not the omission above —
+    is the request the browser organizer in #1206 was sending when they got a coded 409
+    telling them the venue they did not have could not be located.
+    """
+    client, _ = authed_client
+    blank = dict.fromkeys(_address(), "")
+
+    response = await client.post("/v1/tournaments", json=_create_payload(address=blank))
+
+    assert response.status_code == 201, response.text
+    assert response.json()["address"] is None
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(response.json()["id"]))
+        )
+    ).scalar_one()
+    assert row.address is None
+
+
+async def test_a_venue_can_be_booked_and_then_un_booked_over_the_wire(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The whole venue life-cycle in one request sequence: create with none, book one,
+    un-book it.
+
+    The three single-step tests above each pin one edge; this pins that they compose,
+    which is the claim the organizer actually cares about. The middle step is the one no
+    other test reaches over HTTP: giving an address to a tournament that has none makes
+    the edit verb's lock-free change-detection read return ``None`` for "no venue"
+    rather than "no such row", and it must still treat the submission as a change and
+    geocode it.
+    """
+    client, _ = authed_client
+    payload = _create_payload()
+    del payload["address"]
+    created = (await client.post("/v1/tournaments", json=payload)).json()
+    assert created["address"] is None
+
+    booked = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"address": _address()}
+    )
+    assert booked.status_code == 200, booked.text
+    # Booked with coordinates, not merely with text — the invariant that survived the
+    # column becoming nullable is "an address, when present, has NOT NULL coordinates".
+    assert booked.json()["address"] == await _geocoded_address(_address())
+
+    un_booked = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"address": None}
+    )
+    assert un_booked.status_code == 200, un_booked.text
+    assert un_booked.json()["address"] is None
+
+    # And the read-back agrees, so none of the three steps merely echoed its request.
+    detail = await client.get(f"/v1/tournaments/{created['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["address"] is None
 
 
 async def test_patch_explicit_null_table_catalogue_returns_422(
@@ -1826,6 +1944,9 @@ async def _seed_located_tournament(
 _SF_LAT, _SF_LNG = 37.7749, -122.4194
 _BERKELEY_LAT, _BERKELEY_LNG = 37.8716, -122.2727
 _LA_LAT, _LA_LNG = 34.0522, -118.2437
+# Where a COALESCE-ed-to-zero coordinate would land a venue-less tournament. Only the
+# no-venue test searches from here, to tell "no coordinates" apart from "0, 0".
+_NULL_ISLAND_LAT, _NULL_ISLAND_LNG = 0.0, 0.0
 
 
 async def test_list_near_me_returns_only_tournaments_within_radius(
@@ -1866,6 +1987,91 @@ async def test_list_near_me_returns_only_tournaments_within_radius(
     assert str(near.id) in rows
     expected = _haversine_miles(_SF_LAT, _SF_LNG, _BERKELEY_LAT, _BERKELEY_LNG)
     assert rows[str(near.id)]["distance_miles"] == pytest.approx(expected, abs=0.1)
+
+
+async def test_a_tournament_with_no_venue_never_matches_a_proximity_search(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """A tournament with no venue is invisible to "near me", at any radius, from any
+    point — and that is the wanted behaviour, not a gap (CONTEXT.md, "Venue"). Nothing
+    implements it: ``_venue_coordinate`` casts a NULL ``address`` to NULL, every
+    bounding-box comparison against NULL is NULL, and the row falls out.
+
+    It has been true since the column became nullable, but only as an unasserted
+    accident of SQL three-valued logic — so it is pinned here.
+
+    **It is searched from two points on purpose.** One search would be passed by the
+    most plausible wrong fix: ``COALESCE``-ing the missing coordinates to ``0`` reads
+    like defensive hygiene, and from San Francisco it is indistinguishable from correct
+    — it merely plants every venue-less tournament on Null Island, 7,000 miles away and
+    out of the radius. So the second search is *at* Null Island, where that fix returns
+    the row and this test reds.
+
+    Every search carries a control that must be found, so an assertion of absence can
+    never be satisfied by a query that returned nothing at all; the unlocated list is a
+    third control, proving the venue-less tournament is visible to this caller in the
+    first place and that its absence downstream is the filter and not permissions.
+    """
+    client, user = authed_client
+    near = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="Berkeley Open",
+        latitude=_BERKELEY_LAT,
+        longitude=_BERKELEY_LNG,
+    )
+    on_null_island = await _seed_located_tournament(
+        db_session,
+        owner=user,
+        league=default_league,
+        name="Null Island Open",
+        latitude=_NULL_ISLAND_LAT + 0.01,
+        longitude=_NULL_ISLAND_LNG + 0.01,
+    )
+    venueless = Tournament(
+        name="Unbooked Open",
+        status=TournamentStatus.published,
+        address=None,
+        table_catalogue=[],
+        league_id=default_league.id,
+        created_by_user_id=user.id,
+    )
+    db_session.add(venueless)
+    await db_session.commit()
+    # SQL NULL, not the JSONB 'null' literal — the distinction the whole behaviour
+    # rests on, since `IS NULL` is false for the literal and the cast would then
+    # produce a NULL float anyway but for a different reason.
+    await assert_tournament_address_is_sql_null(db_session, venueless.id)
+
+    unlocated = await client.get("/v1/tournaments")
+    assert unlocated.status_code == 200, unlocated.text
+    assert str(venueless.id) in {row["id"] for row in unlocated.json()}, (
+        "control: the venue-less tournament is visible when no location is given"
+    )
+
+    async def _search(lat: float, lng: float) -> set[str]:
+        response = await client.get(
+            "/v1/tournaments",
+            params={"lat": lat, "lng": lng, "radius_miles": 50},
+        )
+        assert response.status_code == 200, response.text
+        return {row["id"] for row in response.json()}
+
+    from_sf = await _search(_SF_LAT, _SF_LNG)
+    assert str(near.id) in from_sf, "control: the proximity search itself still matches"
+    assert str(venueless.id) not in from_sf
+
+    from_null_island = await _search(_NULL_ISLAND_LAT, _NULL_ISLAND_LNG)
+    assert str(on_null_island.id) in from_null_island, (
+        "control: a real venue at 0,0 IS found there — so the assertion below is about "
+        "the missing address, not about an empty result"
+    )
+    assert str(venueless.id) not in from_null_island, (
+        "no venue means no coordinates, not the coordinates 0,0"
+    )
 
 
 @pytest.mark.parametrize(
