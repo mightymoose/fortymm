@@ -250,15 +250,20 @@ def build_preview_snapshot(
         # exception is raised: ``strategy_for`` is total (ADR "the enum holds only what
         # runs"), so the refusal is this builder's, about scheduling, not the domain's
         # about planning.
-        match event.draw_type:
+        # Off the event's ``draw_settings`` row — the one home of the draw type
+        # (ADR "an event's draw configuration is a row, not a column") — bound once
+        # so the exhaustive ``match`` below narrows a name rather than re-deriving it
+        # per branch.
+        draw_type = event.draw_settings.draw_type
+        match draw_type:
             case DrawType.round_robin:
-                fixtures = strategy_for(event.draw_type).plan_initial(
+                fixtures = strategy_for(draw_type).plan_initial(
                     draw_config(event), ordered_entrants
                 )
             case DrawType.single_elim:
-                raise UnsupportedDrawType(event.draw_type)
+                raise UnsupportedDrawType(draw_type)
             case _:
-                assert_never(event.draw_type)
+                assert_never(draw_type)
         plans.append(
             _EventPlan(
                 event=event,

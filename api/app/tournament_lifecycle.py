@@ -41,6 +41,10 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
+from app.tournament_draw_settings import (
+    draw_settings_ids_for_tournament,
+    reap_draw_settings,
+)
 from app.tournament_draws import DrawCurrency, draw_currency_by_event
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
@@ -172,9 +176,27 @@ async def delete_tournament(
 
     Issues the ``DELETE`` and commits it. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport.
+
+    The delete also reaps the events' draw-settings rows, which nothing else would.
+    ``tournament_events.tournament_id`` is ``ON DELETE CASCADE``, so the events go
+    with the tournament in one statement — but a *database* cascade does not run the
+    ORM's ``TournamentEvent.draw_settings`` ``delete-orphan``, and the settings rows
+    have no ``tournament_id`` of their own to cascade along. So their ids are read
+    off the events **before** the delete (afterwards nothing names them), and only
+    then are the now-unreferenced rows removed — in that order, because the event's
+    FK is ``ON DELETE RESTRICT`` and would refuse the reverse.
+
+    The explicit ``flush`` is belt-and-braces, not the mechanism: ``reap_draw_settings``
+    issues an ORM-enabled ``delete()``, so ``Session.execute`` would autoflush the
+    pending tournament delete ahead of it anyway. It is spelled out so the ordering
+    survives a session with autoflush disabled — and, measured, removing it alone
+    leaves the suite green, so nothing here would catch its loss.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
     await db.delete(tournament)
+    await db.flush()
+    await reap_draw_settings(db, settings_ids)
     await db.commit()
 
 

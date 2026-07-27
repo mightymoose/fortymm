@@ -277,6 +277,12 @@ def _build_event(
         pool.id: pool for pool in (Pool.model_validate(raw) for raw in event.pools)
     }
     settings = MatchSettings.model_validate(event.match_settings)
+    # The draw type off the event's ``draw_settings`` row — its one home (ADR "an
+    # event's draw configuration is a row, not a column"). Read once here and passed
+    # down: the row rides along with the event on the panel's single entries query
+    # (``lazy="joined"``), so the round and stage wording below costs no extra
+    # statement per event on this endpoint's hot path.
+    draw_type = event.draw_settings.draw_type
 
     results = event_results(
         event,
@@ -338,7 +344,7 @@ def _build_event(
                 else None
             ),
             best_of=settings.length_games,
-            draw_type=event.draw_type,
+            draw_type=draw_type,
             tables=tables,
             game_counts=game_counts,
         )
@@ -346,7 +352,7 @@ def _build_event(
     return DashboardTournamentEvent(
         id=event.id,
         name=event.name,
-        draw_type=event.draw_type,
+        draw_type=draw_type,
         is_live=any(f.match_status is MatchStatus.in_progress for f in my_fixtures),
         # Taken from the standings row when there IS one, so the record agrees with
         # the table it sits beside; counted from the caller's own decided fixtures
@@ -359,7 +365,7 @@ def _build_event(
         losses=my_standing.losses if my_standing is not None else record_losses,
         position=my_standing.rank if my_standing is not None else None,
         field_size=field_size,
-        stage_label=_stage_label(event.draw_type, complete=pool_complete),
+        stage_label=_stage_label(draw_type, complete=pool_complete),
         pool_label=(
             pools[my_pool_id].name
             if my_pool_id is not None and my_pool_id in pools

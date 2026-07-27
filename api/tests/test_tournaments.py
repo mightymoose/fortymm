@@ -51,6 +51,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1050,7 +1051,7 @@ async def test_event_negative_entry_fee_violates_db_check(
         tournament_id=uuid.UUID(created["id"]),
         name="Bad Fee",
         format=EventFormat.singles,
-        draw_type=DrawType.single_elim,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
         max_players=8,
         entry_fee=-1,
         timezone="America/Chicago",
@@ -6149,15 +6150,21 @@ async def test_patching_a_table_catalogue_with_an_empty_table_id_is_refused(
 
 
 async def _draw_type_of(db_session: AsyncSession, event_id: str) -> DrawType:
-    """The event's ``draw_type``, read straight from the column — never from a response
-    body, and never from an ORM instance the test session may be holding stale."""
-    return (
+    """The event's draw type, read straight from the ``tournament_event_draw_settings``
+    row it points at — the one place that fact is stored (ADR "an event's draw
+    configuration is a row, not a column"). Never from a response body, and never from
+    an ORM instance the test session may be holding stale."""
+    key = (
         await db_session.execute(
-            select(TournamentEvent.draw_type).where(
-                TournamentEvent.id == uuid.UUID(event_id)
+            select(TournamentEventDrawSettings.draw_type_key)
+            .join(
+                TournamentEvent,
+                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
             )
+            .where(TournamentEvent.id == uuid.UUID(event_id))
         )
     ).scalar_one()
+    return DrawType(key)
 
 
 async def test_a_cut_draw_freezes_the_draw_type(
@@ -6219,12 +6226,15 @@ async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_
     assert response.status_code == 409, response.text
     stored = (
         await db_session.execute(
-            select(TournamentEvent.name, TournamentEvent.draw_type).where(
-                TournamentEvent.id == uuid.UUID(event["id"])
+            select(TournamentEvent.name, TournamentEventDrawSettings.draw_type_key)
+            .join(
+                TournamentEventDrawSettings,
+                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
             )
+            .where(TournamentEvent.id == uuid.UUID(event["id"]))
         )
     ).one()
-    assert stored == (event["name"], DrawType.round_robin)
+    assert stored == (event["name"], DrawType.round_robin.value)
 
 
 async def test_an_undrawn_event_still_changes_its_draw_type(

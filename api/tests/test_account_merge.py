@@ -36,6 +36,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     User,
     UserLeagueRating,
@@ -417,7 +418,9 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
         TournamentEvent(
             name="Open Singles",
             format=EventFormat.singles,
-            draw_type=DrawType.single_elim,
+            draw_settings=TournamentEventDrawSettings.for_draw_type(
+                DrawType.single_elim
+            ),
             max_players=32,
             entry_fee=40,
             timezone="America/Chicago",
@@ -477,7 +480,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
     event = TournamentEvent(
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.single_elim,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
         max_players=32,
         entry_fee=40,
         timezone="America/Chicago",
@@ -973,7 +976,7 @@ async def _make_rr_event(
     event = TournamentEvent(
         name=name,
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=32,
         entry_fee=40,
         timezone="America/Chicago",

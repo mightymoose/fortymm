@@ -76,6 +76,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -2116,7 +2117,7 @@ async def _seed_drawable_tournament(
         tournament_id=tournament.id,
         name="Open Singles",
         format=format,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",
@@ -2577,7 +2578,7 @@ async def _seed_previewable_tournament(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=4,
         entry_fee=Decimal("0"),
         slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
@@ -3193,7 +3194,7 @@ async def _seed_event(db: AsyncSession, tournament: Tournament) -> TournamentEve
         tournament_id=tournament.id,
         name="Existing Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3421,7 +3422,7 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         tournament_id=tournament.id,
         name="Cut Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3532,7 +3533,7 @@ async def test_update_event_frozen_change_raises_tool_error(
             select(TournamentEvent).where(TournamentEvent.id == event_id)
         )
     ).scalar_one()
-    assert persisted.draw_type is DrawType.round_robin
+    assert persisted.draw_settings.draw_type is DrawType.round_robin
     assert persisted.name == "Cut Singles"
 
 
@@ -3597,7 +3598,7 @@ async def _seed_published_singles_event(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=max_players,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -3933,7 +3934,7 @@ async def _seed_placeable_fixture(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=64,
         entry_fee=Decimal("45"),
         timezone="America/Chicago",

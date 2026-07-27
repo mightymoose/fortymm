@@ -123,8 +123,9 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     against.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with (``strategy_for(event.draw_type)``),
-    and it does so before this config exists; copying it in here as well gave the domain
+    is what ``cut_draw`` picks the *strategy* with
+    (``strategy_for(event.draw_settings.draw_type)``), and it does so before this config
+    exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
@@ -403,7 +404,7 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for(event.draw_type)
+    strategy = strategy_for(event.draw_settings.draw_type)
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )

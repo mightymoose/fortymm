@@ -223,7 +223,7 @@ def event_results(
     # ``results_for`` returns the union of the two implemented strategies; narrow it
     # with an exhaustive ``match`` so each shape builds its own input and serializes its
     # own way, and a third strategy is a type error here until it declares both.
-    strategy = results_for(e.draw_type)
+    strategy = results_for(e.draw_settings.draw_type)
     match strategy:
         case RoundRobinResults():
             return _serialize_standings(
@@ -395,7 +395,12 @@ def serialize_event(
             "tournament_id": e.tournament_id,
             "name": e.name,
             "format": e.format,
-            "draw_type": e.draw_type,
+            # The wire field is unchanged — only where it is read from moved. The
+            # value comes off the event's ``draw_settings`` row (ADR "an event's draw
+            # configuration is a row, not a column"), which is joined onto every query
+            # that loads an event (``lazy="joined"``), so the list endpoint's
+            # per-event serialization still issues no query of its own.
+            "draw_type": e.draw_settings.draw_type,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
             # The event's venue timezone anchors its wall-clock ``Slot`` windows to

@@ -35,6 +35,7 @@ from app.models.tournament import (
     TournamentStatus,
 )
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
+from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_fixture import TournamentFixture
 from app.models.user import User
 from app.models.user_league_rating import UserLeagueRating
@@ -76,6 +77,7 @@ __all__ = [
     "TournamentEntry",
     "TournamentEntryStatus",
     "TournamentEvent",
+    "TournamentEventDrawSettings",
     "TournamentFixture",
     "TournamentStatus",
     "User",

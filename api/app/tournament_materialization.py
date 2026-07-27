@@ -105,7 +105,7 @@ async def materialize_event(
         # this is unreachable on that path (every event has a current draw). Guarding it
         # keeps the function honest for a future caller that has no such precondition.
         return
-    strategy = strategy_for(event.draw_type)
+    strategy = strategy_for(event.draw_settings.draw_type)
     plan = strategy.advance([fixture_state(f) for f in fixtures])
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
     # fixture made whole by them seats its match in this same transaction. A fill only

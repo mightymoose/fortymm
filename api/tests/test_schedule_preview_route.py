@@ -42,6 +42,7 @@ from app.models import (
     EventFormat,
     Tournament,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentStatus,
     User,
 )
@@ -125,7 +126,9 @@ async def _make_tournament(
             tournament_id=tournament.id,
             name="Open Singles",
             format=EventFormat.singles,
-            draw_type=DrawType.round_robin,
+            draw_settings=TournamentEventDrawSettings.for_draw_type(
+                DrawType.round_robin
+            ),
             max_players=4,
             entry_fee=Decimal("0.00"),
             slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},

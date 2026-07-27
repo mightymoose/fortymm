@@ -28,6 +28,7 @@ from app.models import (
     League,
     Tournament,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -110,7 +111,7 @@ async def _add_event(db: AsyncSession, tournament: Tournament) -> TournamentEven
         tournament_id=tournament.id,
         name="Existing Singles",
         format=EventFormat.singles,
-        draw_type=DrawType.round_robin,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -348,7 +349,7 @@ async def _add_cut_event(
         tournament_id=tournament.id,
         name="Cut Singles",
         format=EventFormat.singles,
-        draw_type=draw_type,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone=timezone,
@@ -533,7 +534,7 @@ async def test_update_event_frozen_draw_type_change_is_refused(
             select(TournamentEvent).where(TournamentEvent.id == event_id)
         )
     ).scalar_one()
-    assert row.draw_type is DrawType.round_robin
+    assert row.draw_settings.draw_type is DrawType.round_robin
     assert row.name == "Cut Singles"
 
 
@@ -560,7 +561,7 @@ async def test_update_event_re_sending_the_same_draw_type_is_not_frozen(
 
     assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
-    assert updated.draw_type is DrawType.round_robin
+    assert updated.draw_settings.draw_type is DrawType.round_robin
 
 
 async def test_update_event_timezone_change_reanchors_placements(
