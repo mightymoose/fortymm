@@ -19,9 +19,23 @@ export type EventFormat = 'singles' | 'doubles' | 'teams'
  * `swiss` were removed from the API's enum and are a 422 at the boundary now.
  *
  * Pinned to the generated `components['schemas']['DrawType']` by a compile-time
- * assertion in `data/options.test.ts`, so this hand-written union cannot drift
+ * assertion in `data/draw-types.test.ts`, so this hand-written union cannot drift
  * back into offering a director something the server would refuse. */
 export type DrawType = 'single-elim' | 'round-robin'
+
+/** One selectable draw format, **as the server sent it** — a `draw_types` row
+ * (`DrawTypeRead`) reduced to what a picker needs (ADR 20260726). `value` is the slug
+ * an event stores and sends as its `draw_type`; `label` is the server's own `name`, the
+ * only copy for it that exists anywhere.
+ *
+ * Shaped `value`/`label` rather than the wire's `key`/`name` so it *is* an option list:
+ * `labelFor` (`./options`) reads it, and `OptionSelect` renders it, exactly as they do
+ * the format and match-length lists. The client no longer authors one of these — they
+ * are parsed out of the tournament-detail payload by `./draw-types`. */
+export interface DrawTypeOption {
+  value: DrawType
+  label: string
+}
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -468,6 +482,18 @@ export interface Tournament {
    * the boundary by `./solve`; read it, never write it — a new row appears only
    * through `POST …/schedule/solves` (or the server's own triggers). */
   latestScheduleSolve: ScheduleSolve | null
+  /** The draw formats this server can actually run, in the order it wants them
+   * offered — the `draw_types` catalogue off the tournament-detail payload (ADR
+   * 20260726). It is what the event editor's draw-type picker renders and what every
+   * surface that shows a *stored* draw type resolves its label through; the client
+   * keeps no list of its own.
+   *
+   * **`null` means the payload did not carry one** — the LIST route withholds it, since
+   * a catalogue is page data for the one page that picks a draw type — and it is
+   * likewise `null` on a client-built draft that has never been fetched
+   * (`emptyTournament`). It is NOT "the server offers nothing": a detail payload always
+   * carries at least the two seeded rows. Parsed at the boundary by `./draw-types`. */
+  drawTypes: DrawTypeOption[] | null
   /** How far this tournament's venue is from the point the list query was given a
    * location for — a non-negative haversine distance in **miles** — or `null` when the
    * query sent no location (the default list, and the detail payload). The server

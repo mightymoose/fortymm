@@ -19,6 +19,7 @@ import { z } from 'zod'
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
+import { parseDrawTypeCatalogue } from './draw-types'
 import { entryRefusalNotice } from './entry-refusal'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
@@ -209,6 +210,12 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     // of a `switch` as a blank strip. `null` — no solve ever requested — is the
     // designed state and parses straight through.
     latestScheduleSolve: parseLatestScheduleSolve(t.latest_schedule_solve),
+    // PARSED, not cast (`./draw-types`) — and the one parse on this payload that feeds
+    // a *control* rather than a rendering: whatever the picker offers is what a PATCH
+    // will carry as `draw_type`, so a blank or keyless row must fail here rather than
+    // become a menu item. `null` — the LIST route withholding a catalogue it has no
+    // page for — parses straight through to `null`.
+    drawTypes: parseDrawTypeCatalogue(t.draw_type_catalogue),
   }
 }
 

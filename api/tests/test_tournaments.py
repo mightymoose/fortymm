@@ -3968,15 +3968,163 @@ async def test_the_list_and_the_detail_agree_about_an_entrants_rating(
     assert listed_event["entrants"] == detail_event["entrants"]
 
 
+# ----- the draw-type catalogue on the detail payload -------------------------
+#
+# The tournament page's event form offers a draw format, and the options it offers are
+# the ``draw_types`` ROWS — served here, not hardcoded in the client (ADR "a draw type
+# is a seeded row, and the enum holds only what runs", section "the catalogue is served,
+# not hardcoded"). What makes that design real rather than nominal is the pair of tests
+# below that change the TABLE and watch the payload follow: without them, a refactor
+# that quietly re-derived the list from the ``DrawType`` enum — or hardcoded the copy in
+# Python beside it — would pass every other assertion in this file.
+
+
+async def _catalogue_of(
+    client: AsyncClient, tournament_id: str
+) -> list[dict[str, Any]]:
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    catalogue: list[dict[str, Any]] = response.json()["draw_type_catalogue"]
+    return catalogue
+
+
+async def test_the_detail_payload_carries_the_seeded_draw_types_in_display_order(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """A client loading a tournament is handed the draw formats it may offer — every
+    seeded one, in ``display_order``, each with the copy to render it.
+
+    Order is asserted as a list, not a set: a picker whose options move between two
+    loads is a real defect, and the round-robin/single-elim sequence is the one the seed
+    states."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [row["key"] for row in catalogue] == ["round-robin", "single-elim"]
+    assert [row["display_order"] for row in catalogue] == sorted(
+        row["display_order"] for row in catalogue
+    )
+    # Every option is renderable: a label and the sentence explaining the trade-off. An
+    # option with a blank name is a radio button with no words next to it.
+    assert all(row["name"].strip() for row in catalogue), catalogue
+    assert all(row["description"].strip() for row in catalogue), catalogue
+
+
+async def test_the_draw_type_catalogue_is_the_table_not_the_draw_type_enum(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**The test that makes the design structural.** Delete a ``draw_types`` row and
+    the payload loses that option — because the payload is a read of the table.
+
+    A catalogue derived from the ``DrawType`` enum instead would answer both formats
+    here, which is why the enum is asserted to still hold both: the two sources are the
+    same set in every other test in the suite, so this is the only arrangement in which
+    "reads the table" and "iterates the enum" give different answers. If a future
+    refactor swaps one for the other, this is what reds.
+
+    The event is a ROUND-ROBIN one so the row being deleted is unreferenced — the FK is
+    ``ON DELETE RESTRICT`` and would otherwise refuse (see
+    ``test_a_seeded_draw_type_cannot_be_deleted_while_an_event_uses_it``)."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(draw_type="round-robin")
+    )
+
+    await db_session.execute(text("DELETE FROM draw_types WHERE key = 'single-elim'"))
+    await db_session.commit()
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [row["key"] for row in catalogue] == ["round-robin"]
+    # And the enum still holds both, so "it followed the table" is the only reading of
+    # the assertion above.
+    assert {t.value for t in DrawType} == {"round-robin", "single-elim"}
+
+
+async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The other half of the same claim: the label, the help text and the order a client
+    renders all come off the row, so a copy change is a seed change and nothing else.
+
+    Rewriting the two rows swaps their order and their words; a catalogue assembled from
+    a Python dict of labels keyed by enum member would answer the old copy in the old
+    order, whatever the table says."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+    await db_session.execute(
+        text(
+            "UPDATE draw_types SET name = 'Knockout', "
+            "description = 'Lose once and you are out.', display_order = 1 "
+            "WHERE key = 'single-elim'"
+        )
+    )
+    await db_session.execute(
+        text(
+            "UPDATE draw_types SET name = 'Everybody plays everybody', "
+            "description = 'One pool, every pairing.', display_order = 2 "
+            "WHERE key = 'round-robin'"
+        )
+    )
+    await db_session.commit()
+    # A test artefact, not the subject: the request runs on THIS session (conftest
+    # overrides ``get_session`` with it) and the sessionmaker is ``expire_on_commit=
+    # False``, so the seed fixture's instances would still be sitting in the identity
+    # map with their old copy — a real request gets a fresh session and reads the row.
+    # Without this the assertion below would measure SQLAlchemy's cache, not the table:
+    # the ORDER BY would come back reordered (that is computed in SQL) while the names
+    # stayed stale, which is precisely the confusing half-right failure to avoid.
+    db_session.expire_all()
+
+    catalogue = await _catalogue_of(client, tournament_id)
+
+    assert [(row["key"], row["name"], row["description"]) for row in catalogue] == [
+        ("single-elim", "Knockout", "Lose once and you are out."),
+        ("round-robin", "Everybody plays everybody", "One pool, every pairing."),
+    ]
+
+
+async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """``null``, not a copy per card: the list renders no event form, so it does not pay
+    a query to repeat one global catalogue on every tournament it returns.
+
+    This is the payload-level statement of what ``EXPECTED_TOURNAMENT_LIST_STATEMENTS``
+    pins numerically — the two together are what keep the catalogue a detail-BFF
+    concern."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(client)
+
+    rows = (await client.get("/v1/tournaments")).json()
+
+    listed = next(row for row in rows if row["id"] == tournament_id)
+    assert listed["draw_type_catalogue"] is None
+    # And the detail read of the very same tournament does carry it, so this is a
+    # decision about the LIST and not a feature that quietly stopped working.
+    assert await _catalogue_of(client, tournament_id)
+
+
 # The pin, measured: the tournament + username join, its events, ONE batched load of
 # those events' active entrants (their ratings on the tournament's ladder ride along on
 # that same statement — see ``active_entrants_by_event``), ONE batched load of those
 # events' fixtures — their draws (ADR-0786) — ONE read of the caller's rating on the
-# tournament's league, and ONE read of the newest solve-ledger row (the Schedule tab's
-# solve strip, ADR "the schedule is solved, the call is pinned"). Six, whatever the
-# number of events, whatever the number of entrants in them, whatever the size of
-# their draws, and whatever the length of the day's solve ledger.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 6
+# tournament's league, ONE read of the newest solve-ledger row (the Schedule tab's
+# solve strip, ADR "the schedule is solved, the call is pinned"), and ONE read of the
+# ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
+# seeded row, and the enum holds only what runs"). Seven, whatever the number of
+# events, whatever the number of entrants in them, whatever the size of their draws,
+# and whatever the length of the day's solve ledger.
+#
+# It was six until the catalogue landed, and the seventh is deliberate: the catalogue
+# is global reference data with nothing to key off the page, so it is one flat read
+# that does not grow with anything — which is exactly what the parametrized cases
+# below check by measuring the same number at one event and at four.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 7
 
 
 @pytest.mark.parametrize("event_count", [1, 4])

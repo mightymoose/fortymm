@@ -4,7 +4,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildFixtureTimeRead } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildFixtureTimeRead,
+  DRAW_TYPE_CATALOGUE,
+} from '@/mocks/factories/tournaments/tournament.factory'
 import {
   createEvent,
   createTournament,
@@ -1063,15 +1066,6 @@ describe('cutting and un-cutting a draw', () => {
     expect(uncutDraw(TOURNAMENT, EMPTY_SINGLES)).toEqual({ ok: true })
   })
 
-  // The 422s — the refusals a director actually meets, each naming what they must change.
-  it('refuses a draw type with no generator yet (only round-robin has one)', () => {
-    const result = cutDraw(TOURNAMENT, FULL_SINGLES) // `single-elim`, 16 entrants
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.status).toBe(422)
-    expect(result.status === 422 && result.detail).toContain('single-elim')
-  })
-
   it('refuses a pooled draw with NO pools — there is nowhere to deal the field', () => {
     // `ev-open-singles` is a pooled round-robin in the seed; empty its pools and keep the
     // type, so the refusal can only be about the pools.
@@ -1137,6 +1131,199 @@ describe('cutting and un-cutting a draw', () => {
       ok: false,
       status: 404,
     })
+  })
+})
+
+// Cutting a SINGLE-ELIMINATION draw (ADR-0785, and ADR 20260726 for why the store may no
+// longer refuse it). The store used to answer every non-round-robin cut with "A <type>
+// draw cannot be cut yet" — a sentence the CUT route has not been able to say since #785
+// (the schedule preview still raises `UnsupportedDrawType` for single-elim, so the string
+// is alive on that path — just not this one), and which, with the enum down to the two
+// types that run, could only ever fire on this route for a type
+// the server cuts perfectly well. A mock that refuses what the server accepts is the same
+// trap as one that accepts what the server refuses, pointed the other way: the bracket
+// panel would be unreachable in `npm run dev`, in vitest and in the browser at once.
+describe('cutting a single-elimination draw', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  /** Seeded `single-elim` with SIXTEEN entrants — an exact power of two, so the bracket
+   * is full and no seed draws a bye. */
+  const BRACKET = FULL_SINGLES
+  /** The seed's 9-entrant round-robin, re-typed as a bracket below: **9 is the point** —
+   * padded to 16, seven of the top eight seeds draw byes, which is the state that says
+   * what a bye actually is. */
+  const BYES = INELIGIBLE_SINGLES
+
+  const fixturesOf = (eventId: string) =>
+    findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!.fixtures
+
+  /** Cut `eventId` and hand back the fixtures, failing loudly on a refusal — so a test
+   * that meant to assert about a bracket never quietly asserts about `undefined`. */
+  function cut(eventId: string) {
+    const result = cutDraw(TOURNAMENT, eventId)
+    if (!result.ok) {
+      throw new Error(
+        `expected a cut, got ${result.status}: ${'detail' in result ? result.detail : ''}`,
+      )
+    }
+    return result.fixtures
+  }
+
+  /** Re-type an event as a bracket. The draw type FREEZES while a draw stands
+   * (ADR-0786), so the standing round-robin draw comes off first — which is exactly the
+   * route a director would take through the UI. */
+  function asSingleElim(eventId: string) {
+    expect(uncutDraw(TOURNAMENT, eventId).ok).toBe(true)
+    const patched = updateEvent(TOURNAMENT, eventId, { draw_type: 'single-elim' })
+    if (!patched.ok) throw new Error(`could not re-type ${eventId}`)
+  }
+
+  /** The fixtures of one round, in position order. */
+  const round = (fixtures: ReturnType<typeof cut>, n: number) =>
+    fixtures.filter((f) => f.round === n).sort((a, b) => a.position - b.position)
+
+  const entry = (eventId: string, seed: number) => `entry-${eventId}-${seed}`
+
+  it('cuts a bracket instead of refusing the draw type', () => {
+    // The whole chore in one assertion: the seed's single-elim event is CUT, not 422'd.
+    const fixtures = cut(BRACKET)
+    expect(fixtures.length).toBeGreaterThan(0)
+    expect(fixturesOf(BRACKET)).toEqual(fixtures)
+  })
+
+  it('emits every round up front, halving each time, all of it un-pooled', () => {
+    const fixtures = cut(BRACKET) // 16 entrants → a 16-slot bracket, 4 rounds
+
+    expect(round(fixtures, 1)).toHaveLength(8)
+    expect(round(fixtures, 2)).toHaveLength(4)
+    expect(round(fixtures, 3)).toHaveLength(2)
+    expect(round(fixtures, 4)).toHaveLength(1)
+    expect(fixtures).toHaveLength(15)
+    // A bracket is un-pooled — its fixtures name no pool, whatever pools the event has.
+    expect(fixtures.every((f) => f.pool_id === null)).toBe(true)
+    // `position` is contiguous within a round, and the later rounds are all TBD: nothing
+    // is decided at the cut but round 1.
+    expect(round(fixtures, 1).map((f) => f.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    for (const later of fixtures.filter((f) => f.round > 1)) {
+      expect([later.entry_a_id, later.entry_b_id]).toEqual([null, null])
+    }
+  })
+
+  it('seats round 1 by the standard recursive seeding, so 1 and 2 can only meet in the final', () => {
+    // 1-16, 8-9, 5-12, 4-13, 3-14, 6-11, 7-10, 2-15 (`_seed_slots`, `api/app/draws.py`).
+    // The naive wrong deal — 1 v 2, 3 v 4, … — would knock the top two seeds out in
+    // round 1 and would still *look* like a bracket, which is why this asserts the
+    // pairings rather than the shape.
+    const seeded = round(cut(BRACKET), 1).map((f) => [f.entry_a_id, f.entry_b_id])
+
+    expect(seeded).toEqual(
+      [
+        [1, 16],
+        [8, 9],
+        [5, 12],
+        [4, 13],
+        [3, 14],
+        [6, 11],
+        [7, 10],
+        [2, 15],
+      ].map(([a, b]) => [entry(BRACKET, a), entry(BRACKET, b)]),
+    )
+  })
+
+  it('renders a bye as a MISSING round-1 fixture, never a null-sided one', () => {
+    asSingleElim(BYES) // 9 entrants, padded to 16 → seven byes
+
+    const fixtures = cut(BYES)
+
+    // Seven of the eight round-1 slots are byes, so seven round-1 rows are simply not
+    // there: one fixture, between the only two seeds (8 and 9) that face each other.
+    // A planner that emitted a "bye" row with an empty side would give 8 here.
+    expect(round(fixtures, 1)).toHaveLength(1)
+    expect(round(fixtures, 1)[0]).toMatchObject({
+      entry_a_id: entry(BYES, 8),
+      entry_b_id: entry(BYES, 9),
+    })
+    // …and NO round-1 fixture has a null side. `null` means TBD and only TBD, so a
+    // null-sided round-1 row would be a fixture waiting on a feeder that cannot exist.
+    for (const fixture of round(fixtures, 1)) {
+      expect(fixture.entry_a_id).not.toBeNull()
+      expect(fixture.entry_b_id).not.toBeNull()
+    }
+  })
+
+  it('seats a byed seed straight onto its round-2 side, one column along', () => {
+    asSingleElim(BYES)
+
+    const two = round(cut(BYES), 2)
+
+    // All three round-2 shapes at once, which is the point of a 9-entrant field:
+    //  · one bye + one live feeder  → one side pre-filled, the other TBD;
+    //  · both feeders byes          → a fully-known fixture, playable at go-live;
+    // (the third — both feeders live, so both sides TBD — needs a fuller bracket and is
+    // covered by the 16-entrant case above.)
+    expect(two.map((f) => [f.entry_a_id, f.entry_b_id])).toEqual([
+      [entry(BYES, 1), null],
+      [entry(BYES, 5), entry(BYES, 4)],
+      [entry(BYES, 3), entry(BYES, 6)],
+      [entry(BYES, 7), entry(BYES, 2)],
+    ])
+  })
+
+  it('refuses a bracket of fewer than two entrants, in the server’s words', () => {
+    // Round-robin's per-pool floor, one level up — and the ONLY 422 a single-elim cut
+    // makes. Notably NOT a refusal about pools: `ev-u1500` has none, and a bracket does
+    // not want any.
+    const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, { draw_type: 'single-elim' })
+    expect(patched.ok).toBe(true)
+    enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
+
+    const result = cutDraw(TOURNAMENT, EMPTY_SINGLES)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+    expect(result.status === 422 && result.detail).toContain('at least 2 entrants')
+  })
+
+  it('survives a re-cut and an un-cut like any other draw', () => {
+    // Nothing about the bracket is random, so the same field cuts the same draw — which
+    // is what makes a re-cut a reviewable act rather than a gamble — and the draw is
+    // still just fixtures, so removing it empties the event as usual.
+    const first = cut(BRACKET)
+    expect(cut(BRACKET)).toEqual(first)
+    expect(uncutDraw(TOURNAMENT, BRACKET)).toEqual({ ok: true })
+    expect(fixturesOf(BRACKET)).toEqual([])
+  })
+})
+
+// The DRAW-TYPE CATALOGUE (ADR 20260726) — the `draw_types` table, served on the page
+// that picks one. It is served rather than hardcoded client-side precisely so that "the
+// table gates what a director can pick" is a fact about the running system; a mock that
+// withheld it would leave the picker's only data source unreachable.
+describe('the draw-type catalogue', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  it('carries every draw type the server can run, in display order, on the DETAIL read', () => {
+    const catalogue = findTournament(TOURNAMENT)!.draw_type_catalogue
+
+    expect(catalogue).toEqual(DRAW_TYPE_CATALOGUE)
+    // A row exists exactly when the type has an implementation, so the keys are the two
+    // members of `DrawType` — both of which `cutDraw` above can now plan.
+    expect(catalogue!.map((d) => d.key)).toEqual(['round-robin', 'single-elim'])
+    expect(catalogue!.map((d) => d.display_order)).toEqual([1, 2])
+    // The copy is what a director reads while choosing; neither field is ever empty.
+    for (const drawType of catalogue!) {
+      expect(drawType.name.length).toBeGreaterThan(0)
+      expect(drawType.description.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('is NULL on the list — a catalogue is page data, not a property of a row', () => {
+    // `null`, never `[]`: an empty array would say the server can run no draw types at
+    // all, which is a different and false claim.
+    for (const listed of listTournaments()) {
+      expect(listed.draw_type_catalogue).toBeNull()
+    }
   })
 })
 
@@ -1237,8 +1424,11 @@ describe('the draw type freezes while a draw exists', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.status).toBe(409)
-    // The way out — otherwise the director is stuck: `single-elim` has no generator, so
-    // they could not even re-cut their way back into agreement with themselves.
+    // The way out, named in the refusal — otherwise the director is stuck with an event
+    // whose type they cannot change and whose fixtures they were never told to remove.
+    // (It is not that the target type is unplannable: `single-elim` has had a generator
+    // since #785, and since ADR 20260726 every member of the enum does. The freeze is
+    // about the fixtures already dealt AS a round robin.)
     expect(result.status === 409 && result.detail).toContain('remove the draw')
     // A refused write writes nothing.
     expect(eventOf(ROUND_ROBIN).draw_type).toBe('round-robin')

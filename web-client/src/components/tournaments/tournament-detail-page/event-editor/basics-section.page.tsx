@@ -1,5 +1,7 @@
+import userEvent from '@testing-library/user-event'
+
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
-import { render, screen, type Container } from '@/test/utilities'
+import { render, screen, within, type Container } from '@/test/utilities'
 
 import { fieldPage } from '../../field.page'
 import { BasicsSection, type BasicsSectionProps } from './basics-section'
@@ -44,6 +46,24 @@ const scoped = (container: Container) => ({
    * under test is a control that is there, readable, and dead. */
   getDrawTypeTrigger() {
     return container.getByRole('combobox', { name: 'Draw type' })
+  },
+  /** Open the draw-type picker and read back **what it actually offers**, in order —
+   * the labels a director sees, which since ADR 20260726 are the server's own
+   * (`draw_type_catalogue`) rather than a list this client keeps.
+   *
+   * The radix listbox portals to the body, so the options resolve against `screen`,
+   * not the scoped container. */
+  async openDrawTypeOptions() {
+    await userEvent.click(this.getDrawTypeTrigger())
+    const listbox = await screen.findByRole('listbox')
+    return within(listbox)
+      .getAllByRole('option')
+      .map((o) => o.textContent?.trim() ?? '')
+  },
+  /** Open the draw-type picker and choose the option labelled `label`. */
+  async chooseDrawType(label: string) {
+    await userEvent.click(this.getDrawTypeTrigger())
+    await userEvent.click(await screen.findByRole('option', { name: label }))
   },
   /** The player-limit helper text — form furniture, and so absent from the
    * read-only view (ADR 0015). It is also the one place the editor says out loud

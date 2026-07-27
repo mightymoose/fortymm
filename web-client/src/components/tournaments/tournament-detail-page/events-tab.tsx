@@ -3,7 +3,11 @@ import { Plus, Trophy } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
 
-import type { Tournament, TournamentEvent } from '../data/types'
+import type {
+  DrawTypeOption,
+  Tournament,
+  TournamentEvent,
+} from '../data/types'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
 import { DrawPanel } from './events-tab/draw-panel'
@@ -15,6 +19,11 @@ export interface EventsTabProps {
   /** When false (a non-creator), the "New event" affordances are hidden and
    * the tab is a read-only list of events. */
   canEdit: boolean
+  /** The draw formats the server offers (ADR 20260726), handed to each card so it can
+   * name the event's draw type in the server's words. Threaded from the page rather
+   * than read off `tournament` here so that "what if there is no catalogue" is decided
+   * once, where the payload lands, instead of in every component that renders one. */
+  drawTypes: DrawTypeOption[]
   onOpenEvent: (event: TournamentEvent) => void
   onNewEvent: () => void
 }
@@ -24,6 +33,7 @@ export interface EventsTabProps {
 export const EventsTab = ({
   tournament,
   canEdit,
+  drawTypes,
   onOpenEvent,
   onNewEvent,
 }: EventsTabProps) => {
@@ -76,6 +86,7 @@ export const EventsTab = ({
               key={ev.id}
               event={ev}
               canEdit={canEdit}
+              drawTypes={drawTypes}
               username={username}
               onOpen={() => onOpenEvent(ev)}
               // Self-registration is a *player's* affordance, not the owner's:

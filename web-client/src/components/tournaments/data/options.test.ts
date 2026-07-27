@@ -1,14 +1,10 @@
-import type { components } from '@/api/schema'
-
-import { eventSchema } from '../tournament-detail-page/event-form'
 import {
-  DRAW_TYPE_OPTIONS,
   PRED_FIELDS,
   PRED_OPS_BY_TYPE,
   parsePredicateOp,
   type PredicateOp,
 } from './options'
-import type { DrawType, Predicate } from './types'
+import type { Predicate } from './types'
 
 /** The seven operators, written down once. They are pinned at BOTH levels off
  * this one list: what the builder *renders* (runtime, below) and what a
@@ -89,52 +85,5 @@ describe('the predicate type (a contract with the API, not a convention)', () =>
       value: 1500,
     } satisfies Predicate
     expect(rule.op).toBe('is')
-  })
-})
-
-/** The DRAW TYPE vocabulary — the same contract, one layer up (ADR 20260726 "a draw
- * type is a seeded row, and the enum holds only what runs").
- *
- * `DrawType` used to name five types while the server could plan two, so a director
- * could pick "Swiss" from the picker, create the event, enter a whole field, and only
- * discover at the moment they cut the draw that it was never possible. The API's enum
- * now holds exactly the two that run, and the three that did not are a **422 at the
- * request boundary**.
- *
- * The client keeps three hand-written copies of that vocabulary — the domain union, the
- * form's `z.enum`, and the picker's option list — and nothing but this file makes them
- * agree with the generated schema. All three are pinned here, two at compile time
- * (`tsc -b`, i.e. `npm run build` — vitest does not typecheck) and one at runtime. */
-describe('the draw-type vocabulary (a contract with the API, not a menu)', () => {
-  /** The generated enum, straight off `schema.d.ts` — never re-typed here, or the pin
-   * would be two lists agreeing with each other rather than with the server. */
-  type WireDrawType = components['schemas']['DrawType']
-
-  it('is EXACTLY the API’s enum — no client-only member can exist', () => {
-    expectTypeOf<DrawType>().toEqualTypeOf<WireDrawType>()
-  })
-
-  it('is the same set the event form will accept', () => {
-    type FormDrawType = ReturnType<typeof eventSchema.parse>['drawType']
-    expectTypeOf<FormDrawType>().toEqualTypeOf<WireDrawType>()
-  })
-
-  // The runtime half: the type only constrains what an option *may* say, not which
-  // options are actually offered. A stale entry left in this list is a menu item whose
-  // click ends in a 422 — which is the exact failure the ADR removed.
-  it('offers exactly the two draw types the server can plan, each with a label', () => {
-    expect(DRAW_TYPE_OPTIONS.map((o) => o.value)).toEqual([
-      'single-elim',
-      'round-robin',
-    ])
-    for (const option of DRAW_TYPE_OPTIONS) {
-      expect(option.label.trim()).not.toBe('')
-    }
-  })
-
-  it('makes a draw type the server would 422 a compile error', () => {
-    // @ts-expect-error 'swiss' left the API's enum — it is not a draw type any more.
-    const drawType: DrawType = 'swiss'
-    expect(drawType).toBe('swiss')
   })
 })

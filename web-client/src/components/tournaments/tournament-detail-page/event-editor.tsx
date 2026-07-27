@@ -24,7 +24,11 @@ import {
   saveFailureMessage,
   type SaveFailure,
 } from '../data/save-failure'
-import type { TournamentEvent, TournamentTable } from '../data/types'
+import type {
+  DrawTypeOption,
+  TournamentEvent,
+  TournamentTable,
+} from '../data/types'
 import { BasicsSection } from './event-editor/basics-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
@@ -43,6 +47,11 @@ export interface EventEditorProps {
   event: TournamentEvent | null
   /** The tables available to this tournament (for the pools tab). */
   tables: TournamentTable[]
+  /** The draw formats the server offers, off the tournament payload (ADR 20260726) —
+   * handed to the Basics tab's picker, and to `drawTypeFreeze`, whose frozen reason
+   * quotes the same option the director is looking at. A catalogue, like `tables`: the
+   * editor holds no vocabulary of its own. */
+  drawTypes: DrawTypeOption[]
   /** When false (a non-creator), the Save and Delete actions are hidden and the
    * editor becomes a read-only view of the event. */
   canEdit: boolean
@@ -97,6 +106,7 @@ export const EventEditor = ({
   onOpenChange,
   event,
   tables,
+  drawTypes,
   canEdit,
   onSave,
   onDelete,
@@ -232,7 +242,7 @@ export const EventEditor = ({
   // live, including — pointedly — a pool's tables, window and name.
   const OPEN: EditFreeze = { kind: 'open' }
   const poolsFreeze = event ? poolSetFreeze(event) : OPEN
-  const drawTypeLock = event ? drawTypeFreeze(event) : OPEN
+  const drawTypeLock = event ? drawTypeFreeze(event, drawTypes) : OPEN
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -278,6 +288,7 @@ export const EventEditor = ({
                   canEdit={canEdit}
                   errors={basicsErrors}
                   drawTypeFreeze={drawTypeLock}
+                  drawTypes={drawTypes}
                   onChange={applyChange}
                 />
               </TabsContent>

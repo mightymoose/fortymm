@@ -19,6 +19,7 @@ from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    DrawTypeOption,
     Match,
     MatchGame,
     MatchGameScore,
@@ -34,6 +35,7 @@ from app.models import (
 )
 from app.ratings.rated import is_rated_member
 from app.schemas.tournament import (
+    DrawTypeRead,
     FixtureTimeRead,
     TournamentEntrantRead,
     TournamentFixtureRead,
@@ -104,6 +106,38 @@ def completed_match_ids(
         for f in fixtures
         if f.match_status is MatchStatus.completed and f.match_id is not None
     ]
+
+
+async def draw_type_catalogue(db: AsyncSession) -> list[DrawTypeRead]:
+    """Every selectable draw format, in ``display_order`` — the picker's options, read
+    from the ``draw_types`` table.
+
+    **From the table, not from the ``DrawType`` enum.** The two are the same set by
+    construction (a migration test pins that), so iterating the enum would produce the
+    same keys — and would be wrong anyway: the enum carries no ``name``, no
+    ``description`` and no order, so the copy would have to be hardcoded somewhere,
+    which is the drift the ADR ("a draw type is a seeded row, and the enum holds only
+    what runs") moved the catalogue into the database to end. Reading the rows is what
+    makes "the table gates what a director can pick" a fact about the running system
+    rather than two lists that happen to agree.
+
+    The order is total, not just ``display_order``: ties break on ``key`` so the picker
+    cannot reorder itself between two requests. Postgres is free to return equal-ranked
+    rows in any order, and a control whose options shuffle under the cursor is a defect
+    the seed data alone must not be trusted to prevent.
+
+    ONE statement, unconditional and independent of the page — this is global reference
+    data, two rows today, so there is nothing to batch and nothing to key. The
+    tournament-detail statement pin in ``tests/test_tournaments.py`` counts it.
+    """
+    rows = (
+        await db.execute(
+            select(DrawTypeOption).order_by(
+                DrawTypeOption.display_order, DrawTypeOption.key
+            )
+        )
+    ).scalars()
+    return [DrawTypeRead.model_validate(row) for row in rows]
 
 
 async def active_entrants_by_event(

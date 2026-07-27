@@ -441,9 +441,10 @@ async def get_tournament(
     if row is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
     tournament, username = row
-    # The six-statement batched composition — events, their entrants, their draws,
-    # the completed matches' games (standings), the caller's one ladder rating, and
-    # the newest solve — lives in the shared ``tournament_detail`` reader, which the
+    # The seven-statement batched composition — events, their entrants, their draws,
+    # the completed matches' games (standings), the caller's one ladder rating, the
+    # newest solve, and the selectable draw formats the event form's picker renders
+    # — lives in the shared ``tournament_detail`` reader, which the
     # MCP ``get_tournament`` tool composes too, so the two surfaces cannot drift. The
     # statement-count pin (tests/test_tournaments.py) is measured against this route,
     # which is the reader plus this one visibility-scoped load.
@@ -1082,10 +1083,16 @@ async def cut_event_draw(
     a recorded winner, or any fixture that has become a real match. A re-cut would throw
     those away, and a draw must never silently eat a score.
 
-    Refused with a `422` when this event cannot produce a draw at all: its draw type has
-    no generator yet (only round-robin does today), it has **no pools** configured for a
-    pooled draw type, or its field is too small for the pools it has — a pool with fewer
-    than two players has nobody to play. The message names what to change.
+    Refused with a `422` when this event cannot produce a draw at all: it has
+    **no pools** configured for a pooled draw type, its field is too small for the
+    pools it has — a pool with fewer than two players has nobody to play — or a
+    bracket has fewer than two entrants. The message names what to change.
+
+    There is no longer a "this draw type has no generator" refusal here: every
+    draw type a director can pick is one that has a strategy, because the pickable
+    set *is* the seeded `draw_types` rows, and those are the types that run
+    (ADR 20260726). Every `422` this route can raise is now about the event's
+    **field or pools**, not its type.
 
     Owner-only. Fixtures come back in pool → round → position order, exactly as the
     tournament-detail page carries them.

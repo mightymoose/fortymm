@@ -1303,10 +1303,16 @@ export interface paths {
          *     a recorded winner, or any fixture that has become a real match. A re-cut would throw
          *     those away, and a draw must never silently eat a score.
          *
-         *     Refused with a `422` when this event cannot produce a draw at all: its draw type has
-         *     no generator yet (only round-robin does today), it has **no pools** configured for a
-         *     pooled draw type, or its field is too small for the pools it has — a pool with fewer
-         *     than two players has nobody to play. The message names what to change.
+         *     Refused with a `422` when this event cannot produce a draw at all: it has
+         *     **no pools** configured for a pooled draw type, its field is too small for the
+         *     pools it has — a pool with fewer than two players has nobody to play — or a
+         *     bracket has fewer than two entrants. The message names what to change.
+         *
+         *     There is no longer a "this draw type has no generator" refusal here: every
+         *     draw type a director can pick is one that has a strategy, because the pickable
+         *     set *is* the seeded `draw_types` rows, and those are the types that run
+         *     (ADR 20260726). Every `422` this route can raise is now about the event's
+         *     **field or pools**, not its type.
          *
          *     Owner-only. Fixtures come back in pool → round → position order, exactly as the
          *     tournament-detail page carries them.
@@ -2213,6 +2219,31 @@ export interface components {
          * @enum {string}
          */
         DrawType: "single-elim" | "round-robin";
+        /**
+         * DrawTypeRead
+         * @description One selectable draw format, as the ``draw_types`` table holds it.
+         *
+         *     The rows of this table are the draw formats the product can actually run — a row
+         *     exists exactly when the server has a strategy that can cut and stand that draw (ADR
+         *     "a draw type is a seeded row, and the enum holds only what runs"). So a client
+         *     renders the catalogue it is sent and never keeps a list of its own: a format added
+         *     on the server appears in the picker with no client change, and one the server cannot
+         *     run is never offered in the first place.
+         *
+         *     ``name`` and ``description`` are the copy to show — a short label and the sentence
+         *     or two explaining the trade-off a director is choosing between. Both are always
+         *     present and never empty. ``key`` is the value to send back as an event's
+         *     ``draw_type``.
+         */
+        DrawTypeRead: {
+            key: components["schemas"]["DrawType"];
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Display Order */
+            display_order: number;
+        };
         /**
          * EventEntryFull
          * @description The event holds ``max_players`` active entrants already, so nobody may enter it
@@ -4466,6 +4497,8 @@ export interface components {
             /** Distance Miles */
             distance_miles?: number | null;
             latest_schedule_solve: components["schemas"]["ScheduleSolveRead"] | null;
+            /** Draw Type Catalogue */
+            draw_type_catalogue: components["schemas"]["DrawTypeRead"][] | null;
         };
         /**
          * TournamentEntrantRead

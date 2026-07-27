@@ -11,7 +11,7 @@ tripwires in ``tests/test_tournaments.py`` exist to catch.
 
 The single-tournament DETAIL read (:func:`tournament_detail`) lives here for the
 same reason: the HTTP ``GET /v1/tournaments/{id}`` route and the MCP
-``get_tournament`` tool composed the identical six-statement batched read inline,
+``get_tournament`` tool composed the identical seven-statement batched read inline,
 a hairline apart, and a second copy is the drift this module exists to prevent.
 
 Both sit a layer above ``tournament_queries`` (pure data access) because they also
@@ -32,6 +32,7 @@ from app.schemas.tournament import TournamentDetailRead
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
+    draw_type_catalogue,
     entrant_rating,
     entrant_ratings_by_league,
     fixtures_by_event,
@@ -253,6 +254,11 @@ async def list_tournament_details(
             # it skips the ledger read rather than paying a query for a field every
             # card throws away. The solve strip is a detail-BFF concern.
             latest_schedule_solve=None,
+            # No draw-type catalogue either, for the third time and the same reason: a
+            # card has no event form, so the list does not pay a query to repeat one
+            # global two-row catalogue on every tournament it returns. The picker is a
+            # detail-BFF concern.
+            draw_type_catalogue=None,
             # The near-me distance, or ``None`` when the list was not location-filtered
             # (``distance_by_id`` is empty then, so every card carries a null distance).
             distance_miles=distance_by_id.get(tournament.id),
@@ -275,7 +281,7 @@ async def tournament_detail(
     not-found itself, since the HTTP route and the MCP tool 404/refuse
     differently) and hands it in with its creator's ``created_by_username``; this
     reader runs the shared batched composition both surfaces used to run inline —
-    SIX statements, no N+1 whatever the number of events, entrants, fixtures or
+    SEVEN statements, no N+1 whatever the number of events, entrants, fixtures or
     solves:
 
     1. the tournament's events, in creation order;
@@ -283,9 +289,12 @@ async def tournament_detail(
     3. those events' fixtures — their draws (one batch, ADR-0786);
     4. the games of every **completed** match on the page — the standings' raw
        material (one batch; **no statement at all** until something is played, so an
-       unplayed tournament costs five here, a played one six);
+       unplayed tournament costs six here, a played one seven);
     5. the caller's rating on the tournament's one league (ADR-0783);
-    6. the newest row of the solve ledger (the Schedule tab's solve strip).
+    6. the newest row of the solve ledger (the Schedule tab's solve strip);
+    7. the selectable draw formats (the event form's picker, ADR "a draw type is a
+       seeded row, and the enum holds only what runs") — global reference data, so
+       it is one flat read with nothing to key or batch.
 
     Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
     perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The
@@ -310,6 +319,7 @@ async def tournament_detail(
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, tournament.league_id, current_user_id)
     latest_schedule_solve = await latest_solve(db, tournament.id)
+    catalogue = await draw_type_catalogue(db)
     return serialize_detail(
         tournament,
         created_by_username=created_by_username,
@@ -320,4 +330,5 @@ async def tournament_detail(
         game_counts=game_counts,
         rating=rating,
         latest_schedule_solve=latest_schedule_solve,
+        draw_type_catalogue=catalogue,
     )

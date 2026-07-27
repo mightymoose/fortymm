@@ -26,6 +26,37 @@ describe('EventCard', () => {
     expect(document.body).toHaveTextContent('Rating < 1500')
   })
 
+  /** The card names the event's draw type in the **server's** words (ADR 20260726) —
+   * it looks the stored slug up in the catalogue it was handed, exactly as the editor's
+   * read-only row does, so the two cannot say different things about one event.
+   *
+   * Asserted against a catalogue that is NOT the seed's: "Round robin" would pass
+   * against the hardcoded `DRAW_TYPE_OPTIONS` this replaced and would prove nothing. */
+  describe('the draw type, in the server’s words', () => {
+    it('labels the stored slug from the served catalogue', () => {
+      eventCardPage.render({
+        event: buildEvent({ name: 'Open Singles', drawType: 'round-robin' }),
+        drawTypes: [{ value: 'round-robin', label: 'Everyone plays everyone' }],
+      })
+
+      expect(document.body).toHaveTextContent('Everyone plays everyone')
+      expect(document.body).not.toHaveTextContent('round-robin')
+    })
+
+    /** No catalogue reached the card. It still must not print the slug: the em-dash
+     * keeps the row's shape and admits it does not know the words, which is the honest
+     * answer — and the one `labelFor` exists to give. */
+    it('shows an em-dash, never the raw slug, with no catalogue', () => {
+      eventCardPage.render({
+        event: buildEvent({ name: 'Open Singles', drawType: 'round-robin' }),
+        drawTypes: [],
+      })
+
+      expect(document.body).not.toHaveTextContent('round-robin')
+      expect(document.body).toHaveTextContent('—')
+    })
+  })
+
   describe('the entries capacity', () => {
     it('shows entries out of the player cap, with a fill bar and the places left', () => {
       eventCardPage.render({

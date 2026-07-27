@@ -52,9 +52,11 @@ export interface DrawPanelProps {
  * authored for them and it names the numbers they must change:
  *
  * - **409** — the draw shows evidence of play. It can no longer be cut or removed.
- * - **422** — this event cannot be planned as it stands: an unsupported draw type (only
- *   round-robin has a generator today), no pools, or a pool that would get fewer than
- *   two entrants.
+ * - **422** — this event cannot be planned **as it stands**. Always about the event's
+ *   configuration, never about its type: every member of `DrawType` has a strategy behind
+ *   it (ADR 20260726 shrank the enum to exactly what runs), so the refusals left are a
+ *   round-robin with no pools, a pool that would get fewer than two entrants, and a
+ *   bracket with fewer than two entrants.
  *
  * Everything else (403, an expired session, a 5xx, a dead network) has designed words of
  * its own in `drawRefusalNotice` — there is no arm that fails silently.

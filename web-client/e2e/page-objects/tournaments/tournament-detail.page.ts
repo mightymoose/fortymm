@@ -173,6 +173,27 @@ export class TournamentDetailPage {
     return this.drawPanel(eventName).locator('[data-testid^="fixture-line-"]')
   }
 
+  /** The **bracket** a single-elimination draw renders instead of pools (ADR-0785) —
+   * the `<section>` labelled "Bracket" on one event's card. A round-robin event never
+   * has one (its fixtures all carry a pool), so `toHaveCount(0)` here is how a spec
+   * tells the two renderers apart. */
+  bracket(eventName: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: 'Bracket' })
+  }
+
+  /** One bracket COLUMN's fixtures, addressed by the name the round goes by — "Final",
+   * "Semifinals", "Quarterfinals", or "Round N" earlier than that.
+   *
+   * By the label and not by the round number on purpose: the label is read off the
+   * *final* (a two-entrant bracket is a lone "Final", not "Round 1"), so it is the one
+   * thing a director actually sees, and a locator keyed on the index would go on
+   * matching a column that had started calling itself something else. */
+  bracketRound(eventName: string, label: string): Locator {
+    return this.bracket(eventName)
+      .getByRole('list', { name: `${label} fixtures in the bracket` })
+      .getByRole('listitem')
+  }
+
   // ----- the standings (ADR-0788) ------------------------------------------
   //
   // The results block below the fixtures on a round-robin card: a table per pool (in the
@@ -468,6 +489,24 @@ export class TournamentDetailPage {
    * dead. */
   get drawTypeSelect(): Locator {
     return this.page.getByRole('combobox', { name: 'Draw type' })
+  }
+
+  /**
+   * Open the draw-type picker and read back **what it actually offers**, in order — the
+   * labels a director sees, which since ADR 20260726 are the *server's* (the payload's
+   * `draw_type_catalogue`) rather than a list this client keeps.
+   *
+   * Radix portals the listbox to the body, so it is located from the page and not from
+   * the editor dialog. The text is trimmed because each option carries an indicator
+   * slot: a raw `allTextContents()` returns the label with the check-mark's whitespace
+   * still on it.
+   */
+  async drawTypeOptions(): Promise<string[]> {
+    await this.drawTypeSelect.click()
+    const listbox = this.page.getByRole('listbox')
+    await expect(listbox).toBeVisible()
+    const labels = await listbox.getByRole('option').allTextContents()
+    return labels.map((label) => label.trim())
   }
 
   /** The Table pools tab's one explanation of the freeze — the `Alert` that both the Add

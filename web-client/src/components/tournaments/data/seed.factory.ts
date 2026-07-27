@@ -6,6 +6,7 @@
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import type {
   Address,
+  DrawTypeOption,
   Entrant,
   EventEntryState,
   FinishesResults,
@@ -629,6 +630,26 @@ export function buildStandingsEvent(
   })
 }
 
+/** The draw-type catalogue **as the server serves it** (ADR 20260726): both seeded
+ * rows, labelled with the migration's copy, in `display_order` — round robin first.
+ *
+ * A fixture of a *response*, not a menu this client authors. It is deliberately not
+ * derived from `DRAW_TYPES` with labels invented here: a component test's picker must
+ * hold the words a director really sees, and the only place those words exist is the
+ * server's seed (mirrored in `src/mocks/factories/tournaments/tournament.factory.ts`,
+ * which copies the migration verbatim).
+ *
+ * ⚠️ Never assert the picker's contents against **this** fixture alone — that is a
+ * mock agreeing with itself. The claim worth proving is that the picker follows
+ * *whatever* catalogue arrives, which is what the hand-written catalogues in
+ * `basics-section.test.tsx` exercise. */
+export function buildDrawTypes(): DrawTypeOption[] {
+  return [
+    { value: 'round-robin', label: 'Round robin' },
+    { value: 'single-elim', label: 'Single elimination' },
+  ]
+}
+
 /** The published "Bay Area Open 2026" with a single Open Singles event. */
 export function buildTournament(
   overrides: Partial<Tournament> = {},
@@ -649,6 +670,9 @@ export function buildTournament(
     // NO SOLVE YET — the designed state every tournament is born in. A fixture that
     // wants a row on the strip passes a `buildScheduleSolve()` override.
     latestScheduleSolve: null,
+    // The DETAIL payload's catalogue, because this builds a tournament as a page holds
+    // one. A list-row fixture passes `drawTypes: null` — the shape that route sends.
+    drawTypes: buildDrawTypes(),
     ...overrides,
   }
 }

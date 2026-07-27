@@ -335,6 +335,10 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     // model besides: `draftToCreateBody` does not propagate this, exactly as it
     // drops `status`.
     latestScheduleSolve: null,
+    // No catalogue: this draft has never been fetched, so nothing has served one
+    // (ADR 20260726). `null` is "not sent", not "no draw types exist" — the created
+    // tournament's own detail payload brings the real one.
+    drawTypes: null,
   }
 }
 

@@ -66,6 +66,13 @@ const SAY = {
    * would be putting words in the server's mouth that it can no longer say. This one it
    * emits for real, and permanently. */
   noPools: 'A round-robin draw needs at least one pool.',
+  /** The bracket's twin of the sentence above: a single-elimination event whose field is
+   * one player. Also permanent, and also about the event's *configuration* rather than
+   * about its type — which, since the enum shrank, is the only kind of 422 a cut has
+   * left. */
+  loneEntrant:
+    'A single-elimination draw needs at least 2 entrants — a bracket of one has ' +
+    'nobody to play.',
   /** The title over a refused **start** — named after the edge the director clicked,
    * never after the wire call. */
   cannotStart: "Couldn't start the tournament",
@@ -204,18 +211,20 @@ test.describe('Tournaments · cutting the draw', () => {
     await expect(pom.toasts).toHaveCount(0)
   })
 
-  test('a draw type with no generator is REFUSED (422), in the panel, in the server’s words', async ({
+  test('a round-robin with NO POOLS is REFUSED (422), in the panel, in the server’s words', async ({
     page,
   }) => {
     // The default seed's U1500 Singles is a round-robin with NO POOLS, so there is
     // nowhere to deal the field: the refusal lands before the entrants are even looked
     // at, and the sentence is the *answer* — it names what to change.
     //
-    // The subject used to be Open Singles, refused for having a draw type nothing could
-    // plan. That refusal is gone at the source: `DrawType` now holds only types the
-    // server has a strategy for (ADR 20260726), so no valid event can be in that state.
-    // A pool-less draw is the refusal that replaces it, and unlike the old one it is
-    // permanent.
+    // This spec used to drive Open Singles and was titled for a draw type nothing could
+    // plan. That refusal no longer exists: `DrawType` holds only the types the server has
+    // a strategy for (ADR 20260726), so no valid event can be in that state and no server
+    // will ever send that sentence. The claim the spec protects — the panel echoes the
+    // server's refusal inline, in the server's own words, with no toast — is unchanged;
+    // only its subject moved, to a refusal that is about an event's *configuration* and
+    // is therefore permanent.
     const { pom, store } = await TournamentDetailPage.navigateTo(page)
     const event = EVENT.EMPTY
 
@@ -237,6 +246,100 @@ test.describe('Tournaments · cutting the draw', () => {
     // …and it was a 422 from the draw route, not an accident of an unmocked call falling
     // through to a 404. Without this line the test would pass just as happily against no
     // draw endpoint at all.
+    expect(store.unhandled).toEqual([])
+  })
+
+  test('a SINGLE-ELIM event cuts into a bracket, with its byes left unsaid', async ({
+    page,
+  }) => {
+    // The other draw type the server can run (#785), cut in a browser — which nothing in
+    // this suite had ever done. Every seeded event here is round-robin, so the stub's
+    // bracket arm, and the columnar `Bracket` renderer the panel swaps in for it, were
+    // reachable by no permanent spec: the arm could have been reverted to a refusal and
+    // the whole suite would have stayed green.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      bracket: true,
+    })
+    const event = EVENT.BRACKET
+
+    await expect(pom.drawEmpty(event)).toContainText(SAY.noDraw)
+    expect(store.fixturesOf(event)).toEqual([])
+
+    await pom.generateDrawButton(event).click()
+
+    // A field of FIVE in a bracket of eight. Three of the slots are phantom, so seeds 1,
+    // 2 and 3 bye — and the whole bracket is these four cards:
+    //
+    //   Quarterfinals   Semifinals            Final
+    //   4 vs 5          1 vs (winner of QF)   TBD vs TBD
+    //                   3 vs 2
+    //
+    // The round NAMES are read back off the final (ADR-0785), which is why round 1 is
+    // "Quarterfinals" here and would be a lone "Final" in a two-player event.
+    await expect(pom.bracket(event)).toBeVisible()
+    await expect(pom.bracketRound(event, 'Quarterfinals')).toHaveText([
+      'player.4 vs player.5',
+    ])
+    await expect(pom.bracketRound(event, 'Semifinals')).toHaveText([
+      'player.1 vs TBD',
+      'player.3 vs player.2',
+    ])
+    await expect(pom.bracketRound(event, 'Final')).toHaveText(['TBD vs TBD'])
+
+    // THE bracket assertion (ADR-0786): **a bye is the absence of a fixture.** Round 1
+    // holds ONE card, not four with three empty halves, and the byed seeds appear by
+    // name one column along instead. A planner that emitted a row per phantom seat, or a
+    // renderer that drew the word, would pass every line above and fail these two.
+    await expect(pom.fixtureLines(event)).toHaveCount(4)
+    await expect(pom.drawPanel(event)).not.toContainText(/bye/i)
+    // `TBD` is on the card, and legitimately: a semifinal whose feeder has not been
+    // played is a real pairing with one half still being decided. It is NOT a bye, and
+    // the count above is what keeps the two apart.
+
+    // A bracket is UN-POOLED — the event has no pools and would ignore them if it had —
+    // so the pooled renderer must not appear at all. The two are different components,
+    // and "the bracket rendered" and "no pool card rendered" are two claims.
+    await expect(pom.poolDraw(event, 'Pool A')).toHaveCount(0)
+
+    // The SERVER cut it, and every fixture it dealt belongs to no pool.
+    const fixtures = store.fixturesOf(event)
+    expect(fixtures).toHaveLength(4)
+    expect(fixtures.every((f) => f.pool_id === null)).toBe(true)
+
+    await expect(pom.drawNotice(event)).toHaveCount(0)
+    await expect(pom.toasts).toHaveCount(0)
+    expect(store.unhandled).toEqual([])
+  })
+
+  test('a bracket with a LONE entrant is REFUSED (422), in the panel, in the server’s words', async ({
+    page,
+  }) => {
+    // The bracket twin of the pool-less refusal above, and the other half of the stub's
+    // single-elim arm: a field of one has nobody to play. Kept because a refusal nothing
+    // exercises is a refusal that can be quietly deleted — and because the two 422s
+    // together are the whole of what a cut can now refuse for, the draw-TYPE arm having
+    // left the enum (ADR 20260726).
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      bracket: true,
+    })
+    const event = EVENT.LONE
+
+    await pom.generateDrawButton(event).click()
+
+    await expect(pom.drawNotice(event)).toBeVisible()
+    await expect(pom.drawNotice(event)).toContainText(SAY.cannotDraw)
+    await expect(pom.drawNotice(event)).toContainText(SAY.loneEntrant)
+    await expect(pom.toasts).toHaveCount(0)
+
+    // Nothing drawn, here or on the server, and the button is still offered: the refusal
+    // is about the event's field, which the director can go and change.
+    await expect(pom.bracket(event)).toHaveCount(0)
+    await expect(pom.drawEmpty(event)).toContainText(SAY.noDraw)
+    await expect(pom.generateDrawButton(event)).toBeVisible()
+    expect(store.fixturesOf(event)).toEqual([])
+    // …and the event beside it is untouched: a refused cut refuses one event, not the
+    // tab. (It is the same tournament, and the bracket event is still uncut.)
+    expect(store.fixturesOf(EVENT.BRACKET)).toEqual([])
     expect(store.unhandled).toEqual([])
   })
 
@@ -437,6 +540,90 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
     ])
     await expect(pom.toasts).toHaveCount(0)
     expect(store.unhandled).toEqual([])
+  })
+})
+
+/**
+ * The **draw types a director can pick** (ADR 20260726), through the real browser.
+ *
+ * A row in the API's `draw_types` table means "this draw type has an implementation", and
+ * the tournament-detail payload serves those rows (`draw_type_catalogue`). The client
+ * keeps no list of its own: the picker renders what it was sent. So "no un-backed slug is
+ * selectable" is settled **at the point of choice** — the director never picks a format
+ * the server cannot run, enters a whole field, and meets a 422 four steps later.
+ *
+ * The component tests (`basics-section.test.tsx`) already drive the picker off a
+ * hand-written catalogue. What only a browser adds is the CHAIN: the payload really
+ * carries the rows, they really survive the Zod parse at the fetch boundary
+ * (`parseDrawTypeCatalogue`), they are really threaded down through the page into the
+ * editor's Basics tab, and a real radix listbox really renders them. Every link of that
+ * is code the vitest suite stubs past.
+ */
+test.describe('Tournaments · the draw types a director is offered', () => {
+  /** The two labels the API SEEDS, verbatim — a copy of the migration's `DRAW_TYPE_SEED`,
+   * as the stub's catalogue is. Spelled out here rather than imported for the same reason
+   * `SAY` is: an assertion that read the labels out of the fixture it is asserting on
+   * could only ever prove the fixture equals itself. */
+  const SEEDED_LABELS = ['Round robin', 'Single elimination']
+
+  test('offers exactly the two seeded draw types, in the server’s words', async ({
+    page,
+  }) => {
+    // The default seed, whose events are all uncut — so the picker is live rather than
+    // frozen (a cut draw disables it; that case is two describes up).
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditor(EVENT.JOURNEY)
+    await expect(pom.eventEditor).toBeVisible()
+
+    // EXACTLY these, and in this order. `toEqual` is the assertion the claim needs:
+    // "double elimination", "Swiss" and "round robin then knockout" were all on this
+    // menu, and each one let a director author an event nothing could ever cut. They
+    // left the API's enum, so they are not seeded, so they are not here — and a
+    // `toContain` pair would not have noticed if they came back.
+    expect(await pom.drawTypeOptions()).toEqual(SEEDED_LABELS)
+
+    expect(store.unhandled).toEqual([])
+  })
+
+  test('follows the SERVED catalogue — its labels and its display order', async ({
+    page,
+  }) => {
+    // The falsification for the spec above, which on its own would pass just as happily
+    // against the hardcoded `DRAW_TYPE_OPTIONS` this ADR deleted. Serve a catalogue that
+    // agrees with the seed about nothing a client could guess: different words, and an
+    // ARRAY order that contradicts `display_order` (so a picker rendering the array as it
+    // came would put these the wrong way round, and one sorting alphabetically would
+    // too).
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      drawTypeCatalogue: [
+        {
+          key: 'single-elim',
+          name: 'Knockout bracket',
+          description: 'Lose once and you are out.',
+          display_order: 2,
+        },
+        {
+          key: 'round-robin',
+          name: 'Everyone plays everyone',
+          description: 'Every entrant plays every other in their pool.',
+          display_order: 1,
+        },
+      ],
+    })
+
+    await pom.openEditor(EVENT.JOURNEY)
+    await expect(pom.eventEditor).toBeVisible()
+
+    expect(await pom.drawTypeOptions()).toEqual([
+      'Everyone plays everyone',
+      'Knockout bracket',
+    ])
+    // And the seeded words are gone with the seeded rows — the picker holds no copy of
+    // its own to fall back on.
+    for (const label of SEEDED_LABELS) {
+      await expect(page.getByRole('option', { name: label })).toHaveCount(0)
+    }
   })
 })
 

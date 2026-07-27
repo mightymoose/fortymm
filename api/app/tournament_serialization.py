@@ -35,6 +35,7 @@ from app.results import (
     results_for,
 )
 from app.schemas.tournament import (
+    DrawTypeRead,
     EventEntryFull,
     EventEntryOpen,
     EventEntryRatingIneligible,
@@ -447,6 +448,7 @@ def serialize_detail(
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
     latest_schedule_solve: ScheduleSolve | None,
+    draw_type_catalogue: list[DrawTypeRead] | None,
     distance_miles: float | None = None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
@@ -475,6 +477,13 @@ def serialize_detail(
             # The near-me distance in miles, or ``None`` on every read that was not
             # location-filtered (the detail read, the unfiltered/owner-scoped lists).
             "distance_miles": distance_miles,
+            # The selectable draw formats, already ordered by the query that read them
+            # off the ``draw_types`` table — passed in rather than fetched here for the
+            # same reason ``fixtures`` is, and taken from the table rather than the
+            # ``DrawType`` enum because the table is what gates the choice (ADR "a draw
+            # type is a seeded row, and the enum holds only what runs"). ``None`` on the
+            # LIST, whose cards render no event form and so do not pay for it.
+            "draw_type_catalogue": draw_type_catalogue,
             "events": [
                 serialize_event(
                     e,

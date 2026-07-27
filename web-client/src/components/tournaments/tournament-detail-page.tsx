@@ -91,6 +91,13 @@ export const TournamentDetailPage = ({
     .filter((t): t is TournamentTable => t !== undefined)
 
   const canEdit = tournament.canEdit
+  // The draw formats this server can run, as it sent them (ADR 20260726). **This is the
+  // one place the "no catalogue" case is decided**, because this is where the payload
+  // lands: `null` means the tournament reached this page without one (the list route
+  // withholds it; a never-fetched draft has none), and the surfaces below are handed an
+  // empty catalogue rather than a nullable one. They then offer no draw type and label
+  // none — never the raw slug — instead of every renderer re-deciding the same thing.
+  const drawTypes = tournament.drawTypes ?? []
   const range = effectiveDateRange(tournament)
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
@@ -222,6 +229,7 @@ export const TournamentDetailPage = ({
             <EventsTab
               tournament={tournament}
               canEdit={canEdit}
+              drawTypes={drawTypes}
               onOpenEvent={openEvent}
               onNewEvent={openNewEvent}
             />
@@ -252,6 +260,7 @@ export const TournamentDetailPage = ({
         onOpenChange={setEditorOpen}
         event={editorEvent}
         tables={tournamentTables}
+        drawTypes={drawTypes}
         canEdit={canEdit}
         onSave={saveEvent}
         onDelete={(id) => {
