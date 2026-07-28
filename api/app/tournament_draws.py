@@ -26,7 +26,7 @@ that field must not be separated by another writer's entry (see the route).
 
 import enum
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,7 @@ from app.draws import (
     DrawConfig,
     Entrant,
     EntryId,
+    FixtureGames,
     FixtureId,
     FixtureState,
     MatchId,
@@ -87,7 +88,10 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
-def fixture_state(fixture: TournamentFixture) -> FixtureState:
+def fixture_state(
+    fixture: TournamentFixture,
+    game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
+) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
 
@@ -96,7 +100,34 @@ def fixture_state(fixture: TournamentFixture) -> FixtureState:
     lets every rule about the *shape* of a draw be tested without a database. Shared by
     every path that advances a draw (materialization at go-live #788, completion #789),
     so the projection is written once.
+
+    ``game_counts`` is the games each **side** won, keyed by match id, exactly as
+    :func:`app.tournament_queries.game_counts_by_match` returns it — and it holds
+    **only completed matches**, because that is what its caller batches over
+    (``completed_match_ids``, which filters on ``MatchStatus.completed``). An
+    in-progress match's part-scored board is not a result, so a fixture whose match has
+    not completed is simply not a key here and projects
+    :attr:`~app.draws.FixtureState.games` as ``None`` — the same absence a fixture with
+    no match at all gets. Passing nothing (the default) is "no games are known for any
+    fixture", which is what every caller that does not tabulate wants.
+
+    **side 1 ← ``entry_a``, side 2 ← ``entry_b``** (#788), the same fixed convention the
+    completion seam maps a winning side back to an entry with, so the ``(side_1,
+    side_2)`` pair is ``(entry_a, entry_b)``'s. Getting this backwards would hand a
+    strategy a mirrored scoreline that still looks like a plausible result, which is
+    what ``tests/test_tournament_draws.py`` asserts with an asymmetric one.
+
+    It is the caller — not this function — that loads the counts, because
+    ``advance()``'s current caller
+    (:func:`app.tournament_materialization.materialize_event`) loads fixtures and
+    nothing else. Reading the games here would mean a query per fixture inside the
+    projection; the batched load belongs at the seam, alongside the fixture load.
     """
+    games = (
+        game_counts.get(fixture.match_id)
+        if game_counts is not None and fixture.match_id is not None
+        else None
+    )
     return FixtureState(
         fixture_id=FixtureId(fixture.id),
         pool_id=PoolId(fixture.pool_id) if fixture.pool_id is not None else None,
@@ -114,6 +145,11 @@ def fixture_state(fixture: TournamentFixture) -> FixtureState:
             else None
         ),
         match_id=MatchId(fixture.match_id) if fixture.match_id is not None else None,
+        games=(
+            FixtureGames(entry_a_games=games[0], entry_b_games=games[1])
+            if games is not None
+            else None
+        ),
     )
 
 

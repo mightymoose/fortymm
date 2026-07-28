@@ -14,67 +14,55 @@ it reads out.
 
 Like ``app.draws`` this module is **pure**: it holds no session, issues no query, and
 imports no SQLAlchemy construct. Its whole input is small frozen value objects
-(:class:`MatchOutcome`, grouped into :class:`PoolInput` for a round-robin or
-:class:`BracketFixture` for a single-elim bracket) that the persistence layer projects
-from the fixtures' **currently-completed** matches — so nothing here is a snapshot, and
-a corrected or voided match re-derives the results the instant it leaves ``completed``,
-with no bookkeeping to keep in step (ADR-0788, "everything derives from the matches").
+(:class:`~app.pool_finishing_order.MatchOutcome`, grouped into :class:`PoolInput` for a
+round-robin or :class:`BracketFixture` for a single-elim bracket) that the persistence
+layer projects from the fixtures' **currently-completed** matches — so nothing here is a
+snapshot, and a corrected or voided match re-derives the results the instant it leaves
+``completed``, with no bookkeeping to keep in step (ADR-0788, "everything derives from
+the matches").
 
-Two arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
-table per pool, and :class:`SingleElimResults` (ADR-0785), whose shape is the bracket's
-**finishes** — each entrant's finishing position by the round it was eliminated in. The
-two shapes cross the wire as a discriminated union tagged by ``kind`` (ADR-0785); here
-they are simply two different value objects returned by two ``tabulate`` methods.
+The round-robin **tiebreak chain itself** lives in ``app.pool_finishing_order``, not
+here: the draw layer needs the same order to pick a pool's qualifiers, and this module
+already imports ``app.draws``, so a shared third module is the only place both can
+reach (ADR 20260727). ``MatchOutcome`` is re-exported from here for the callers that
+already know it by this name.
+
+Three arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
+table per pool; :class:`SingleElimResults` (ADR-0785), whose shape is the bracket's
+**finishes** — each entrant's finishing position by the round it was eliminated in; and
+:class:`RrThenKoResults` (ADR 20260727), a two-**stage** event whose shape is **both**,
+one block per stage. The shapes cross the wire as a discriminated union tagged by
+``kind`` (ADR-0785); here they are simply different value objects returned by different
+``tabulate`` methods.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
+from app.pool_finishing_order import MatchOutcome, entry_id_order, finishing_order
 
-
-@dataclass(frozen=True, slots=True)
-class MatchOutcome:
-    """One decided fixture, as the standings need to see it: who was in it, who won,
-    and the games each side took.
-
-    Projected by the caller from a fixture whose match is **currently completed** — so
-    it is a fact about live state, never a snapshot. The games are the count each entry
-    *won*, which is all the game-difference and games-won tiebreakers need — and the
-    winner falls out of them.
-    """
-
-    entry_a_id: EntryId
-    entry_b_id: EntryId
-    entry_a_games: int
-    entry_b_games: int
-
-    @property
-    def winner_entry_id(self) -> EntryId:
-        """Whichever entry took more games. A decided match has no tie (odd best-of),
-        so the higher count is always the winner — derived here rather than stored, so
-        it cannot be handed in disagreeing with the counts beside it."""
-        return (
-            self.entry_a_id
-            if self.entry_a_games > self.entry_b_games
-            else self.entry_b_id
-        )
-
-    @property
-    def loser_entry_id(self) -> EntryId:
-        """The other side of :attr:`winner_entry_id` — whichever entry took fewer
-        games. A decided match has no tie (odd best-of), so the lower count is always
-        the loser; single-elim's finishes read a fixture's loser straight off this,
-        since losing is exactly what places you (ADR-0785)."""
-        return (
-            self.entry_b_id
-            if self.entry_a_games > self.entry_b_games
-            else self.entry_a_id
-        )
+__all__ = [
+    "BracketFinishes",
+    "BracketFixture",
+    "EventResults",
+    "FinishRow",
+    # Re-exported: the value object the tabulation consumes lives in
+    # ``app.pool_finishing_order`` so the draw layer can reach it too, but every
+    # existing caller imports it from here.
+    "MatchOutcome",
+    "PoolInput",
+    "PoolStandings",
+    "RoundRobinResults",
+    "RrThenKoResults",
+    "SingleElimResults",
+    "StandingRow",
+    "StandingsThenFinishes",
+    "results_for",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,30 +187,31 @@ class BracketFinishes:
     champion: EntryId | None
 
 
-@dataclass(slots=True)
-class _Stat:
-    """A mutable per-entry accumulator — private to the tabulation, never returned."""
+@dataclass(frozen=True, slots=True)
+class StandingsThenFinishes:
+    """A round-robin-then-knockout event's results: **one block per stage** — the pool
+    stage's standings *and* the knockout stage's finishes — read out together (ADR
+    20260727, "results are a third arm of the wire union").
 
-    entry_id: EntryId
-    played: int = 0
-    wins: int = 0
-    losses: int = 0
-    games_won: int = 0
-    games_lost: int = 0
+    Both blocks are exactly what the one-stage shapes carry: ``pools`` is
+    :class:`EventResults`' standings, ``finishes`` is :class:`BracketFinishes`' ranked
+    rows, each still live and partial — pool rows appear before a pool has finished, and
+    only *placed* knockout entrants have a finish. Neither is a new reading of a stage;
+    see :class:`RrThenKoResults`.
 
-    @property
-    def game_difference(self) -> int:
-        return self.games_won - self.games_lost
+    ``champion`` is the **knockout final's winner, never a pool leader** (CONTEXT.md,
+    "Champion"): the pool stage only seeds the bracket, so topping a pool wins nothing.
+    It is ``None`` until that final is decided — which, since the final cannot be
+    decided before the pools that seat it, is also the only way it can be non-``None``.
 
+    ``complete`` is **both stages decided**, and the two are asserted separately rather
+    than one inferred from the other. See :meth:`RrThenKoResults.tabulate`.
+    """
 
-# The tiebreak chain, after wins (which groups) and the two-way head-to-head (which
-# refines a pair): each entry maps to a value where HIGHER is better, tried in order.
-# A new comparator is **appended** here, not surgically inserted between the existing
-# ones — the chain is data, so extending it touches nothing already in it (ADR-0788).
-_TIEBREAKERS: tuple[Callable[[_Stat], int], ...] = (
-    lambda stat: stat.game_difference,
-    lambda stat: stat.games_won,
-)
+    pools: tuple[PoolStandings, ...]
+    finishes: tuple[FinishRow, ...]
+    complete: bool
+    champion: EntryId | None
 
 
 def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
@@ -252,18 +241,12 @@ def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
 class RoundRobinResults:
     """A round-robin event's results: a standings table per pool.
 
-    Each pool is ordered by an extensible chain of tiebreakers (ADR-0788):
-
-    1. **wins** — most match wins first;
-    2. **head-to-head**, *only when exactly two entries are tied* on wins — the one
-       that beat the other ranks above it. A three-or-more-way tie can cycle (A beat B
-       beat C beat A), so it is **not** broken head-to-head; it falls straight through
-       to the game tiebreakers rather than a recursive mini-league;
-    3. **game difference** — games won minus games lost;
-    4. **games won**.
-
-    The entry id is the final, deterministic tiebreak, so a pool in which two entries
-    are genuinely level on every count still orders the same way on every read.
+    Each pool is ordered by :func:`~app.pool_finishing_order.finishing_order` — the
+    extensible tiebreak chain of ADR-0788 (wins, then head-to-head when exactly two are
+    tied, then game difference, then games won, then the entry id as a deterministic
+    final fallback). That chain lives in its own module because the draw layer reads the
+    same order to pick a pool's qualifiers; this strategy is the *standings* reading of
+    it, and the two cannot drift because there is only one of them (ADR 20260727).
     """
 
     def tabulate(self, pools: Sequence[PoolInput]) -> EventResults:
@@ -325,7 +308,7 @@ class SingleElimResults:
         # Ranked by position; the entry id is the final *list*-order tiebreak so tied
         # rows come out deterministically — without conferring an order on the tie
         # itself (the shared ``position`` is what the reader sees).
-        rows.sort(key=lambda row: (row.position, _entry_id_order(row.entry_id)))
+        rows.sort(key=lambda row: (row.position, entry_id_order(row.entry_id)))
         # Complete once every fixture is decided — which is exactly when the final is,
         # so ``champion`` is non-None precisely then. A voided (never-completed) fixture
         # holds the bracket incomplete, honestly: its winner was never seated forward,
@@ -337,98 +320,68 @@ class SingleElimResults:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RrThenKoResults:
+    """A round-robin-then-knockout event's results: **both stages, read out together**
+    (ADR 20260727).
+
+    It computes neither stage itself. The pool stage *is*
+    :meth:`RoundRobinResults.tabulate` and the knockout stage *is*
+    :meth:`SingleElimResults.tabulate` — the same two readings a pure round-robin and a
+    pure single-elim get — so "an rr-then-ko event's pools stand exactly as a
+    round-robin's do, and its bracket places exactly as a single-elim's do" is true
+    structurally rather than by three implementations agreeing. This strategy's whole
+    job is to run both and say what the *event* (as opposed to either stage) makes of
+    them: who is champion, and whether it is over. It is the results-side mirror of
+    :class:`~app.draws.RrThenKoStrategy`, which composes the same two draw strategies.
+
+    Live and partial like every other shape, in either stage independently: pools
+    part-played read as a live table with an empty bracket behind them, and pools
+    decided with the bracket mid-flight read as a settled table plus the finishes of
+    whoever has been knocked out so far.
+    """
+
+    def tabulate(
+        self, pools: Sequence[PoolInput], bracket: Sequence[BracketFixture]
+    ) -> StandingsThenFinishes:
+        pool_stage = RoundRobinResults().tabulate(pools)
+        knockout_stage = SingleElimResults().tabulate(bracket)
+        return StandingsThenFinishes(
+            pools=pool_stage.pools,
+            finishes=knockout_stage.finishes,
+            # Both stages, asserted separately. The conjunction's left half is not
+            # redundant even though it is implied: nothing is seated into the bracket
+            # until a pool finishes, so a decided final entails decided pools. Deriving
+            # ``complete`` from the bracket alone would make this shape's headline claim
+            # depend on an invariant enforced two modules away (``RrThenKoStrategy``'s
+            # seating) rather than on the standings it is handed — and it would read as
+            # complete for any caller that projects the two stages inconsistently.
+            complete=pool_stage.complete and knockout_stage.complete,
+            # The champion is the **bracket's**. ``pool_stage.champion`` is deliberately
+            # dropped, and it is not always ``None``: a legal one-pool rr-then-ko (a
+            # league, then a playoff) makes ``RoundRobinResults`` crown its complete
+            # pool's leader, who is merely the top *seed* of the knockout here. Taking
+            # it would crown somebody the playoff went on to eliminate.
+            champion=knockout_stage.champion,
+        )
+
+
 def _pool_standings(pool: PoolInput) -> PoolStandings:
-    stats: dict[EntryId, _Stat] = {
-        entry_id: _Stat(entry_id=entry_id) for entry_id in pool.entrants
-    }
-    for outcome in pool.outcomes:
-        _record(stats[outcome.entry_a_id], stats[outcome.entry_b_id], outcome)
-    ordered = _order(list(stats.values()), pool.outcomes)
+    ordered = finishing_order(pool.entrants, pool.outcomes)
     rows = tuple(
         StandingRow(
-            entry_id=stat.entry_id,
+            entry_id=tally.entry_id,
             rank=rank,
-            played=stat.played,
-            wins=stat.wins,
-            losses=stat.losses,
-            games_won=stat.games_won,
-            games_lost=stat.games_lost,
+            played=tally.played,
+            wins=tally.wins,
+            losses=tally.losses,
+            games_won=tally.games_won,
+            games_lost=tally.games_lost,
         )
-        for rank, stat in enumerate(ordered, start=1)
+        for rank, tally in enumerate(ordered, start=1)
     )
     return PoolStandings(
         pool_id=pool.pool_id,
         rows=rows,
         complete=len(pool.outcomes) == pool.fixture_count,
     )
-
-
-def _record(a: _Stat, b: _Stat, outcome: MatchOutcome) -> None:
-    a.played += 1
-    b.played += 1
-    a.games_won += outcome.entry_a_games
-    a.games_lost += outcome.entry_b_games
-    b.games_won += outcome.entry_b_games
-    b.games_lost += outcome.entry_a_games
-    if outcome.winner_entry_id == outcome.entry_a_id:
-        a.wins += 1
-        b.losses += 1
-    else:
-        b.wins += 1
-        a.losses += 1
-
-
-def _order(stats: list[_Stat], outcomes: Sequence[MatchOutcome]) -> list[_Stat]:
-    """The pool's finishing order: group by wins (descending), then break each tie."""
-    by_wins: dict[int, list[_Stat]] = defaultdict(list)
-    for stat in stats:
-        by_wins[stat.wins].append(stat)
-    ordered: list[_Stat] = []
-    for wins in sorted(by_wins, reverse=True):
-        ordered.extend(_break_tie(by_wins[wins], outcomes))
-    return ordered
-
-
-def _break_tie(group: list[_Stat], outcomes: Sequence[MatchOutcome]) -> list[_Stat]:
-    """Order a group of entries level on wins.
-
-    A **two-way** tie is broken head-to-head when the pair has actually met — the
-    winner of that match ranks above the loser. A larger tie (which can cycle) and a
-    two-way tie whose pair has not met yet (mid-pool) fall through to the game
-    tiebreakers.
-    """
-    if len(group) == 2:
-        decided = _head_to_head(group[0], group[1], outcomes)
-        if decided is not None:
-            return decided
-    return sorted(group, key=_scalar_key)
-
-
-def _head_to_head(
-    first: _Stat, second: _Stat, outcomes: Sequence[MatchOutcome]
-) -> list[_Stat] | None:
-    """``[winner, loser]`` if these two have met, else ``None`` (not yet played)."""
-    pair = {first.entry_id, second.entry_id}
-    for outcome in outcomes:
-        if {outcome.entry_a_id, outcome.entry_b_id} == pair:
-            if outcome.winner_entry_id == first.entry_id:
-                return [first, second]
-            return [second, first]
-    return None
-
-
-def _scalar_key(stat: _Stat) -> tuple[int, ...]:
-    """The tiebreak-chain sort key: each comparator negated (higher is better ⇒
-    earlier), then the entry id as the final deterministic tiebreak so the order is
-    total."""
-    return (*(-tiebreaker(stat) for tiebreaker in _TIEBREAKERS), _entry_order(stat))
-
-
-def _entry_order(stat: _Stat) -> int:
-    return _entry_id_order(stat.entry_id)
-
-
-def _entry_id_order(entry_id: EntryId) -> int:
-    """A total, deterministic order over entry ids — the final list-order tiebreak both
-    shapes fall back to so equal rows never come out in a nondeterministic order."""
-    return int.from_bytes(entry_id.bytes, "big")
