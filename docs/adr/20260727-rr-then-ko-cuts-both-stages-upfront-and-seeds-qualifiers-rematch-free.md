@@ -126,6 +126,27 @@ playing; the knockout fixture simply is not `ready` until both its sides are
 seated, which `ready_fixtures` already handles. `advance()` stays idempotent
 because `SideFill` only ever fills an empty side.
 
+**A correction that changes who qualified does not re-seat the bracket**, and we
+ship that knowingly. Because `SideFill` only fills an *empty* side, a pool match
+corrected after its pool's qualifiers were seated leaves the original qualifier
+in the bracket while the standings re-order beneath them. Single-elimination
+already behaves this way — a corrected result never un-seats a winner — so this
+is not a new class of behaviour, but rr-then-ko makes it far easier to reach:
+pool corrections are ordinary, and the window between a pool finishing and its
+qualifiers playing out is long.
+
+We considered re-seating while the knockout stage is untouched (allowed only
+before any KO match has materialized) and rejected it for now as new state to
+reason about for a case that has not yet been observed; and refusing the
+correction outright, which makes a genuine scoring error uncorrectable — much
+worse than the disagreement it prevents. If this bites in practice, the
+untouched-bracket re-seat is the option to reach for.
+
+**The seeded row's director-facing copy** is `Round-robin then knockout` /
+`Pools play all-play-all, then the top finishers from each pool meet in a
+knockout bracket.` Recorded here because `draw_types.name` and `.description`
+are seed data, so changing them is a migration.
+
 **The pool finishing order moves to a shared pure module that both `app.draws`
 and `app.results` import.** The tiebreak chain is not reimplemented — it is the
 existing one, relocated so both callers can reach it, which resolves the import
