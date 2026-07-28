@@ -55,9 +55,12 @@ builder sits inside a per-event loop of a whole-tournament build. That is why
 rr-then-ko is skipped rather than refused: refusing it would take every unrelated
 round-robin event beside it down too (ADR 20260727).
 
-The per-event :class:`EventFieldSummary` (the count used) is returned alongside
-the snapshot so :mod:`app.schedule_preview_solve` composes the preview's
-honest-notes strip and per-event breakdown from it without re-deriving it.
+The per-event :class:`EventFieldSummary` (the count used, and how many knockout
+fixtures were left out) is returned alongside the snapshot so
+:mod:`app.schedule_preview_solve` composes the preview's honest-notes strip and
+per-event breakdown from it without re-deriving it — including the note that tells
+a director an rr-then-ko event's knockout stage is not in the schedule they are
+looking at.
 """
 
 from __future__ import annotations
@@ -114,10 +117,18 @@ class EventFieldSummary:
     ``field_size`` is the entrant count actually synthesized for the event (the
     override if the caller gave one, else the event's cap, else
     :data:`DEFAULT_UNCAPPED_FIELD`).
+
+    ``knockout_fixtures`` is how many of the event's drawn fixtures this preview
+    **left out** — the un-pooled knockout stage of an rr-then-ko draw (``0`` for a
+    plain round-robin, which has none). It is *measured* on the way past rather than
+    re-derived from the draw type downstream, so the honest note the caller writes
+    from it says something is missing exactly when something is (api/CLAUDE.md —
+    don't carry a field and its own derivation).
     """
 
     event_id: EventId
     field_size: int
+    knockout_fixtures: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,6 +367,9 @@ def build_preview_snapshot(
                     window=Window(start_min=to_min(start), end_min=to_min(end)),
                 )
             )
+        # Counted, not just dropped: the caller turns a non-zero count into the honest
+        # note that this event's knockout stage is missing from the schedule shown.
+        knockout_fixtures = 0
         for fixture in plan.fixtures:
             if fixture.pool_id is None:
                 # The knockout stage of an rr-then-ko draw (``pool_id IS NULL`` *is* the
@@ -364,12 +378,17 @@ def build_preview_snapshot(
                 # bracket has neither — so there is nothing to place it against, and
                 # inventing one would preview a schedule production will never run.
                 # #1228 schedules it, incrementally, as the pools that feed it resolve.
+                knockout_fixtures += 1
                 continue
             schedule_fixtures.append(
                 _schedule_fixture(plan.event.id, event_id, fixture)
             )
         summaries.append(
-            EventFieldSummary(event_id=event_id, field_size=plan.field_size)
+            EventFieldSummary(
+                event_id=event_id,
+                field_size=plan.field_size,
+                knockout_fixtures=knockout_fixtures,
+            )
         )
 
     snapshot = ScheduleSnapshot(

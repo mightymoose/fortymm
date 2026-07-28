@@ -147,14 +147,17 @@ class _PreviewPoolResolution:
 
 @dataclass(frozen=True, slots=True)
 class _PreviewEventMeta:
-    """One event's honest-notes + breakdown ingredients: its id, display ``name``
-    and the synthetic ``field_size`` the preview drew a field to. Carried from the
-    enqueue verb (which has the loaded events) to the job (which has only the pure
-    snapshot)."""
+    """One event's honest-notes + breakdown ingredients: its id, display ``name``,
+    the synthetic ``field_size`` the preview drew a field to, and how many of its
+    drawn fixtures the preview **left out** — ``knockout_fixtures``, the un-pooled
+    knockout stage of an rr-then-ko draw, ``0`` for a plain round-robin. Carried from
+    the enqueue verb (which has the loaded events) to the job (which has only the pure
+    snapshot, from which "a bracket was dropped" is no longer visible)."""
 
     event_id: str
     name: str
     field_size: int
+    knockout_fixtures: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +328,7 @@ async def request_schedule_preview(
                 event_id=summary.event_id,
                 name=event_names.get(summary.event_id, summary.event_id),
                 field_size=summary.field_size,
+                knockout_fixtures=summary.knockout_fixtures,
             )
             for summary in preview.field_summaries
         ),
@@ -613,13 +617,30 @@ def _resolve_reason(
 def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     """The always-present honest-notes strip (ADR): first the disjoint-field
     caveat that makes a preview *optimistic* (its synthetic fields are disjoint
-    across events, so it ignores multi-event contention), then one line per event
-    naming the synthetic count it assumed — so the estimate reads as the floor it
-    is, never a hidden simplification."""
+    across events, so it ignores multi-event contention), then a line for each event
+    whose knockout stage this preview left out, then one line per event naming the
+    synthetic count it assumed — so the estimate reads as the floor it is, never a
+    hidden simplification.
+
+    The knockout line is what stops the strip lying by omission about an
+    **rr-then-ko** event: the preview plans that event's whole draw but schedules only
+    its pool stage (ADR 20260727 — a bracket is placeable only incrementally, as the
+    pools that feed it resolve, which is #1228), so without a note the director reads a
+    schedule that silently covers part of their event. It is emitted off the count of
+    fixtures actually dropped, so a tournament of plain round-robins — which drops none
+    — gets the strip it always had, unchanged."""
     notes = [
         "This estimate assumes no player is entered in more than one event; a "
         "real multi-event field would take longer."
     ]
+    notes.extend(
+        f"Only the pool stage of {meta.name} is scheduled here: its knockout "
+        f"bracket ({meta.knockout_fixtures} further "
+        f"{'match' if meta.knockout_fixtures == 1 else 'matches'}) is played "
+        "after the pools finish and is not in this estimate."
+        for meta in inputs.events
+        if meta.knockout_fixtures > 0
+    )
     notes.extend(
         f"Assumed {meta.field_size} entrants for {meta.name}." for meta in inputs.events
     )

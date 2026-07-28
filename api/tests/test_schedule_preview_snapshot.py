@@ -176,6 +176,9 @@ async def test_preview_snapshot_round_robin_synthesizes_full_draw(
     summary = preview.field_summaries[0]
     assert summary.field_size == 6
     assert summary.event_id == scheduling.EventId(str(loaded.events[0].id))
+    # Nothing was left out: a round-robin has no knockout stage, so the honest-notes
+    # strip downstream has no missing-stage caveat to write.
+    assert summary.knockout_fixtures == 0
 
 
 async def test_preview_snapshot_base_is_the_earliest_window_start(
@@ -456,6 +459,12 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
         scheduling.PoolId(f"{loaded.events[0].id}:p-a")
     }
     assert preview.field_summaries[0].field_size == 6
+    # What was dropped is *counted*, not silently discarded: the top 2 of the single
+    # pool make a 2-slot bracket, so one knockout fixture was left out. This is the
+    # fact the honest-notes strip turns into "the knockout stage is not scheduled" —
+    # a builder that dropped the bracket without counting it would report 0 here and
+    # leave the director reading a partial schedule with nothing to say so.
+    assert preview.field_summaries[0].knockout_fixtures == 1
 
 
 async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
