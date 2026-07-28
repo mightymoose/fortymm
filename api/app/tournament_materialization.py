@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import Side, SideFill, ready_fixtures, strategy_for
+from app.draws import Side, SideFill, ready_fixtures
 from app.models import (
     Match,
     MatchSettings,
@@ -35,7 +35,8 @@ from app.models import (
     TournamentFixture,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
-from app.tournament_draws import fixture_state
+from app.tournament_draws import fixture_state, strategy_for_event
+from app.tournament_queries import game_counts_by_match
 
 
 async def materialize_live_draw(db: AsyncSession, tournament: Tournament) -> None:
@@ -87,9 +88,22 @@ async def materialize_event(
     ``advance()`` reports in ``ready_fixture_ids``) over the now-filled state so a
     fixture the fills just made whole (single-elim seating a decided fixture's winner
     onto its successor, #785) is materialized into a match in the **same** transaction.
-    For round-robin — the only other strategy today — the plan carries no side-fills at
-    all (every pairing is known at the cut), so that step is a no-op and its behaviour
-    is byte-identical.
+    For round-robin the plan carries no side-fills at all (every pairing is known at the
+    cut), so that step is a no-op and its behaviour is byte-identical.
+
+    **The projection loads the fixtures' game counts**, and that is load-bearing rather
+    than defensive. ``FixtureState.games`` is what a pools-then-knockout draw picks its
+    qualifiers by — the same tiebreak chain (wins → head-to-head → game difference →
+    games won) the standings on screen are ordered by (ADR 20260727) — and this seam is
+    the *only* place its ``advance()`` is ever run. Projected without them, every
+    fixture reaching ``advance()`` carries ``games=None``: the strategy refuses loudly
+    (``MissingFixtureGames``) rather than seating qualifiers computed on wins alone, so
+    the failure is not silent — but the correct outcome is that a pool finishes and its
+    qualifiers are seated, and that needs the counts. One batched load for the event,
+    beside the fixture load, exactly as the read path batches it per page
+    (``app.tournament_queries.game_counts_by_match``); reading them inside
+    ``fixture_state`` would be a query per fixture. The two strategies that do not read
+    ``games`` are unaffected.
     """
     fixtures = (
         (
@@ -105,8 +119,9 @@ async def materialize_event(
         # this is unreachable on that path (every event has a current draw). Guarding it
         # keeps the function honest for a future caller that has no such precondition.
         return
-    strategy = strategy_for(event.draw_settings.draw_type)
-    plan = strategy.advance([fixture_state(f) for f in fixtures])
+    game_counts = await _completed_game_counts(db, fixtures)
+    strategy = strategy_for_event(event)
+    plan = strategy.advance([fixture_state(f, game_counts) for f in fixtures])
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
     # fixture made whole by them seats its match in this same transaction. A fill only
     # ever seats a still-empty side (``advance()`` never plans one over a filled side,
@@ -122,7 +137,7 @@ async def materialize_event(
     # a fixture the fills completed is seen ready here. Fills only add sides (never a
     # match or a winner), so this recomputed ready set is a superset of the first
     # plan's and needs no second side-fill pass beyond the loop above.
-    ready = set(ready_fixtures([fixture_state(f) for f in fixtures]))
+    ready = set(ready_fixtures([fixture_state(f, game_counts) for f in fixtures]))
     ready_fixture_rows = [f for f in fixtures if f.id in ready]
     if not ready_fixture_rows:
         return
@@ -153,6 +168,43 @@ async def materialize_event(
     await db.flush()
     for fixture, match in built:
         fixture.match_id = match.id
+
+
+async def _completed_game_counts(
+    db: AsyncSession, fixtures: Sequence[TournamentFixture]
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """The games each side won, for every one of these fixtures' **completed** matches —
+    keyed by match id, the shape :func:`app.tournament_draws.fixture_state` consumes.
+
+    Two statements for the whole event, not per fixture: one to find which of the linked
+    matches are currently ``completed``, one to count their games
+    (:func:`app.tournament_queries.game_counts_by_match`, the same loader the read path
+    projects standings through — so the qualifiers a draw seats and the table a director
+    is reading are counted by one implementation).
+
+    The ``completed`` filter is the contract, not an optimization. An in-progress
+    match's
+    part-scored board is not a result; a fixture whose match has not completed projects
+    ``games=None`` and its pool is simply not finished yet, which is exactly how a
+    result
+    under correction un-finishes the pool it was in rather than freezing a stale
+    qualifier list (ADR 20260727).
+    """
+    match_ids = [f.match_id for f in fixtures if f.match_id is not None]
+    if not match_ids:
+        return {}
+    completed = (
+        (
+            await db.execute(
+                select(Match.id).where(
+                    Match.id.in_(match_ids), Match.status == MatchStatus.completed
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return await game_counts_by_match(db, list(completed))
 
 
 async def _entry_user_ids(

@@ -62,6 +62,7 @@ class DrawType(enum.Enum):
     # agree) as well as the JSON the clients send.
     single_elim = "single-elim"
     round_robin = "round-robin"
+    rr_then_ko = "rr-then-ko"
 
 
 class Tournament(Base):

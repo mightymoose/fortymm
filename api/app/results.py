@@ -124,10 +124,14 @@ class EventResults:
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
-    knockout stage to join its pool winners (that is a round-robin-then-knockout draw
-    type, which does not exist yet — not this slice), so
-    ``champion`` is ``None`` there even when the event is complete. ``None`` also while
-    any fixture is still to be played.
+    knockout stage to join its pool winners, so ``champion`` is ``None`` there even when
+    the event is complete. ``None`` also while any fixture is still to be played.
+
+    That carve-out is unchanged by the arrival of the ``rr-then-ko`` draw type (ADR
+    20260727): a pools-then-knockout event *does* have a knockout stage to join its pool
+    winners, and it reads out as :class:`StandingsThenFinishes` — a **different shape**,
+    crowned from its bracket. This one still describes a draw with pools and nothing
+    after them, and for such a draw the claim is as true as it ever was.
     """
 
     pools: tuple[PoolStandings, ...]
@@ -214,7 +218,9 @@ class StandingsThenFinishes:
     champion: EntryId | None
 
 
-def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
+def results_for(
+    draw_type: DrawType,
+) -> RoundRobinResults | SingleElimResults | RrThenKoResults:
     """The results strategy for this draw type.
 
     **Total**, exactly as ``app.draws.strategy_for``: an exhaustive ``match`` with
@@ -225,16 +231,24 @@ def results_for(draw_type: DrawType) -> RoundRobinResults | SingleElimResults:
 
     The return type is a **union tagged by shape** (ADR-0785): round-robin's
     :class:`RoundRobinResults` reads out a **standings** table, single-elim's
-    :class:`SingleElimResults` reads out the bracket's **finishes**. A caller narrows
-    the union (an exhaustive ``match`` over the two concrete strategies) to call the
-    right ``tabulate`` — so a third strategy is a type error at every call site until
-    handled. A further draw type lands its own strategy and widens this union.
+    :class:`SingleElimResults` reads out the bracket's **finishes**, and rr-then-ko's
+    :class:`RrThenKoResults` reads out **both**. A caller narrows the union (an
+    exhaustive ``match`` over the concrete strategies) to call the right ``tabulate`` —
+    so a further strategy is a type error at every call site until handled.
+
+    The narrowing is not uniform, and cannot be: :meth:`RrThenKoResults.tabulate` takes
+    **two** stage inputs where its siblings take one, because a two-stage event has two
+    stages to project (the pooled fixtures and the ``pool_id IS NULL`` ones). That is
+    what the ``match`` at the call site is for — each arm builds the input its own shape
+    needs, rather than a single call signature pretending every draw type has one stage.
     """
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinResults()
         case DrawType.single_elim:
             return SingleElimResults()
+        case DrawType.rr_then_ko:
+            return RrThenKoResults()
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,9 @@ reads the event's field, hands it to the strategy, and writes what comes back. T
 split is what lets every rule about *what a draw looks like* be tested with literals,
 and leaves this module with only the three things a database is actually needed for:
 
+- **the strategy** (``strategy_for_event``) — the one door onto ``app.draws``'
+  dispatch, because picking a strategy now takes the event's whole draw configuration
+  (its type *and*, for ``rr-then-ko``, its qualifier count) rather than a bare enum.
 - **the field** (``active_draw_entrants``) — the *active* entries, in the shape
   ``order_entrants`` wants. Withdrawal is a soft-delete, so a withdrawn entry is not an
   entrant (ADR-0016) and has no place in a draw.
@@ -33,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
     DrawConfig,
+    DrawStrategy,
     Entrant,
     EntryId,
     FixtureGames,
@@ -159,9 +163,8 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     against.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with
-    (``strategy_for(event.draw_settings.draw_type)``), and it does so before this config
-    exists; copying it in here as well gave the domain
+    is what ``cut_draw`` picks the *strategy* with (``strategy_for_event(event)``), and
+    it does so before this config exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
@@ -178,6 +181,27 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     """
     return DrawConfig(
         pool_ids=tuple(PoolId(Pool.model_validate(pool).id) for pool in event.pools),
+    )
+
+
+def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
+    """The strategy that cuts and advances **this event's** draw — the one production
+    door onto :func:`app.draws.strategy_for`.
+
+    ``strategy_for`` is keyword-strict about the qualifier count and has no default, so
+    somebody has to read it off the event; this is that somebody, and it is one function
+    rather than three call sites each reaching into ``event.draw_settings`` for a pair
+    of columns. Which matters because forgetting the second column does not fail — it
+    produces a differently-configured strategy — and because the two facts live on one
+    row precisely so they are read together (ADR "an event's draw configuration is a
+    row, not a column").
+
+    The settings row rides along with the event (``lazy="joined"``), so this is
+    attribute access, not a lazy load in async context.
+    """
+    return strategy_for(
+        event.draw_settings.draw_type,
+        qualifiers_per_pool=event.draw_settings.qualifiers_per_pool,
     )
 
 
@@ -441,7 +465,7 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for(event.draw_settings.draw_type)
+    strategy = strategy_for_event(event)
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )

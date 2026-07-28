@@ -201,11 +201,34 @@ class TestOrderEntrants:
 
 class TestStrategyRegistry:
     def test_round_robin_resolves_to_the_round_robin_strategy(self) -> None:
-        assert isinstance(strategy_for(DrawType.round_robin), RoundRobinStrategy)
+        assert isinstance(
+            strategy_for(DrawType.round_robin, qualifiers_per_pool=None),
+            RoundRobinStrategy,
+        )
 
     def test_single_elim_resolves_to_the_single_elim_strategy(self) -> None:
         # The second implemented arm (ADR-0785).
-        assert isinstance(strategy_for(DrawType.single_elim), SingleElimStrategy)
+        assert isinstance(
+            strategy_for(DrawType.single_elim, qualifiers_per_pool=None),
+            SingleElimStrategy,
+        )
+
+    def test_rr_then_ko_resolves_to_the_configured_rr_then_ko_strategy(self) -> None:
+        """The third arm (ADR 20260727) — and the first whose strategy is *configured*:
+        the qualifier count is not a detail of the dispatch, it is what the strategy
+        cuts with, so it is asserted to have arrived rather than merely to have been
+        accepted."""
+        strategy = strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=3)
+
+        assert strategy == RrThenKoStrategy(qualifiers_per_pool=3)
+
+    def test_rr_then_ko_without_a_qualifier_count_refuses_loudly(self) -> None:
+        """A wiring bug, not a director's mistake: the request boundary and the settings
+        table's CHECK both refuse an ``rr-then-ko`` configuration with no count, so the
+        only way here is a caller that dropped the column. Silently defaulting it would
+        cut a bracket for a K nobody chose."""
+        with pytest.raises(ValueError, match="qualifiers_per_pool"):
+            strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=None)
 
     def test_every_draw_type_resolves_to_a_strategy_and_none_refuses(self) -> None:
         """``strategy_for`` is **total** — the enum holds only draw types that run (ADR
@@ -216,9 +239,13 @@ class TestStrategyRegistry:
         without a strategy — alongside the type error the catch-all-free ``match``
         already is. It replaces the old "unimplemented types raise": that refusal has
         no input any more, because Pydantic rejects an un-backed slug at the request
-        boundary instead."""
+        boundary instead.
+
+        Every member is handed a qualifier count, because handing one to a draw type
+        that takes none must be *harmless* — a configuration-free strategy ignores it —
+        while the one that needs it must not be left guessing."""
         for draw_type in DrawType:
-            assert strategy_for(draw_type) is not None
+            assert strategy_for(draw_type, qualifiers_per_pool=2) is not None
 
     def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
         self,

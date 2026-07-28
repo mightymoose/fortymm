@@ -781,10 +781,10 @@ class RrThenKoStrategy:
         return fills
 
 
-#: Static proof that :class:`RrThenKoStrategy` satisfies :class:`DrawStrategy`. For the
-#: other two that check falls out of :func:`strategy_for`'s return type; rr-then-ko does
-#: not reach it until the enum member lands, so the conformance is asserted here instead
-#: of going unchecked in the meantime.
+#: Static proof that :class:`RrThenKoStrategy` satisfies :class:`DrawStrategy`. It is
+#: now redundant — the enum member landed (#1227) and :func:`strategy_for`'s return type
+#: checks all three arms — and it is kept because it is *free*, and because it names the
+#: conformance at the class rather than leaving it a side effect of a dispatch table.
 _RR_THEN_KO_IS_A_STRATEGY: DrawStrategy = RrThenKoStrategy(qualifiers_per_pool=1)
 
 
@@ -878,8 +878,11 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     return tuple(f.fixture_id for f in ready)
 
 
-def strategy_for(draw_type: DrawType) -> DrawStrategy:
-    """The strategy that cuts and advances this draw type.
+def strategy_for(
+    draw_type: DrawType, *, qualifiers_per_pool: int | None
+) -> DrawStrategy:
+    """The strategy that cuts and advances this draw type, configured as the event's
+    draw-settings row configures it.
 
     **Total** — every :class:`DrawType` returns a strategy, and there is no refusal arm
     left to reach. That is the whole point of holding only what runs in the enum (ADR
@@ -890,12 +893,36 @@ def strategy_for(draw_type: DrawType) -> DrawStrategy:
     Still an exhaustive ``match`` with **no catch-all**, and now with nowhere to park a
     new member lazily: adding one to :class:`DrawType` fails to type-check here until
     its strategy exists.
+
+    ``qualifiers_per_pool`` is the settings row's **K** column, passed straight through:
+    ``rr-then-ko`` is the first draw type whose strategy takes a *parameter*, and the
+    parameter lives on the event, not in this module. It is keyword-only and has **no
+    default**, so every call site has to answer "where does K come from" rather than
+    silently taking a strategy configured by omission — and the two draw types that take
+    no configuration say ``None`` out loud. Production callers do not spell the pair
+    themselves; :func:`app.tournament_draws.strategy_for_event` reads both facts off the
+    one row that holds them.
+
+    A ``None`` on the ``rr-then-ko`` arm is a **programmer** error, not a director's,
+    and raises :class:`ValueError` — the same status
+    :meth:`RrThenKoStrategy.__post_init__` gives ``K < 1``. Nothing a director can type
+    reaches it: the request boundary refuses an ``rr-then-ko`` payload with no qualifier
+    count (422) and the settings table's ``CHECK`` refuses such a row outright, so the
+    only way here is a caller that dropped the column on the floor — which is exactly
+    the silent-wrong-answer this refuses to give.
     """
     match draw_type:
         case DrawType.round_robin:
             return RoundRobinStrategy()
         case DrawType.single_elim:
             return SingleElimStrategy()
+        case DrawType.rr_then_ko:
+            if qualifiers_per_pool is None:
+                raise ValueError(
+                    f"A {DrawType.rr_then_ko.value!r} draw needs a qualifiers_per_pool "
+                    "— the event's draw settings carry it, and the caller passed None."
+                )
+            return RrThenKoStrategy(qualifiers_per_pool=qualifiers_per_pool)
 
 
 def _snake(

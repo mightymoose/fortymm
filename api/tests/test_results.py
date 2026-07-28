@@ -73,6 +73,11 @@ def test_results_for_returns_the_single_elim_strategy() -> None:
     assert isinstance(results_for(DrawType.single_elim), SingleElimResults)
 
 
+def test_results_for_returns_the_rr_then_ko_strategy() -> None:
+    """The third arm (ADR 20260727) — a two-stage event reads out as both blocks."""
+    assert isinstance(results_for(DrawType.rr_then_ko), RrThenKoResults)
+
+
 def test_every_draw_type_reads_out_and_none_refuses() -> None:
     """``results_for`` is **total** — the enum holds only draw types that run (ADR "a
     draw type is a seeded row, and the enum holds only what runs"), so every member has

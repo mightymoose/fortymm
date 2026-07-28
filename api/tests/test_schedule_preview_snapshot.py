@@ -92,6 +92,7 @@ async def _add_event(
     tournament: Tournament,
     *,
     draw_type: DrawType = DrawType.round_robin,
+    qualifiers_per_pool: int | None = None,
     max_players: int | None = 6,
     pools: list[dict[str, object]] | None = None,
     length_games: int = 5,
@@ -102,7 +103,9 @@ async def _add_event(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
+        draw_settings=TournamentEventDrawSettings.for_draw_type(
+            draw_type, qualifiers_per_pool=qualifiers_per_pool
+        ),
         max_players=max_players,
         entry_fee=Decimal("0"),
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
@@ -403,7 +406,9 @@ async def test_preview_snapshot_count_override_resizes_field(
     # run (ADR "a draw type is a seeded row, …"): it *can* be cut (#785), but the
     # CP-SAT table scheduler is pool-based and a pool-less bracket has no windows to
     # solve over, so the preview must refuse it rather than invent a grid. The old
-    # double-elim / swiss / rr-then-ko subjects are no longer enum members.
+    # double-elim / swiss subjects are no longer enum members, and ``rr-then-ko`` is
+    # deliberately NOT here: it has a pool stage that schedules perfectly well, so it
+    # is previewed in part rather than refused (see the two tests below).
     [DrawType.single_elim],
 )
 async def test_preview_snapshot_unsupported_draw_raises(
@@ -416,6 +421,77 @@ async def test_preview_snapshot_unsupported_draw_raises(
 
     with pytest.raises(UnsupportedDrawType):
         build_preview_snapshot(loaded)
+
+
+async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """An ``rr-then-ko`` event is previewed, and what is previewed is its **pools**.
+
+    The knockout fixtures the cut emits alongside them (``pool_id IS NULL``) are
+    dropped: the solver places a fixture into its pool's window on its pool's tables,
+    and a bracket has neither. Scheduling it is #1228 — a freshly cut bracket is
+    entirely TBD-sided, so it is placeable only incrementally, as the pools resolve.
+
+    Six synthetic entrants in one pool, so the pool stage is C(6, 2) = 15 pairings and
+    the bracket for the top 2 would add 1 more fixture on top. The count is what
+    discriminates: a builder that passed the un-pooled fixtures through would answer 16
+    here and then trip ``_schedule_fixture``'s pool assertion.
+    """
+    owner = await make_user(db_session, "prev-rrko")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+        max_players=6,
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    assert len(preview.snapshot.fixtures) == 15
+    assert {f.pool_id for f in preview.snapshot.fixtures} == {
+        scheduling.PoolId(f"{loaded.events[0].id}:p-a")
+    }
+    assert preview.field_summaries[0].field_size == 6
+
+
+async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """The reason it is skipped rather than refused.
+
+    This builder runs a **per-event loop inside a whole-tournament build**, so a
+    refusal is not scoped to the event that raised it — it takes the preview of every
+    event beside it. A director previewing a day that happens to contain one
+    pools-then-knockout event would get no schedule at all, including for their plain
+    round-robin events. The round-robin event's own 15 fixtures are asserted present,
+    which is the claim a bare "it did not raise" would miss.
+    """
+    owner = await make_user(db_session, "prev-rrko-beside")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(db_session, tournament, name="Open Singles", max_players=6)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Second Singles",
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+        max_players=6,
+        pools=[_one_pool(["t2"])],
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    by_event: dict[str, int] = {}
+    for fixture in preview.snapshot.fixtures:
+        by_event[fixture.event_id] = by_event.get(fixture.event_id, 0) + 1
+    assert by_event == {
+        scheduling.EventId(str(event.id)): 15 for event in loaded.events
+    }
 
 
 async def test_preview_snapshot_event_without_pools_refuses(

@@ -380,6 +380,158 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
     await db_session.rollback()
 
 
+# The slug the qualifier count belongs to, taken **from the enum** — since #1227
+# ``rr-then-ko`` is a real ``DrawType`` member with a seeded lookup row (the autouse
+# ``draw_types`` fixture stands one up per enum member), so these tests no longer
+# have to insert a test-local parent row to reach the constraint's active half.
+RR_THEN_KO = DrawType.rr_then_ko.value
+
+
+async def test_a_new_events_settings_row_carries_no_qualifier_count(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A round-robin event's settings row has ``qualifiers_per_pool`` NULL — not 0,
+    and not "unset but present".
+
+    ``NULL`` is the whole representation of "this draw type takes no qualifier
+    count" (ADR "rr-then-ko cuts both stages upfront"). A default of ``0`` would
+    make every round-robin event carry a number that reads as a real configuration
+    and that the ``K >= 1`` floor would then contradict.
+    """
+    client, _ = authed_client
+    _, event_id = await _create_event(client, draw_type="round-robin")
+
+    (event,) = await _load_events(db_session, event_id)
+    assert event.draw_settings.draw_type is DrawType.round_robin
+    assert event.draw_settings.qualifiers_per_pool is None
+
+
+async def test_a_settings_row_that_is_not_rr_then_ko_may_not_carry_a_qualifier_count(
+    db_session: AsyncSession,
+) -> None:
+    """The qualifier count is unrepresentable on any other draw type — refused by
+    the database, not dropped on the way in.
+
+    This is the storage-layer half of the claim the request boundary makes: "top K
+    from each pool advance" is meaningless for a round-robin (there is no cut to
+    size) and for a single-elim (there are no pools to cut from), so a row pairing
+    either slug with a number is not a row Postgres will accept. Both other slugs
+    are asked, because a constraint that only covered one of them would look
+    identical on a one-slug test.
+
+    A NULL-carrying row of each slug is inserted first, so a green result cannot be
+    explained by the table or the statements being wrong.
+    """
+    for slug in ("round-robin", "single-elim"):
+        accepted = await db_session.execute(
+            sa.text(
+                "INSERT INTO tournament_event_draw_settings"
+                " (draw_type_key, qualifiers_per_pool)"
+                " VALUES (:slug, NULL) RETURNING qualifiers_per_pool"
+            ),
+            {"slug": slug},
+        )
+        assert accepted.scalar_one() is None
+
+        with pytest.raises(IntegrityError) as refusal:
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    sa.text(
+                        "INSERT INTO tournament_event_draw_settings"
+                        " (draw_type_key, qualifiers_per_pool)"
+                        " VALUES (:slug, 2)"
+                    ),
+                    {"slug": slug},
+                )
+        assert "ck_tournament_event_draw_settings_qualifiers_per_pool" in str(
+            refusal.value
+        ), f"{slug} accepted a qualifier count: {refusal.value}"
+
+    await db_session.rollback()
+
+
+async def test_an_rr_then_ko_settings_row_round_trips_its_qualifier_count(
+    db_session: AsyncSession,
+) -> None:
+    """The column is a real, readable configuration for the one draw type that has
+    one: written as 2, read back as 2.
+
+    Driven through raw SQL rather than through the HTTP boundary because the subject
+    is the **column and its CHECK**, not the route: the end-to-end path an
+    ``rr-then-ko`` event now takes is covered in ``test_tournaments.py``.
+    """
+    settings_id = (
+        await db_session.execute(
+            sa.text(
+                "INSERT INTO tournament_event_draw_settings"
+                " (draw_type_key, qualifiers_per_pool)"
+                " VALUES (:key, 2) RETURNING id"
+            ),
+            {"key": RR_THEN_KO},
+        )
+    ).scalar_one()
+
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(
+            select(TournamentEventDrawSettings).where(
+                TournamentEventDrawSettings.id == settings_id
+            )
+        )
+    ).scalar_one()
+    assert stored.draw_type_key == RR_THEN_KO
+    assert stored.qualifiers_per_pool == 2
+
+    await db_session.rollback()
+
+
+async def test_an_rr_then_ko_settings_row_needs_at_least_one_qualifier(
+    db_session: AsyncSession,
+) -> None:
+    """``K >= 1`` is the STATIC half of the ADR's legal configuration space, so it
+    is a floor the row itself carries — zero, negative and absent are all refused.
+
+    A qualifier count of zero advances nobody, which is not a knockout stage; a
+    negative one is not a count at all; and an absent one leaves an ``rr-then-ko``
+    row with no answer to "how many advance", which the cut has no default for. The
+    two bounds that MOVE with the entrant count — ``P × K >= 2`` and ``K <= ⌊N/P⌋``
+    — are deliberately NOT here: they are refused at the cut as ``DegenerateDraw``,
+    because a row that was legal when written must not become unwritable when a
+    player withdraws.
+    """
+    for count in ("0", "-1", "NULL"):
+        with pytest.raises(IntegrityError) as refusal:
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    sa.text(
+                        "INSERT INTO tournament_event_draw_settings"
+                        " (draw_type_key, qualifiers_per_pool)"
+                        f" VALUES (:key, {count})"
+                    ),
+                    {"key": RR_THEN_KO},
+                )
+        assert "ck_tournament_event_draw_settings_qualifiers_per_pool" in str(
+            refusal.value
+        ), f"qualifiers_per_pool={count} was accepted: {refusal.value}"
+
+    # One qualifier per pool IS legal — a two-pool event at K=1 is a single final
+    # between the two pool winners, which the ADR names as a supported shape. So the
+    # floor is at 1, not at 2, and this is what says the refusals above are the
+    # constraint discriminating rather than rejecting everything.
+    accepted = await db_session.execute(
+        sa.text(
+            "INSERT INTO tournament_event_draw_settings"
+            " (draw_type_key, qualifiers_per_pool)"
+            " VALUES (:key, 1) RETURNING qualifiers_per_pool"
+        ),
+        {"key": RR_THEN_KO},
+    )
+    assert accepted.scalar_one() == 1
+
+    await db_session.rollback()
+
+
 async def test_a_seeded_draw_type_cannot_be_deleted_while_an_event_uses_it(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

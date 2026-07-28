@@ -64,6 +64,7 @@ from app.schemas.tournament import (
     MatchSettings,
     Pool,
     StandingsResultsRead,
+    StandingsThenFinishesResultsRead,
     TournamentEntrantRead,
     TournamentFixtureRead,
     TournamentTable,
@@ -300,11 +301,12 @@ def _build_event(
     my_standing = None
     field_size = 0
     pool_complete = False
-    # Only the round-robin **standings** shape has a per-pool table with the caller's
-    # row in it; a single-elim **finishes** block does not, so it falls through to the
-    # fixture-counted record below (``StandingsResultsRead`` narrows the results union —
-    # a new results shape is a type error here until it says whether it has a pool row).
-    if isinstance(results, StandingsResultsRead):
+    # The two shapes that carry a per-pool table with the caller's row in it: the
+    # round-robin **standings**, and the pool stage of an rr-then-ko event's
+    # **standings_then_finishes** (ADR 20260727 — the same ``PoolStandingsRead`` model,
+    # which is why one branch reads both). A single-elim **finishes** block has no such
+    # table, so it falls through to the fixture-counted record below.
+    if isinstance(results, StandingsResultsRead | StandingsThenFinishesResultsRead):
         for pool_standings in results.pools:
             if my_pool_id is not None and pool_standings.pool_id != my_pool_id:
                 continue
@@ -316,6 +318,19 @@ def _build_event(
                     break
             if my_standing is not None:
                 break
+    # What ``stage_label`` is judged on, and it is NOT always the pool's completeness.
+    # For a round-robin the two coincide — the pool finishing IS the event finishing,
+    # and "Group complete" is the right thing to say. For a two-stage event they come
+    # apart badly: the caller's pool finishes early and the bracket it seeds them into
+    # runs for hours afterwards, so reading the pool's flag would announce "Complete"
+    # over an event still being played. The two-stage shape's own ``complete`` is both
+    # stages decided (ADR 20260727) — the only honest answer this minimal label can
+    # give.
+    stage_complete = (
+        results.complete
+        if isinstance(results, StandingsThenFinishesResultsRead)
+        else pool_complete
+    )
 
     # The caller's own decided fixtures, counted directly — draw-type-agnostic, so it
     # stands in wherever there is no standings row to read (see the record below).
@@ -369,7 +384,7 @@ def _build_event(
         losses=my_standing.losses if my_standing is not None else record_losses,
         position=my_standing.rank if my_standing is not None else None,
         field_size=field_size,
-        stage_label=_stage_label(draw_type, complete=pool_complete),
+        stage_label=_stage_label(draw_type, complete=stage_complete),
         pool_label=(
             pools[my_pool_id].name
             if my_pool_id is not None and my_pool_id in pools
@@ -433,7 +448,7 @@ def _build_match(
         opponent_games=opponent_games,
         best_of=best_of,
         games=_games(match, side=side),
-        round_label=_round_label(draw_type, fixture.round),
+        round_label=_round_label(draw_type, fixture.pool_id, fixture.round),
         table_label=_table_label(fixture.table_id, tables),
         start_label=_time_label(fixture),
         next_game_number=(current_game_number(match) if match is not None else None),
@@ -573,9 +588,15 @@ def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
             assert_never(status)
 
 
-def _round_label(draw_type: DrawType, round_number: int) -> str:
+def _round_label(draw_type: DrawType, pool_id: str | None, round_number: int) -> str:
     """A round number in its draw type's own vocabulary, composed here so no client
     maps an integer to a word.
+
+    It takes the fixture's ``pool_id`` because for a two-stage draw the vocabulary is a
+    property of the **stage**, not of the event: ``pool_id IS NULL`` is already how the
+    knockout stage is spelled everywhere else (ADR-0786), so there is nothing new to
+    carry — the discriminator is on the row. The one-stage draw types ignore it; their
+    fixtures are all pooled or all un-pooled anyway.
 
     An exhaustive ``match`` with no catch-all: a new ``DrawType`` is a type error until
     it says what it calls a round (api/CLAUDE.md)."""
@@ -587,6 +608,16 @@ def _round_label(draw_type: DrawType, round_number: int) -> str:
             # cannot be composed from the round number alone — it needs the bracket's
             # depth, which this helper is not given.
             return f"Round {round_number}"
+        case DrawType.rr_then_ko:
+            # Both existing vocabularies, verbatim, chosen by the stage the fixture is
+            # in (ADR 20260727). Inventing a third — "Group match 3" becoming "Pool
+            # match 3" because the event also has a bracket — would make the same match
+            # read differently in two events for no reason a player could name.
+            return (
+                f"Group match {round_number}"
+                if pool_id is not None
+                else f"Round {round_number}"
+            )
         case _:
             assert_never(draw_type)
 
@@ -596,6 +627,13 @@ def _stage_label(draw_type: DrawType, *, complete: bool) -> str:
         case DrawType.round_robin:
             return "Group complete" if complete else "Group play"
         case DrawType.single_elim:
+            return "Complete" if complete else "In play"
+        case DrawType.rr_then_ko:
+            # Deliberately minimal, and deliberately not the round-robin wording:
+            # "Group complete" on a two-stage event would announce the event over while
+            # its knockout stage is still being played. Naming *which* stage is live
+            # needs more plumbing than this ticket buys (ADR 20260727), so the label
+            # says only whether the event has finished.
             return "Complete" if complete else "In play"
         case _:
             assert_never(draw_type)

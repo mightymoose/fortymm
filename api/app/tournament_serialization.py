@@ -13,6 +13,7 @@ it stays cycle-free, mirroring ``app/match_serialization.py``.
 
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,10 +29,14 @@ from app.results import (
     BracketFinishes,
     BracketFixture,
     EventResults,
+    FinishRow,
     MatchOutcome,
     PoolInput,
+    PoolStandings,
     RoundRobinResults,
+    RrThenKoResults,
     SingleElimResults,
+    StandingsThenFinishes,
     results_for,
 )
 from app.schemas.tournament import (
@@ -47,6 +52,7 @@ from app.schemas.tournament import (
     ScheduleSolveRead,
     StandingRowRead,
     StandingsResultsRead,
+    StandingsThenFinishesResultsRead,
     TournamentDetailRead,
     TournamentEntrantRead,
     TournamentEventRead,
@@ -204,7 +210,8 @@ def event_results(
     """The event's results, projected from its fixtures' completed matches, or ``None``
     when there are none to compute — a **discriminated union tagged by shape**
     (ADR-0785): ``kind: "standings"`` for a round-robin (ADR-0788), ``kind: "finishes"``
-    for a single-elimination bracket.
+    for a single-elimination bracket, ``kind: "standings_then_finishes"`` for a
+    round-robin-then-knockout event, which carries one block per stage (ADR 20260727).
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -233,6 +240,20 @@ def event_results(
         case SingleElimResults():
             return _serialize_finishes(
                 strategy.tabulate(_bracket_fixtures(fixtures, game_counts))
+            )
+        case RrThenKoResults():
+            # The one arm whose ``tabulate`` takes TWO stage inputs, because a two-stage
+            # event has two stages to project. ``pool_id IS NULL`` is the stage
+            # discriminator (ADR-0786), and it is applied to the bracket half only:
+            # ``_pool_inputs`` already drops the un-pooled fixtures itself, so the pool
+            # half needs no filter and asking twice would let the two disagree.
+            return _serialize_standings_then_finishes(
+                strategy.tabulate(
+                    _pool_inputs(fixtures, game_counts),
+                    _bracket_fixtures(
+                        [f for f in fixtures if f.pool_id is None], game_counts
+                    ),
+                )
             )
         case _:
             assert_never(strategy)
@@ -322,27 +343,47 @@ def _fixture_outcome(
     )
 
 
+def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRead]:
+    """The per-pool standings block, shared by the two shapes that carry one — the
+    round-robin arm and the pool stage of the rr-then-ko arm — so a table means the same
+    thing whichever event it is read off."""
+    return [
+        PoolStandingsRead(
+            pool_id=pool.pool_id,
+            rows=[
+                StandingRowRead(
+                    entry_id=row.entry_id,
+                    rank=row.rank,
+                    played=row.played,
+                    wins=row.wins,
+                    losses=row.losses,
+                    games_won=row.games_won,
+                    games_lost=row.games_lost,
+                )
+                for row in pool.rows
+            ],
+            complete=pool.complete,
+        )
+        for pool in pools
+    ]
+
+
+def _finish_rows_read(finishes: Sequence[FinishRow]) -> list[FinishRowRead]:
+    """The ranked finishes block, shared by the two shapes that carry one — the
+    single-elim arm and the knockout stage of the rr-then-ko arm."""
+    return [
+        FinishRowRead(
+            entry_id=row.entry_id,
+            position=row.position,
+            eliminated_in_round=row.eliminated_in_round,
+        )
+        for row in finishes
+    ]
+
+
 def _serialize_standings(results: EventResults) -> StandingsResultsRead:
     return StandingsResultsRead(
-        pools=[
-            PoolStandingsRead(
-                pool_id=pool.pool_id,
-                rows=[
-                    StandingRowRead(
-                        entry_id=row.entry_id,
-                        rank=row.rank,
-                        played=row.played,
-                        wins=row.wins,
-                        losses=row.losses,
-                        games_won=row.games_won,
-                        games_lost=row.games_lost,
-                    )
-                    for row in pool.rows
-                ],
-                complete=pool.complete,
-            )
-            for pool in results.pools
-        ],
+        pools=_pool_standings_read(results.pools),
         complete=results.complete,
         champion=results.champion,
     )
@@ -350,14 +391,22 @@ def _serialize_standings(results: EventResults) -> StandingsResultsRead:
 
 def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
     return FinishesResultsRead(
-        finishes=[
-            FinishRowRead(
-                entry_id=row.entry_id,
-                position=row.position,
-                eliminated_in_round=row.eliminated_in_round,
-            )
-            for row in results.finishes
-        ],
+        finishes=_finish_rows_read(results.finishes),
+        complete=results.complete,
+        champion=results.champion,
+    )
+
+
+def _serialize_standings_then_finishes(
+    results: StandingsThenFinishes,
+) -> StandingsThenFinishesResultsRead:
+    """Both stages, each serialized by the same helper its one-stage sibling uses — so
+    "an rr-then-ko event's pools cross the wire exactly as a round-robin's do, and its
+    bracket exactly as a single-elim's" is true structurally and not by three
+    serializers happening to agree (ADR 20260727)."""
+    return StandingsThenFinishesResultsRead(
+        pools=_pool_standings_read(results.pools),
+        finishes=_finish_rows_read(results.finishes),
         complete=results.complete,
         champion=results.champion,
     )
