@@ -21,6 +21,24 @@ const scoped = (container: Container) => ({
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
+  /** **K** — the qualifier-count box, which exists only for an `rr-then-ko` event
+   * (ADR 20260727). `get` for the case that expects it. */
+  getQualifiersInput() {
+    return container.getByLabelText(/Qualifiers per pool/)
+  },
+  /** …and the `query` twin, because "this control is NOT on screen" is the claim for
+   * every other draw type: a qualifier count is not a blank field a round-robin event
+   * has, it is a question that format does not ask. Asked by LABEL rather than by
+   * `getFormElements().length`, so it discriminates "the row is absent" from "some other
+   * row went missing too". */
+  queryQualifiersInput() {
+    return container.queryByLabelText(/Qualifiers per pool/)
+  },
+  /** The qualifier count as a **reader** sees it — the `Field` read-only branch's value
+   * under its label (ADR 0015). Use `queryQualifiersInput` for the "row absent" claim. */
+  getQualifiersValue() {
+    return fieldPage.within(container).getFieldValue('Qualifiers per pool')
+  },
   /** The red message under a field — the `Field` row's `hint`, rendered as an error.
    * Queried by its TEXT because that is what the organizer reads; a test that asked
    * for "the hint node" would pass on a message rendered in the wrong colour under
@@ -85,8 +103,22 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `BasicsSection`. */
 export const basicsSectionPage = {
+  /** Mount the section. Returns the render result, plus `rerenderWith` — which is the
+   * only honest way to assert that a row **disappears**.
+   *
+   * ⚠️ Calling `render` a second time does NOT replace the first tree: Testing Library
+   * appends a second one, and `screen` spans the whole body, so a "the control is gone"
+   * assertion would find the *previous* mount's control and fail against a component that
+   * unmounts perfectly well (measured: two renders → 2 `basics-section` roots; a
+   * `rerenderWith` → 1 root and the control really gone). Prop-change claims use this. */
   render(overrides: Partial<BasicsSectionProps> = {}) {
-    render(<BasicsSection {...buildBasicsSectionProps(overrides)} />)
+    const utils = render(<BasicsSection {...buildBasicsSectionProps(overrides)} />)
+    return {
+      ...utils,
+      rerenderWith(next: Partial<BasicsSectionProps> = {}) {
+        utils.rerender(<BasicsSection {...buildBasicsSectionProps(next)} />)
+      },
+    }
   },
 
   within(container: Container = screen) {

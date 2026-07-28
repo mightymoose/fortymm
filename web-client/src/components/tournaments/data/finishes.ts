@@ -20,7 +20,7 @@
 // rather than asserted through a DOM.
 
 import { nameByEntryId, nameOf } from './entrant-names'
-import type { FinishRow, TournamentEvent } from './types'
+import type { FinishesResults, FinishRow, TournamentEvent } from './types'
 
 /** One placement line, ready to render: the server's finish row, the entrant's name joined
  * from the event, and the presentation flags the list needs. Every figure is carried
@@ -71,10 +71,13 @@ function ordinal(position: number): string {
 }
 
 /**
- * A single-elimination event's results, shaped for the reader — or `null` when the event has
- * no finishes to show: `results` is `null` (an uncut event), or it is the `standings` arm
- * (a round-robin, rendered by `./standings`). Switch on `results.kind`; this owns only the
- * `finishes` arm.
+ * A **finishes block**, shaped for the reader — always a view, never `null`.
+ *
+ * Like `./standings`, it is handed the block rather than digging one out of the event: it
+ * does not decide whether it applies. **The caller that switches on `results.kind` does**
+ * (`ResultsPanel`), and it is the only place that knows an event may have no results at
+ * all. Everything here is a total function of the block plus the `event` the name join
+ * needs (entry id → username).
  *
  * The rows are mapped **in the order the server sent them** (position ascending, ties
  * together): the server derived the placement from each entrant's elimination round, and
@@ -82,10 +85,10 @@ function ordinal(position: number): string {
  * a result it does not own. The one thing derived is `tied`: a position is a tie exactly when
  * more than one finish shares it (same-round losers), so the list can render it honestly.
  */
-export function eventFinishes(event: TournamentEvent): FinishesView | null {
-  const results = event.results
-  if (results === null || results.kind !== 'finishes') return null
-
+export function eventFinishes(
+  event: TournamentEvent,
+  results: FinishesResults,
+): FinishesView {
   const names = nameByEntryId(event)
 
   // How many finishes share each position — the tie test. A partially-played bracket sends

@@ -74,7 +74,13 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * so `[]` is the real state of an event nobody has cut a draw for, and the only things
  * that ever change it are the two draw verbs (`cutDraw` / `uncutDraw` below). An event
  * PATCH deliberately leaves it alone — a director editing an event's name has not
- * thrown their draw away. */
+ * thrown their draw away.
+ *
+ * `qualifiers_per_pool` is stored too, and it has to be: it is what sizes an
+ * `rr-then-ko` draw's bracket at the cut (`P × K`, ADR 20260727). Before it had a home
+ * here, `planEventDraw` passed nothing and every two-stage event was cut at the planner's
+ * default of one qualifier per pool — a well-formed bracket of the wrong size, for an
+ * event the director had configured otherwise, with nothing reporting the substitution. */
 type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
@@ -220,6 +226,9 @@ function seed(): StoredTournament[] {
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
@@ -255,15 +264,18 @@ function seed(): StoredTournament[] {
           //
           // It is ALSO the seed's **uncuttable** event, and it stays uncuttable for a
           // reason that survives (ADR 20260726): round-robin with **NO POOLS**. It used
-          // to be `rr-then-ko`, refused because nothing could plan that type — but that
-          // slug left the enum, and "an unplannable type" is no longer a state a valid
-          // event can be in. `pools: []` is the refusal that replaces it, and it is
+          // to be `rr-then-ko`, refused because nothing could plan that type — but "an
+          // unplannable type" is no longer a state a valid event can be in (that slug is
+          // back, with a strategy, since #1227). `pools: []` replaces it, and it is
           // permanent: "A round-robin draw needs at least one pool." Do not give it pools.
           id: 'ev-u1500',
           tournament_id: 'bay-area-open-2026',
           name: 'U1500 Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 48,
           entry_fee: 30,
           timezone: 'America/Los_Angeles',
@@ -287,6 +299,9 @@ function seed(): StoredTournament[] {
           name: 'Championship Singles',
           format: 'singles',
           draw_type: 'single-elim',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 16,
           entry_fee: 60,
           timezone: 'America/Los_Angeles',
@@ -321,6 +336,9 @@ function seed(): StoredTournament[] {
           name: 'U1200 Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 24,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
@@ -384,6 +402,9 @@ function seed(): StoredTournament[] {
           name: 'Mixed Doubles',
           format: 'doubles',
           draw_type: 'single-elim',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 32,
           entry_fee: 25,
           timezone: 'America/Los_Angeles',
@@ -442,6 +463,9 @@ function seed(): StoredTournament[] {
           name: 'Slam Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 16,
           entry_fee: 20,
           timezone: 'America/New_York',
@@ -503,6 +527,9 @@ function seed(): StoredTournament[] {
           name: "Women's Championship Singles",
           format: 'singles',
           draw_type: 'single-elim',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 32,
           entry_fee: 40,
           timezone: 'America/Los_Angeles',
@@ -596,6 +623,9 @@ function seed(): StoredTournament[] {
           name: 'Garage Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
+          // value this draw type's settings row admits.
+          qualifiers_per_pool: null,
           max_players: 8,
           entry_fee: 0,
           timezone: 'America/Los_Angeles',
@@ -1330,6 +1360,13 @@ export function createEvent(
     name: body.name,
     format: body.format,
     draw_type: body.draw_type,
+    // **K**, stored beside the draw type it belongs to (ADR 20260727). Absent means the
+    // draw type has no knockout stage to qualify for, which is `null` — the value the
+    // settings row really holds — never `undefined`, and never an invented `1`: the day
+    // this event's draw is cut, this is the number the bracket is sized from
+    // (`planEventDraw` below), so a fallback here would deal a bracket for a K the
+    // director never chose.
+    qualifiers_per_pool: body.qualifiers_per_pool ?? null,
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
@@ -1387,6 +1424,17 @@ export function updateEvent(
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
+    // **The draw configuration is patched as a UNIT** (ADR 20260727): the server refuses
+    // a `qualifiers_per_pool` with no `draw_type` beside it (422), so a patch that names
+    // a draw type carries the whole pair — including the `null` that *removes* a count
+    // when the type moves to one that has no knockout stage. Reading it with `??` would
+    // strand the old K on the new type, which is precisely the contradiction the union
+    // exists to make unrepresentable. A patch that names no draw type is not touching the
+    // configuration at all, and leaves both halves alone.
+    qualifiers_per_pool:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.qualifiers_per_pool
+        : (patch.qualifiers_per_pool ?? null),
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.
@@ -1531,6 +1579,16 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     event.draw_type,
     ordered.map((e) => e.id),
     event.pools.map((p) => p.id),
+    // **The event's own K** (ADR 20260727) — the number the director configured, not the
+    // planner's default. `undefined` (a count-less draw type) lets the default stand,
+    // where it is never read: only the `rr-then-ko` arm consults it, and an `rr-then-ko`
+    // event always has one (its create/patch body is a 422 without it).
+    //
+    // ⚠️ Passing nothing here is the whole bug this argument closes, and it is a SILENT
+    // one: an event configured at K=2 would be cut into a `P × 1` bracket — a perfectly
+    // well-formed draw of the wrong size, with nothing anywhere reporting the
+    // substitution.
+    event.qualifiers_per_pool ?? undefined,
   )
 }
 
@@ -1543,12 +1601,12 @@ function planEventDraw(event: StoredEvent): DrawPlan {
  *
  * The 422s are the planner's (see `planDraw` in the tournament factory, shared with the
  * Playwright store), and they are the ones a director actually meets: a round-robin with
- * no pools, a pool the snake would leave with fewer than two entrants, and a bracket of
- * fewer than two. **There is no draw-TYPE refusal**: both
- * members of `DrawType` have a strategy on the server (ADR 20260726) and both have a
- * planner here, so a mock that still refused single-elim would be putting a sentence in
- * the server's mouth that it can no longer say — and would make a single-elim cut
- * untestable in `npm run dev`, in vitest and in the browser at once. */
+ * no pools, a pool the snake would leave with fewer than two entrants, a bracket of
+ * fewer than two, and a two-stage draw whose knockout would hold one player.
+ * **There is no draw-TYPE refusal**: every member of `DrawType` has a strategy on the
+ * server (ADR 20260726) and a planner here, so a mock that still refused one would be
+ * putting a sentence in the server's mouth that it can no longer say — and would make
+ * that draw untestable in `npm run dev`, in vitest and in the browser at once. */
 export function cutDraw(tournamentId: string, eventId: string): CutDrawResult {
   const owned = requireOwned(tournamentId)
   if (!owned.ok) return owned

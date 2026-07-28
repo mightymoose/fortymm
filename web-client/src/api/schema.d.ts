@@ -4670,6 +4670,8 @@ export interface components {
             name: string;
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
+            /** Qualifiers Per Pool */
+            qualifiers_per_pool: number | null;
             /** Max Players */
             max_players: number | null;
             /** Entry Fee */

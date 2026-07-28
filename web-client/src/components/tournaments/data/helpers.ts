@@ -444,6 +444,11 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     name: '',
     format: 'singles',
     drawType: 'single-elim',
+    // A bracket has no pools to qualify out of, so it carries NO qualifier count — and
+    // `null` is the only value the server's `single-elim` draw-settings arm admits (ADR
+    // 20260727). A new event that pre-filled a number here would be one whose create
+    // body the API 422s the moment the director never touched the draw type.
+    qualifiersPerPool: null,
     maxPlayers: 32,
     entryFee: 30,
     // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):

@@ -1,7 +1,11 @@
 import { Input } from '@/components/ui/input'
 
 import type { EditFreeze } from '../../data/draw'
-import { ENTRY_FEE_MAX, PLAYERS_MAX } from '../../data/event-validation'
+import {
+  ENTRY_FEE_MAX,
+  PLAYERS_MAX,
+  QUALIFIERS_PER_POOL_MIN,
+} from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type {
@@ -21,6 +25,10 @@ import { TimezoneSelect } from './timezone-select'
  * drops the hint slot in its read-only branch (ADR 0015). */
 export interface BasicsFieldErrors {
   name?: string
+  /** The qualifier count's inline red — only ever present for an `rr-then-ko` event,
+   * since that is the only draw type the resolver asks the question of (and the only one
+   * whose control is on screen). */
+  qualifiersPerPool?: string
   maxPlayers?: string
   entryFee?: string
   /** The timezone is chosen from a picker that only ever offers real IANA zones, so
@@ -199,6 +207,57 @@ export const BasicsSection = ({
             />
           )}
         </Field>
+        {/* **K**, and only for the one draw type that has a knockout stage to qualify
+            for (ADR 20260727). Not disabled, not em-dashed — ABSENT: a qualifier count
+            is not a field a round-robin event leaves blank, it is a question that format
+            does not ask, and the server says the same thing by refusing the key outright
+            on that arm of its draw-settings union (`extra="forbid"` — a 422, not a
+            silently dropped value). A control that stayed on screen would invite a
+            director to answer a question whose answer their event cannot hold.
+
+            It rides the SAME freeze as the draw type above, because on the server it is
+            the same guard: `_enforce_draw_settings_frozen` compares the whole
+            configuration, since a bracket cut for `P × K` is exactly as contradicted by
+            a changed K as by a changed type. One freeze, one sentence — and the way out
+            of it (delete the draw, then cut it again) is the same way out. */}
+        {event.drawType === 'rr-then-ko' && (
+          <Field
+            label="Qualifiers per pool"
+            required
+            readOnly={readOnly}
+            value={numericValue(event.qualifiersPerPool)}
+            error={!!errors.qualifiersPerPool}
+            hint={
+              errors.qualifiersPerPool ??
+              (drawTypeFreeze.kind === 'frozen'
+                ? drawTypeFreeze.reason
+                : 'How many of each pool’s finishers advance to the knockout stage.')
+            }
+          >
+            {(id, hintId) => (
+              <Input
+                id={id}
+                type="number"
+                min={QUALIFIERS_PER_POOL_MIN}
+                aria-invalid={!!errors.qualifiersPerPool}
+                aria-describedby={hintId}
+                disabled={drawTypeFreeze.kind === 'frozen'}
+                // Hold empty as empty, exactly as the player limit does — but it means
+                // the opposite thing here, and the resolver says so: a blank cap is an
+                // uncapped event, a blank qualifier count is a MISSING answer to a
+                // question this draw type does ask. Never `Number('')`, which is `0`,
+                // which is a bracket nobody advances into.
+                value={event.qualifiersPerPool ?? ''}
+                onChange={(e) =>
+                  set({
+                    qualifiersPerPool:
+                      e.target.value === '' ? null : Number(e.target.value),
+                  })
+                }
+              />
+            )}
+          </Field>
+        )}
       </div>
 
       {/* ⚠️ **Neither box may coerce a blank into a number** — and they blank to two

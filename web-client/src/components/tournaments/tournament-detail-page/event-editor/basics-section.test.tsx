@@ -2,7 +2,12 @@ import userEvent from '@testing-library/user-event'
 
 import { fireEvent, screen } from '@/test/utilities'
 
-import { buildDrawnEvent, buildEvent } from '../../data/seed.factory'
+import { parseDrawTypeCatalogue } from '../../data/draw-types'
+import {
+  buildDrawnEvent,
+  buildEvent,
+  buildRrThenKoEvent,
+} from '../../data/seed.factory'
 import { basicsSectionPage } from './basics-section.page'
 
 describe('BasicsSection', () => {
@@ -33,6 +38,67 @@ describe('BasicsSection', () => {
         'Knockout bracket',
         'Everyone plays everyone',
       ])
+    })
+
+    /**
+     * …and the other direction, which is the one that fails **silently** (#1227, ADR
+     * "rr-then-ko cuts both stages upfront and seeds qualifiers rematch-free", Context).
+     * The catalogue parser filters the served rows against `DRAW_TYPES`, a hardcoded slug
+     * allowlist, and *drops* a slug that is not in it — no error, no warning, just an
+     * absent option. So "seed the row and the picker follows" was predicted to need no
+     * client change and would instead have shown a director two formats out of three.
+     *
+     * ⚠️ This test hands the section **wire rows** run through the real
+     * `parseDrawTypeCatalogue`, not an option list. That is the whole point: a test given
+     * ready-made options bypasses the filter and stays green with the slug taken back out
+     * of the allowlist — which is precisely the defect.
+     */
+    it('offers a draw type the SERVER seeds, rather than dropping it silently', async () => {
+      basicsSectionPage.render({
+        drawTypes:
+          parseDrawTypeCatalogue([
+            {
+              key: 'round-robin',
+              name: 'Round robin',
+              description: 'Everyone in a pool plays everyone else in that pool.',
+              display_order: 1,
+            },
+            {
+              key: 'rr-then-ko',
+              name: 'Round-robin then knockout',
+              description:
+                'Pools play all-play-all, then the top finishers from each pool ' +
+                'meet in a knockout bracket.',
+              display_order: 3,
+            },
+          ]) ?? [],
+      })
+
+      expect(await basicsSectionPage.openDrawTypeOptions()).toEqual([
+        'Round robin',
+        'Round-robin then knockout',
+      ])
+    })
+
+    /** …and picking it emits the **slug**, so the option the parser let through is one
+     * the PATCH can actually carry. An allowlist that offered a word it could not send
+     * would have moved the failure from the menu to the save. */
+    it('emits the slug of a newly-seeded draw type', async () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin' }),
+        drawTypes: [
+          { value: 'round-robin', label: 'Round robin' },
+          { value: 'rr-then-ko', label: 'Round-robin then knockout' },
+        ],
+        onChange,
+      })
+
+      await basicsSectionPage.chooseDrawType('Round-robin then knockout')
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ drawType: 'rr-then-ko' }),
+      )
     })
 
     /** The point of serving the catalogue: a format the server does not offer cannot be
@@ -166,6 +232,151 @@ describe('BasicsSection', () => {
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ entryFee: 5 }),
       )
+    })
+  })
+
+  /**
+   * **K** — the qualifier count (ADR 20260727). Its whole design is that it belongs to
+   * the `(draw_type, K)` PAIR and not to the event: the server parses the two into a
+   * union tagged by the draw type, whose `rr-then-ko` arm requires a count and whose
+   * other two arms are `extra="forbid"` and refuse the key outright.
+   *
+   * So the claim worth pinning is not "there is a number box" — it is that the box is
+   * **on screen for exactly one draw type**, and absent (not disabled, not em-dashed) for
+   * the rest. A control rendered unconditionally would invite a director to answer a
+   * question their event cannot hold the answer to, and would author a 422.
+   */
+  describe('the qualifier count (rr-then-ko only)', () => {
+    it('renders the control for a two-stage event', () => {
+      basicsSectionPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 2 }) })
+
+      expect(basicsSectionPage.getQualifiersInput()).toHaveValue(2)
+    })
+
+    // The falsification for the conditional: render it unconditionally and these red.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'does not render it at all for %s — a format with no knockout stage to qualify for',
+      (drawType) => {
+        basicsSectionPage.render({
+          event: buildEvent({ drawType, qualifiersPerPool: null }),
+        })
+
+        expect(basicsSectionPage.queryQualifiersInput()).toBeNull()
+        // …and the rest of the tab is untouched, so this is "one row is absent" rather
+        // than "the section failed to render".
+        expect(basicsSectionPage.getNameInput()).toBeInTheDocument()
+        expect(basicsSectionPage.getDrawTypeTrigger()).toBeInTheDocument()
+      },
+    )
+
+    // Switching the picker is what a director actually does, and the row has to follow
+    // the DRAFT they are building, not the event as it was loaded. (The editor bridges
+    // live form state into `event`, so this is the same value that reaches the section;
+    // the picker-driven version of this claim is in `event-editor.test.tsx`.)
+    //
+    // ⚠️ `rerenderWith`, never a second `render`: Testing Library APPENDS a second tree
+    // rather than replacing the first, and `screen` spans the whole body — so a second
+    // `render` leaves the old rr-then-ko section mounted and "the control is gone" fails
+    // against a component that unmounts it correctly. Measured while writing this: two
+    // renders → 2 `basics-section` roots and the stale input still found; one
+    // `rerenderWith` → 1 root and 0 inputs.
+    it('appears and disappears with the draw type the director picks', () => {
+      const { rerenderWith } = basicsSectionPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+      })
+      expect(basicsSectionPage.getQualifiersInput()).toBeInTheDocument()
+
+      rerenderWith({
+        event: buildRrThenKoEvent({ drawType: 'round-robin', qualifiersPerPool: null }),
+      })
+
+      expect(basicsSectionPage.queryQualifiersInput()).toBeNull()
+      // One tree, so the absence above is a real unmount and not a query that missed.
+      expect(screen.getAllByTestId('basics-section')).toHaveLength(1)
+    })
+
+    it('emits the typed count', () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        onChange,
+      })
+
+      fireEvent.change(basicsSectionPage.getQualifiersInput(), {
+        target: { value: '3' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ qualifiersPerPool: 3 }),
+      )
+    })
+
+    // Blank is **missing**, not zero — `Number('')` is `0`, and a bracket nobody advances
+    // into is not what an emptied box means. The resolver turns the `null` into the
+    // required error; a `0` would sail past a "did they answer?" check and be refused
+    // later, by the server, in Pydantic's words.
+    it('emits null — never 0 — when the box is cleared', () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        onChange,
+      })
+
+      fireEvent.change(basicsSectionPage.getQualifiersInput(), {
+        target: { value: '' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ qualifiersPerPool: null }),
+      )
+    })
+
+    it('prints the form’s message under the box, and marks it invalid', () => {
+      basicsSectionPage.render({
+        event: buildRrThenKoEvent(),
+        errors: {
+          qualifiersPerPool: 'At least 1 player must advance from each pool.',
+        },
+      })
+
+      expect(basicsSectionPage.getQualifiersInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError(
+          'At least 1 player must advance from each pool.',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    // The count rides the SAME freeze as the draw type, because on the server it is the
+    // same guard: `_enforce_draw_settings_frozen` compares the whole configuration, since
+    // a bracket cut for `P × K` is exactly as contradicted by a changed K as by a changed
+    // type. A live box here would author a 409.
+    it('freezes with the draw type once the draw is cut, pointing at the reason', () => {
+      basicsSectionPage.render({
+        event: buildRrThenKoEvent({
+          fixtures: buildDrawnEvent().fixtures,
+        }),
+      })
+
+      const input = basicsSectionPage.getQualifiersInput()
+      expect(input).toBeDisabled()
+      const describedBy = input.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(document.getElementById(describedBy!)).toHaveTextContent(
+        /Delete the draw/i,
+      )
+    })
+
+    it('leaves it live, with its hint, when no draw is cut', () => {
+      basicsSectionPage.render({ event: buildRrThenKoEvent() })
+
+      expect(basicsSectionPage.getQualifiersInput()).toBeEnabled()
+      expect(
+        basicsSectionPage.queryFieldError(/advance to the knockout stage/i),
+      ).toBeInTheDocument()
     })
   })
 
@@ -370,6 +581,25 @@ describe('BasicsSection', () => {
       basicsSectionPage.render({ event: buildEvent(), canEdit: false })
       expect(basicsSectionPage.getInteractiveControls()).toHaveLength(0)
       expect(basicsSectionPage.getFormElements()).toHaveLength(0)
+    })
+
+    // …and the same sweep over the ONE draw type that renders an extra row. The default
+    // fixture is round-robin, whose qualifier-count row is not rendered at all — so the
+    // guard above passes whether or not that row honours `readOnly`, and a live
+    // `<input type=number>` (a `spinbutton`, invisible to a role-only sweep) could ship
+    // behind it. The DOM sweep over a two-stage event is what actually covers it.
+    it('renders no interactive controls for a two-stage event either', () => {
+      basicsSectionPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        canEdit: false,
+      })
+
+      expect(basicsSectionPage.getFormElements()).toHaveLength(0)
+      expect(basicsSectionPage.queryQualifiersInput()).toBeNull()
+      // The value is still THERE — a viewer reads the count, they just cannot type it.
+      // (`Field` requires a `value` beside `readOnly` precisely so a row cannot vanish
+      // into an em-dash and be mistaken for one the organizer left blank.)
+      expect(basicsSectionPage.getQualifiersValue()).toHaveTextContent('2')
     })
 
     it('renders every field as a value', () => {

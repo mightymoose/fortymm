@@ -20,6 +20,9 @@
 //   |               | `le=512`, `default=None`              | cap; when present, 1 … 512  |
 //   | `entry_fee`   | `EventEntryFee`: `ge=0`, `le=999…99`, | required; 0 … 999,999.99,   |
 //   |               | whole cents                           | in whole cents              |
+//   | `qualifiers   | `QualifiersPerPool`: `ge=1`, required  | required and ≥ 1 **for      |
+//   |  _per_pool`   | on the `rr-then-ko` union arm, refused | `rr-then-ko` only** — the   |
+//   |               | outright on the other two              | pair, not the field         |
 //   | `predicates`  | (permissive — see below)              | `predicate-validation.ts`   |
 //
 // ⚠️ **BLANK IS NOT ZERO — AND THE TWO NUMBER FIELDS DISAGREE ABOUT WHICH IS WHICH**
@@ -228,6 +231,47 @@ export const entryFeeSchema = z
         message: `An entry fee is in whole cents — at most ${FEE_DECIMALS} decimal places.`,
       })
     }
+  })
+
+/** The floor on **K** — the server's `QualifiersPerPool = Annotated[int, Field(ge=1)]`,
+ * stated once there and mirrored once here. Zero advances nobody into the knockout
+ * stage, and a negative count is not a count.
+ *
+ * ⚠️ There is deliberately **no ceiling**, because the server's two upper bounds move
+ * with the entrant count (`P × K >= 2` and `K <= ⌊N/P⌋`) and are refused at the *cut*,
+ * not at the write — a configuration that was legal when it was written must not become
+ * unwritable when a player withdraws. Mirroring them in the form would refuse saves
+ * nothing on the server would ever refuse, and would do it while the director is still
+ * filling the event in. The cut's own refusal already says which number to change, in
+ * the server's words (`drawRefusalNotice`, `data/draw`). */
+export const QUALIFIERS_PER_POOL_MIN = 1
+
+/**
+ * **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's knockout
+ * stage (ADR 20260727).
+ *
+ * NOT `.nullable()`, unlike the player limit, and the difference is the point: a blank
+ * player limit is a real state (an uncapped event), while a blank qualifier count on a
+ * two-stage event is **missing**. The server's `rr-then-ko` arm requires the field with
+ * no default precisely because there is no defensible number to assume — "2" is a
+ * convention, not a fact about the event — so `null` here is the *required* error and
+ * not a value to coalesce. A `null` reaching the wire would be a 422; a `1` invented
+ * here would be a bracket the director never asked for, which is worse, because it looks
+ * like it worked.
+ *
+ * It is applied **only when the draw type is `rr-then-ko`** — see `eventSchema`
+ * (`../tournament-detail-page/event-form`), which runs this parser from the object-level
+ * refinement rather than inlining it as a field rule. The bound belongs to the
+ * `(draw_type, K)` pair, exactly as it does on the server's tagged union, and a field
+ * rule that fired regardless would put a red under a control that is not on screen: for
+ * a round-robin event the box is not rendered at all (the draw type has no knockout
+ * stage), so its error would be a save refused for a reason nobody can see or fix.
+ */
+export const qualifiersPerPoolSchema = z
+  .number({ error: 'Say how many players advance from each pool.' })
+  .int({ error: 'Qualifiers per pool must be a whole number.' })
+  .min(QUALIFIERS_PER_POOL_MIN, {
+    error: `At least ${QUALIFIERS_PER_POOL_MIN} player must advance from each pool.`,
   })
 
 /** The editor's four tabs, of which three can hold something invalid (Match settings

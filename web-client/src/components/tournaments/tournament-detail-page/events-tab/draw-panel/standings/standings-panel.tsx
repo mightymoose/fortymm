@@ -1,23 +1,32 @@
 import { useId } from 'react'
 
-import { eventStandings } from '../../../../data/standings'
-import type { TournamentEvent } from '../../../../data/types'
+import type { StandingsView } from '../../../../data/standings'
 import { ChampionBanner } from '../champion-banner'
 import { PoolStandingsTable } from './pool-standings-table'
 
 export interface StandingsPanelProps {
-  event: TournamentEvent
+  /** The event the standings belong to — its id is what the panel's own test hooks hang
+   * off (`standings-panel-…`, `standings-champion-…`), so a card showing more than one
+   * results block still names each one. */
+  eventId: string
+  /** The standings to render, already selected and joined to names (`eventStandings`).
+   * **Never null**: whether an event *has* standings is the caller's decision, not this
+   * panel's — see the note above. */
+  standings: StandingsView
 }
 
 /**
- * An event's **results** on its card in the Events tab (ADR-0788): a standings table per
- * pool, and — once the event is decided — its champion.
+ * A **standings block** on an event's card in the Events tab (ADR-0788): a standings table
+ * per pool, and — once the event is decided — its champion.
  *
- * It renders **nothing** for an event with no results (`event.results === null`, so
- * `eventStandings` returns `null`): an uncut event, or a non-round-robin one, has no
- * standings to show, and an empty table would read as a played event with nobody in it.
- * That is why this can be dropped into the panel unconditionally — it is a designed data
- * state, not a gap.
+ * ## It renders what it is handed
+ *
+ * It takes its standings as a prop instead of reading them off an event and deciding
+ * whether they apply. The switch on the results shape lives in exactly one place
+ * (`ResultsPanel`), so this block can be shown for any event that *has* a standings block,
+ * whatever the rest of its results look like — a plain round-robin today, one stage of a
+ * multi-stage event tomorrow. A panel that re-checked `results.kind` would silently render
+ * nothing the moment it met a shape it did not recognise.
  *
  * ## Live, with no machinery of its own
  *
@@ -25,7 +34,7 @@ export interface StandingsPanelProps {
  * live on the server from the fixtures' completed matches. As matches complete, the
  * completion hook re-derives them and the mutations that drive play invalidate the
  * tournament — so the table fills in on the next read with **no polling and no client
- * recompute** here. This component is a pure view over `event`; it never sorts a row or
+ * recompute** here. This component is a pure view over its props; it never sorts a row or
  * computes a number (the order and the figures *are* the result — ADR-0788).
  *
  * ## The champion
@@ -35,17 +44,12 @@ export interface StandingsPanelProps {
  * stage to join its pool winners (a later slice), so `champion` is `null` there even when
  * complete, and the callout simply does not appear — the pool tables still do.
  */
-export const StandingsPanel = ({ event }: StandingsPanelProps) => {
+export const StandingsPanel = ({ eventId, standings }: StandingsPanelProps) => {
   const headingId = useId()
-  const standings = eventStandings(event)
-
-  // No results to stand: an uncut or non-round-robin event. Render nothing — a designed
-  // data state, not a spinner and not a gap.
-  if (standings === null) return null
 
   return (
     <section
-      data-testid={`standings-panel-${event.id}`}
+      data-testid={`standings-panel-${eventId}`}
       aria-labelledby={headingId}
       className="mt-2.5"
     >
@@ -63,7 +67,7 @@ export const StandingsPanel = ({ event }: StandingsPanelProps) => {
       {standings.complete && standings.champion !== null && (
         <ChampionBanner
           name={standings.champion}
-          testId={`standings-champion-${event.id}`}
+          testId={`standings-champion-${eventId}`}
         />
       )}
 

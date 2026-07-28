@@ -22,6 +22,7 @@ import type { components } from '@/api/schema'
 import { resetTournamentsStore } from './tournaments-store'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
+type TournamentEventRead = components['schemas']['TournamentEventRead']
 
 // The dev user's own venue — a point ON the Bay Area Open's coordinates, so its distance
 // rounds to 0 and the radii read like a map.
@@ -135,5 +136,190 @@ describe('GET /v1/tournaments — the near-me filter', () => {
       `?lat=${BERKELEY.lat}&lng=${BERKELEY.lng}`,
     )
     expect(twoOfThree).toBe(422)
+  })
+})
+
+/**
+ * The event write boundary's **draw configuration** check (ADR 20260727) — the mock's
+ * mirror of the server's tagged union, exercised over the same MSW server the app and
+ * `npm run dev` use.
+ *
+ * WHY THIS IS TESTED AT ALL. The rule lives on the server as a discriminated union
+ * (`api/app/schemas/tournament.py`): `RrThenKoDrawSettingsWrite` requires
+ * `qualifiers_per_pool` with `ge=1` and no default, the `round-robin`/`single-elim` arms
+ * declare no such field and are `extra="forbid"`, and `TournamentEventUpdate`'s
+ * `_parse_draw_settings` refuses a count arriving without a `draw_type` beside it. The
+ * mock restates that by hand, and a hand-maintained mirror drifts **both** ways with a
+ * green suite: too strict and it invents 422s that only appear in `npm run dev`; too lax
+ * and it stops catching the class of bug it exists for (a client authoring a body the
+ * real API refuses — which is exactly how a silent 422 shipped earlier in this arc).
+ *
+ * WHAT IS ASSERTED, AND WHAT IS DELIBERATELY NOT. The load-bearing claims are the
+ * **status** and the **offending field** — pinning the mock's full sentences would be a
+ * fragile test of wording rather than a robust test of the rule. Each case additionally
+ * pins the short fragment naming *which* rule fired ("Field required", "Extra inputs are
+ * not permitted", "greater than or equal to 1"), and those are **Pydantic's own**
+ * vocabulary — what the real server emits — not copy invented here. That is what makes a
+ * branch red *for its own reason* rather than merely red.
+ *
+ * The ACCEPT cases are not padding. A mirror mutated to refuse everything satisfies every
+ * refusal case above and would ship a boundary that rejects valid events; the same shape
+ * of corruption (an `ELSE FALSE` in a database constraint) has already been caught on
+ * this arc only by an accept case.
+ */
+describe('the event write boundary — the draw configuration (ADR 20260727)', () => {
+  /** A valid event create body, minus the draw configuration the cases supply. */
+  const baseCreate = {
+    name: 'Two-stage Singles',
+    format: 'singles' as const,
+    entry_fee: 20,
+    timezone: 'America/Chicago',
+    slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
+    match_settings: { rated: true, length_games: 5 as const },
+  }
+
+  /** `POST …/events` against the seeded, owned tournament. */
+  async function createEvent(
+    draw: Partial<components['schemas']['TournamentEventCreate']>,
+  ) {
+    const res = await fetch(`http://localhost/v1/tournaments/${BAY_AREA}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...baseCreate, ...draw }),
+    })
+    return { status: res.status, body: await res.json() }
+  }
+
+  /** `PATCH …/events/{id}` against a seeded event with **no draw cut**, so the draw-type
+   * freeze (a 409, a different rule) can never be what answers these. */
+  async function patchEvent(patch: components['schemas']['TournamentEventUpdate']) {
+    const res = await fetch(
+      `http://localhost/v1/tournaments/${BAY_AREA}/events/ev-open-singles`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    )
+    return { status: res.status, body: await res.json() }
+  }
+
+  /** The refusal, checked the robust way: a 422 that names the field the director must
+   * fix, and the fragment identifying which of the union's rules fired. */
+  function expectRefusal(
+    result: { status: number; body: unknown },
+    rule: string,
+  ) {
+    expect(result.status).toBe(422)
+    const { detail } = result.body as { detail: string }
+    expect(detail).toContain('qualifiers_per_pool')
+    expect(detail).toContain(rule)
+  }
+
+  // ----- the rr-then-ko arm: required, and ge=1 ------------------------------
+  describe('an rr-then-ko event', () => {
+    it('is refused with NO qualifier count — the arm requires one, with no default', async () => {
+      // There is no defensible number to assume ("2" is a convention, not a fact about
+      // the event), so the server refuses rather than cutting a draw for a K nobody chose.
+      expectRefusal(await createEvent({ draw_type: 'rr-then-ko' }), 'Field required')
+      expectRefusal(await patchEvent({ draw_type: 'rr-then-ko' }), 'Field required')
+    })
+
+    it.each([0, -1])('is refused with a count of %i — K >= 1', async (bad) => {
+      // Zero advances nobody into the knockout stage; a negative count is not a count.
+      expectRefusal(
+        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
+        'greater than or equal to 1',
+      )
+      expectRefusal(
+        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
+        'greater than or equal to 1',
+      )
+    })
+
+    // ✅ ACCEPT. Without this, a mirror mutated to refuse everything passes every case
+    // above — and the boundary would reject the very events it exists to admit.
+    it('ACCEPTS a count of 1 or more, and stores it', async () => {
+      const created = await createEvent({
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+      })
+
+      expect(created.status).toBe(201)
+      // Round-tripped, not merely accepted: the value comes back on the read shape,
+      // which is what the next cut sizes its bracket from.
+      expect((created.body as TournamentEventRead).qualifiers_per_pool).toBe(2)
+
+      const patched = await patchEvent({
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 1,
+      })
+      expect(patched.status).toBe(200)
+      expect((patched.body as TournamentEventRead).qualifiers_per_pool).toBe(1)
+    })
+  })
+
+  // ----- the two count-less arms: extra="forbid" -----------------------------
+  describe('a draw type with no knockout stage', () => {
+    it.each(['round-robin', 'single-elim'] as const)(
+      'refuses a qualifier count sent with %s — that arm forbids the key outright',
+      async (drawType) => {
+        // ⚠️ NOT a value silently dropped: the settings table's CHECK says NULL for every
+        // draw type but rr-then-ko, and a director naming a count for a format with no
+        // knockout stage has misunderstood something worth being told about.
+        expectRefusal(
+          await createEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
+          'Extra inputs are not permitted',
+        )
+        expectRefusal(
+          await patchEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
+          'Extra inputs are not permitted',
+        )
+      },
+    )
+
+    // ✅ ACCEPT — and the discriminating half of the rule above: it is the *key* that is
+    // refused, never the draw type. An explicit `null` is accepted too, because absent and
+    // null mean the same thing to the server's `_draw_settings_write` (it omits a `None`
+    // before validating), and the client's own mapper sends neither.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'ACCEPTS %s with no count at all, and stores null',
+      async (drawType) => {
+        const created = await createEvent({ draw_type: drawType })
+
+        expect(created.status).toBe(201)
+        expect((created.body as TournamentEventRead).qualifiers_per_pool).toBeNull()
+
+        const withNull = await createEvent({
+          draw_type: drawType,
+          qualifiers_per_pool: null,
+        })
+        expect(withNull.status).toBe(201)
+        expect((withNull.body as TournamentEventRead).qualifiers_per_pool).toBeNull()
+      },
+    )
+  })
+
+  // ----- the pair rule: a count never travels alone --------------------------
+  it('refuses a qualifier count PATCHed with no draw type beside it', async () => {
+    // Judging it would mean reading the event's *stored* draw type, two layers past the
+    // boundary and after the request has been accepted — so the server refuses it at the
+    // edge (`_parse_draw_settings`). The editor always sends both: it PATCHes the whole
+    // form it rendered.
+    expectRefusal(await patchEvent({ qualifiers_per_pool: 2 }), 'send draw_type alongside it')
+  })
+
+  // ✅ ACCEPT — the discriminating twin of the case above. A patch that touches neither
+  // half of the draw configuration is the ordinary edit (renaming an event, moving its
+  // window), and a mirror that fired on the absence of a draw type would refuse ALL of
+  // them while every refusal case above still passed.
+  it('ACCEPTS a patch that names neither half of the draw configuration', async () => {
+    const { status, body } = await patchEvent({ name: 'Renamed Singles' })
+
+    expect(status).toBe(200)
+    expect((body as TournamentEventRead).name).toBe('Renamed Singles')
+    // …and the stored configuration is untouched by an edit that never mentioned it.
+    expect((body as TournamentEventRead).draw_type).toBe('round-robin')
+    expect((body as TournamentEventRead).qualifiers_per_pool).toBeNull()
   })
 })

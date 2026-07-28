@@ -1,3 +1,5 @@
+import userEvent from '@testing-library/user-event'
+
 import { render, screen, type Container } from '@/test/utilities'
 
 import { EventEditor, type EventEditorProps } from './event-editor'
@@ -77,6 +79,27 @@ const scoped = (container: Container) => ({
   },
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
+  },
+  /** **K** — the qualifier-count box on Basics, which exists only while the draft's draw
+   * type is `rr-then-ko` (ADR 20260727). */
+  getQualifiersInput() {
+    return container.getByLabelText(/Qualifiers per pool/)
+  },
+  /** …and its `query` twin, for the claim that the row is not on screen at all for a
+   * draw type with no knockout stage. */
+  queryQualifiersInput() {
+    return container.queryByLabelText(/Qualifiers per pool/)
+  },
+  /** The draw-type select on Basics. */
+  getDrawTypeTrigger() {
+    return container.getByRole('combobox', { name: 'Draw type' })
+  },
+  /** Pick a draw type the way a director does — open the select, click the option by the
+   * label the SERVER sent (ADR 20260726). The radix listbox portals to the body, so the
+   * option resolves against `screen` rather than the scoped container. */
+  async chooseDrawType(label: string) {
+    await userEvent.click(this.getDrawTypeTrigger())
+    await userEvent.click(await screen.findByRole('option', { name: label }))
   },
   /** An inline validation/server error rendered below a Basics field — the same
    * node `queryFieldError` returns, taking a `RegExp` for the cases that only want

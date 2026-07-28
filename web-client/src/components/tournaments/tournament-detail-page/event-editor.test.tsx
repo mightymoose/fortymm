@@ -6,11 +6,13 @@ import { ApiError } from '@/api/client'
 import { screen, waitFor } from '@/test/utilities'
 
 import { emptyEvent } from '../data/helpers'
+import { eventToUpdateBody } from '../data/api'
 import {
   buildEvent,
   buildFixture,
   buildPool,
   buildPredicate,
+  buildRrThenKoEvent,
   buildTournament,
 } from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
@@ -37,6 +39,109 @@ describe('EventEditor', () => {
     )
     // The panel closes only after the save resolves.
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  /**
+   * **K**, through the whole editor (ADR 20260727) — the picker, the resolver, and the
+   * body that leaves the client.
+   *
+   * The section's own tests prove the row is conditional; these prove the three things
+   * only the *editor* can: that switching the served picker reveals and hides it, that a
+   * bad count is refused BEFORE anything is sent, and — the one that matters most — that
+   * the value a director types is on the object handed to `onSave`, which is what
+   * `eventToUpdateBody` turns into the request. A test that stopped at form state would
+   * pass just as happily against a mapper that dropped the field on the floor.
+   */
+  describe('the qualifier count, end to end', () => {
+    it('reveals the control when the director picks the two-stage format, and hides it again', async () => {
+      eventEditorPage.render({ event: buildEvent({ drawType: 'round-robin' }) })
+      expect(eventEditorPage.queryQualifiersInput()).toBeNull()
+
+      // The label is the SERVER's (`draw_type_catalogue`), not a string this client keeps.
+      await eventEditorPage.chooseDrawType('Round-robin then knockout')
+      expect(await screen.findByLabelText(/Qualifiers per pool/)).toBeInTheDocument()
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      await waitFor(() =>
+        expect(eventEditorPage.queryQualifiersInput()).toBeNull(),
+      )
+    })
+
+    // ⚠️ THE CLAIM IS ABOUT THE REQUEST, not the box. `onSave` receives the event the
+    // page maps with `eventToUpdateBody`, so mapping it here is what the client would
+    // really put on the wire — and 2 is neither the planner's fallback (1) nor absent.
+    it('SENDS the configured count — the value reaches the request body', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 1 }),
+        onSave,
+      })
+
+      fireEvent.change(eventEditorPage.getQualifiersInput(), {
+        target: { value: '2' },
+      })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).qualifiers_per_pool).toBe(2)
+    })
+
+    // The stale-value case, and the reason the mapper keys off the draw type rather than
+    // off "is there a number in the box": switching away leaves K in form state (RHF does
+    // not clear a field because its control unmounted), and the two count-less arms of the
+    // server's draw-settings union are `extra="forbid"` — so a body that still carried it
+    // would be a **422**, produced by a control the director can no longer even see.
+    it('drops the count from the body when the director switches away from rr-then-ko', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        onSave,
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      const body = eventToUpdateBody(onSave.mock.calls[0][0])
+      expect(body.draw_type).toBe('round-robin')
+      expect('qualifiers_per_pool' in body).toBe(false)
+    })
+
+    // Refused HERE, so nothing was sent — `onSave` not called at all is the assertion
+    // that separates "told the director" from "asked the server and read the answer out".
+    it.each([
+      ['0', 'At least 1 player must advance from each pool.'],
+      ['-1', 'At least 1 player must advance from each pool.'],
+      ['', 'Say how many players advance from each pool.'],
+    ])(
+      'refuses %s inline and sends NOTHING',
+      async (typed, message) => {
+        const onSave = vi.fn()
+        eventEditorPage.render({
+          event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+          onSave,
+        })
+
+        fireEvent.change(eventEditorPage.getQualifiersInput(), {
+          target: { value: typed },
+        })
+        await userEvent.click(eventEditorPage.getSaveButton())
+
+        await waitFor(() =>
+          expect(eventEditorPage.queryFieldError(message)).toBeInTheDocument(),
+        )
+        expect(onSave).not.toHaveBeenCalled()
+      },
+    )
+
+    // The far half of the round trip (chores 3c/3d): what the SERVER stored is what the
+    // control opens on. Without this the editor could show a default while the event ran
+    // at a different K — the quiet failure the whole server-side detour was to prevent.
+    it('opens on the count the server sent back', () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 3 }) })
+
+      expect(eventEditorPage.getQualifiersInput()).toHaveValue(3)
+    })
   })
 
   /**

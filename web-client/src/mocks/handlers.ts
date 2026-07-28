@@ -961,6 +961,8 @@ function detail(message: string, status = 422) {
 /** Mirror the server's event-body constraints (ADR-0935) so an invalid event is
  * a 422 the editor surfaces inline, not a value the store silently accepts:
  *   • name — required, at most 255 chars.
+ *   • the draw configuration — `(draw_type, qualifiers_per_pool)` as a pair (ADR
+ *     20260727): required and ≥ 1 for `rr-then-ko`, refused outright on the other two.
  *   • max_players — when present, a positive integer (`null` = no cap is fine).
  *   • entry_fee — when present, non-negative.
  * Returns a 422 response for the first violation, or `null` when the body is OK.
@@ -979,6 +981,58 @@ function validateEventBody(
     if (name.length > 255) {
       return detail('Name must be 255 characters or fewer.', 422)
     }
+  }
+  // The **draw configuration**, judged as the pair it is (ADR 20260727). On the server
+  // `(draw_type, qualifiers_per_pool)` is flat on the wire and a discriminated union in
+  // the interior: the `rr-then-ko` arm REQUIRES a count with no default, and the other
+  // two arms are `extra="forbid"` and declare no such field — so a count sent with either
+  // of them is a 422, not a value quietly dropped on the way to a column whose `CHECK`
+  // says `NULL`.
+  //
+  // Mirrored here because a mock more permissive than the server is a trap: a client that
+  // sent `qualifiers_per_pool: null` on a round-robin event, or a bare `rr-then-ko` with
+  // no count, would look perfectly healthy in `npm run dev` and in vitest, and 422 in
+  // production. (The store below then keeps whatever survives this — see `createEvent`.)
+  if (body.draw_type !== undefined && body.draw_type !== null) {
+    if (body.draw_type === 'rr-then-ko') {
+      if (body.qualifiers_per_pool === undefined || body.qualifiers_per_pool === null) {
+        return detail(
+          '“rr-then-ko” draw settings: qualifiers_per_pool: Field required.',
+          422,
+        )
+      }
+      if (
+        !Number.isInteger(body.qualifiers_per_pool) ||
+        body.qualifiers_per_pool < 1
+      ) {
+        return detail(
+          '“rr-then-ko” draw settings: qualifiers_per_pool: Input should be greater ' +
+            'than or equal to 1.',
+          422,
+        )
+      }
+    } else if (
+      body.qualifiers_per_pool !== undefined &&
+      body.qualifiers_per_pool !== null
+    ) {
+      return detail(
+        `“${body.draw_type}” draw settings: qualifiers_per_pool: Extra inputs are ` +
+          'not permitted.',
+        422,
+      )
+    }
+  } else if (
+    body.qualifiers_per_pool !== undefined &&
+    body.qualifiers_per_pool !== null
+  ) {
+    // A count with no draw type beside it: judging it would mean reading the event's
+    // STORED draw type, two layers past the boundary. The server refuses it there
+    // (`_parse_draw_settings`) and so does this.
+    return detail(
+      'qualifiers_per_pool is part of an event’s draw configuration and is patched ' +
+        'with it: send draw_type alongside it.',
+      422,
+    )
   }
   if (body.max_players !== undefined && body.max_players !== null) {
     if (!Number.isInteger(body.max_players) || body.max_players <= 0) {

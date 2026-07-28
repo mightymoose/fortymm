@@ -403,6 +403,116 @@ async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
     assert event.draw_settings.qualifiers_per_pool is None
 
 
+# ----- the read: the stored qualifier count comes back ------------------------------
+#
+# The event read carries ``qualifiers_per_pool`` beside ``draw_type`` because the
+# configuration is edited as a PAIR: the editor always sends the draw type, and the
+# server parses ``(draw_type, K)`` together with K required and no default. A client
+# that cannot read K back has to supply one on every PATCH — which pre-draw silently
+# overwrites the director's number and post-draw trips the freeze with a 409 for an edit
+# nobody made. So "the number the director chose survives a round trip" is the claim,
+# and it is asserted on all three shaping paths (create, detail GET, patch), which are
+# three call sites of one serializer and would otherwise be free to drift.
+
+
+async def test_an_rr_then_ko_events_qualifier_count_reads_back(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """Created with K=3, read back as 3 — and 3 is what the settings row holds.
+
+    The stored column is asserted alongside the two response bodies on purpose: a read
+    that echoed the *request* would satisfy the wire assertions while the cut used some
+    other number, which is the failure the wire alone cannot see.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+
+    created = await _create_event(client, tournament_id, qualifiers_per_pool=3)
+
+    assert created.status_code == 201, created.text
+    assert created.json()["qualifiers_per_pool"] == 3
+    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] == 3
+    event = await _settings_of(db_session, created.json()["id"])
+    assert event.draw_settings.qualifiers_per_pool == 3
+
+
+@pytest.mark.parametrize("draw_type", ["round-robin", "single-elim"])
+async def test_a_draw_type_with_no_knockout_stage_reads_back_no_qualifier_count(
+    authed_client: tuple[AsyncClient, User], draw_type: str
+) -> None:
+    """``null``, and the key is **present**.
+
+    The other side of the pairing, and it has to be asserted or the read is one-sided:
+    a field hard-wired to the requested K, or defaulted to some convention, would pass
+    the rr-then-ko test above and quietly tell a director that their round-robin
+    advances two per pool — a configuration the settings table's ``CHECK`` says cannot
+    exist. Both of the count-less draw types are asked, because a read keyed off a
+    single slug would look right on a one-slug test.
+
+    ``in`` before the value, so "the field vanished from the response" reds as itself
+    rather than as ``KeyError`` — the client distinguishes *absent* (an older server)
+    from *null* (this draw type takes no count).
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    payload = _event_payload(draw_type=draw_type, pools=[])
+    del payload["qualifiers_per_pool"]
+
+    created = await client.post(f"/v1/tournaments/{tournament_id}/events", json=payload)
+
+    assert created.status_code == 201, created.text
+    assert "qualifiers_per_pool" in created.json()
+    assert created.json()["qualifiers_per_pool"] is None
+    read = await _event_read(client, tournament_id)
+    assert "qualifiers_per_pool" in read
+    assert read["qualifiers_per_pool"] is None
+
+
+async def test_editing_the_qualifier_count_reads_the_edited_value_back(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The round trip the editor actually runs: PATCH the pair, and the response the
+    form re-seeds itself from carries the K just written — not the one it replaced.
+
+    The edited event is reloaded and reprojected by a *different* shaping path than the
+    create, so it gets its own assertion; a read wired only into the create path would
+    hand the editor a stale number the moment the director changed it.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event_id = (await _create_event(client, tournament_id)).json()["id"]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 4},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["qualifiers_per_pool"] == 4
+    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] == 4
+
+
+async def test_patching_away_from_rr_then_ko_reads_back_no_qualifier_count(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The clear is visible on the wire too. ``configure`` writes both columns together,
+    so the count goes NULL when the draw type moves — and the editor has to *see* that,
+    or it re-sends the count it still believes in and gets a 422 for a round-robin event
+    carrying a K."""
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event_id = (await _create_event(client, tournament_id)).json()["id"]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"draw_type": "round-robin"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["qualifiers_per_pool"] is None
+    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] is None
+
+
 # ----- the cut: both stages in one stroke -------------------------------------------
 
 

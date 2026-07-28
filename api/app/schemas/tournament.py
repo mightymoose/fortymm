@@ -1215,6 +1215,24 @@ class TournamentEventRead(BaseModel):
     name: str
     format: EventFormat
     draw_type: DrawType
+    # **K** — how many of each pool's finishers advance into the knockout stage — read
+    # back flat beside the ``draw_type`` it belongs to, exactly as the write schemas
+    # send the pair (ADR 20260727). Both halves come off the same ``draw_settings`` row,
+    # so this is the stored configuration and not a second copy of it.
+    #
+    # ``null`` for a round-robin or single-elim event, and that is a *fact* rather than
+    # missing data: neither draw type has a qualifier count, which is what the settings
+    # table's ``CHECK`` says in DDL and what the write union says at the boundary. This
+    # read is the third statement of the same pairing and it cannot disagree with
+    # either, because it does not decide anything — it reports the column.
+    #
+    # It is on the read at all because the client edits the pair as a unit. The event
+    # editor always sends ``draw_type``, and the server parses ``(draw_type, K)``
+    # together with K required and no default — so every PATCH of an rr-then-ko event,
+    # even a rename, has to carry a K. Without this field the client would have to guess
+    # one, which pre-draw silently overwrites the director's number and post-draw trips
+    # the freeze with a 409 for an edit nobody made.
+    qualifiers_per_pool: int | None
     # ``null`` means the event is uncapped — there is no entrant limit (ADR-0935).
     max_players: int | None
     # Typed ``float`` so JSON emits a number, not a Decimal string. The

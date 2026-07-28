@@ -15,6 +15,20 @@ const scoped = (container: Container) => ({
   queryFinishesPanel(eventId: string) {
     return container.queryByTestId(`finishes-panel-${eventId}`)
   },
+
+  /** A block's champion callout, by its full test id. The panels are handed their view now,
+   * so this is where "the RIGHT data reached the right panel" is asserted — a section
+   * wrapper alone would render for an empty view too. */
+  getChampion(testId: string) {
+    return container.getByTestId(testId)
+  },
+
+  /** The rendered table's accessible name — for the finishes arm, this is the only place
+   * the **event's name** shows up, and `ResultsPanel` is now the only thing that passes
+   * it. */
+  getTableName() {
+    return container.getByRole('table').getAttribute('aria-label')
+  },
 })
 
 /** Test page-object for `ResultsPanel`. */

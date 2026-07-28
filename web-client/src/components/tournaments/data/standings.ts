@@ -23,7 +23,7 @@
 // rather than asserted through a DOM.
 
 import { nameByEntryId, nameOf } from './entrant-names'
-import type { StandingRow, TournamentEvent } from './types'
+import type { StandingRow, StandingsResults, TournamentEvent } from './types'
 
 /** One standings line, ready to render: the server's row, plus the entrant's name joined
  * from the event. The row's every number is carried through unchanged — see the module
@@ -57,9 +57,13 @@ export interface StandingsView {
 }
 
 /**
- * An event's results, shaped for the reader — or `null` when the event has none (an uncut
- * or non-round-robin event; `results` is `null` on the wire, and this returns `null`
- * straight through, so the panel renders nothing).
+ * A **standings block**, shaped for the reader — always a view, never `null`.
+ *
+ * It is handed the block rather than digging one out of the event, so it does not decide
+ * whether it applies: **the caller that switches on `results.kind` does**
+ * (`ResultsPanel`), and it is the only place that knows an event may have no results at
+ * all. Everything here is a total function of the two arguments — the block, plus the
+ * `event` the two id joins need (entry id → username, pool id → pool name).
  *
  * The rows are mapped **in the order the server sent them**: standings are a total order
  * the server computed (wins → two-way head-to-head → game difference → games won), and
@@ -67,13 +71,10 @@ export interface StandingsView {
  * guessing a result it does not own, and would silently disagree the day a tiebreaker the
  * client cannot see (head-to-head) decides two equal rows.
  */
-export function eventStandings(event: TournamentEvent): StandingsView | null {
-  const results = event.results
-  // Only the `standings` arm of the results union stands here (ADR-0785). `null` (no
-  // results) and the `finishes` arm (single-elimination — a placement list, `./finishes`)
-  // both render nothing off this view-model.
-  if (results === null || results.kind !== 'standings') return null
-
+export function eventStandings(
+  event: TournamentEvent,
+  results: StandingsResults,
+): StandingsView {
   const names = nameByEntryId(event)
   const poolNameById = new Map(event.pools.map((p) => [p.id, p.name]))
 

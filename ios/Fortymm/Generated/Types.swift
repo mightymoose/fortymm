@@ -10207,6 +10207,8 @@ internal enum Components {
             internal var format: Components.Schemas.EventFormat
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/draw_type`.
             internal var drawType: Components.Schemas.DrawType
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/qualifiers_per_pool`.
+            internal var qualifiersPerPool: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
@@ -10335,6 +10337,7 @@ internal enum Components {
             ///   - name:
             ///   - format:
             ///   - drawType:
+            ///   - qualifiersPerPool:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10355,6 +10358,7 @@ internal enum Components {
                 name: Swift.String,
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
+                qualifiersPerPool: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
                 timezone: Swift.String,
@@ -10375,6 +10379,7 @@ internal enum Components {
                 self.name = name
                 self.format = format
                 self.drawType = drawType
+                self.qualifiersPerPool = qualifiersPerPool
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10396,6 +10401,7 @@ internal enum Components {
                 case name
                 case format
                 case drawType = "draw_type"
+                case qualifiersPerPool = "qualifiers_per_pool"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone

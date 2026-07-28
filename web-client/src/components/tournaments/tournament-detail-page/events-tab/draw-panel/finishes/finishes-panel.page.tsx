@@ -1,7 +1,11 @@
+import { renderedHtml } from '@/test/rendered-html'
 import { render, screen, within, type Container } from '@/test/utilities'
 
-import { FinishesPanel, type FinishesPanelProps } from './finishes-panel'
-import { buildFinishesPanelProps } from './finishes-panel.factory'
+import { FinishesPanel } from './finishes-panel'
+import {
+  buildFinishesPanelProps,
+  type FinishesPanelScenario,
+} from './finishes-panel.factory'
 
 const scoped = (container: Container) => ({
   /** The whole finishes block, by event id. `query…` because the panel renders NOTHING for
@@ -11,6 +15,19 @@ const scoped = (container: Container) => ({
   },
   queryPanel(eventId: string) {
     return container.queryByTestId(`finishes-panel-${eventId}`)
+  },
+
+  /** The panel's whole rendered DOM (React ids normalized) — the equivalence guard's
+   * subject: an inline snapshot of this reds on ANY rendered change. */
+  getPanelHtml(eventId: string) {
+    return renderedHtml(container.getByTestId(`finishes-panel-${eventId}`))
+  },
+
+  /** The panel's landmark by its accessible name — a `<section>` with `aria-labelledby` is
+   * a `region`, so this only resolves while the heading is still wired to the section.
+   * (The snapshot normalizes the generated id away, so the wiring is asserted here.) */
+  getRegion() {
+    return container.getByRole('region', { name: 'Finishes' })
   },
 
   /** The champion callout, by event id — shown only once the final is decided. `query…`
@@ -43,7 +60,7 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `FinishesPanel`. */
 export const finishesPanelPage = {
-  render(overrides: Partial<FinishesPanelProps> = {}) {
+  render(overrides: FinishesPanelScenario = {}) {
     render(<FinishesPanel {...buildFinishesPanelProps(overrides)} />)
   },
 

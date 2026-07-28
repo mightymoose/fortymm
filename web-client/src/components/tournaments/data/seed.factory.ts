@@ -163,6 +163,12 @@ export function buildEvent(
     // `buildEventResults` override (or use `buildStandingsEvent`).
     results: null,
     ...overrides,
+    // **No knockout stage to qualify for, so no qualifier count** (ADR 20260727) —
+    // `null` is the only value a round-robin or single-elim event's draw settings admit,
+    // and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an
+    // explicit `undefined` while the field is required-and-nullable (`number | null`) —
+    // the same reason `entryState` is computed below rather than spread.
+    qualifiersPerPool: overrides.qualifiersPerPool ?? null,
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole
@@ -206,6 +212,40 @@ export function buildFullEvent(
     name: 'Championship Singles',
     maxPlayers: 16,
     entrants: buildEntrants(16),
+    ...overrides,
+  })
+}
+
+/**
+ * A **round-robin-then-knockout** event (ADR 20260727): two pools, and **two** qualifiers
+ * out of each into the bracket.
+ *
+ * `qualifiersPerPool: 2` rather than the smallest legal `1`, deliberately. One is what a
+ * planner falls back to when nobody tells it otherwise (`DEFAULT_QUALIFIERS_PER_POOL`,
+ * `mocks/factories/tournaments/tournament.factory`), so a fixture built on it could not
+ * tell "the director's count was threaded through" from "the default was taken" — the
+ * exact mock/server mismatch that would cut a K=1 bracket for an event configured at K=2.
+ * Two pools, likewise, because `P × K` is what sizes the bracket and a single pool would
+ * make the product ambiguous between the two factors.
+ */
+export function buildRrThenKoEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-two-stage',
+    name: 'Two-stage Singles',
+    drawType: 'rr-then-ko',
+    qualifiersPerPool: 2,
+    maxPlayers: 32,
+    entrants: buildEntrants(8),
+    pools: [
+      buildPool({ id: 'p-a', name: 'Pool A' }),
+      buildPool({
+        id: 'p-b',
+        name: 'Pool B',
+        slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
+      }),
+    ],
     ...overrides,
   })
 }
@@ -618,6 +658,40 @@ export function buildFinishesEvent(
     results: buildFinishesResults(),
     ...overrides,
   })
+}
+
+/**
+ * A fixture event's own **standings block**, narrowed — what `ResultsPanel` hands
+ * `eventStandings` after its switch on `results.kind`.
+ *
+ * A test reasons in whole events (the results and the entrants they join against travel
+ * together), but the selector and the panel now take the block, so this is the bridge. It
+ * **throws** rather than returning `null`: a fixture that is not a standings event is a
+ * mis-built test, and it should say so at the call site instead of quietly yielding a view
+ * of nothing.
+ */
+export function standingsResultsOf(event: TournamentEvent): StandingsResults {
+  const results = event.results
+  if (results === null || results.kind !== 'standings') {
+    throw new Error(
+      `Fixture event '${event.id}' has no standings block (results: ${results?.kind ?? 'null'}). Build it with buildStandingsEvent().`,
+    )
+  }
+  return results
+}
+
+/**
+ * A fixture event's own **finishes block**, narrowed — the `finishes` twin of
+ * `standingsResultsOf`, and throwing for the same reason.
+ */
+export function finishesResultsOf(event: TournamentEvent): FinishesResults {
+  const results = event.results
+  if (results === null || results.kind !== 'finishes') {
+    throw new Error(
+      `Fixture event '${event.id}' has no finishes block (results: ${results?.kind ?? 'null'}). Build it with buildFinishesEvent().`,
+    )
+  }
+  return results
 }
 
 /** A round-robin event **with results**: the drawn U1200 pool play (`buildDrawnEvent`)

@@ -451,6 +451,15 @@ def serialize_event(
             # that loads an event (``lazy="joined"``), so the list endpoint's
             # per-event serialization still issues no query of its own.
             "draw_type": e.draw_settings.draw_type,
+            # The other half of the same fact, off the same already-joined row: the
+            # slug through the ``draw_type`` property (which owns the slug→enum parse,
+            # so this serializer never spells one), and **K** through the column beside
+            # it. Read as a pair because they are stored as a pair — taking the type
+            # from the settings row and the count from anywhere else is how the two
+            # start disagreeing. ``None`` for the two draw types that have no knockout
+            # stage to qualify for, which the table's ``CHECK`` guarantees rather than
+            # this line assuming.
+            "qualifiers_per_pool": e.draw_settings.qualifiers_per_pool,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
             # The event's venue timezone anchors its wall-clock ``Slot`` windows to

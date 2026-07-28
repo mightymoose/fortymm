@@ -190,6 +190,10 @@ export const EventEditor = ({
     form.setValue('name', next.name, opts)
     form.setValue('format', next.format, opts)
     form.setValue('drawType', next.drawType, opts)
+    // Written back beside the draw type, because the resolver judges the two as one pair
+    // (ADR 20260727): a draw type set without its count would be validated against a
+    // stale K, and a count without its type against a stale arm.
+    form.setValue('qualifiersPerPool', next.qualifiersPerPool, opts)
     form.setValue('maxPlayers', next.maxPlayers, opts)
     form.setValue('entryFee', next.entryFee, opts)
     form.setValue('timezone', next.timezone, opts)
@@ -225,6 +229,7 @@ export const EventEditor = ({
 
   const basicsErrors = {
     name: errors.name?.message,
+    qualifiersPerPool: errors.qualifiersPerPool?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
     timezone: errors.timezone?.message,

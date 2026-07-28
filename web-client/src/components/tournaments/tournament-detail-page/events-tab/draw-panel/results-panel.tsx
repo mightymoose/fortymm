@@ -1,3 +1,5 @@
+import { eventFinishes } from '../../../data/finishes'
+import { eventStandings } from '../../../data/standings'
 import type { TournamentEvent } from '../../../data/types'
 import { FinishesPanel } from './finishes/finishes-panel'
 import { StandingsPanel } from './standings/standings-panel'
@@ -15,8 +17,13 @@ export interface ResultsPanelProps {
  *
  * It renders **nothing** for an event with no results (`results === null`: an uncut event, or
  * a draw type with no results strategy yet) — the designed data state, so this drops into the
- * panel unconditionally, exactly as the standings panel used to. Each arm is itself a pure
- * view over the event, live off the tournament-detail payload with no machinery of its own.
+ * panel unconditionally, exactly as the standings panel used to.
+ *
+ * **This is the only component that knows which block applies.** It selects each block's view
+ * (`eventStandings` / `eventFinishes`) and hands it to a panel that just renders what it is
+ * given: no panel re-checks `kind`, so none of them can meet a shape it does not recognise and
+ * quietly render nothing. Each block stays a pure view, live off the tournament-detail
+ * payload, with no machinery of its own.
  */
 export const ResultsPanel = ({ event }: ResultsPanelProps) => {
   const results = event.results
@@ -27,9 +34,20 @@ export const ResultsPanel = ({ event }: ResultsPanelProps) => {
 
   switch (results.kind) {
     case 'standings':
-      return <StandingsPanel event={event} />
+      return (
+        <StandingsPanel
+          eventId={event.id}
+          standings={eventStandings(event, results)}
+        />
+      )
     case 'finishes':
-      return <FinishesPanel event={event} />
+      return (
+        <FinishesPanel
+          eventId={event.id}
+          eventName={event.name}
+          finishes={eventFinishes(event, results)}
+        />
+      )
     default: {
       // A results shape without a render arm is a TYPE error here, not a blank section.
       const exhaustive: never = results
