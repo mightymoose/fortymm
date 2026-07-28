@@ -21,6 +21,7 @@ import type {
   Predicate,
   StandingRow,
   StandingsResults,
+  StandingsThenFinishesResults,
   Tournament,
   TournamentEvent,
   TournamentTable,
@@ -661,6 +662,81 @@ export function buildFinishesEvent(
 }
 
 /**
+ * A **two-stage** event's results (ADR 20260727) — a played-out `rr-then-ko`: two pools
+ * decided, the bracket run to a final, one champion.
+ *
+ * The numbers are arranged around the claim the format turns on: **the champion is the
+ * bracket's, never a pool's.** `entry-2` wins the final, and `entry-2` tops NO pool —
+ * `entry-5` leads Pool A and `entry-3` leads Pool B, and both of them lose their semifinal
+ * (they are the two tied 3rd). A fixture whose champion also happened to top the first
+ * standings table could not tell a banner that reads the bracket from one that reads the
+ * standings, and that is exactly the bug worth catching.
+ *
+ * The finishes follow single-elimination's own shape, unchanged: 1st, 2nd, then the two
+ * same-round losers **tied 3rd**. A mid-flight event is built by overriding
+ * `complete: false`, `champion: null` and a `finishes` list holding only what the bracket
+ * has settled (see `buildMidFlightTwoStageResults`).
+ */
+export function buildTwoStageResults(
+  overrides: Partial<StandingsThenFinishesResults> = {},
+): StandingsThenFinishesResults {
+  return {
+    kind: 'standings_then_finishes',
+    pools: [
+      buildPoolStandings({
+        poolId: 'p-a',
+        complete: true,
+        rows: [
+          buildStandingRow({ entryId: 'entry-5', rank: 1, played: 3, wins: 3, losses: 0, gamesWon: 6, gamesLost: 1, gameDifference: 5 }),
+          buildStandingRow({ entryId: 'entry-1', rank: 2, played: 3, wins: 2, losses: 1, gamesWon: 5, gamesLost: 2, gameDifference: 3 }),
+          buildStandingRow({ entryId: 'entry-4', rank: 3, played: 3, wins: 1, losses: 2, gamesWon: 2, gamesLost: 5, gameDifference: -3 }),
+          buildStandingRow({ entryId: 'entry-8', rank: 4, played: 3, wins: 0, losses: 3, gamesWon: 1, gamesLost: 6, gameDifference: -5 }),
+        ],
+      }),
+      buildPoolStandings({
+        poolId: 'p-b',
+        complete: true,
+        rows: [
+          buildStandingRow({ entryId: 'entry-3', rank: 1, played: 3, wins: 2, losses: 1, gamesWon: 5, gamesLost: 3, gameDifference: 2 }),
+          buildStandingRow({ entryId: 'entry-2', rank: 2, played: 3, wins: 2, losses: 1, gamesWon: 4, gamesLost: 4, gameDifference: 0 }),
+          buildStandingRow({ entryId: 'entry-6', rank: 3, played: 3, wins: 1, losses: 2, gamesWon: 4, gamesLost: 4, gameDifference: 0 }),
+          buildStandingRow({ entryId: 'entry-7', rank: 4, played: 3, wins: 1, losses: 2, gamesWon: 3, gamesLost: 5, gameDifference: -2 }),
+        ],
+      }),
+    ],
+    finishes: [
+      buildFinishRow({ entryId: 'entry-2', position: 1, eliminatedInRound: null }),
+      buildFinishRow({ entryId: 'entry-1', position: 2, eliminatedInRound: 2 }),
+      buildFinishRow({ entryId: 'entry-5', position: 3, eliminatedInRound: 1 }),
+      buildFinishRow({ entryId: 'entry-3', position: 3, eliminatedInRound: 1 }),
+    ],
+    complete: true,
+    champion: 'entry-2',
+    ...overrides,
+  }
+}
+
+/** The **mid-flight** two-stage read: the same pools, all decided, and a bracket one match
+ * from home — the final seated and unplayed. So `complete` is `false` (both stages decided
+ * is the bar, and one is not), `champion` is `null`, and the finishes list **starts at
+ * position 3**: the two beaten semifinalists are the only entrants the bracket has placed,
+ * and 1st and 2nd do not exist yet. It is the state the seed's `ev-shield` is in, and the
+ * one a partial render must survive. */
+export function buildMidFlightTwoStageResults(
+  overrides: Partial<StandingsThenFinishesResults> = {},
+): StandingsThenFinishesResults {
+  return buildTwoStageResults({
+    complete: false,
+    champion: null,
+    finishes: [
+      buildFinishRow({ entryId: 'entry-5', position: 3, eliminatedInRound: 1 }),
+      buildFinishRow({ entryId: 'entry-3', position: 3, eliminatedInRound: 1 }),
+    ],
+    ...overrides,
+  })
+}
+
+/**
  * A fixture event's own **standings block**, narrowed — what `ResultsPanel` hands
  * `eventStandings` after its switch on `results.kind`.
  *
@@ -692,6 +768,39 @@ export function finishesResultsOf(event: TournamentEvent): FinishesResults {
     )
   }
   return results
+}
+
+/**
+ * A fixture event's own **two-stage block**, narrowed — the `standings_then_finishes` twin
+ * of the two above, and throwing for the same reason.
+ */
+export function twoStageResultsOf(
+  event: TournamentEvent,
+): StandingsThenFinishesResults {
+  const results = event.results
+  if (results === null || results.kind !== 'standings_then_finishes') {
+    throw new Error(
+      `Fixture event '${event.id}' has no two-stage block (results: ${results?.kind ?? 'null'}). Build it with buildTwoStageEvent().`,
+    )
+  }
+  return results
+}
+
+/** A **two-stage** (`rr-then-ko`) event **with results**: the two-pool event
+ * `buildRrThenKoEvent` seeds, played out to a champion (`buildTwoStageResults`). Its eight
+ * entrants (`entry-1`…`entry-8`) are the ones both stages name, so every id joins to a
+ * username; its two pools (`p-a`, `p-b`) are the ones the standings name, so both tables
+ * title themselves.
+ *
+ * The mid-flight state — pools done, final unplayed, no champion — is
+ * `buildTwoStageEvent({ results: buildMidFlightTwoStageResults() })`. */
+export function buildTwoStageEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildRrThenKoEvent({
+    results: buildTwoStageResults(),
+    ...overrides,
+  })
 }
 
 /** A round-robin event **with results**: the drawn U1200 pool play (`buildDrawnEvent`)

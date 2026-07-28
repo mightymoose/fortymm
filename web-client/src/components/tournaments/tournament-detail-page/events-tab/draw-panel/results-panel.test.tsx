@@ -1,4 +1,9 @@
-import { buildEvent, buildFinishesEvent } from '../../../data/seed.factory'
+import {
+  buildEvent,
+  buildFinishesEvent,
+  buildMidFlightTwoStageResults,
+  buildTwoStageEvent,
+} from '../../../data/seed.factory'
 import { resultsPanelPage as page } from './results-panel.page'
 
 describe('ResultsPanel', () => {
@@ -28,6 +33,33 @@ describe('ResultsPanel', () => {
       'player.1',
     )
     expect(page.getTableName()).toBe('Finishes for Championship Singles')
+  })
+
+  it('renders BOTH stages for a two-stage event (kind: standings_then_finishes)', () => {
+    // The third arm (ADR 20260727) routes to the composite, which reuses the same two
+    // panels — so a two-stage card shows a standings block AND a finishes block, under one
+    // champion banner naming the BRACKET's winner (`player.2`), who tops neither pool.
+    page.render({ event: buildTwoStageEvent() })
+
+    expect(page.queryStandingsPanel('ev-two-stage')).not.toBeNull()
+    expect(page.queryFinishesPanel('ev-two-stage')).not.toBeNull()
+    expect(page.getChampion('two-stage-champion-ev-two-stage')).toHaveTextContent(
+      'player.2',
+    )
+    // Neither stage crowned anybody itself — one banner on the card, not three.
+    expect(page.queryStandingsChampion('ev-two-stage')).toBeNull()
+    expect(page.queryFinishesChampion('ev-two-stage')).toBeNull()
+  })
+
+  it('renders a mid-flight two-stage event with no champion at all', () => {
+    // Pools decided, final unplayed: the stages still render, and nothing is crowned.
+    page.render({
+      event: buildTwoStageEvent({ results: buildMidFlightTwoStageResults() }),
+    })
+
+    expect(page.queryStandingsPanel('ev-two-stage')).not.toBeNull()
+    expect(page.queryFinishesPanel('ev-two-stage')).not.toBeNull()
+    expect(page.queryTwoStageChampion('ev-two-stage')).toBeNull()
   })
 
   it('renders nothing for an event with no results', () => {

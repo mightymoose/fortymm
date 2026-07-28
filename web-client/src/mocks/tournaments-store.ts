@@ -21,6 +21,7 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
 import {
+  buildTournamentFixtureRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
   planDraw,
@@ -186,6 +187,298 @@ const SLAM_POOLS: Pool[] = [
     slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
   },
+]
+
+// ----- the seed's TWO-STAGE events (`rr-then-ko`, ADR 20260727) -------------------
+//
+// Two of them, on their own tournament (`GOLDEN_STATE` below): the **Challenge Cup**,
+// played out to a champion, and the **Shield**, whose pools are decided while its bracket
+// is still mid-flight. Between them they are the only place the results union's third arm
+// (`kind: "standings_then_finishes"`) exists outside the server — complete and partial.
+//
+// They are hand-seeded, and that is not laziness: **this store derives no results at
+// all.** Every seeded event states its own `results` block and `cutDraw` never writes one
+// (the same seam `ev-u1200`'s standings come through), so without fixtures that spell the
+// shape out, the two-stage arm is a thing only the server has ever produced.
+//
+// ⚠️ A results shape the client has no arm for is NOT contained by parking it on a
+// tournament of its own, and believing it was cost this seed a broken app. `parseResults`
+// throws on an unknown `kind` (by design — ADR 20260727 says so out loud), and the
+// tournaments **list** handler returns full detail rows, results included, which the list
+// query maps through that same parser. So while the third arm was seeded and unparsed, the
+// throw failed the LIST query and took the entire `/tournaments` section down — every
+// tournament, not just this one. The separate row buys isolation for the *detail* query
+// only; nothing isolates the list.
+//
+// The lesson, for the next arm: **the parser and the fixture that exercises it must land
+// together.** (vitest stayed green throughout, because every list test stubs the endpoint
+// with a hand-built row — the suite was green about a stub. `npm run dev` was not.)
+//
+// The numbers below are consistent by construction and `tournaments-store.test.ts` holds
+// them to it: the standings' wins and losses are the ones the POOL FIXTURES record, the
+// finishes follow single-elimination's tie shape, and the champion is the FINAL's winner
+// — never a pool leader.
+
+/** The tournament both two-stage events run at: **live**, mid-weekend, with one event
+ * finished and one still playing. It is also the seed's only `live` row, so `npm run dev`
+ * gets a started tournament for free. */
+const GOLDEN_STATE_ID = 'golden-state-classic-2026'
+
+const CUP_EVENT_ID = 'ev-challenge-cup'
+const SHIELD_EVENT_ID = 'ev-shield'
+
+/** An event's entrant ids in registration order — read off `otherEntrants` rather than
+ * spelled out, so the ids a results block names and the ids the event actually holds
+ * cannot drift apart. `player.N`'s id is at index `N − 1`, which is what lets the outcome
+ * tables below read as the matches a director would recognise (`cup(5)` beat `cup(1)`)
+ * instead of as array indices. */
+const CUP_ENTRY_IDS = otherEntrants(CUP_EVENT_ID, 8).map((e) => e.id)
+const SHIELD_ENTRY_IDS = otherEntrants(SHIELD_EVENT_ID, 6).map((e) => e.id)
+
+const cup = (n: number): string => CUP_ENTRY_IDS[n - 1]
+const shield = (n: number): string => SHIELD_ENTRY_IDS[n - 1]
+
+/** The Challenge Cup's two pools. Pulled out of the seed for the reason `U1200_POOLS` is
+ * — the fixtures are planned against these very ids, so they cannot be spelled twice and
+ * spelled differently. */
+const CUP_POOLS: Pool[] = [
+  {
+    id: 'p-cup-a',
+    name: 'Pool A',
+    slot: { date: '2026-06-06', start: '09:00', end: '11:00' },
+    table_ids: ['t1', 't2'],
+  },
+  {
+    id: 'p-cup-b',
+    name: 'Pool B',
+    slot: { date: '2026-06-06', start: '11:00', end: '13:00' },
+    table_ids: ['t3', 't4'],
+  },
+]
+
+/** The Shield's two pools — a day later and on the other four tables, so the tournament
+ * raises no double-booking diagnostic (`findPoolConflicts`). */
+const SHIELD_POOLS: Pool[] = [
+  {
+    id: 'p-shield-a',
+    name: 'Pool A',
+    slot: { date: '2026-06-07', start: '09:00', end: '10:30' },
+    table_ids: ['t5', 't6'],
+  },
+  {
+    id: 'p-shield-b',
+    name: 'Pool B',
+    slot: { date: '2026-06-07', start: '10:30', end: '12:00' },
+    table_ids: ['t7', 't8'],
+  },
+]
+
+/** One played pool match: `[winner, loser, winner's games, loser's games]` over an
+ * event's `player.N` numbering. Best-of-three throughout (`length_games: 3`), so every
+ * score is `2–0` or `2–1`. */
+type PoolPlay = readonly [number, number, number, number]
+
+/**
+ * Every pool match the **Challenge Cup** played — the play its standings block reports.
+ *
+ * Written out as OUTCOMES rather than as the standings themselves, because the two are
+ * the seed's two independent statements about the same pool stage: this table stamps each
+ * planned pool fixture with its `winner_entry_id`, the results block states the table a
+ * director reads, and the store's test derives the first into the second and fails if they
+ * disagree. A single hand-written standings block with nothing to check it against is a
+ * block whose arithmetic rots the first time somebody edits a row.
+ */
+const CUP_POOL_PLAY: readonly PoolPlay[] = [
+  // Pool A (`player.1`, `.4`, `.5`, `.8` — the snake's deal): `player.5` unbeaten,
+  // `player.1` second on 2–1, then `player.4`, then a winless `player.8`. No tie, so the
+  // finishing order is wins alone.
+  [5, 1, 2, 1],
+  [1, 4, 2, 0],
+  [1, 8, 2, 0],
+  [5, 4, 2, 0],
+  [4, 8, 2, 1],
+  [5, 8, 2, 0],
+  // Pool B (`player.2`, `.3`, `.6`, `.7`): TWO ties, both broken by **two-way
+  // head-to-head** — the first tiebreak the finishing order falls through to
+  // (`player.3` over `player.2` at 2–1 each, `player.6` over `player.7` at 1–2 each).
+  // Seeded deliberately: a pool where wins alone settle everything leaves the chain the
+  // qualifiers are chosen by completely unexercised. The game difference agrees with
+  // head-to-head in both cases, so the table still reads top-to-bottom without a director
+  // having to know why.
+  [3, 2, 2, 0],
+  [2, 6, 2, 1],
+  [2, 7, 2, 1],
+  [3, 6, 2, 1],
+  [7, 3, 2, 1],
+  [6, 7, 2, 0],
+]
+
+/**
+ * Every pool match the **Shield** played. Both pools are decided; the knockout stage is
+ * not (see `SHIELD_KNOCKOUT_FIXTURES`).
+ *
+ * Pool A is a **three-way tie** — everybody 1–1 — which head-to-head cannot break (it
+ * only settles a *two*-way one), so the order falls through to game difference:
+ * `player.1` (+1), `player.5` (0), `player.4` (−1). That is the next link of the same
+ * chain the Cup's Pool B exercises, and between them the two events cover it.
+ */
+const SHIELD_POOL_PLAY: readonly PoolPlay[] = [
+  // Pool A — `player.1`, `.4`, `.5`.
+  [1, 4, 2, 0],
+  [5, 1, 2, 1],
+  [4, 5, 2, 1],
+  // Pool B — `player.2`, `.3`, `.6`: no tie at all. `player.2` unbeaten, `player.6`
+  // winless.
+  [2, 3, 2, 1],
+  [3, 6, 2, 0],
+  [2, 6, 2, 0],
+]
+
+/** `entry id | entry id` (sorted) → the winner's entry id, for every pool match of one
+ * event. The lookup `stampPoolWinners` uses to record play on the PLANNED fixtures, so
+ * the draw the store would have cut and the play the results report are one thing. */
+function poolWinnersOf(
+  play: readonly PoolPlay[],
+  entryOf: (n: number) => string,
+): Map<string, string> {
+  return new Map(
+    play.map(([winner, loser]) => [
+      [entryOf(winner), entryOf(loser)].sort().join('|'),
+      entryOf(winner),
+    ]),
+  )
+}
+
+const CUP_POOL_WINNERS = poolWinnersOf(CUP_POOL_PLAY, cup)
+const SHIELD_POOL_WINNERS = poolWinnersOf(SHIELD_POOL_PLAY, shield)
+
+/** Record an event's play on its planned pool fixtures — the state a decided pool's
+ * fixtures are really in. The play table names every pairing exactly once, so a fixture
+ * with no entry in the map is a planner/seed disagreement rather than an unplayed match,
+ * and it throws here rather than seeding a half-played pool nobody notices. */
+function stampPoolWinners(
+  fixtures: TournamentFixtureRead[],
+  winners: ReadonlyMap<string, string>,
+): TournamentFixtureRead[] {
+  return fixtures.map((fixture) => {
+    const key = [fixture.entry_a_id, fixture.entry_b_id].sort().join('|')
+    const winner = winners.get(key)
+    if (winner === undefined) {
+      throw new Error(`seed: no pool result for fixture ${fixture.id}`)
+    }
+    return { ...fixture, winner_entry_id: winner }
+  })
+}
+
+/**
+ * The Challenge Cup's knockout stage, **played out** — the state the bracket reaches once
+ * every pool has finished, `advance()` has seated its qualifiers, and all three matches
+ * have been won.
+ *
+ * Written out rather than planned, because seating a qualifier and carrying a winner
+ * forward are `advance()`'s job on the server and this store implements neither. What
+ * keeps it honest is a test: the seeded bracket's `(id, pool_id, round, position)` shape
+ * is asserted equal to the one `planDraw('rr-then-ko', …)` cuts for this very field, so
+ * this is that bracket with its sides filled in — never a differently-shaped one.
+ *
+ * **Who plays whom is the ADR's seeding, not a choice made here.** Qualifiers are ordered
+ * place-major — both pool winners (`player.5`, `player.3`) outrank both runners-up
+ * (`player.1`, `player.2`) — and the pool order *within* a place is picked so round one
+ * pairs nobody with a pool-mate: seeds 1–4 are `player.5`, `player.3`, `player.1`,
+ * `player.2`, and a 4-bracket pairs 1 v 4 and 2 v 3, i.e. A-winner v B-runner-up and
+ * B-winner v A-runner-up.
+ *
+ * **And both pool winners lose in round one.** That is the point of the fixture: the
+ * champion is `player.2`, who came SECOND in pool B, and the two entrants who topped
+ * their pools finish tied 3rd. Crown the pool leader instead and nothing on screen can
+ * tell "champion from the bracket" (the ADR's decision) from "champion from the
+ * standings".
+ */
+const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
+  // Semifinal 1 — seed 1 (`player.5`, pool A's winner) v seed 4 (`player.2`, pool B's
+  // runner-up). The runner-up wins.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r1-p1',
+    pool_id: null,
+    round: 1,
+    position: 1,
+    entry_a_id: cup(5),
+    entry_b_id: cup(2),
+    winner_entry_id: cup(2),
+  }),
+  // Semifinal 2 — seed 2 (`player.3`, pool B's winner) v seed 3 (`player.1`, pool A's
+  // runner-up). The runner-up wins again.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r1-p2',
+    pool_id: null,
+    round: 1,
+    position: 2,
+    entry_a_id: cup(3),
+    entry_b_id: cup(1),
+    winner_entry_id: cup(1),
+  }),
+  // The final — two runners-up, and `player.2` takes it. THIS fixture's winner is the
+  // event's champion; the standings have no say in it.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r2-p1',
+    pool_id: null,
+    round: 2,
+    position: 1,
+    entry_a_id: cup(2),
+    entry_b_id: cup(1),
+    winner_entry_id: cup(2),
+  }),
+]
+
+/**
+ * The Shield's knockout stage, **mid-flight** — both semifinals won, the final seated and
+ * still to be played.
+ *
+ * This is the state the two-stage results shape spends most of a tournament in, and the
+ * reason it is seeded alongside the finished Cup: `complete` is false because the SECOND
+ * stage is undecided even though every pool is done, `champion` is `null` because no
+ * final has been won, and `finishes` holds only the two entrants the bracket has actually
+ * placed — the beaten semifinalists, tied 3rd. A results panel built solely against the
+ * finished event would never meet a finishes list that starts at position 3.
+ *
+ * Seeds 1–4 are `player.1`, `player.2` (the pool winners) then `player.5`, `player.3`
+ * (the runners-up), by the same place-major, pool-mate-avoiding rule the Cup uses.
+ */
+const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
+  // Semifinal 1 — seed 1 (`player.1`, pool A) v seed 4 (`player.3`, pool B). The top
+  // seed holds.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r1-p1',
+    pool_id: null,
+    round: 1,
+    position: 1,
+    entry_a_id: shield(1),
+    entry_b_id: shield(3),
+    winner_entry_id: shield(1),
+  }),
+  // Semifinal 2 — seed 2 (`player.2`, pool B's winner) v seed 3 (`player.5`, pool A's
+  // runner-up), and the runner-up takes it.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r1-p2',
+    pool_id: null,
+    round: 1,
+    position: 2,
+    entry_a_id: shield(2),
+    entry_b_id: shield(5),
+    winner_entry_id: shield(5),
+  }),
+  // The final: both sides SEATED — `advance()` has carried the semifinal winners in — and
+  // no winner recorded. A ready fixture waiting to be played, which is precisely why this
+  // event has no champion yet.
+  buildTournamentFixtureRead({
+    id: 'fx-ko-r2-p1',
+    pool_id: null,
+    round: 2,
+    position: 1,
+    entry_a_id: shield(1),
+    entry_b_id: shield(5),
+    winner_entry_id: null,
+  }),
 ]
 
 function seed(): StoredTournament[] {
@@ -638,6 +931,209 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-13T18:01:00Z',
           updated_at: '2026-06-13T18:01:00Z',
+        },
+      ],
+    },
+    {
+      // The seed's **two-stage** tournament (ADR 20260727) — and its only `live` one.
+      //
+      // Both of its events are `rr-then-ko`, and between them they hold the two states
+      // the results union's third arm (`kind: "standings_then_finishes"`) has: the
+      // Challenge Cup finished on the Saturday and has a champion; the Shield's pools are
+      // decided and its final is still to be played. Everything they are built from — the
+      // pools, the play, the brackets, and why the champion is who it is — is in the
+      // block above `seed()`.
+      //
+      // It is Los Angeles, ~345 miles from Berkeley, on purpose: every near-me test in
+      // the suite searches around Berkeley at 10 or 35 miles, so a venue placed anywhere
+      // in the Bay would silently join their expected result sets.
+      id: GOLDEN_STATE_ID,
+      name: 'Golden State Classic 2026',
+      description: 'Pools on the Saturday, knockout on the Sunday.',
+      status: 'live',
+      start_date: '2026-06-06',
+      end_date: '2026-06-07',
+      league_id: DEFAULT_LEAGUE_ID,
+      address: {
+        venue: 'Golden State TT Center',
+        street: '3900 W Sixth St',
+        city: 'Los Angeles',
+        region: 'CA',
+        postal: '90020',
+        country: 'USA',
+        latitude: 34.0522,
+        longitude: -118.2437,
+      },
+      table_catalogue: tables(8),
+      created_by_user_id: DEV_USER_ID,
+      created_by_username: DEV_USERNAME,
+      can_edit: true,
+      created_at: '2026-05-02T10:00:00Z',
+      updated_at: '2026-06-07T11:20:00Z',
+      latest_schedule_solve: null,
+      events: [
+        {
+          // FINISHED: both pools decided, the bracket run to a final, a champion crowned.
+          //
+          // FULL (8 of 8), deliberately: a finished event must not offer the dev user an
+          // Enter button, and an entry would make its draw *stale* — a decided event
+          // whose draw no longer seats its field is a state the server could never be in.
+          id: CUP_EVENT_ID,
+          tournament_id: GOLDEN_STATE_ID,
+          name: 'Challenge Cup',
+          format: 'singles',
+          draw_type: 'rr-then-ko',
+          // TWO qualifiers per pool — the number that sizes the bracket at the cut
+          // (`P × K` = 2 × 2 = 4, derived and never configured, ADR 20260727). Unlike
+          // every other event in this seed it is NOT null: a knockout stage to qualify
+          // for is exactly what this draw type has.
+          qualifiers_per_pool: 2,
+          max_players: 8,
+          entry_fee: 35,
+          timezone: 'America/Los_Angeles',
+          entrants: otherEntrants(CUP_EVENT_ID, 8),
+          slot: { date: '2026-06-06', start: '09:00', end: '16:00' },
+          match_settings: { rated: true, length_games: 3 },
+          predicates: [],
+          pools: CUP_POOLS,
+          // BOTH STAGES, in the order the wire sends them: the pool fixtures planned by
+          // the same function `cutDraw` uses — then stamped with the winners they were
+          // actually played to — followed by the knockout bracket, seated and decided.
+          // `tournaments-store.test.ts` asserts this whole list has the shape
+          // `planDraw('rr-then-ko', …)` cuts for this very field, so it is that draw
+          // played out rather than a hand-drawn one no cut would produce.
+          fixtures: [
+            ...stampPoolWinners(
+              planRoundRobinFixtures(
+                CUP_ENTRY_IDS,
+                CUP_POOLS.map((p) => p.id),
+              ),
+              CUP_POOL_WINNERS,
+            ),
+            ...CUP_KNOCKOUT_FIXTURES,
+          ],
+          // The third arm of the results union (ADR 20260727), tagged
+          // `standings_then_finishes`: ONE standings block per pool and ONE finishes
+          // block for the bracket — the very models the round-robin and single-elim arms
+          // send, so each stage renders with the panel that already exists.
+          //
+          // `complete: true` is BOTH stages decided, not either: every pool says
+          // `complete`, and the bracket has run to a final. `champion` is that final's
+          // winner (`player.2`) — and `player.2` tops NO pool, which is the whole point.
+          // Topping a pool wins nothing here; the pool stage only seeds the bracket.
+          results: {
+            kind: 'standings_then_finishes',
+            complete: true,
+            champion: cup(2),
+            pools: [
+              {
+                pool_id: 'p-cup-a',
+                complete: true,
+                rows: [
+                  { entry_id: cup(5), rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 1, game_difference: 5 },
+                  { entry_id: cup(1), rank: 2, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 2, game_difference: 3 },
+                  { entry_id: cup(4), rank: 3, played: 3, wins: 1, losses: 2, games_won: 2, games_lost: 5, game_difference: -3 },
+                  { entry_id: cup(8), rank: 4, played: 3, wins: 0, losses: 3, games_won: 1, games_lost: 6, game_difference: -5 },
+                ],
+              },
+              {
+                // Both of this pool's ties are broken by two-way head-to-head, so the
+                // rank column is NOT a re-reading of the wins column: `player.3` and
+                // `player.2` both went 2–1, and `player.3` won the match between them.
+                pool_id: 'p-cup-b',
+                complete: true,
+                rows: [
+                  { entry_id: cup(3), rank: 1, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 3, game_difference: 2 },
+                  { entry_id: cup(2), rank: 2, played: 3, wins: 2, losses: 1, games_won: 4, games_lost: 4, game_difference: 0 },
+                  { entry_id: cup(6), rank: 3, played: 3, wins: 1, losses: 2, games_won: 4, games_lost: 4, game_difference: 0 },
+                  { entry_id: cup(7), rank: 4, played: 3, wins: 1, losses: 2, games_won: 3, games_lost: 5, game_difference: -2 },
+                ],
+              },
+            ],
+            // Single-elimination's own placement shape (`2 ** (final_round − round) + 1`):
+            // 1st, 2nd, then the two semifinal losers **tied 3rd** — same round out, same
+            // position, because the bracket never played them off. Those two losers are
+            // the pool winners.
+            finishes: [
+              { entry_id: cup(2), position: 1, eliminated_in_round: null },
+              { entry_id: cup(1), position: 2, eliminated_in_round: 2 },
+              { entry_id: cup(5), position: 3, eliminated_in_round: 1 },
+              { entry_id: cup(3), position: 3, eliminated_in_round: 1 },
+            ],
+          },
+          created_at: '2026-05-02T10:05:00Z',
+          updated_at: '2026-06-06T17:12:00Z',
+        },
+        {
+          // MID-FLIGHT: the same shape, one round from home. Every pool is decided and
+          // the final is seated and unplayed, so `complete` is false, `champion` is null,
+          // and `finishes` holds only what the bracket has actually settled.
+          id: SHIELD_EVENT_ID,
+          tournament_id: GOLDEN_STATE_ID,
+          name: 'Shield Singles',
+          format: 'singles',
+          draw_type: 'rr-then-ko',
+          // Two pools of three, two qualifiers from each — `K = ⌊N/P⌋`, the legal
+          // maximum, where everyone but the pool's last qualifies and the pool stage
+          // exists purely to seed (ADR 20260727).
+          qualifiers_per_pool: 2,
+          max_players: 6,
+          entry_fee: 25,
+          timezone: 'America/Los_Angeles',
+          entrants: otherEntrants(SHIELD_EVENT_ID, 6),
+          slot: { date: '2026-06-07', start: '09:00', end: '16:00' },
+          match_settings: { rated: true, length_games: 3 },
+          predicates: [],
+          pools: SHIELD_POOLS,
+          fixtures: [
+            ...stampPoolWinners(
+              planRoundRobinFixtures(
+                SHIELD_ENTRY_IDS,
+                SHIELD_POOLS.map((p) => p.id),
+              ),
+              SHIELD_POOL_WINNERS,
+            ),
+            ...SHIELD_KNOCKOUT_FIXTURES,
+          ],
+          // The PARTIAL two-stage read. Note what is and is not true of it: both pools
+          // say `complete`, and the event still does not — `complete` is *both* stages
+          // decided, and one final stands between this event and its champion. The
+          // finishes list therefore starts at position **3**: the two beaten
+          // semifinalists are the only entrants the bracket has placed, and 1st and 2nd
+          // do not exist yet.
+          results: {
+            kind: 'standings_then_finishes',
+            complete: false,
+            champion: null,
+            pools: [
+              {
+                // A THREE-way tie — everyone 1–1 — which two-way head-to-head cannot
+                // break, so the order is game difference: +1, 0, −1.
+                pool_id: 'p-shield-a',
+                complete: true,
+                rows: [
+                  { entry_id: shield(1), rank: 1, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 2, game_difference: 1 },
+                  { entry_id: shield(5), rank: 2, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 3, game_difference: 0 },
+                  { entry_id: shield(4), rank: 3, played: 2, wins: 1, losses: 1, games_won: 2, games_lost: 3, game_difference: -1 },
+                ],
+              },
+              {
+                pool_id: 'p-shield-b',
+                complete: true,
+                rows: [
+                  { entry_id: shield(2), rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
+                  { entry_id: shield(3), rank: 2, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 2, game_difference: 1 },
+                  { entry_id: shield(6), rank: 3, played: 2, wins: 0, losses: 2, games_won: 0, games_lost: 4, game_difference: -4 },
+                ],
+              },
+            ],
+            finishes: [
+              { entry_id: shield(3), position: 3, eliminated_in_round: 1 },
+              { entry_id: shield(2), position: 3, eliminated_in_round: 1 },
+            ],
+          },
+          created_at: '2026-05-02T10:06:00Z',
+          updated_at: '2026-06-07T11:20:00Z',
         },
       ],
     },

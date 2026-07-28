@@ -2,8 +2,9 @@
 // being bytes off the wire and become a typed domain value.
 //
 // An event's results are a **discriminated union tagged by shape** — `standings` (a table
-// per pool) for round-robin, `finishes` (a placement list) for single-elimination — plus
-// whether the whole event is decided and its champion, all derived *live* on the server
+// per pool) for round-robin, `finishes` (a placement list) for single-elimination, and
+// `standings_then_finishes` (one of each, ADR 20260727) for round-robin-then-knockout —
+// plus whether the whole event is decided and its champion, all derived *live* on the server
 // from the fixtures' currently-completed matches (never a snapshot). This is the runtime
 // parse that guards them, the twin of `./fixtures` for the draw. The parse switches on
 // `kind`, so an **unknown shape fails HERE**, at the boundary, before it can leak inward.
@@ -18,7 +19,7 @@
 //
 // **`results` is `.nullable()`, and the null is a FACT** (`.nullable()` demands the key be
 // present, unlike `.optional()`): `null` means the event has no results to stand — it has
-// no draw, or its draw type has no results strategy yet (only round-robin does today). An
+// no draw, or its draw type has no results strategy yet. An
 // event whose payload simply *omitted* the field would be one we could not tell apart from
 // one that means "no results", so the schema refuses the absent case and accepts only an
 // explicit `null` or a real results object.
@@ -127,30 +128,85 @@ const finishesResultsWireSchema = z.object({
   champion: z.string().nullable(),
 })
 
+/** The wire shape (`StandingsThenFinishesResultsRead`): the round-robin-then-knockout arm,
+ * tagged `kind: "standings_then_finishes"` — **one block per stage**, and each is the very
+ * model its own arm sends: `pools` are the `PoolStandingsRead`s a round-robin reads out,
+ * `finishes` the `FinishRowRead`s a single-elimination reads out. Reusing the two row
+ * parsers here is the point: the two-stage shape cannot drift from the shapes it composes,
+ * and a malformed row fails at the same boundary whichever arm carried it.
+ *
+ * `complete` is **both** stages decided; `champion` is the **bracket final's** winner (never
+ * a pool leader — the pool stage only seeds), `null` until that final lands. A mid-flight
+ * event is the ordinary case: complete pools, a `finishes` list holding only the entrants
+ * the bracket has placed so far. */
+const standingsThenFinishesResultsWireSchema = z.object({
+  kind: z.literal('standings_then_finishes'),
+  pools: z.array(poolStandingsSchema),
+  finishes: z.array(finishRowSchema),
+  complete: z.boolean(),
+  champion: z.string().nullable(),
+})
+
+/** The parsed wire union — the input to the transform below, named so the transform can
+ * switch on it exhaustively. */
+type EventResultsWire = z.output<
+  | typeof standingsResultsWireSchema
+  | typeof finishesResultsWireSchema
+  | typeof standingsThenFinishesResultsWireSchema
+>
+
+/** Wire → domain, arm by arm. A `switch` with a `never` default rather than a chain of
+ * ternaries: adding a fourth arm to the union above without a mapping here is a **compile
+ * error**, which is the same guarantee `ResultsPanel`'s exhaustive switch gives the render
+ * path. Nothing is re-ordered or recomputed — the order *is* the result. */
+function toDomain(r: EventResultsWire): EventResults {
+  switch (r.kind) {
+    case 'standings':
+      return {
+        kind: 'standings',
+        pools: r.pools,
+        complete: r.complete,
+        champion: r.champion,
+      }
+    case 'finishes':
+      return {
+        kind: 'finishes',
+        finishes: r.finishes,
+        complete: r.complete,
+        champion: r.champion,
+      }
+    case 'standings_then_finishes':
+      return {
+        kind: 'standings_then_finishes',
+        pools: r.pools,
+        finishes: r.finishes,
+        complete: r.complete,
+        champion: r.champion,
+      }
+    default: {
+      const exhaustive: never = r
+      return exhaustive
+    }
+  }
+}
+
 /** The results union, **discriminated on `kind`**: Zod picks the arm by the tag and rejects
  * any other shape (a missing/unknown `kind`, or a `finishes` block carrying `pools`) HERE,
  * at the boundary. The transform switches on the same tag to hand the app a domain value
- * that still carries `kind`, so every consumer narrows the union exhaustively. */
+ * that still carries `kind`, so every consumer narrows the union exhaustively.
+ *
+ * ⚠️ **Adding an arm must never make this permissive.** The union lists exactly the shapes
+ * this client can render; a tag it has never heard of is real server drift, and it fails
+ * here — loudly, in the queryFn — rather than reaching a component that would render half a
+ * page. `results.test.ts` pins that with an unknown `kind`, deliberately one a hair away
+ * from a known one. */
 export const eventResultsSchema = z
   .discriminatedUnion('kind', [
     standingsResultsWireSchema,
     finishesResultsWireSchema,
+    standingsThenFinishesResultsWireSchema,
   ])
-  .transform((r): EventResults =>
-    r.kind === 'standings'
-      ? {
-          kind: 'standings',
-          pools: r.pools,
-          complete: r.complete,
-          champion: r.champion,
-        }
-      : {
-          kind: 'finishes',
-          finishes: r.finishes,
-          complete: r.complete,
-          champion: r.champion,
-        },
-  )
+  .transform(toDomain)
 
 /** An event's `results`, or `null`. **`.nullable()`, never `.optional()`** — the key must
  * be present, and a `null` is the designed "no results here" state, not a missing field

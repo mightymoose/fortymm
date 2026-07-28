@@ -1,8 +1,10 @@
 import { eventFinishes } from '../../../data/finishes'
 import { eventStandings } from '../../../data/standings'
+import { eventStandingsThenFinishes } from '../../../data/two-stage'
 import type { TournamentEvent } from '../../../data/types'
 import { FinishesPanel } from './finishes/finishes-panel'
 import { StandingsPanel } from './standings/standings-panel'
+import { TwoStagePanel } from './two-stage/two-stage-panel'
 
 export interface ResultsPanelProps {
   event: TournamentEvent
@@ -10,10 +12,12 @@ export interface ResultsPanelProps {
 
 /**
  * An event's **results** on its card in the Events tab — the one render path that switches on
- * the results shape (ADR-0785): a **standings** table for round-robin, a **finishes**
- * placement list for single-elimination. The results are a discriminated union tagged by
- * `kind`, parsed at the boundary (`../../../data/results`), so this switch is exhaustive: a
- * future draw type's shape is a **type error here** until it is given a render arm.
+ * the results shape (ADR-0785, widened by ADR 20260727): a **standings** table for
+ * round-robin, a **finishes** placement list for single-elimination, and **both** — pools
+ * above bracket, one champion — for round-robin-then-knockout. The results are a
+ * discriminated union tagged by `kind`, parsed at the boundary (`../../../data/results`), so
+ * this switch is exhaustive: a future draw type's shape is a **type error here** until it is
+ * given a render arm.
  *
  * It renders **nothing** for an event with no results (`results === null`: an uncut event, or
  * a draw type with no results strategy yet) — the designed data state, so this drops into the
@@ -46,6 +50,17 @@ export const ResultsPanel = ({ event }: ResultsPanelProps) => {
           eventId={event.id}
           eventName={event.name}
           finishes={eventFinishes(event, results)}
+        />
+      )
+    case 'standings_then_finishes':
+      // Both stages, on one card (ADR 20260727): the pool standings above the bracket
+      // finishes, under a single champion banner naming the BRACKET's winner. The two
+      // panels above are reused as they stand — the composite only selects and arranges.
+      return (
+        <TwoStagePanel
+          eventId={event.id}
+          eventName={event.name}
+          twoStage={eventStandingsThenFinishes(event, results)}
         />
       )
     default: {

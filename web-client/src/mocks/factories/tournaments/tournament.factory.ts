@@ -10,6 +10,8 @@ type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
 type StandingsResultsRead = components['schemas']['StandingsResultsRead']
 type FinishesResultsRead = components['schemas']['FinishesResultsRead']
+type StandingsThenFinishesResultsRead =
+  components['schemas']['StandingsThenFinishesResultsRead']
 type FinishRowRead = components['schemas']['FinishRowRead']
 type PoolStandingsRead = components['schemas']['PoolStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
@@ -915,6 +917,68 @@ export function buildFinishesResultsRead(
     ],
     complete: true,
     champion: 'entry-1',
+    ...overrides,
+  }
+}
+
+/** A wire event's `standings_then_finishes` results (`StandingsThenFinishesResultsRead`,
+ * ADR 20260727): the round-robin-then-knockout arm — **both stages at once**, each block the
+ * very model its own arm carries.
+ *
+ * Built for a **six-entrant, two-pool** event, and the pool memberships are the ones the
+ * snake actually deals (`snakedPools` above: `p-a` takes entries 1, 4, 5; `p-b` takes 2, 3,
+ * 6) — not a tidier split, because a results fixture that stood over pools its own draw
+ * never dealt is a payload the server could not send.
+ *
+ * The champion is **`entry-4`, who tops neither pool.** The pool winners are `entry-1` and
+ * `entry-2`; `entry-4` qualifies second out of `p-a` and wins the bracket, beating `entry-1`
+ * in the final. That is the format working as designed — the pool stage only *seeds* — and
+ * it is what lets a test tell a client reading the bracket from one reading the top of a
+ * standings table. A fixture whose champion also led a pool could not.
+ *
+ * A **mid-flight** event — pools decided, final unplayed — is
+ * `buildStandingsThenFinishesResultsRead({ complete: false, champion: null, finishes: [only
+ * the placed entrants] })`. */
+export function buildStandingsThenFinishesResultsRead(
+  overrides: Partial<StandingsThenFinishesResultsRead> = {},
+): StandingsThenFinishesResultsRead {
+  const finish = (o: Partial<FinishRowRead>): FinishRowRead => ({
+    entry_id: 'entry-1',
+    position: 1,
+    eliminated_in_round: null,
+    ...o,
+  })
+  return {
+    kind: 'standings_then_finishes',
+    pools: [
+      buildPoolStandingsRead({
+        pool_id: 'p-a',
+        complete: true,
+        rows: [
+          buildStandingRowRead({ entry_id: 'entry-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 }),
+          buildStandingRowRead({ entry_id: 'entry-4', rank: 2, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 3, game_difference: 0 }),
+          buildStandingRowRead({ entry_id: 'entry-5', rank: 3, played: 2, wins: 0, losses: 2, games_won: 1, games_lost: 4, game_difference: -3 }),
+        ],
+      }),
+      buildPoolStandingsRead({
+        pool_id: 'p-b',
+        complete: true,
+        rows: [
+          buildStandingRowRead({ entry_id: 'entry-2', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 0, game_difference: 4 }),
+          buildStandingRowRead({ entry_id: 'entry-3', rank: 2, played: 2, wins: 1, losses: 1, games_won: 2, games_lost: 3, game_difference: -1 }),
+          buildStandingRowRead({ entry_id: 'entry-6', rank: 3, played: 2, wins: 0, losses: 2, games_won: 1, games_lost: 4, game_difference: -3 }),
+        ],
+      }),
+    ],
+    finishes: [
+      finish({ entry_id: 'entry-4', position: 1, eliminated_in_round: null }),
+      finish({ entry_id: 'entry-1', position: 2, eliminated_in_round: 2 }),
+      // The two beaten semifinalists — one of them the OTHER pool's winner — tied 3rd.
+      finish({ entry_id: 'entry-2', position: 3, eliminated_in_round: 1 }),
+      finish({ entry_id: 'entry-3', position: 3, eliminated_in_round: 1 }),
+    ],
+    complete: true,
+    champion: 'entry-4',
     ...overrides,
   }
 }

@@ -285,6 +285,37 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).locator('[data-testid^="standings-champion-"]')
   }
 
+  // ----- the finishes, and the two-stage block (ADR-0785, ADR 20260727) -----
+
+  /** One event's **finishes** block — the `<section>` headed "Finishes": a bracket's
+   * placement list. On a two-stage card it is the knockout half, below the standings. */
+  finishesPanel(eventName: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: 'Finishes' })
+  }
+
+  /** The placement list's rows as `[position, player]` cells, top to bottom — the position
+   * label (`1st`, `T3`) and the name the FE joined from an entry id. */
+  finishesRows(eventName: string): Locator {
+    return this.eventCard(eventName)
+      .getByRole('table', { name: `Finishes for ${eventName}` })
+      .locator('tbody tr')
+  }
+
+  /** A **two-stage** event's one champion callout (ADR 20260727) — rendered above both
+   * stages by the composite, and naming the BRACKET's winner. Its own testid prefix, so a
+   * spec can assert the two stage-level callouts are absent while this one is present. */
+  twoStageChampion(eventName: string): Locator {
+    return this.eventCard(eventName).locator('[data-testid^="two-stage-champion-"]')
+  }
+
+  /** Every champion callout on one card, whoever rendered it — the "**one** banner" check.
+   * All three testids (`standings-champion-…`, `finishes-champion-…`,
+   * `two-stage-champion-…`) share the `-champion-` infix, so this catches a stage that
+   * started crowning somebody of its own. */
+  championCallouts(eventName: string): Locator {
+    return this.eventCard(eventName).locator('[data-testid*="-champion-"]')
+  }
+
   // ----- the event card's entry control ------------------------------------
 
   enterButton(eventName: string): Locator {
