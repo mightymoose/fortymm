@@ -29,6 +29,16 @@ class User(Base):
     auth0_sub: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
+    # When ``auth0_sub`` was first bound to this user — i.e. the moment an Auth0
+    # identity became linked to this fortymm account, so the agent-access
+    # settings surface can say "Connected <date>". Stamped at the two bind sites
+    # in ``app.auth0_provisioning`` (match-bind onto an existing account, and the
+    # fresh provision) and nowhere else: the steady-state resolve-by-``sub`` path
+    # every later token takes must stay write-free, so this keeps reading as the
+    # *original* link time. NULL for an account that has never linked.
+    agent_access_linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

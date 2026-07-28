@@ -39,6 +39,7 @@ import {
   pageAdminScheduleSolves,
 } from './factories/tournaments/tournament.factory'
 import { buildDashboardTournament } from './factories/dashboard/tournament.factory'
+import { buildAgentAccess } from './factories/settings/agent-access.factory'
 import { mockUuid } from './mock-uuid'
 import { PARKED_STREAM_BODY, SSE_CONTENT_TYPE } from './realtime-stream'
 import { notificationHandlers } from './notifications-store'
@@ -100,6 +101,18 @@ export const mockSession = sessionResponse({
   },
 })
 export const mockHealthy = healthCheck()
+
+/**
+ * The dev world's Claude access state. Swap `state` (and/or null out
+ * `connector`) to walk `/settings/claude` through its five status rows without
+ * a backend.
+ */
+export const MOCK_AGENT_ACCESS = buildAgentAccess({
+  state: 'ready',
+  username: mockSession.data.user.username,
+  email: 'rita.kovac@example.com',
+  connected_on: null,
+})
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -1177,6 +1190,16 @@ export const handlers = [
   http.delete('*/v1/session', async () => {
     await delay(150)
     return new HttpResponse(null, { status: 204 })
+  }),
+  // ----- /v1/settings/agent-access (the Claude access page's BFF) ---------
+  // The dev world is `ready`: an email on file, permission granted, nothing
+  // connected. To walk the page's other states under `npm run dev`, change
+  // `MOCK_AGENT_ACCESS` below — `connector: null` gives the "couldn't load"
+  // row, and the other three `state` values give their own status rows.
+  // Tests override this per-case with `mockAgentAccessEndpoint`.
+  http.get('*/v1/settings/agent-access', async () => {
+    await delay(200)
+    return HttpResponse.json(MOCK_AGENT_ACCESS)
   }),
   // ----- /v1/stream (realtime hints) -------------------------------------
   // A PARKED stream: the reconnect directive and then silence, held open for

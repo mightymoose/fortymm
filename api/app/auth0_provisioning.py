@@ -72,6 +72,11 @@ async def resolve_or_provision_user(
 
     Writes on the first token for a new identity (a bind, or an INSERT); every
     later token resolves via step 1 with no write.
+
+    Both binding paths stamp ``agent_access_linked_at`` with the moment the
+    identity bound, so the agent-access settings surface can say "Connected
+    <date>". Step 1 deliberately does not touch it: it is the *first* link time,
+    and the steady-state path stays write-free.
     """
     # (1) Already linked — the common steady-state path, and a no-op write-wise.
     existing = await resolve_linked_user(db, sub)
@@ -90,6 +95,10 @@ async def resolve_or_provision_user(
     if matched is not None:
         if matched.auth0_sub is None:
             matched.auth0_sub = sub
+            # Stamp *when* the identity bound, for "Connected <date>". This is a
+            # bind-site-only write: the linked-sub path above returns without
+            # touching it, so it keeps reading as the original link time.
+            matched.agent_access_linked_at = datetime.now(UTC)
             try:
                 await db.commit()
             except IntegrityError:
@@ -122,9 +131,9 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
 
     Born exactly like a normal account (coolname username, ``confirmed_at``
     stamped, default league + default role, in that same order) plus the bound
-    ``auth0_sub``. A verified Auth0 email is trusted as equivalent to fortymm's
-    own magic-link inbox-proof, so the account is ``confirmed_at``-stamped rather
-    than half-real (ADR).
+    ``auth0_sub`` and its ``agent_access_linked_at`` stamp. A verified Auth0
+    email is trusted as equivalent to fortymm's own magic-link inbox-proof, so
+    the account is ``confirmed_at``-stamped rather than half-real (ADR).
 
     **Concurrency — match, don't duplicate.** A near-simultaneous second request
     for the same identity can win the INSERT first; the unique constraints on
@@ -132,11 +141,15 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
     catch it, roll back, and re-resolve (by ``sub``, then by email) so the loser
     returns the winning row instead of raising.
     """
+    now = datetime.now(UTC)
     user = User(
         username=await generate_username(db),
         email=email,
-        confirmed_at=datetime.now(UTC),
+        confirmed_at=now,
         auth0_sub=sub,
+        # The account and its Auth0 link are born together, so the link time is
+        # the same instant as the confirmation.
+        agent_access_linked_at=now,
     )
     db.add(user)
     try:

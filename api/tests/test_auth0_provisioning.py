@@ -11,7 +11,9 @@ framing — that lives in the MCP verifier, chore 1c):
 - match conflict (different ``auth0_sub``) → ``None``, no hijack;
 - provision (first-seen verified email) → confirmed account with the default role;
 - ``email_verified`` false / ``email`` missing → ``None``, no write;
-- a concurrent-insert ``IntegrityError`` re-resolves to the winning row.
+- a concurrent-insert ``IntegrityError`` re-resolves to the winning row;
+- both binding paths stamp ``agent_access_linked_at``, and the steady-state
+  linked-``sub`` path leaves the stamp (and the row) untouched.
 
 ``default_role`` and ``default_league`` are autouse fixtures in ``conftest``, so
 provision has both the role to grant and the league to join.
@@ -282,3 +284,73 @@ async def test_match_branch_reresolves_on_concurrent_sub_bind(
     # The email-matched row's bind was rolled back — it never took the ``sub``.
     await db_session.refresh(matched_user)
     assert matched_user.auth0_sub is None
+
+
+# ----- agent_access_linked_at: when the identity bound ----------------------
+#
+# The settings surface wants "Connected <date>", so both binding paths stamp the
+# moment they bind — and the steady-state resolve path must NOT, or every MCP
+# request would both rewrite history and turn a read into a write.
+
+
+async def test_match_unlinked_stamps_the_link_time(db_session: AsyncSession) -> None:
+    before = datetime.now(UTC)
+    user = await _make_user(db_session, "stamper", email="stamper@example.com")
+    assert user.agent_access_linked_at is None
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "stamper@example.com", True
+    )
+
+    assert resolved is not None
+    linked_at = resolved.agent_access_linked_at
+    assert linked_at is not None
+    # A ``DateTime(timezone=True)`` column must yield an aware datetime.
+    assert linked_at.tzinfo is not None
+    assert before <= linked_at <= datetime.now(UTC)
+
+
+async def test_provision_stamps_the_link_time(db_session: AsyncSession) -> None:
+    before = datetime.now(UTC)
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "fresh-stamp@example.com", True
+    )
+
+    assert resolved is not None
+    linked_at = resolved.agent_access_linked_at
+    assert linked_at is not None
+    assert linked_at.tzinfo is not None
+    assert before <= linked_at <= datetime.now(UTC)
+
+
+async def test_linked_sub_leaves_the_original_stamp_untouched(
+    db_session: AsyncSession,
+) -> None:
+    """The hot path every steady-state MCP request takes must stay a no-op —
+    it neither re-stamps the link time nor writes the row at all.
+
+    ``updated_at`` carries ``onupdate=func.now()``, so it only moves on a real
+    UPDATE: an unchanged ``updated_at`` is the evidence that nothing was written.
+    """
+    sub = _sub()
+    original = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+    user = await _make_user(db_session, "steady", email="steady@example.com")
+    user.auth0_sub = sub
+    user.agent_access_linked_at = original
+    await db_session.commit()
+    await db_session.refresh(user)
+    updated_at_before = user.updated_at
+
+    resolved = await resolve_or_provision_user(
+        db_session, sub, "steady@example.com", True
+    )
+
+    assert resolved is not None
+    assert resolved.id == user.id
+    # Nothing pending either — the path issued no write at all.
+    assert user not in db_session.dirty
+    # ``refresh`` autoflushes, so a pending re-stamp would still be caught here.
+    await db_session.refresh(user)
+    assert user.agent_access_linked_at == original
+    assert user.updated_at == updated_at_before

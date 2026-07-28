@@ -93,8 +93,23 @@ async function renderSettings(initialEntry = '/settings') {
     path: '/elsewhere',
     component: () => <div data-testid="elsewhere-page">Elsewhere</div>,
   })
+  // The Claude access card renders a typed <Link> whose target must be
+  // registered or the link throws at render. Mount the *real* page component
+  // so clicking through proves the destination, not a stub.
+  const { ClaudeAccessPage } = await import(
+    '@/components/settings/claude-access-page'
+  )
+  const claudeRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings/claude',
+    component: ClaudeAccessPage,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([settingsRoute, elsewhereRoute]),
+    routeTree: rootRoute.addChildren([
+      settingsRoute,
+      elsewhereRoute,
+      claudeRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return render(
@@ -341,6 +356,37 @@ describe('SettingsPage notifications section', () => {
     expect(
       await screen.findByText(/aren't configured on the server/i),
     ).toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage Claude access card', () => {
+  it('shows the card with a link labelled for its purpose out of context', async () => {
+    await renderSettings()
+
+    const heading = await screen.findByRole('heading', {
+      name: 'Claude access',
+      level: 2,
+    })
+    const section = heading.closest('section') as HTMLElement
+    const link = within(section).getByRole('link', {
+      name: /set up claude access/i,
+    })
+    expect(link).toHaveAttribute('href', '/settings/claude')
+  })
+
+  it('navigates to the Claude access page when the link is clicked', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    await user.click(
+      await screen.findByRole('link', { name: /set up claude access/i }),
+    )
+
+    // The destination's own H1 — the settings card's title is an H2.
+    expect(
+      await screen.findByRole('heading', { name: 'Claude access', level: 1 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^username$/i)).not.toBeInTheDocument()
   })
 })
 

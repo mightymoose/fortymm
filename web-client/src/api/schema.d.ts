@@ -1645,6 +1645,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/agent-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Access
+         * @description Everything the Claude-access settings page renders: which panel to show,
+         *     the email an agent must be signed in with, when an agent was first linked,
+         *     and the connector pair to paste into Claude.
+         *
+         *     The connector reports server configuration, so it is present or absent
+         *     independently of the caller's state — a deployment with no MCP OAuth
+         *     configuration returns it as null even for a connected player.
+         */
+        get: operations["get_agent_access_v1_settings_agent_access_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -1852,6 +1878,46 @@ export interface components {
             /** Tournament Name */
             tournament_name: string;
         };
+        /**
+         * AgentAccessConnector
+         * @description The pair a player pastes into Claude's "Add custom connector".
+         *
+         *     Present or absent as a whole — a half-filled connector (an empty client-id
+         *     box) makes a player paste nothing and hit an inscrutable failure, so
+         *     ``app.config.Settings.mcp_connector`` resolves it all-or-nothing.
+         */
+        AgentAccessConnector: {
+            /** Url */
+            url: string;
+            /** Client Id */
+            client_id: string;
+        };
+        /**
+         * AgentAccessResponse
+         * @description Everything the Claude-access settings page renders.
+         */
+        AgentAccessResponse: {
+            state: components["schemas"]["AgentAccessState"];
+            /** Email */
+            email: string | null;
+            /** Username */
+            username: string;
+            /** Connected On */
+            connected_on: string | null;
+            connector: components["schemas"]["AgentAccessConnector"] | null;
+        };
+        /**
+         * AgentAccessState
+         * @description Which panel the settings page renders — a closed set, decided on the
+         *     server so the client never re-derives it from a handful of nullable fields.
+         *
+         *     The four members are ordered by the precedence
+         *     :func:`app.agent_access.resolve_agent_access_state` applies, which is the
+         *     actual decision (and is tested as one). They are mutually exclusive by
+         *     construction: exactly one is returned.
+         * @enum {string}
+         */
+        AgentAccessState: "guest" | "gated" | "ready" | "connected";
         /**
          * BroadcastRecipient
          * @description One selectable player in the admin recipient picker.
@@ -8062,6 +8128,37 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_access_v1_settings_agent_access_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccessResponse"];
                 };
             };
             /** @description Validation Error */

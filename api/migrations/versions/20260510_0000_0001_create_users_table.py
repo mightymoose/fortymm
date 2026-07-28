@@ -61,6 +61,16 @@ def upgrade() -> None:
         # ``sub``. NULL until the user explicitly links. See ADR
         # ``20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0``.
         sa.Column("auth0_sub", sa.String(length=255), nullable=True),
+        # When ``auth0_sub`` was first bound — the moment an Auth0 identity became
+        # linked to this account, so the agent-access settings surface can say
+        # "Connected <date>". Written only at the two bind sites in
+        # ``app.auth0_provisioning``; the steady-state resolve-by-``sub`` path
+        # never rewrites it. NULL for an account that has never linked.
+        sa.Column(
+            "agent_access_linked_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
         sa.UniqueConstraint("username", name="uq_users_username"),
         sa.UniqueConstraint("email", name="uq_users_email"),
         sa.UniqueConstraint("auth0_sub", name="uq_users_auth0_sub"),

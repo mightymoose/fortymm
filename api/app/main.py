@@ -19,6 +19,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app import db, queue
 from app.admin_schedule_solves import router as admin_schedule_solves_router
+from app.agent_access import router as agent_access_router
 from app.config import get_settings
 from app.dashboard import router as dashboard_router
 from app.match_calls import pin_tick_loop
@@ -233,6 +234,7 @@ app.include_router(notifications_router)
 app.include_router(tournaments_router)
 app.include_router(admin_schedule_solves_router)
 app.include_router(stream_router)
+app.include_router(agent_access_router)
 
 # The MCP server (Streamable HTTP) at ``/mcp``. A mounted Starlette sub-app does
 # not contribute to the parent ``openapi.json``, so this endpoint is absent from

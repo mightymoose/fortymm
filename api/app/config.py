@@ -7,10 +7,31 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@dataclass(frozen=True)
+class McpConnectorConfig:
+    """The complete pair a player pastes into Claude's "Add custom connector".
+
+    The dataclass itself validates nothing — ``McpConnectorConfig("", "")`` is
+    constructible. What holds is the *single construction site*:
+    :attr:`Settings.mcp_connector` is the only thing that builds one, and it
+    returns ``None`` rather than a half-filled instance, so every value reaching
+    a caller has both fields non-empty and its URL already normalised. Keep it
+    that way — a second construction site is what would make the guarantee
+    false, and nothing here would catch it.
+    """
+
+    #: The connector URL, always ending in exactly one trailing slash.
+    url: str
+
+    #: The public (non-secret) OAuth client id the connector authenticates with.
+    client_id: str
 
 
 class GeocoderChoice(StrEnum):
@@ -69,6 +90,13 @@ class Settings(BaseSettings):
     #: Public resource identifier advertised in the RFC 9728 protected-resource
     #: metadata (the MCP server's public origin). Empty = fail-closed.
     mcp_public_resource_url: str = ""
+
+    #: Public OAuth client id an MCP client (Claude's "Add custom connector")
+    #: authenticates the player with. **Not a secret** — a public client id is
+    #: designed to be handed to the user, which is why it may be surfaced to the
+    #: browser alongside the connector URL. Empty = no connector is advertised
+    #: (see :attr:`Settings.mcp_connector`).
+    mcp_oauth_client_id: str = ""
 
     #: How long an attached realtime stream lets hints pile up before emitting,
     #: in milliseconds. Coalescing is what stops one burst of writes (a draw
@@ -154,6 +182,38 @@ class Settings(BaseSettings):
         an agent's access token. The single source of that URL (see
         ``auth0_issuer``). Meaningful only when ``auth0_domain`` is set."""
         return f"https://{self.auth0_domain}/.well-known/jwks.json"
+
+    @property
+    def mcp_connector(self) -> McpConnectorConfig | None:
+        """The connector a player can paste into Claude — or ``None``.
+
+        Resolved **all-or-nothing**, mirroring ``_build_mcp_auth`` in
+        ``app.mcp_server``: only when BOTH ``mcp_public_resource_url`` and
+        ``mcp_oauth_client_id`` are non-empty is there anything to advertise. A
+        partial config fails closed (``None``) instead of surfacing a broken
+        value — a settings page rendering an empty client-id box makes a player
+        paste nothing into Claude and hit an inscrutable failure.
+
+        "Non-empty" is asked of the **stripped** value, and the stripped value
+        is what ships: a variable set to whitespace (a blank line in a compose
+        ``.env``, a heredoc'd Kubernetes secret carrying a trailing newline) is
+        an unset variable that merely looks set, and passing it through would
+        put an invisible character in the client id a player pastes into Claude.
+
+        The URL is normalised to end in **exactly one** trailing slash whether
+        or not the configured value carries one (``deploy/uat/values.yaml``
+        currently sets it without). A missing trailing slash makes nginx answer
+        discovery with a 307, which has surfaced as a 502 on every MCP call —
+        so the slash is fixed here, once, rather than trusted to every deploy.
+        """
+        resource_url = self.mcp_public_resource_url.strip()
+        client_id = self.mcp_oauth_client_id.strip()
+        if not (resource_url and client_id):
+            return None
+        return McpConnectorConfig(
+            url=f"{resource_url.rstrip('/')}/",
+            client_id=client_id,
+        )
 
 
 def get_settings() -> Settings:
