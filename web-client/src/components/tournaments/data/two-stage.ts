@@ -9,6 +9,12 @@
 // of its own beyond the champion's — it hands each block to the selector that already
 // shapes it (`eventStandings`, `eventFinishes`) and composes the two views.
 //
+// It hands over a `StandingsBlock` / `FinishesBlock` — the fields those selectors read —
+// and **never a forged arm of the union**. Tagging this event's pools `kind: 'standings'`
+// to fit a signature would construct a boundary type *inward*, which is the wrong
+// direction (`.claude/rules/parse-at-boundaries.md`): the wire's arms are parsed at the
+// edge and carried in, never minted here to satisfy a parameter.
+//
 // **The champion belongs to the event, not to a stage** (ADR 20260727: "the champion comes
 // from the bracket — never from a pool"), so it is lifted out of both sub-views and named
 // once, here:
@@ -20,9 +26,13 @@
 //   Leaving it on the sub-view would print the same fact twice on one card.
 //
 // Everything else is carried straight through: neither stage is re-ordered or recomputed
-// (the order *is* the result), and `complete` is the server's — **both** stages decided,
-// never either. A mid-flight event is the ordinary case, not an edge: complete pools, a
-// finishes list that starts below 1st, no champion.
+// (the order *is* the result). **`complete` is asked per stage, and the event's is a
+// different question**: `TwoStageView.complete` is the server's — **both** stages decided,
+// never either — while each sub-view carries its own stage's, because that is what
+// `StandingsView.complete` / `FinishesView.complete` mean. A mid-flight event is the
+// ordinary case, not an edge, and it is exactly where the two answers differ: complete
+// pools (so the standings block IS complete), a finishes list that starts below 1st, no
+// champion, and an incomplete event.
 //
 // A pure function of one event, so it is unit-tested (`./two-stage.test.ts`) rather than
 // asserted through a DOM.
@@ -41,7 +51,8 @@ export interface TwoStageView {
   /** The **knockout stage**, exactly as a single-elimination's finishes render — minus a
    * champion, which the composite names once above both stages. */
   finishes: FinishesView
-  /** True when **both** stages are decided. */
+  /** True when **both** stages are decided — the server's own flag. Not either sub-view's
+   * `complete`: the pool stage is decided well before the event is. */
   complete: boolean
   /** The champion's username — the **bracket final's** winner, joined from the server's
    * `champion` entry id — or `null` until that final is decided. Never a pool leader. */
@@ -65,27 +76,38 @@ export function eventStandingsThenFinishes(
   event: TournamentEvent,
   results: StandingsThenFinishesResults,
 ): TwoStageView {
-  const names = nameByEntryId(event)
+  // The BRACKET's winner. Read off `results.champion` — the server's own figure — and
+  // never off the top of a standings table, which would crown whoever led a pool.
+  //
+  // The entrant map is built HERE, inside the branch that needs it: it feeds exactly one
+  // lookup, and a mid-flight event — the ordinary case — has no champion to look up.
+  const champion =
+    results.champion === null
+      ? null
+      : nameOf(results.champion, nameByEntryId(event))
 
   return {
     // `champion: null` on both sub-blocks is the composite's decision, not a claim about
-    // the data — see the module note. The event's champion is named below, once.
+    // the data — see the module note. The event's champion is named above, once.
     standings: eventStandings(event, {
-      kind: 'standings',
       pools: results.pools,
-      complete: results.complete,
+      // The POOL STAGE's own completeness, which is what a `StandingsView.complete`
+      // states. `results.complete` is a different fact — *both* stages — and handing it
+      // over would have this block report an unplayed final as an undecided pool stage.
+      // Every pool decided IS the pool stage decided, the same reading
+      // `StandingsResults.complete` carries for a round-robin event.
+      complete: results.pools.every((pool) => pool.complete),
       champion: null,
     }),
     finishes: eventFinishes(event, {
-      kind: 'finishes',
       finishes: results.finishes,
+      // The knockout stage is the LAST stage, so "this bracket is decided" and "the event
+      // is decided" are the same fact — the event's flag is this block's own, not a
+      // stand-in for it.
       complete: results.complete,
       champion: null,
     }),
     complete: results.complete,
-    // The BRACKET's winner. Read off `results.champion` — the server's own figure — and
-    // never off the top of a standings table, which would crown whoever led a pool.
-    champion:
-      results.champion === null ? null : nameOf(results.champion, names),
+    champion,
   }
 }

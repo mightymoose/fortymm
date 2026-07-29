@@ -243,9 +243,15 @@ def _qualifiers_per_pool_frozen_detail(
     It is not hypothetical and it is not cosmetic. The knockout bracket is cut
     **upfront** from ``P × K``, and the qualifiers are seated into predetermined slots
     as each pool finishes: a bracket cut at ``K = 2`` and then advanced at ``K = 3`` has
-    three pools' worth of thirds with nowhere to sit — ``advance()`` seats the five it
-    finds slots for, raises nothing, and the draw is quietly wrong. So the count is
-    frozen exactly as the type is, and the way out is the same one.
+    three pools' worth of thirds with nowhere to sit. So the count is frozen exactly as
+    the type is, and the way out is the same one.
+
+    This is the **first** line of defence, not the only one: past it,
+    :meth:`app.draws.RrThenKoStrategy.advance` raises
+    :class:`~app.draws.MissingBracketSlot` rather than seating the qualifiers it finds
+    slots for and dropping the rest. Which is why the 409 is worth having — it is the
+    refusal a director can act on, in their own language, before the domain has to shout
+    about a state nothing they typed could have produced.
     """
     return (
         "This event's draw is already cut, so the number of qualifiers per pool is "

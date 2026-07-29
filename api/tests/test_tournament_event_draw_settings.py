@@ -26,7 +26,7 @@ column on ``tournament_events`` to cross-check it against, which is the point.
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 import pytest_asyncio
@@ -42,6 +42,7 @@ from app.models import (
     TournamentEventDrawSettings,
     User,
 )
+from app.schemas.tournament import DrawSettingsWrite
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import grant_permissions, start_session
 
@@ -385,6 +386,35 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
 # ``draw_types`` fixture stands one up per enum member), so these tests no longer
 # have to insert a test-local parent row to reach the constraint's active half.
 RR_THEN_KO = DrawType.rr_then_ko.value
+
+
+def test_every_draw_type_has_an_arm_in_the_write_union() -> None:
+    """``DrawSettingsWrite`` is the request-boundary twin of this table's ``CHECK``:
+    the union says which configuration each draw type may carry, and the constraint
+    says the same thing about the row it lands on.
+
+    Unlike the four dispatch sites (``strategy_for``, ``results_for``, …), a
+    **discriminated union is not exhaustive by construction** — a new ``DrawType``
+    member with no arm type-checks perfectly and surfaces as a 422 in a director's
+    request, at the moment they try to create the event. So the totality those sites
+    get from a catch-all-free ``match`` is asserted here instead, exactly as its
+    siblings do it (``for draw_type in DrawType`` in ``test_draws`` /
+    ``test_results``): a member added without an arm reds in CI, not in production.
+
+    The discriminator is read off each arm's ``draw_type`` **field default** rather
+    than by parsing a payload per arm, because the payloads differ (``rr-then-ko``
+    requires its qualifier count) and the claim here is about the union's *shape*, not
+    about what any one arm accepts.
+    """
+    arms = get_args(get_args(DrawSettingsWrite)[0])
+    discriminators = [arm.model_fields["draw_type"].default for arm in arms]
+
+    assert {discriminator.value for discriminator in discriminators} == {
+        draw_type.value for draw_type in DrawType
+    }
+    # One arm per member, so two arms tagged with the same slug (a copy/paste that
+    # leaves a member uncovered while the set above still matches) also reds.
+    assert len(discriminators) == len(DrawType)
 
 
 async def test_a_new_events_settings_row_carries_no_qualifier_count(

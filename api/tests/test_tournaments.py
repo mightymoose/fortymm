@@ -68,7 +68,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
-from app.tournament_materialization import materialize_live_draw
+from app.tournament_materialization import materialize_event, materialize_live_draw
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
@@ -6994,6 +6994,76 @@ async def test_go_live_materialization_is_idempotent(
     assert await _match_count(db_session) == before, (
         "a second advance over already-materialized fixtures must create nothing"
     )
+
+
+async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_counts(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """``materialize_event`` runs on the **completion seam** — every result submission
+    re-runs it, inside the score-accept transaction, under the match row lock — so what
+    it costs is not a micro-optimization.
+
+    Two things are pinned, and both are invisible in every assertion about the
+    resulting matches. **The game counts are not loaded at all** for a draw type whose
+    ``advance()`` never reads them (``app.draws.reads_fixture_games``): round-robin
+    picks no qualifiers, so the counts were 200–500 score rows fetched and discarded on
+    a mature event. And **the fixtures' match status rides along on the fixture load**
+    rather than costing a second SELECT — the read path already learns it that way
+    (``completed_match_ids`` filters rows it has), so the write seam has no reason to
+    pay a round trip the read seam does not.
+
+    Run against an already-materialized draw with a **completed** match in it, which is
+    exactly what the completion seam sees: nothing is ready, so the whole call is the
+    load — and the completed match is what would make the game-count load fire, without
+    which the "no game counts" half of this pin would be vacuous.
+    ``match_game_scores`` is asserted by name as well as by count, so a regression that
+    folds the game load into the fixture statement still reds.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    played = (
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(
+                    TournamentFixture.event_id == uuid.UUID(event["id"])
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert played is not None and played.match_id is not None
+    match = await db_session.get(Match, played.match_id)
+    assert match is not None
+    match.status = MatchStatus.completed
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        tournament = (
+            await session.execute(
+                select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+            )
+        ).scalar_one()
+        event_row = (
+            await session.execute(
+                select(TournamentEvent).where(
+                    TournamentEvent.id == uuid.UUID(event["id"])
+                )
+            )
+        ).scalar_one()
+        # Only the seam's own statements are counted, not the two loads that stand in
+        # for the caller already holding these rows.
+        statements.clear()
+        await materialize_event(session, tournament, event_row)
+
+    assert len(statements) == 1, statements
+    assert not [s for s in statements if "match_game_scores" in s], statements
 
 
 async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(

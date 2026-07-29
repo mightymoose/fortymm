@@ -79,9 +79,14 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  *
  * `qualifiers_per_pool` is stored too, and it has to be: it is what sizes an
  * `rr-then-ko` draw's bracket at the cut (`P × K`, ADR 20260727). Before it had a home
- * here, `planEventDraw` passed nothing and every two-stage event was cut at the planner's
- * default of one qualifier per pool — a well-formed bracket of the wrong size, for an
- * event the director had configured otherwise, with nothing reporting the substitution. */
+ * here, `planEventDraw` passed nothing and every two-stage event was cut at one qualifier
+ * per pool — a well-formed bracket of the wrong size, for an event the director had
+ * configured otherwise, with nothing reporting the substitution.
+ *
+ * **It is `null` for every draw type but `rr-then-ko`** (ADR 20260727), which is why the
+ * seed below states the bare literal and says no more: no knockout stage to qualify for,
+ * so no qualifier count — `null` is the only value those draw types' settings row admits,
+ * and it is not "unset". */
 type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
@@ -519,8 +524,6 @@ function seed(): StoredTournament[] {
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 64,
           entry_fee: 45,
@@ -566,8 +569,6 @@ function seed(): StoredTournament[] {
           name: 'U1500 Singles',
           format: 'singles',
           draw_type: 'round-robin',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 48,
           entry_fee: 30,
@@ -592,8 +593,6 @@ function seed(): StoredTournament[] {
           name: 'Championship Singles',
           format: 'singles',
           draw_type: 'single-elim',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 16,
           entry_fee: 60,
@@ -629,8 +628,6 @@ function seed(): StoredTournament[] {
           name: 'U1200 Singles',
           format: 'singles',
           draw_type: 'round-robin',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 24,
           entry_fee: 20,
@@ -695,8 +692,6 @@ function seed(): StoredTournament[] {
           name: 'Mixed Doubles',
           format: 'doubles',
           draw_type: 'single-elim',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 32,
           entry_fee: 25,
@@ -756,8 +751,6 @@ function seed(): StoredTournament[] {
           name: 'Slam Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 16,
           entry_fee: 20,
@@ -820,8 +813,6 @@ function seed(): StoredTournament[] {
           name: "Women's Championship Singles",
           format: 'singles',
           draw_type: 'single-elim',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 32,
           entry_fee: 40,
@@ -916,8 +907,6 @@ function seed(): StoredTournament[] {
           name: 'Garage Singles',
           format: 'singles',
           draw_type: 'round-robin',
-          // No knockout stage, so no qualifier count (ADR 20260727): `null` is the only
-          // value this draw type's settings row admits.
           qualifiers_per_pool: null,
           max_players: 8,
           entry_fee: 0,
@@ -2075,16 +2064,15 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     event.draw_type,
     ordered.map((e) => e.id),
     event.pools.map((p) => p.id),
-    // **The event's own K** (ADR 20260727) — the number the director configured, not the
-    // planner's default. `undefined` (a count-less draw type) lets the default stand,
-    // where it is never read: only the `rr-then-ko` arm consults it, and an `rr-then-ko`
-    // event always has one (its create/patch body is a 422 without it).
+    // **The event's own K** (ADR 20260727) — the stored number, passed through unchanged.
+    // `null` is the honest answer for a count-less draw type, and only the `rr-then-ko`
+    // arm reads it at all; an `rr-then-ko` event always has one (its create/patch body is
+    // a 422 without it), so that arm never meets the null.
     //
-    // ⚠️ Passing nothing here is the whole bug this argument closes, and it is a SILENT
-    // one: an event configured at K=2 would be cut into a `P × 1` bracket — a perfectly
-    // well-formed draw of the wrong size, with nothing anywhere reporting the
-    // substitution.
-    event.qualifiers_per_pool ?? undefined,
+    // ⚠️ Substituting anything here is the whole bug this argument closes, and it is a
+    // SILENT one: an event configured at K=2 would be cut into a `P × 1` bracket — a
+    // perfectly well-formed draw of the wrong size, with nothing anywhere reporting it.
+    event.qualifiers_per_pool,
   )
 }
 

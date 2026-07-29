@@ -24,6 +24,7 @@ from app.draws import (
     FixtureId,
     FixtureState,
     MatchId,
+    MissingBracketSlot,
     MissingFixtureGames,
     OrderedEntrant,
     PlannedFixture,
@@ -36,6 +37,7 @@ from app.draws import (
     SingleElimStrategy,
     order_entrants,
     qualifier_seed_assignment,
+    reads_fixture_games,
     ready_fixtures,
     strategy_for,
 )
@@ -246,6 +248,62 @@ class TestStrategyRegistry:
         while the one that needs it must not be left guessing."""
         for draw_type in DrawType:
             assert strategy_for(draw_type, qualifiers_per_pool=2) is not None
+
+    def test_the_games_gate_names_every_draw_type_and_only_the_one_that_reads_them(
+        self,
+    ) -> None:
+        """``reads_fixture_games`` is what lets the materialization seam — which runs
+        inside the score-accept transaction on **every** result — skip loading game
+        counts nothing will read.
+
+        A whole-enum equality, so a new ``DrawType`` reds here as well as failing to
+        type-check in the catch-all-free ``match``: the gate is a claim about which
+        strategies read ``FixtureState.games``, and a wrong answer is either a discarded
+        query per result (harmless, slow) or a ``MissingFixtureGames`` on the seam
+        (loud), never a silently mis-seated qualifier.
+        """
+        assert {
+            draw_type: reads_fixture_games(draw_type) for draw_type in DrawType
+        } == {
+            DrawType.round_robin: False,
+            DrawType.single_elim: False,
+            DrawType.rr_then_ko: True,
+        }
+
+    def test_a_draw_type_the_gate_clears_advances_the_same_without_its_games(
+        self,
+    ) -> None:
+        """And the gate's answer is *true of the strategies*, not just asserted about
+        them: for every draw type it clears, a fully-played draw advances
+        byte-identically with the game counts stripped out.
+
+        This is the falsifiable half. A strategy that started reading the field would
+        plan something different from the two states and red here, rather than silently
+        advancing on ``games=None`` at the one seam that would have skipped the load.
+        """
+        for draw_type in DrawType:
+            if reads_fixture_games(draw_type):
+                continue
+            strategy = strategy_for(draw_type, qualifiers_per_pool=None)
+            cut = _persisted(strategy.plan_initial(_config(2), _ordered(8)))
+            with_games = _played(
+                cut,
+                {
+                    frozenset({f.entry_a_id.int, f.entry_b_id.int}): (
+                        min(f.entry_a_id.int, f.entry_b_id.int),
+                        3,
+                        1,
+                    )
+                    for f in cut
+                    if f.entry_a_id is not None and f.entry_b_id is not None
+                },
+            )
+            without_games = [dataclasses.replace(f, games=None) for f in with_games]
+            assert any(f.games is not None for f in with_games), (
+                f"{draw_type.value}: the two states must actually differ"
+            )
+
+            assert strategy.advance(with_games) == strategy.advance(without_games)
 
     def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
         self,
@@ -1674,6 +1732,24 @@ class TestRrThenKoAdvance:
         assert "18 decided pool fixtures" in str(excinfo.value)
         # Not a DrawError: this is a wiring bug, not something a director can fix by
         # re-cutting, so it must not be dressed up as a 422.
+        assert not isinstance(excinfo.value, DrawError)
+
+    def test_rr_then_ko_refuses_a_bracket_that_was_cut_for_a_different_k(self) -> None:
+        # The sibling of the gameless refusal above, and the same reasoning: a bracket
+        # cut for K=1 advanced at K=2 has qualifiers whose predetermined slot does not
+        # exist. Skipping them seats *some* of the qualifiers and leaves the draw
+        # quietly wrong — the outcome the event editor's 409 freeze calls unacceptable —
+        # the domain says so instead of the freeze being the only thing standing between
+        # a director and a half-seated bracket.
+        cut = _persisted(_rr_then_ko(1).plan_initial(_config(2), _ordered(4)))
+        fixtures = _played(cut, _lower_seed_wins(cut))
+
+        with pytest.raises(MissingBracketSlot) as excinfo:
+            _rr_then_ko(2).advance(fixtures)
+
+        assert "cut for a different number of qualifiers" in str(excinfo.value)
+        # Not a DrawError: a frozen K means nothing a director can type reaches this, so
+        # it is a wiring bug and a 500, not a 422 they could act on.
         assert not isinstance(excinfo.value, DrawError)
 
     def test_rr_then_ko_tolerates_one_result_in_flux_among_scored_neighbours(

@@ -93,11 +93,26 @@ provable rather than hopeful:
   pair is safe automatically;
 - round-one pairing is a perfect matching on seeds, so each seed has **at most
   one** partner and therefore at most **one forbidden pool**;
-- assigning blocks in order, every position then allows at least `P−1` pools, and
-  Hall's condition holds for `P ≥ 2` — any set `S` of positions with `|S| ≤ P−1`
-  has `|N(S)| ≥ P−1 ≥ |S|`, and `|S| = P` reaches every pool since each position
-  forbids only one. A conflict-free assignment always exists, and a deterministic
-  pass (pools tried in ascending order) finds it.
+- assigning blocks in order, every position then allows at least `P−1` pools, so
+  Hall's condition holds for any set `S` of positions with `|S| ≤ P−1`
+  (`|N(S)| ≥ P−1 ≥ |S|`). The remaining case, `|S| = P`, is the one that needs
+  the block's *geometry* rather than a counting argument, and the first draft of
+  this ADR got it wrong: "each position forbids only one pool" does **not** by
+  itself reach every pool, because `|N(S)|` collapses to `P−1` precisely when all
+  `P` positions forbid the *same* pool. What rules that out is that a block is
+  `P` **consecutive** seeds and round one pairs `s ↔ B+1−s`, which is
+  order-reversing — so a block's partners are themselves a run of `P` consecutive
+  seeds, spanning at most two blocks, and each block hands each pool to exactly
+  one seed. At most **two** of a block's positions can therefore forbid the same
+  pool, which is fewer than `P` for `P ≥ 3`. `P = 2` is the only size where two
+  would suffice, and there the partner run is `{B−2b−1, B−2b}`, whose lower
+  member is odd because `B` is a power of two — so both partners sit in the *same*
+  block and hold *different* pools.
+
+  A conflict-free assignment therefore always exists, and a deterministic pass
+  (pools tried in ascending order, augmenting when stuck) finds it. Probed over
+  `P` 2..64 × `K` 1..40, the largest number of one block's positions forbidding a
+  single pool is **1**, so the bound proved here is conservative.
 
 We rejected the two fixed orderings the issue floated. Ordering by place-then-pool
 pairs `C1` against `C2` at three pools; reversing the runners-up fixes three pools

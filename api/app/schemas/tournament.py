@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     computed_field,
@@ -192,12 +193,21 @@ class RrThenKoDrawSettingsWrite(BaseModel):
     qualifiers_per_pool: QualifiersPerPool
 
 
-DrawSettingsWrite = Annotated[
+DrawSettingsWriteArm = (
     RoundRobinDrawSettingsWrite
     | SingleElimDrawSettingsWrite
-    | RrThenKoDrawSettingsWrite,
-    Field(discriminator="draw_type"),
-]
+    | RrThenKoDrawSettingsWrite
+)
+"""The **arms** of the draw-settings union, listed once.
+
+A parsed draw configuration is one of these — the type a caller holds after
+:data:`DrawSettingsWrite` has done its work, and the type the parse itself returns. It
+is named because the list of arms was being spelled three times (the discriminated
+alias, its ``TypeAdapter``, and the parse's return type), which made "add a draw type"
+three edits with nothing to catch a fourth spelling that fell behind. Now it is one, and
+the three are the same list by construction rather than by review."""
+
+DrawSettingsWrite = Annotated[DrawSettingsWriteArm, Field(discriminator="draw_type")]
 """An event's draw configuration as it arrives: a **discriminated union tagged by the
 draw-type slug** (ADR 20260727, promised by ADR 20260726's companion and first built
 here).
@@ -209,25 +219,19 @@ half-honoured, and the settings table's ``CHECK`` and this union say the same th
 two different boundaries rather than one of them silently absorbing what the other
 refuses.
 
-Adding a draw type is an arm here, and it is *not* a type error until it has one — the
+Adding a draw type is an arm in :data:`DrawSettingsWriteArm` above (one list, read by
+this alias, its ``TypeAdapter`` and the parse alike), and it is *not* a type error until
+it has one — the
 enum's exhaustiveness is enforced at the four dispatch sites, and a missing arm surfaces
 as ``_draw_settings_write`` refusing a payload the enum accepts. Which is loud, at the
 boundary, and in the director's request."""
 
-_DRAW_SETTINGS_WRITE: TypeAdapter[
-    RoundRobinDrawSettingsWrite
-    | SingleElimDrawSettingsWrite
-    | RrThenKoDrawSettingsWrite
-] = TypeAdapter(DrawSettingsWrite)
+_DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettingsWrite)
 
 
 def _draw_settings_write(
     draw_type: DrawType, qualifiers_per_pool: int | None
-) -> (
-    RoundRobinDrawSettingsWrite
-    | SingleElimDrawSettingsWrite
-    | RrThenKoDrawSettingsWrite
-):
+) -> DrawSettingsWriteArm:
     """Parse a ``(draw_type, qualifiers_per_pool)`` pair into the union arm it names, or
     raise :class:`ValueError` — a 422 — when it names none.
 
@@ -1594,22 +1598,39 @@ class TournamentEventCreate(BaseModel):
     # same alias the patch schema carries, so the rule holds on both verbs.
     pools: EventPools = Field(default_factory=list)
 
+    #: The arm :meth:`_parse_draw_settings` parsed, kept rather than re-derived. Set by
+    #: that validator and by nothing else; it cannot fall out of step with the two
+    #: fields it was parsed from because a request model is **read-only after
+    #: validation** — nothing assigns to ``draw_type``/``qualifiers_per_pool`` and
+    #: nothing ``model_copy(update=…)``s one, which are the two gestures that would
+    #: move a field without re-running the validator. It has no default because a model
+    #: that exists has run the validator, and reading it on one that has not is a
+    #: programmer error worth an ``AttributeError`` rather than a plausible-looking
+    #: second parse.
+    _draw_settings: DrawSettingsWriteArm = PrivateAttr()
+
     @property
-    def draw_settings(self) -> DrawSettingsWrite:
+    def draw_settings(self) -> DrawSettingsWriteArm:
         """The parsed draw configuration — the union arm this payload names.
 
-        Total by the time anybody can call it: :meth:`_parse_draw_settings` has already
-        run the same parse during validation, so a model that exists is a model whose
-        pair is legal. Callers take the *arm*, never the two loose fields, which is what
-        keeps "which draw types carry a qualifier count" a fact stated in one place."""
-        return _draw_settings_write(self.draw_type, self.qualifiers_per_pool)
+        Total by the time anybody can call it **because the validator ran**:
+        :meth:`_parse_draw_settings` parsed this pair during validation and kept the
+        arm, so a model that exists is a model whose pair is legal and already parsed.
+        The totality is the validator's, not this property's — which is why reading it
+        twice (``create_event`` reads two attributes off it) costs one parse, not three.
+        Callers take the *arm*, never the two loose fields, which is what keeps "which
+        draw types carry a qualifier count" a fact stated in one place."""
+        return self._draw_settings
 
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventCreate":
         """Parse at the boundary: an illegal ``(draw_type, qualifiers_per_pool)`` pair
         is a 422 on the create, not a row the settings table's ``CHECK`` rejects later
-        with a 500."""
-        _draw_settings_write(self.draw_type, self.qualifiers_per_pool)
+        with a 500. The arm it parses is **kept** (:attr:`_draw_settings`) rather than
+        discarded — parse once, at the boundary, and carry the parsed value inward."""
+        self._draw_settings = _draw_settings_write(
+            self.draw_type, self.qualifiers_per_pool
+        )
         return self
 
 
@@ -1682,16 +1703,22 @@ class TournamentEventUpdate(BaseModel):
             raise ValueError("must not be null")
         return value
 
+    #: The arm :meth:`_parse_draw_settings` parsed, or ``None`` when this patch does not
+    #: touch the draw configuration. Kept rather than re-derived, exactly as the create
+    #: schema's is — and here it is worth more, because the update path reads it twice
+    #: (the freeze guard, then the write). ``None`` is a real answer on this verb, so
+    #: unlike create's it carries that default.
+    _draw_settings: DrawSettingsWriteArm | None = PrivateAttr(default=None)
+
     @property
-    def draw_settings(self) -> DrawSettingsWrite | None:
+    def draw_settings(self) -> DrawSettingsWriteArm | None:
         """The parsed draw configuration this patch asks for, or ``None`` when it is not
         patching the draw configuration at all.
 
-        Total by the time anybody can call it, exactly as the create schema's is:
-        :meth:`_parse_draw_settings` ran the same parse during validation."""
-        if self.draw_type is None:
-            return None
-        return _draw_settings_write(self.draw_type, self.qualifiers_per_pool)
+        Total by the time anybody can call it, exactly as the create schema's is and
+        for the same reason: :meth:`_parse_draw_settings` ran the parse during
+        validation and kept the arm."""
+        return self._draw_settings
 
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventUpdate":
@@ -1703,14 +1730,19 @@ class TournamentEventUpdate(BaseModel):
         patch carrying only ``K`` does not hold that pair: judging it would mean reading
         the event's stored draw type, which happens two layers in, after the request has
         been accepted. Sending both is what the event editor does anyway — it PATCHes
-        the form it rendered."""
+        the form it rendered.
+
+        The arm it parses is **kept** (:attr:`_draw_settings`) rather than discarded, so
+        the freeze guard and the write that follows it read one parse between them."""
         if self.draw_type is None and self.qualifiers_per_pool is not None:
             raise ValueError(
                 "qualifiers_per_pool is part of an event's draw configuration and is "
                 "patched with it: send draw_type alongside it."
             )
         if self.draw_type is not None:
-            _draw_settings_write(self.draw_type, self.qualifiers_per_pool)
+            self._draw_settings = _draw_settings_write(
+                self.draw_type, self.qualifiers_per_pool
+            )
         return self
 
 

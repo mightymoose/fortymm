@@ -685,25 +685,6 @@ function snakeRefusal(
   return null
 }
 
-/** **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's knockout
- * stage, when nothing tells the planner otherwise.
- *
- * One, i.e. "pool winners only", because that is the smallest legal value (`K ≥ 1` is a
- * Pydantic bound at the request boundary) and the least surprising reading of a format
- * whose director has expressed no preference.
- *
- * ⚠️ It is a **default, not the truth**, and by now it is a **fallback nobody should
- * reach**: the count is a real column (`tournament_event_draw_settings.qualifiers_per_pool`),
- * it rides both write bodies, and `TournamentEventRead` now sends it back — so both
- * stubs read a stored event's own value and pass it in (`planEventDraw`, in the MSW store
- * and in the Playwright one alike). What is left for this default is a caller that names
- * no count at all, i.e. a unit test of the planner itself.
- *
- * Do NOT let a store fall back to it. A K=1 bracket cut for an event configured at K=2 is
- * the quietest possible mock/server disagreement: nothing errors, the draw is a perfectly
- * well-formed bracket, and it is simply the wrong size. */
-export const DEFAULT_QUALIFIERS_PER_POOL = 1
-
 /**
  * Plan an event's draw exactly as the cut route does, or say why it cannot be — the
  * planner's 422s, in the server's own words (`app/draws.py`), because for these the
@@ -720,6 +701,14 @@ export const DEFAULT_QUALIFIERS_PER_POOL = 1
  * `entryIds` arrive in **draw order** — seed ascending where one is set, then
  * registration order (ADR-0786) — because that is the list the API's planner is handed.
  *
+ * **`qualifiersPerPool` has no default**, on purpose. It is a real column
+ * (`tournament_event_draw_settings.qualifiers_per_pool`) that rides both write bodies and
+ * comes back on `TournamentEventRead`, so every caller genuinely has an answer: a stored
+ * event's own value, or `null` for the two draw types that take no count. A default here
+ * would let one be omitted by accident, and that is the quietest possible mock/server
+ * disagreement — a K=1 bracket cut for an event configured at K=2 raises nothing, is a
+ * perfectly well-formed draw, and is simply the wrong size.
+ *
  * **Exhaustive over `DrawType`, with no default arm.** Every member of the enum has a
  * server-side strategy by construction (ADR 20260726), so there is no "this type cannot
  * be cut" refusal left to make — and adding a member tomorrow is a *type error* here
@@ -732,7 +721,10 @@ export function planDraw(
   drawType: components['schemas']['DrawType'],
   entryIds: readonly string[],
   poolIds: readonly string[],
-  qualifiersPerPool: number = DEFAULT_QUALIFIERS_PER_POOL,
+  /** **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's
+   * knockout stage. `null` for the two draw types that have no knockout stage to qualify
+   * for, which is what their settings row holds and what their callers pass out loud. */
+  qualifiersPerPool: number | null,
 ): DrawPlan {
   switch (drawType) {
     case 'round-robin': {
@@ -767,6 +759,18 @@ export function planDraw(
       // consulted at all.
       const refusal = snakeRefusal(entryIds, poolIds)
       if (refusal !== null) return { ok: false, detail: refusal }
+      if (qualifiersPerPool === null) {
+        // NOT a refusal, and NOT a default: an `rr-then-ko` event without a count is not
+        // a state the server can be in — the write boundary requires one with no default
+        // (`RrThenKoDrawSettingsWrite`), so the column is never NULL for this draw type.
+        // A stub reaching here has been seeded or patched into a shape the API cannot
+        // hold, and says so instead of quietly cutting a `P × 1` bracket.
+        throw new Error(
+          'planDraw: an “rr-then-ko” draw has no qualifiers_per_pool. The count is ' +
+            'required at the write boundary, so a stored event always has one — pass ' +
+            'the event’s own value, never a fallback.',
+        )
+      }
       const dealt = snakedPools(entryIds, poolIds.length)
       // The snake has already refused a pool of fewer than two, so `smallest` is at
       // least 2 and the noun below never needs inflecting.

@@ -974,12 +974,12 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
     drawOrder(event.entrants).map((e) => e.id),
     event.pools.map((p) => p.id),
     // **The event's own K** (ADR 20260727) — the count the director configured and the
-    // PATCH stored, never the planner's default. It is what sizes an `rr-then-ko` draw's
-    // bracket (`P × K`), so passing nothing would cut a `P × 1` bracket for an event
+    // PATCH stored, passed through unchanged. It is what sizes an `rr-then-ko` draw's
+    // bracket (`P × K`), so substituting anything would cut a `P × 1` bracket for an event
     // configured otherwise: a well-formed draw of the wrong size, with nothing anywhere
-    // reporting the substitution. `undefined` (a count-less draw type) leaves the default
-    // standing, where only the arm that never reads it can see it.
-    event.qualifiers_per_pool ?? undefined,
+    // reporting the substitution. `null` is the honest value for a count-less draw type,
+    // and only the arm that never reads it can see it.
+    event.qualifiers_per_pool,
   )
 }
 

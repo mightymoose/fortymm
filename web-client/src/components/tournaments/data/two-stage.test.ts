@@ -82,6 +82,11 @@ describe('eventStandingsThenFinishes', () => {
     expect(view.complete).toBe(false)
     expect(view.champion).toBeNull()
     expect(view.standings.pools.every((p) => p.complete)).toBe(true)
+    // …and each stage answers for ITSELF, which is the whole point of this state: the
+    // pool stage IS complete while the event is not, and the bracket is not. A sub-view
+    // handed the event's flag would call the decided pool stage undecided.
+    expect(view.standings.complete).toBe(true)
+    expect(view.finishes.complete).toBe(false)
     expect(view.finishes.finishes.map((f) => [f.positionLabel, f.name])).toEqual([
       ['T3', 'player.5'],
       ['T3', 'player.3'],

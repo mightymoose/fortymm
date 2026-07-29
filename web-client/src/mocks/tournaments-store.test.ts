@@ -1481,10 +1481,11 @@ describe('cutting a round-robin-then-knockout draw', () => {
    * the reason the count had to be stored at all.
    *
    * ⚠️ This is the *silent* mismatch, which is why it needs pinning by size rather than
-   * by an error: with the count dropped on the way to `planDraw`, the arm falls back to
-   * `DEFAULT_QUALIFIERS_PER_POOL` (1) and cuts a perfectly well-formed bracket — just one
-   * sized for a K nobody chose. Nothing throws, nothing warns, and `npm run dev` and
-   * vitest both look healthy while an event configured at K=2 runs a K=1 knockout.
+   * by an error: a count substituted on the way to `planDraw` cuts a perfectly well-formed
+   * bracket — just one sized for a K nobody chose. Nothing throws, nothing warns, and
+   * `npm run dev` and vitest both look healthy while an event configured at K=2 runs a
+   * K=1 knockout. (The planner having no default is what makes *dropping* the argument a
+   * type error; this pins the value that actually arrives.)
    *
    * Two pools of sixteen entrants, so the two candidate brackets are unmistakably
    * different: `P × K` = 2 × 2 = 4 slots (2 semis + 1 final = **3** fixtures) against the
@@ -1543,10 +1544,11 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
   const entrants = (n: number) => Array.from({ length: n }, (_, i) => `entry-${i + 1}`)
   const pools = (n: number) => Array.from({ length: n }, (_, i) => `p-${i + 1}`)
 
-  it('defaults to pool winners only — one qualifier from each pool', () => {
-    // 8 entrants across 2 pools of 4; K defaults to 1, so 2 qualifiers meet in a
-    // one-fixture bracket.
-    const plan = planDraw('rr-then-ko', entrants(8), pools(2))
+  it('takes pool winners only at K = 1 — the smallest legal count', () => {
+    // 8 entrants across 2 pools of 4, K = 1, so 2 qualifiers meet in a one-fixture
+    // bracket. The count is passed explicitly like every other: the planner has no
+    // default, so "pool winners only" is a configuration, never an omission.
+    const plan = planDraw('rr-then-ko', entrants(8), pools(2), 1)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
     expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(1)
@@ -2047,7 +2049,9 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
         'rr-then-ko',
         event.entrants.map((e) => e.id),
         event.pools.map((p) => p.id),
-        event.qualifiers_per_pool!,
+        // The event's own count, unasserted: the planner takes `number | null` and
+        // refuses the impossible pair loudly, so there is nothing here to talk past.
+        event.qualifiers_per_pool,
       )
       if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
 

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -145,6 +146,27 @@ class MissingFixtureGames(RuntimeError):
     under correction leaves the match un-``completed`` while the fixture's written-back
     ``winner_entry_id`` stays put — and that one is handled honestly by the strategy
     (its pool is simply not finished yet), not raised at.
+    """
+
+
+class MissingBracketSlot(RuntimeError):
+    """A qualifier's predetermined knockout slot **does not exist in this draw** — the
+    bracket standing here was cut for a different qualifier count than the one being
+    advanced.
+
+    :class:`MissingFixtureGames`' sibling, and deliberately not a :class:`DrawError` for
+    the same reason: nothing a director can type reaches it. The qualifier count is
+    frozen the moment a draw is cut (a 409 from the event editor), and the bracket is
+    cut upfront from ``P × K``, so a seed with no slot means a caller advanced these
+    fixtures with a strategy configured differently from the one that dealt them. That
+    is a wiring bug, and the only useful response is a loud 500.
+
+    It exists because the alternative failure is silent and wrong in exactly the way the
+    freeze's own 409 refuses to allow: skipping the seed seats *some* of the qualifiers
+    and leaves the rest out, producing a bracket that looks cut, looks seeded, and is
+    playable — while the entrants who earned those places are simply missing from it.
+    The 409 is the first line of defence, not a licence for the domain to be quiet when
+    it has been breached.
     """
 
 
@@ -317,7 +339,9 @@ class FixtureState:
     #: **structurally**, down to the game-difference and games-won tiebreakers, rather
     #: than by two implementations happening to concur.
     #:
-    #: No strategy reads this yet; round-robin and single-elim ignore it.
+    #: Only ``rr-then-ko`` reads it; round-robin and single-elim ignore it, and
+    #: :func:`reads_fixture_games` is where that is said once so a caller knows whether
+    #: it has to load the counts at all.
     games: FixtureGames | None = None
 
     @property
@@ -442,12 +466,16 @@ def qualifier_seed_assignment(
     - round one is a perfect matching on seeds (:func:`_seed_slots` pairs ``s`` with
       ``B+1−s``), so a seed has **at most one** partner and therefore at most one
       forbidden pool;
-    - assigning blocks in ascending order, every position in the block still admits at
-      least ``P−1`` pools, so Hall's condition holds for ``P ≥ 2`` and a conflict-free
-      system of distinct representatives always exists. The search below finds one
-      deterministically — pools tried in ascending index order, augmenting when stuck
-      — so a re-cut reproduces the same bracket, the same promise
-      :func:`order_entrants` makes.
+    - assigning blocks in ascending order, one forbidden pool per seed leaves Hall's
+      condition exactly **one** way to fail — all ``P`` of a block's seeds forbidding
+      the *same* pool — and the block's own geometry closes it, so a conflict-free
+      system of distinct representatives always exists. That last step is the one worth
+      reading in full, and it is stated where it is relied on
+      (:func:`_assign_block_pools`), because "each admits at least ``P−1`` pools" is not
+      by itself the reason. The search below finds a representative system
+      deterministically — pools tried in ascending index order, augmenting when stuck —
+      so a re-cut reproduces the same bracket, the same promise :func:`order_entrants`
+      makes.
 
     The two fixed orderings this replaces cannot work: place-then-pool pairs ``C1``
     against ``C2`` at three pools, and reversing the runners-up fixes three pools while
@@ -769,7 +797,16 @@ class RrThenKoStrategy:
                 round_number, position, side = seats[seed]
                 slot = by_slot.get((round_number, position))
                 if slot is None:
-                    continue  # no such fixture — a bracket cut for a different K
+                    raise MissingBracketSlot(
+                        f"Seed {seed} (place {place} in pool {pool_id!r}) qualifies "
+                        f"into knockout slot (round {round_number}, position "
+                        f"{position}), which this draw has no fixture for: the bracket "
+                        f"standing here holds {len(by_slot)} fixtures and was cut for "
+                        "a different number of qualifiers than the "
+                        f"{len(pool_ids) * self.qualifiers_per_pool} "
+                        f"({len(pool_ids)} pools × {self.qualifiers_per_pool}) this "
+                        "advance is seating."
+                    )
                 already = slot.entry_a_id if side is Side.a else slot.entry_b_id
                 if already is not None:
                     continue  # already seated — the source of idempotence
@@ -779,13 +816,6 @@ class RrThenKoStrategy:
                     )
                 )
         return fills
-
-
-#: Static proof that :class:`RrThenKoStrategy` satisfies :class:`DrawStrategy`. It is
-#: now redundant — the enum member landed (#1227) and :func:`strategy_for`'s return type
-#: checks all three arms — and it is kept because it is *free*, and because it names the
-#: conformance at the class rather than leaving it a side effect of a dispatch table.
-_RR_THEN_KO_IS_A_STRATEGY: DrawStrategy = RrThenKoStrategy(qualifiers_per_pool=1)
 
 
 def _finished_pool_order(
@@ -925,6 +955,32 @@ def strategy_for(
             return RrThenKoStrategy(qualifiers_per_pool=qualifiers_per_pool)
 
 
+def reads_fixture_games(draw_type: DrawType) -> bool:
+    """Whether this draw type's ``advance()`` reads :attr:`FixtureState.games` — i.e.
+    whether a caller projecting fixtures for it has to load the game counts first.
+
+    A fact about the strategies, kept beside them rather than inferred at the seam.
+    ``rr-then-ko`` picks its qualifiers by the standings' own tiebreak chain and so
+    reads the games (refusing loudly — :class:`MissingFixtureGames` — when they were not
+    loaded); round-robin and single-elim never touch the field, and for them the load is
+    a SQL statement and a few hundred score rows discarded, on the completion seam,
+    inside the score-accept transaction, once per result.
+
+    An exhaustive ``match`` with **no catch-all**, exactly like :func:`strategy_for`: a
+    new :class:`DrawType` member has to *declare* whether it needs the games, and until
+    it does this fails to type-check. The alternative — a default of ``False`` — is a
+    new strategy silently advancing on ``games=None``, which is the one failure
+    :class:`MissingFixtureGames` exists to make impossible.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return False
+        case DrawType.single_elim:
+            return False
+        case DrawType.rr_then_ko:
+            return True
+
+
 def _snake(
     ordered_entrants: Sequence[OrderedEntrant], pool_ids: Sequence[PoolId]
 ) -> list[tuple[PoolId, tuple[EntryId, ...]]]:
@@ -1003,6 +1059,27 @@ def _circle_method(pool_id: PoolId, members: Sequence[EntryId]) -> list[PlannedF
     return fixtures
 
 
+def _bracket_size(field_size: int) -> int:
+    """The bracket a field of ``field_size`` is played in: the **smallest power of two ≥
+    field_size**.
+
+    Stated once, because the questions that turn on it — which slots exist
+    (:func:`_knockout_fixtures`) and where a seed enters (:func:`_knockout_seats`) —
+    must not size the bracket one way here and another way there, which is a draw that
+    disagrees with itself. The ``B − field_size`` spare seats are the byes, which is why
+    the padding rule and the bye rule are the same fact.
+
+    A field of one pads to one (there is no zero-th power below it) and a field of zero
+    to one as well; neither is a competition, and the refusals that say so
+    (:class:`DegenerateDraw`) are the strategies', raised at the cut where the field is
+    in hand.
+    """
+    bracket = 1
+    while bracket < field_size:
+        bracket <<= 1
+    return bracket
+
+
 def _seed_slots(bracket_size: int) -> list[int]:
     """The **standard single-elimination seeding order** for a bracket of
     ``bracket_size`` slots (a power of two): the 1-based seed positions laid out
@@ -1036,11 +1113,13 @@ def _knockout_seats(field_size: int) -> dict[int, tuple[int, int, Side]]:
     """Where every seed **enters** the bracket that holds ``field_size`` of them:
     ``seed → (round, position, side)``.
 
-    One description of a bracket's shape, for the two questions that need it: *which
-    fixtures exist* (:func:`_knockout_fixtures`) and *where does a given seed sit*
+    One description of a bracket's shape, for the three questions that need it: *which
+    fixtures exist* (:func:`_knockout_fixtures`), *where does a given seed sit*
     (:meth:`RrThenKoStrategy.advance`, seating a qualifier the moment its pool
-    finishes). Keeping them one function is what stops a qualifier being seated into a
-    slot the cut never emitted.
+    finishes) and *who does a seed meet in round one* (:func:`_round_one_partners`, the
+    constraint the rematch-free seeding is solved against). Keeping them one function is
+    what stops a qualifier being seated into a slot the cut never emitted — and what
+    stops the seeding believing in a bye the bracket does not give.
 
     Byes are the top ``B − field_size`` seeds, and a byed seed's entry point is its
     **round-2** side — computed with :func:`_successor` from the round-1 position it
@@ -1048,9 +1127,7 @@ def _knockout_seats(field_size: int) -> dict[int, tuple[int, int, Side]]:
     successor. ``position`` is always the **full-bracket** slot index, never a
     renumbering of the surviving matches, which is what keeps that arithmetic true.
     """
-    bracket = 1
-    while bracket < field_size:
-        bracket <<= 1
+    bracket = _bracket_size(field_size)
     slots = _seed_slots(bracket)
     seats: dict[int, tuple[int, int, Side]] = {}
     for pair_index in range(bracket // 2):
@@ -1099,9 +1176,7 @@ def _knockout_fixtures(
     ``NULLS NOT DISTINCT``, so ``pool_id IS NULL`` is its own numbering namespace, and
     "the round after the pools" is ill-defined anyway when pools may differ in size.
     """
-    bracket = 1
-    while bracket < field_size:
-        bracket <<= 1
+    bracket = _bracket_size(field_size)
     rounds = bracket.bit_length() - 1
     seats = _knockout_seats(field_size)
 
@@ -1124,20 +1199,20 @@ def _knockout_fixtures(
         )
         for position in round_one_positions
     ]
-    if rounds >= 2:
-        fixtures.extend(
-            PlannedFixture(
-                pool_id=None,
-                round=2,
-                position=position,
-                entry_a_id=seated.get((2, position, Side.a)),
-                entry_b_id=seated.get((2, position, Side.b)),
-            )
-            for position in range(1, bracket // 4 + 1)
-        )
+    # Every later round, in one loop. Round 2 is the only one a *bye* can pre-fill —
+    # :func:`_knockout_seats` seats a byed seed via ``_successor(1, …)``, which lands in
+    # round 2 and nowhere further — so from round 3 on the lookup is ``None`` for every
+    # slot and asking it costs nothing. Splitting the two would be two statements of one
+    # rule ("a side is known only where a seat says so"), which is how they drift.
     fixtures.extend(
-        PlannedFixture(pool_id=None, round=round_number, position=position)
-        for round_number in range(3, rounds + 1)
+        PlannedFixture(
+            pool_id=None,
+            round=round_number,
+            position=position,
+            entry_a_id=seated.get((round_number, position, Side.a)),
+            entry_b_id=seated.get((round_number, position, Side.b)),
+        )
+        for round_number in range(2, rounds + 1)
         for position in range(1, (bracket >> round_number) + 1)
     )
     return fixtures
@@ -1148,20 +1223,30 @@ def _round_one_partners(qualifier_count: int) -> dict[int, int]:
     qualifiers — ``{seed: opposing seed}``, symmetric, and **only** for the pairs that
     are real matches.
 
-    Read straight off :func:`_seed_slots` rather than restated as ``B+1−s``, so there is
-    one description of the bracket's shape and not two that can drift. A seed whose
-    opposite number lands past ``qualifier_count`` has a **bye** and simply does not
-    appear here: a bye plays nobody, so it can never be a same-pool rematch.
+    Read off :func:`_knockout_seats` — the *one* description of a bracket's shape —
+    rather than re-walking :func:`_seed_slots` and re-stating the bye rule beside it.
+    Two seats at the same round-1 position are two seeds in the same fixture, which is
+    exactly what "meets in round one" means. A **byed** seed enters at round 2 by
+    construction, so it never appears here at all, and the rematch-free guarantee
+    (:func:`qualifier_seed_assignment`) is therefore built on the same bracket the cut
+    emits rather than on a second opinion about it — the drift that would otherwise be
+    silent, because a partner map that thinks a seed byes admits the same-pool pairing
+    that seed actually plays.
     """
-    bracket = 1
-    while bracket < qualifier_count:
-        bracket <<= 1
-    slots = _seed_slots(bracket)
+    by_position: dict[int, dict[Side, int]] = defaultdict(dict)
+    for seed, (round_number, position, side) in _knockout_seats(
+        qualifier_count
+    ).items():
+        if round_number == 1:
+            by_position[position][side] = seed
     partners: dict[int, int] = {}
-    for index in range(0, bracket, 2):
-        first, second = slots[index], slots[index + 1]
-        if max(first, second) > qualifier_count:
-            continue  # one side is a phantom seat — that seed byes
+    for sides in by_position.values():
+        first, second = sides.get(Side.a), sides.get(Side.b)
+        # A round-1 position always carries both sides (``_knockout_seats`` seats them
+        # together or byes the survivor into round 2); the guard only narrows the
+        # Optionals for the type checker.
+        if first is None or second is None:
+            continue
         partners[first] = second
         partners[second] = first
     return partners
@@ -1176,9 +1261,28 @@ def _assign_block_pools(
 
     Kuhn's augmenting-path algorithm, walked in ascending seed then ascending pool
     order, which makes the matching it lands on a *function of the inputs* rather than
-    of dict iteration luck. Hall's condition guarantees a matching exists whenever
-    ``pool_count ≥ 2`` (each seed forbids at most one pool, so each admits at least
-    ``pool_count − 1``), so the failure arm is unreachable and says so.
+    of dict iteration luck.
+
+    **Why the failure arm below is unreachable**, stated the way it is actually true.
+    "Each seed forbids at most one pool, so each admits at least ``P−1``" is the fact,
+    but it is *not* the reason: a subset ``S`` of the block's seeds sees all ``P`` pools
+    the moment two of its members forbid different pools (or one forbids none), so the
+    only subset that can fail Hall's condition is the whole block — all ``P`` seeds
+    forbidding the **same** pool, leaving ``P−1`` pools for ``P`` seeds. Admitting
+    ``P−1`` each is exactly what does not rule that out.
+
+    What rules it out is the geometry of a block. A block is ``P`` **consecutive**
+    seeds; round one pairs ``s`` with ``B+1−s`` (:func:`_seed_slots`, ``B`` the bracket
+    size), an order-reversing pairing, so a block's partners are themselves ``P``
+    consecutive seeds — a run spanning at most **two** blocks. Each block hands each
+    pool to exactly one seed, so at most two of a block's seeds can forbid one pool,
+    which is fewer than ``P`` for every ``P ≥ 3``. ``P = 2`` is the one size where two
+    would be enough, and there the partner run is ``{B−2b−1, B−2b}`` (block ``b``),
+    whose lower member is odd because ``B`` is a power of two — so both partners sit in
+    the *same* block and necessarily hold different pools. Either way a block never
+    forbids one pool ``P`` times, Hall's condition holds, and a matching exists.
+    (Measured over ``P`` 2..64 × ``K`` 1..40 the margin is wider still: no two seeds of
+    a block were ever seen to forbid the same pool at all.)
 
     A seed takes the **lowest free pool** it is allowed, and only displaces an incumbent
     when every pool it admits is taken — the standard greedy initialization for Kuhn's.

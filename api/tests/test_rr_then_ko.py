@@ -617,8 +617,9 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
 
     The bracket is cut upfront for ``P × K`` and qualifiers are seated into
     predetermined slots. A bracket cut at K=2 and then advanced at K=3 would leave
-    three pools' worth of thirds with nowhere to sit: ``advance()`` seats the five it
-    finds slots for and raises nothing. Re-sending the SAME configuration is not a
+    three pools' worth of thirds with nowhere to sit — which past this refusal is a
+    ``MissingBracketSlot`` (a 500 nobody can act on), so the 409 is what makes it a
+    sentence a director can. Re-sending the SAME configuration is not a
     change and is allowed, which is what makes this a freeze on the edit rather than on
     the key being present.
     """

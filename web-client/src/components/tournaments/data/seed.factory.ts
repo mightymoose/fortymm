@@ -221,10 +221,10 @@ export function buildFullEvent(
  * A **round-robin-then-knockout** event (ADR 20260727): two pools, and **two** qualifiers
  * out of each into the bracket.
  *
- * `qualifiersPerPool: 2` rather than the smallest legal `1`, deliberately. One is what a
- * planner falls back to when nobody tells it otherwise (`DEFAULT_QUALIFIERS_PER_POOL`,
- * `mocks/factories/tournaments/tournament.factory`), so a fixture built on it could not
- * tell "the director's count was threaded through" from "the default was taken" — the
+ * `qualifiersPerPool: 2` rather than the smallest legal `1`, deliberately. One is the
+ * value any dropped-count bug lands on — the smallest legal K, and the shape of a bracket
+ * cut for a count nobody supplied — so a fixture built on it could not tell "the
+ * director's count was threaded through" from "something substituted the minimum": the
  * exact mock/server mismatch that would cut a K=1 bracket for an event configured at K=2.
  * Two pools, likewise, because `P × K` is what sizes the bracket and a single pool would
  * make the product ambiguous between the two factors.

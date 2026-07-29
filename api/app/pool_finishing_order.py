@@ -146,14 +146,22 @@ def finishing_order(
         entry_id: EntryTally(entry_id=entry_id) for entry_id in entrants
     }
     for outcome in outcomes:
-        record_outcome(
+        _record_outcome(
             tallies[outcome.entry_a_id], tallies[outcome.entry_b_id], outcome
         )
     return _order(list(tallies.values()), outcomes)
 
 
-def record_outcome(a: EntryTally, b: EntryTally, outcome: MatchOutcome) -> None:
-    """Fold one decided fixture into both sides' tallies."""
+def _record_outcome(a: EntryTally, b: EntryTally, outcome: MatchOutcome) -> None:
+    """Fold one decided fixture into both sides' tallies.
+
+    Private, like every other step of the order: :func:`finishing_order` is the module's
+    verb and the accumulator is its internals. Nothing outside builds a tally, so a
+    public one would advertise a protocol no caller wants — and invite a second, partial
+    tallying path beside the one definition this module exists to be.
+    (:func:`entry_id_order` is the exception, and is public because the *results* layer
+    genuinely shares that final tiebreak.)
+    """
     a.played += 1
     b.played += 1
     a.games_won += outcome.entry_a_games

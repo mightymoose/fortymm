@@ -41,11 +41,25 @@ export interface FinishLine extends FinishRow {
   positionLabel: string
 }
 
-/** A single-elimination event's results, shaped for the reader: the placement list (names
- * joined, ties marked), whether the bracket is decided, and the champion's *name* when
- * there is one. */
+/**
+ * The fields `eventFinishes` actually reads — a **finishes block**: the placement list,
+ * whether the bracket behind it is decided, and its champion when it has one.
+ *
+ * A whole single-elimination event's `FinishesResults` is one of these; so is the
+ * **knockout stage** of a two-stage event, which is not a `FinishesResults` at all
+ * (`./two-stage`). The `./standings` note applies verbatim: the parameter is this rather
+ * than the tagged arm so a composite hands over the block it genuinely holds instead of
+ * minting a `kind: 'finishes'` value the server would never send.
+ */
+export type FinishesBlock = Omit<FinishesResults, 'kind'>
+
+/** A finishes block, shaped for the reader: the placement list (names joined, ties
+ * marked), whether the bracket is decided, and the champion's *name* when there is one. */
 export interface FinishesView {
   finishes: FinishLine[]
+  /** True when **this bracket** is decided — its final played. For a single-elimination
+   * event that is the event itself; for the knockout stage of a two-stage event it is the
+   * last stage, so it is decided exactly when that event is (`./two-stage`). */
   complete: boolean
   /** The champion's username when the final is decided, else `null` — the server's own
    * `champion`, joined to a name. */
@@ -79,6 +93,10 @@ function ordinal(position: number): string {
  * all. Everything here is a total function of the block plus the `event` the name join
  * needs (entry id → username).
  *
+ * The block is a `FinishesBlock`, not the `finishes` arm itself, so the knockout stage of
+ * a two-stage event can be rendered through this same selector without anybody forging a
+ * `kind` for it.
+ *
  * The rows are mapped **in the order the server sent them** (position ascending, ties
  * together): the server derived the placement from each entrant's elimination round, and
  * re-ordering it here — even by the visible `position` — would be the client second-guessing
@@ -87,7 +105,7 @@ function ordinal(position: number): string {
  */
 export function eventFinishes(
   event: TournamentEvent,
-  results: FinishesResults,
+  results: FinishesBlock,
 ): FinishesView {
   const names = nameByEntryId(event)
 

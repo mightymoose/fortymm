@@ -21,6 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { components } from '@/api/schema'
+import { DRAW_SETTINGS_REFUSALS } from './handlers'
 import { resetTournamentsStore } from './tournaments-store'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
@@ -160,12 +161,14 @@ describe('GET /v1/tournaments — the near-me filter', () => {
  * real API refuses — which is exactly how a silent 422 shipped earlier in this arc).
  *
  * WHAT IS ASSERTED, AND WHAT IS DELIBERATELY NOT. The load-bearing claims are the
- * **status** and the **offending field** — pinning the mock's full sentences would be a
- * fragile test of wording rather than a robust test of the rule. Each case additionally
- * pins the short fragment naming *which* rule fired ("Field required", "Extra inputs are
- * not permitted", "greater than or equal to 1"), and those are **Pydantic's own**
- * vocabulary — what the real server emits — not copy invented here. That is what makes a
- * branch red *for its own reason* rather than merely red.
+ * **status**, the **offending field**, and **which rule fired** — the last one pinned by
+ * naming the mock's own `DRAW_SETTINGS_REFUSALS` entry, so a branch reds for its own
+ * reason and not merely reds. No sentence is retyped here: re-asserting the words would
+ * be a fragile test of wording rather than a robust test of the rule, and the wording is
+ * free to change without touching a test. In particular these do NOT quote **Pydantic's**
+ * vocabulary ("Field required", "Extra inputs are not permitted", …): nothing pins the
+ * real server to those strings either, so a library bump could desynchronise the mock
+ * from production with the suite still green.
  *
  * The ACCEPT cases are not padding. A mirror mutated to refuse everything satisfies every
  * refusal case above and would ship a boundary that rejects valid events; the same shape
@@ -209,8 +212,9 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     return { status: res.status, body: await res.json() }
   }
 
-  /** The refusal, checked the robust way: a 422 that names the field the director must
-   * fix, and the fragment identifying which of the union's rules fired. */
+  /** The refusal, checked the robust way: a 422 whose detail names the field the director
+   * must fix, and IS the refusal for the rule that should have fired — identified by the
+   * constant, so the assertion survives any rewording of it. */
   function expectRefusal(
     result: { status: number; body: unknown },
     rule: string,
@@ -218,7 +222,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     expect(result.status).toBe(422)
     const { detail } = result.body as { detail: string }
     expect(detail).toContain('qualifiers_per_pool')
-    expect(detail).toContain(rule)
+    expect(detail).toBe(rule)
   }
 
   // ----- the rr-then-ko arm: required, and ge=1 ------------------------------
@@ -226,19 +230,21 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     it('is refused with NO qualifier count — the arm requires one, with no default', async () => {
       // There is no defensible number to assume ("2" is a convention, not a fact about
       // the event), so the server refuses rather than cutting a draw for a K nobody chose.
-      expectRefusal(await createEvent({ draw_type: 'rr-then-ko' }), 'Field required')
-      expectRefusal(await patchEvent({ draw_type: 'rr-then-ko' }), 'Field required')
+      const rule = DRAW_SETTINGS_REFUSALS.countRequired
+      expectRefusal(await createEvent({ draw_type: 'rr-then-ko' }), rule)
+      expectRefusal(await patchEvent({ draw_type: 'rr-then-ko' }), rule)
     })
 
     it.each([0, -1])('is refused with a count of %i — K >= 1', async (bad) => {
       // Zero advances nobody into the knockout stage; a negative count is not a count.
+      const rule = DRAW_SETTINGS_REFUSALS.countTooSmall
       expectRefusal(
         await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
-        'greater than or equal to 1',
+        rule,
       )
       expectRefusal(
         await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
-        'greater than or equal to 1',
+        rule,
       )
     })
 
@@ -272,13 +278,14 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
         // ⚠️ NOT a value silently dropped: the settings table's CHECK says NULL for every
         // draw type but rr-then-ko, and a director naming a count for a format with no
         // knockout stage has misunderstood something worth being told about.
+        const rule = DRAW_SETTINGS_REFUSALS.countForbidden(drawType)
         expectRefusal(
           await createEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
-          'Extra inputs are not permitted',
+          rule,
         )
         expectRefusal(
           await patchEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
-          'Extra inputs are not permitted',
+          rule,
         )
       },
     )
@@ -311,7 +318,10 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     // boundary and after the request has been accepted — so the server refuses it at the
     // edge (`_parse_draw_settings`). The editor always sends both: it PATCHes the whole
     // form it rendered.
-    expectRefusal(await patchEvent({ qualifiers_per_pool: 2 }), 'send draw_type alongside it')
+    expectRefusal(
+      await patchEvent({ qualifiers_per_pool: 2 }),
+      DRAW_SETTINGS_REFUSALS.countUnpaired,
+    )
   })
 
   // ✅ ACCEPT — the discriminating twin of the case above. A patch that touches neither

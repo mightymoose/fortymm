@@ -958,6 +958,45 @@ function detail(message: string, status = 422) {
   return HttpResponse.json({ detail: message }, { status })
 }
 
+/**
+ * Why a **draw configuration** is refused (ADR 20260727) — the mock's own sentences for
+ * the server's own rules.
+ *
+ * The RULES are mirrored exactly, and must be: a mock more permissive than the server is
+ * how a client ships a body the API 422s (it already happened on this arc). The WORDS are
+ * not. The server renders these three through pydantic — `Field required`,
+ * `Input should be greater than or equal to 1`, `Extra inputs are not permitted`, joined
+ * `loc: msg` — and reproducing a library's prose here pins nothing: no test, on either
+ * side, holds pydantic to those strings, so a minor bump would silently desynchronise
+ * `npm run dev` and vitest from production with everything still green.
+ *
+ * So these are authored, in the app's voice, and each names `qualifiers_per_pool` — the
+ * field the director has to fix, which is the part that IS load-bearing. Tests pin the
+ * rule that fired by referring to the constant, never by retyping a sentence.
+ *
+ * `countUnpaired` is the exception, verbatim on purpose: that one is a **human-written**
+ * sentence in `_parse_draw_settings` (`api/app/schemas/tournament.py`), not a library's.
+ */
+export const DRAW_SETTINGS_REFUSALS = {
+  /** `rr-then-ko` requires a count, and has no default to fall back on. */
+  countRequired:
+    'An “rr-then-ko” event needs a qualifiers_per_pool: how many of each pool’s ' +
+    'finishers advance into the knockout stage. There is no default — name a count.',
+  /** `K ≥ 1`, and a whole number of players. */
+  countTooSmall:
+    'qualifiers_per_pool must be a whole number of 1 or more: a knockout stage ' +
+    'nobody qualifies for is not a stage.',
+  /** The two count-less arms declare no such field, so the key is refused outright —
+   * never silently dropped on the way to a column whose `CHECK` says `NULL`. */
+  countForbidden: (drawType: string) =>
+    `A “${drawType}” draw has no knockout stage to qualify for, so it takes no ` +
+    'qualifiers_per_pool. Remove the count.',
+  /** A count arriving with no `draw_type` beside it — the server's own words. */
+  countUnpaired:
+    'qualifiers_per_pool is part of an event’s draw configuration and is patched ' +
+    'with it: send draw_type alongside it.',
+} as const
+
 /** Mirror the server's event-body constraints (ADR-0935) so an invalid event is
  * a 422 the editor surfaces inline, not a value the store silently accepts:
  *   • name — required, at most 255 chars.
@@ -993,33 +1032,23 @@ function validateEventBody(
   // sent `qualifiers_per_pool: null` on a round-robin event, or a bare `rr-then-ko` with
   // no count, would look perfectly healthy in `npm run dev` and in vitest, and 422 in
   // production. (The store below then keeps whatever survives this — see `createEvent`.)
+  // The rules are the server's; the sentences are ours — see `DRAW_SETTINGS_REFUSALS`.
   if (body.draw_type !== undefined && body.draw_type !== null) {
     if (body.draw_type === 'rr-then-ko') {
       if (body.qualifiers_per_pool === undefined || body.qualifiers_per_pool === null) {
-        return detail(
-          '“rr-then-ko” draw settings: qualifiers_per_pool: Field required.',
-          422,
-        )
+        return detail(DRAW_SETTINGS_REFUSALS.countRequired, 422)
       }
       if (
         !Number.isInteger(body.qualifiers_per_pool) ||
         body.qualifiers_per_pool < 1
       ) {
-        return detail(
-          '“rr-then-ko” draw settings: qualifiers_per_pool: Input should be greater ' +
-            'than or equal to 1.',
-          422,
-        )
+        return detail(DRAW_SETTINGS_REFUSALS.countTooSmall, 422)
       }
     } else if (
       body.qualifiers_per_pool !== undefined &&
       body.qualifiers_per_pool !== null
     ) {
-      return detail(
-        `“${body.draw_type}” draw settings: qualifiers_per_pool: Extra inputs are ` +
-          'not permitted.',
-        422,
-      )
+      return detail(DRAW_SETTINGS_REFUSALS.countForbidden(body.draw_type), 422)
     }
   } else if (
     body.qualifiers_per_pool !== undefined &&
@@ -1028,11 +1057,7 @@ function validateEventBody(
     // A count with no draw type beside it: judging it would mean reading the event's
     // STORED draw type, two layers past the boundary. The server refuses it there
     // (`_parse_draw_settings`) and so does this.
-    return detail(
-      'qualifiers_per_pool is part of an event’s draw configuration and is patched ' +
-        'with it: send draw_type alongside it.',
-      422,
-    )
+    return detail(DRAW_SETTINGS_REFUSALS.countUnpaired, 422)
   }
   if (body.max_players !== undefined && body.max_players !== null) {
     if (!Number.isInteger(body.max_players) || body.max_players <= 0) {
