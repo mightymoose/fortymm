@@ -1,5 +1,6 @@
 import { Locator, Page } from '@playwright/test'
 
+import { EventEditorPage } from './tournament-detail-page/event-editor.page'
 import { ScheduleTabPage } from './tournament-detail-page/schedule-tab.page'
 
 /**
@@ -98,6 +99,25 @@ export class TournamentDetailPage {
     return this.page.getByTestId('lifecycle-notice')
   }
 
+  // ----- events (Events tab) ------------------------------------------------
+
+  /** **New event** — opens the editor sheet on a blank draft. Owner-only. */
+  get newEventButton(): Locator {
+    return this.page.getByRole('button', { name: 'New event' })
+  }
+
+  /** Open the event editor on a new draft and return its page object (the
+   * child-composition variant, like `openSchedule`). A tournament with no events yet
+   * offers the invitation from its empty state instead of the section header, so both
+   * controls are accepted — they are one act. */
+  async openNewEvent(): Promise<EventEditorPage> {
+    await this.newEventButton
+      .or(this.page.getByRole('button', { name: 'Add an event' }))
+      .first()
+      .click()
+    return new EventEditorPage(this.page)
+  }
+
   // ----- entry (event card) -------------------------------------------------
 
   /** The self-registration **Enter** button on an event's card, by event name. */
@@ -136,6 +156,42 @@ export class TournamentDetailPage {
   /** A materialized fixture's live match status ("In progress" → "Completed"). */
   fixtureMatchStatus(eventId: string): Locator {
     return this.drawPanel(eventId).getByTestId('fixture-match-status')
+  }
+
+  /** **Every pool section** of a cut draw, so a spec can count them. Addressed by the
+   * testid *pattern* rather than by pool id on purpose: the rr-then-ko spec authors its
+   * pools in the browser, where the ids are minted client-side and never handed back to
+   * the test. What the test knows — and what the format is about — is how MANY pools
+   * the draw was dealt across. */
+  poolDraws(eventId: string): Locator {
+    return this.drawPanel(eventId).getByTestId(/^pool-draw-/)
+  }
+
+  /** One pool section of a cut draw, by the pool's displayed name ("Pool A"). */
+  poolDrawNamed(eventId: string, poolName: string): Locator {
+    return this.poolDraws(eventId).filter({
+      has: this.page.getByRole('heading', { name: poolName, level: 4 }),
+    })
+  }
+
+  /** The **knockout bracket** — the fixtures belonging to no pool, rendered as
+   * rounds-as-columns.
+   *
+   * For an `rr-then-ko` draw this must be present the moment the draw is cut, with its
+   * sides still unknown: both stages are cut in one stroke (ADR 20260727), because an
+   * `advance()` can only ever FILL a side of an existing fixture and so could never
+   * bring a bracket into being later. Pools without this is not a selector problem — it
+   * is the second stage genuinely missing. */
+  bracket(eventId: string): Locator {
+    return this.drawPanel(eventId).getByTestId('draw-unpooled')
+  }
+
+  /** One round-column of the bracket. Its fixtures are `<li>`s, so a spec counts them
+   * with `getByRole('listitem')`; the highest round that exists is the final, which is
+   * how a spec pins the bracket's SIZE (three rounds = eight slots = the smallest power
+   * of two that holds `P × K` qualifiers). */
+  bracketRound(eventId: string, round: number): Locator {
+    return this.bracket(eventId).getByTestId(`bracket-round-${round}`)
   }
 
   // ----- standings (event card) ---------------------------------------------

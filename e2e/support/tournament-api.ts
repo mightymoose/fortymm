@@ -1,5 +1,5 @@
 import type { APIResponse } from '@playwright/test'
-import type { Guest } from './match-api'
+import { findUserId, mintGuest, type Guest } from './match-api'
 
 // Composed-stack API helpers for provisioning the **inert scaffolding** of a
 // tournament directly against the real API (through nginx at `/api`), so a spec
@@ -126,6 +126,61 @@ export interface SeededTournament {
 }
 
 /**
+ * Create a **draft** tournament and nothing else — no events.
+ *
+ * The empty shell is a first-class seed, not half of `seedTournament`: an event is the
+ * subject of some specs rather than their scaffolding. `tournament-rr-then-ko.spec.ts`
+ * authors its event through the **event editor in the browser**, because the payload
+ * that editor builds — specifically whether it carries `qualifiers_per_pool` — is the
+ * exact seam the arc's 422 lived in, and an event seeded here by hand-written JSON
+ * would prove only that the *server* accepts the field.
+ *
+ * The table catalogue is still seeded (a pool references its tables by id, and the
+ * browser has no way to invent one), as is the venue — see `SeedTournamentOptions` for
+ * what `address: null` means.
+ */
+export async function createTournament(
+  director: Guest,
+  name: string,
+  options: SeedTournamentOptions = {},
+): Promise<string> {
+  const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
+  // `??` would be wrong here: `null` is a MEANINGFUL value for this option ("no
+  // venue"), and `null ?? default` would silently give it a venue. Only an
+  // *omitted* option falls back to the default address.
+  const address =
+    options.address === undefined
+      ? {
+          venue: 'Test Arena',
+          street: '1 Test Way',
+          city: 'Testville',
+          region: 'TS',
+          postal: '00000',
+          country: 'Testland',
+        }
+      : options.address
+
+  const res = await director.ctx.post(`${API}/tournaments`, {
+    headers: { [CSRF_HEADER]: director.csrf },
+    data: {
+      name,
+      // No venue = the `address` key is simply absent from the payload. Sending
+      // it as `null` would work too (both mean "no venue" on create), but the
+      // absent key is the shape a non-browser caller produces, and keeping the
+      // two routes distinct is deliberate: the browser's explicit `null` is
+      // covered through the UI in `tournament-no-venue.spec.ts`.
+      ...(address === null ? {} : { address }),
+      // A pool references these tables by id, so the catalogue must carry them.
+      table_catalogue: tables,
+    },
+  })
+  if (res.status() !== 201) {
+    throw new Error(`create tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  return ((await res.json()) as { id: string }).id
+}
+
+/**
  * Create a **draft** tournament with one singles, **round-robin**, **unrated**,
  * best-of-1 event, drawn across a single pool that holds one table — the minimal
  * shape that can go live and produce a champion.
@@ -147,41 +202,13 @@ export async function seedTournament(
 ): Promise<SeededTournament> {
   const slot = options.slot ?? { date: '2026-08-01', start: '09:00', end: '17:00' }
   const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
-  // `??` would be wrong here: `null` is a MEANINGFUL value for this option ("no
-  // venue"), and `null ?? default` would silently give it a venue. Only an
-  // *omitted* option falls back to the default address.
-  const address =
-    options.address === undefined
-      ? {
-          venue: 'Test Arena',
-          street: '1 Test Way',
-          city: 'Testville',
-          region: 'TS',
-          postal: '00000',
-          country: 'Testland',
-        }
-      : options.address
-
-  const tournamentRes = await director.ctx.post(`${API}/tournaments`, {
-    headers: { [CSRF_HEADER]: director.csrf },
-    data: {
-      name,
-      // No venue = the `address` key is simply absent from the payload. Sending
-      // it as `null` would work too (both mean "no venue" on create), but the
-      // absent key is the shape a non-browser caller produces, and keeping the
-      // two routes distinct is deliberate: the browser's explicit `null` is
-      // covered through the UI in `tournament-no-venue.spec.ts`.
-      ...(address === null ? {} : { address }),
-      // The pool references these tables by id, so the catalogue must carry them.
-      table_catalogue: tables,
-    },
+  // Resolve the catalogue HERE and pass it down, rather than letting
+  // `createTournament` default it again: the pool below references these tables
+  // by id, so the two must be the same list by construction.
+  const tournamentId = await createTournament(director, name, {
+    ...options,
+    tables,
   })
-  if (tournamentRes.status() !== 201) {
-    throw new Error(
-      `create tournament failed: ${tournamentRes.status()} ${await tournamentRes.text()}`,
-    )
-  }
-  const tournamentId = ((await tournamentRes.json()) as { id: string }).id
 
   const eventRes = await director.ctx.post(
     `${API}/tournaments/${tournamentId}/events`,
@@ -254,6 +281,93 @@ export async function enterPlayer(
       `director-entry failed: ${res.status()} ${await res.text()}`,
     )
   }
+}
+
+/** The slice of an event the rr-then-ko spec reads back off the tournament detail:
+ * its id, and the **draw configuration as the server stored it**.
+ *
+ * `draw_type` and `qualifiers_per_pool` are one fact in two columns (ADR 20260727), so
+ * they are read as a pair. Reading them back is what turns "the create request did not
+ * 422" into "the server holds the configuration the director typed" — a 201 alone would
+ * also be returned by a server that had quietly dropped K. */
+export interface EventDrawConfig {
+  readonly id: string
+  readonly name: string
+  readonly draw_type: string
+  /** **K**. `null` for every draw type that has no knockout stage to qualify for. */
+  readonly qualifiers_per_pool: number | null
+  /** The server's own count of active entries. Read here rather than counted off the
+   * roster on screen, which **truncates** at eight chips and a `+N more` line: a spec
+   * counting list items there would be counting the truncation, and at nine entrants
+   * the two numbers happen to coincide — a green assertion measuring the wrong thing. */
+  readonly entered: number
+}
+
+/**
+ * Find an event of `tournamentId` **by name** and return its id and draw configuration.
+ *
+ * By name because the spec that needs this created the event *in the browser* — the id
+ * was minted server-side and never crossed back through anything the test can see. The
+ * name is the one handle the test authored itself.
+ *
+ * Throws when no event matches, which is the honest report of a create that silently
+ * did not happen.
+ */
+export async function findEventByName(
+  viewer: Guest,
+  tournamentId: string,
+  eventName: string,
+): Promise<EventDrawConfig> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  const detail = (await res.json()) as {
+    events: ReadonlyArray<EventDrawConfig>
+  }
+  const event = detail.events.find((e) => e.name === eventName)
+  if (!event) {
+    const names = detail.events.map((e) => e.name).join(', ') || '(none)'
+    throw new Error(
+      `no event named "${eventName}" on tournament ${tournamentId} — has: ${names}`,
+    )
+  }
+  return event
+}
+
+/**
+ * Mint `count` fresh guests and **director-enter** every one of them into the event,
+ * returning them so the spec can name them (and dispose their contexts).
+ *
+ * The fleet exists because some draw shapes only appear at scale: three pools with three
+ * players each is nine entrants, and nine self-registrations through the browser would
+ * be nine sign-ins to run a test whose subject is the *draw*, not registration. Each
+ * guest is minted the same way `mintGuest` mints one — `GET /v1/session` into its own
+ * cookie jar — and entered by the director (`enterPlayer`), the seam that has no web UI.
+ *
+ * Sequential on purpose: entries land in registration order, which is the order the
+ * draw deals from (ADR-0786), so a serial loop makes the seeded field deterministic
+ * rather than dependent on how nine parallel POSTs happened to interleave.
+ *
+ * Requires the tournament to be **published** — `enterPlayer` says why.
+ */
+export async function seedEntrants(
+  director: Guest,
+  baseURL: string,
+  tournamentId: string,
+  eventId: string,
+  count: number,
+): Promise<Guest[]> {
+  const entrants: Guest[] = []
+  for (let i = 0; i < count; i += 1) {
+    const guest = await mintGuest(baseURL)
+    // Ephemeral guests are searchable, so the typeahead is how one user's id is
+    // resolved from another's session — the same route the opponent picker takes.
+    const userId = await findUserId(director, guest.username)
+    await enterPlayer(director, tournamentId, eventId, userId)
+    entrants.push(guest)
+  }
+  return entrants
 }
 
 /**
