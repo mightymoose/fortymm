@@ -10,6 +10,7 @@ import { buildConnectedStatus } from './claude-access-view/status-row.factory'
 const NOT_READY: [string, ClaudeAccessStatus][] = [
   ['a player with no email', { kind: 'guest' }],
   ['a player whose club is not switched on', { kind: 'gated' }],
+  ['a player who switched agent access off', { kind: 'revoked' }],
   ['a player who has already connected', buildConnectedStatus()],
   ['a deployment with no connector to paste', { kind: 'unavailable' }],
 ]
@@ -65,6 +66,24 @@ describe('ClaudeAccessView', () => {
     expect(
       claudeAccessViewPage.setup.getCopyValue('Connector URL'),
     ).toHaveTextContent('https://fortymm.test/mcp/')
+  })
+
+  it('gives a revoked player the way back instead of the setup steps', async () => {
+    claudeAccessViewPage.render({
+      view: buildClaudeAccessView({
+        status: { kind: 'revoked' },
+        // A configured deployment, so the panel's absence is about the player's
+        // state and not about having nothing to paste.
+        connector: buildClaudeConnector(),
+      }),
+    })
+
+    await claudeAccessViewPage.findStatus()
+
+    // Both halves matter: printed steps a revoked player can follow are a
+    // silent 401 they cannot diagnose, and the button is the only exit.
+    expect(claudeAccessViewPage.setup.querySetupPanel()).toBeNull()
+    expect(claudeAccessViewPage.getAllowButton()).toBeEnabled()
   })
 
   it.each(NOT_READY)(

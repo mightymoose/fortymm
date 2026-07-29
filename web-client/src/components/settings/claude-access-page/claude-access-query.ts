@@ -1,4 +1,8 @@
-import { queryOptions } from '@tanstack/react-query'
+import {
+  queryOptions,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { api, unwrap } from '@/api/client'
@@ -27,7 +31,10 @@ const connectorSchema = z.object({
  * consent screen — which is the one failure mode this page must not have.
  */
 const agentAccessSchema = z.object({
-  state: z.enum(['guest', 'gated', 'ready', 'connected']),
+  // Mirrors `AgentAccessState` in `schema.d.ts`, member for member. `revoked`
+  // is the player's own switch-off (see the disconnecting-an-agent ADR) and is
+  // distinct from `gated`, which is the operator's.
+  state: z.enum(['guest', 'gated', 'revoked', 'ready', 'connected']),
   email: z.string().nullable(),
   username: z.string(),
   connected_on: z.string().nullable(),
@@ -51,6 +58,10 @@ export type ClaudeAccessStatus =
   | { kind: 'unavailable' }
   | { kind: 'guest' }
   | { kind: 'gated' }
+  /** The player switched agent access off themselves. Carries nothing: the row
+   * is a sentence and one button, and neither needs an email — the way back is
+   * "allow", not "sign in with X". */
+  | { kind: 'revoked' }
   | { kind: 'ready'; email: string }
   /** `email` / `connectedOn` are display-ready — an em dash when the server sent
    * null, never an empty field. */
@@ -83,7 +94,10 @@ export interface ClaudeAccessView {
  *
  * 1. **No connector.** The deployment has no MCP OAuth configuration, so there
  *    is nothing for the player to paste. Reported independently of the player's
- *    own state, so it wins over all four of them.
+ *    own state, so it wins over all five of them — including `revoked`, whose
+ *    re-allow control exists to stop a player following the setup steps into a
+ *    silent 401. With no connector there are no setup steps to follow, so that
+ *    dead end cannot open and the honest report is that we have nothing to show.
  * 2. **`ready` with no email.** The server cannot produce this (a player with no
  *    email resolves to `guest`), but the ready row's whole content is *which
  *    email to sign in with* — "Use —" is a dead end, so we decline to render it.
@@ -114,6 +128,8 @@ function resolveStatus(payload: AgentAccessPayload): ClaudeAccessStatus {
       return { kind: 'guest' }
     case 'gated':
       return { kind: 'gated' }
+    case 'revoked':
+      return { kind: 'revoked' }
     case 'ready':
       return payload.email === null
         ? { kind: 'unavailable' }
@@ -156,5 +172,77 @@ export function claudeAccessQuery() {
     queryKey: claudeAccessQueryKey(),
     queryFn: fetchAgentAccess,
     select: selectClaudeAccess,
+  })
+}
+
+const allowAgentAccess = async (): Promise<AgentAccessPayload> =>
+  agentAccessSchema.parse(
+    unwrap(
+      'allow Claude to connect',
+      await api.POST('/v1/settings/agent-access/allow'),
+    ),
+  )
+
+/**
+ * `POST /v1/settings/agent-access/allow` — clear the player's own revocation.
+ *
+ * Revocation is deliberately sticky (there is no timer and no implicit clear),
+ * so this is the *only* way back: a revoked player who follows the connector
+ * setup steps again is refused by the MCP transport with a silent 401, forever.
+ * Hence the control it drives is load-bearing rather than decorative.
+ *
+ * The response is the page's whole new payload, not an acknowledgement, so the
+ * success path **writes it into the cache** instead of invalidating. Two
+ * reasons: the server has just told us the answer, so a follow-up GET is a
+ * round trip for a fact we already hold; and an invalidation would blank
+ * nothing but would let a slow refetch re-render the revoked row after the
+ * player has already been told it worked. It is parsed on the way in — a
+ * mutation response is as untrusted as any other network payload, and priming
+ * the cache with an unparsed body would smuggle past the query's own boundary.
+ */
+export function useAllowAgentAccess() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: allowAgentAccess,
+    onSuccess: (payload) => {
+      // The options object's own `queryKey`, so the write is type-checked
+      // against what the query caches (the payload, before `select`) rather
+      // than against a bare tuple.
+      queryClient.setQueryData(claudeAccessQuery().queryKey, payload)
+    },
+  })
+}
+
+const disconnectAgentAccess = async (): Promise<AgentAccessPayload> =>
+  agentAccessSchema.parse(
+    unwrap(
+      'disconnect Claude',
+      await api.POST('/v1/settings/agent-access/disconnect'),
+    ),
+  )
+
+/**
+ * `POST /v1/settings/agent-access/disconnect` — switch agent access off.
+ *
+ * The mirror image of `useAllowAgentAccess`, and the same shape for the same
+ * reasons: the endpoint answers with the page's whole new state, so the success
+ * path **parses it and writes it into the cache** rather than invalidating —
+ * no follow-up GET for a fact the server has just told us, and no window in
+ * which a slow refetch re-renders the connected card after the player has been
+ * told it is gone.
+ *
+ * What it stops is wider than its name: revocation is recorded on the *user*,
+ * so it cuts off every agent signed in with this account's email, and it holds
+ * against tokens already issued (the MCP transport re-reads the flag per
+ * request). See the disconnecting-an-agent ADR — the dialog's copy is making
+ * that promise, and this is the call that keeps it.
+ */
+export function useDisconnectAgentAccess() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: disconnectAgentAccess,
+    onSuccess: (payload) => {
+      queryClient.setQueryData(claudeAccessQuery().queryKey, payload)
+    },
   })
 }

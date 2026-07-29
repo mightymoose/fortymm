@@ -10,6 +10,7 @@ const ALL_PILLS = [
   'UNAVAILABLE',
   'EMAIL NEEDED',
   'NOT ENABLED',
+  'TURNED OFF',
   'READY TO CONNECT',
   'CONNECTED',
 ]
@@ -65,6 +66,36 @@ describe('StatusRow', () => {
     )
   })
 
+  it('offers a revoked player the one control that turns access back on', async () => {
+    statusRowPage.render({ status: { kind: 'revoked' } })
+
+    await statusRowPage.findStatus()
+
+    expectOnlyPill('TURNED OFF')
+    expect(
+      statusRowPage.queryCopy(
+        'Claude access is switched off for your account. No agent can read or change anything until you turn it back on.',
+      ),
+    ).toBeInTheDocument()
+    expect(statusRowPage.getAllowButton()).toBeEnabled()
+  })
+
+  it.each([
+    ['ready', buildReadyStatus()],
+    ['guest', { kind: 'guest' } as const],
+    ['gated', { kind: 'gated' } as const],
+    ['unavailable', { kind: 'unavailable' } as const],
+    ['connected', buildConnectedStatus()],
+  ])('offers no re-allow control in the %s state', async (_kind, status) => {
+    statusRowPage.render({ status })
+
+    await statusRowPage.findStatus()
+
+    // Only a revoked account has a revocation to clear; anywhere else the
+    // button would be a no-op the player has to reason about.
+    expect(statusRowPage.queryAllowButton()).not.toBeInTheDocument()
+  })
+
   it('says the details could not be loaded, and offers no action to take', async () => {
     statusRowPage.render({ status: { kind: 'unavailable' } })
 
@@ -100,5 +131,32 @@ describe('StatusRow', () => {
     expect(statusRowPage.getFieldValue('Connected')).toHaveTextContent(
       'May 12, 2026',
     )
+  })
+
+  it('offers a connected player the way to switch agent access off', async () => {
+    statusRowPage.render({ status: buildConnectedStatus() })
+
+    await statusRowPage.findStatus()
+
+    expect(statusRowPage.getDisconnectButton()).toBeEnabled()
+    // The press asks; it does not act. The confirmation is what disconnects.
+    expect(statusRowPage.queryDialog()).toBeNull()
+  })
+
+  it.each([
+    ['ready', buildReadyStatus()],
+    ['guest', { kind: 'guest' } as const],
+    ['gated', { kind: 'gated' } as const],
+    ['revoked', { kind: 'revoked' } as const],
+    ['unavailable', { kind: 'unavailable' } as const],
+  ])('offers no disconnect control in the %s state', async (_kind, status) => {
+    statusRowPage.render({ status })
+
+    await statusRowPage.findStatus()
+
+    // Only a connected account has a link to cut; anywhere else the button
+    // would be a destructive-looking no-op the player has to reason about —
+    // and in `revoked` it would sit next to the control that undoes it.
+    expect(statusRowPage.queryDisconnectButton()).toBeNull()
   })
 })

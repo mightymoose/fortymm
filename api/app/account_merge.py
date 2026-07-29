@@ -451,9 +451,31 @@ async def merge_user(
     # simply dropped. The ephemeral is nulled FIRST (freeing the value from the
     # unique index) so the survivor UPDATE can adopt it without the two rows
     # momentarily colliding — the constraint is checked per statement, not deferred.
-    freed = (
-        await db.execute(select(User.auth0_sub).where(User.id == from_user_id))
-    ).scalar_one_or_none()
+    #
+    # Two agent-access columns ride alongside the binding and move under their own
+    # rules; see the two blocks below (ADR "disconnecting an agent is a user-held
+    # revocation checked at the MCP transport", ## Consequences).
+    ephemeral_agent_access = (
+        (
+            await db.execute(
+                select(
+                    User.auth0_sub,
+                    User.agent_access_linked_at,
+                    User.agent_access_revoked_at,
+                ).where(User.id == from_user_id)
+            )
+        )
+        .tuples()
+        .one_or_none()
+    )
+    # A missing row leaves every branch below a no-op, as the old
+    # ``scalar_one_or_none`` read did — the caller's "``from_user_id`` exists"
+    # invariant is enforced by the tombstone UPDATE, not here.
+    freed, freed_linked_at, ephemeral_revoked_at = ephemeral_agent_access or (
+        None,
+        None,
+        None,
+    )
     if freed is not None:
         # Null the ephemeral FIRST (freeing the value from the unique index) so the
         # survivor UPDATE can adopt it without the two rows momentarily colliding —
@@ -461,13 +483,59 @@ async def merge_user(
         # ``auth0_sub IS NULL`` guard carries the "adopt only where the survivor has
         # none" rule declaratively: if the survivor already holds a binding, its
         # own link stands and the ephemeral's is simply dropped.
+        #
+        # ``agent_access_linked_at`` is a fact ABOUT THE BINDING — "when this Auth0
+        # identity became linked to this account", the settings page's "Connected
+        # <date>". So it goes exactly where the binding goes: cleared off the
+        # tombstone (which no longer holds the link the stamp describes) and, in
+        # the same guarded statement that adopts the ``sub``, carried onto the
+        # survivor. Adopting the binding without the stamp is what left a survivor
+        # reading ``connected`` with no date. When the survivor already holds its
+        # own binding the guard fails and both columns stay its own, which is right
+        # — its stamp describes the link it kept.
         await db.execute(
-            update(User).where(User.id == from_user_id).values(auth0_sub=None)
+            update(User)
+            .where(User.id == from_user_id)
+            .values(auth0_sub=None, agent_access_linked_at=None)
         )
         await db.execute(
             update(User)
             .where(User.id == to_user_id, User.auth0_sub.is_(None))
-            .values(auth0_sub=freed)
+            .values(auth0_sub=freed, agent_access_linked_at=freed_linked_at)
+        )
+
+    # ``agent_access_revoked_at`` — the player's own "I switched agent access off"
+    # — is NOT a fact about the binding, and deliberately does not ride the block
+    # above. Disconnect *clears* ``auth0_sub`` as it stamps this column
+    # (``app.agent_access.disconnect_agent_access``), so a revoked account has no
+    # binding to move: gating the carry on a moved binding would make it dead code
+    # in exactly the case it exists for. It is a per-user, sticky fact, so the
+    # merge takes the UNION of the two accounts' revocations — set on the survivor
+    # if either party had it set.
+    #
+    # Fail-closed in both directions, which is the whole point:
+    #   * ephemeral revoked, survivor not → the survivor inherits the revocation.
+    #     Without this the merge silently hands over a usable agent connection the
+    #     player had switched off: the MCP transport only refuses a *revoked* user,
+    #     and ``resolve_or_provision_user`` re-matches the freed Auth0 identity onto
+    #     the survivor by verified email the moment the next token arrives.
+    #   * survivor already revoked → the ``IS NULL`` guard makes adopting anything
+    #     (a binding, an ephemeral's later revocation stamp) unable to un-revoke it,
+    #     and leaves the survivor's own moment intact rather than rewriting it.
+    #
+    # The cost is a false positive: a guest who hit disconnect (the endpoint is
+    # open to guests, though a guest can never connect) switches off the account it
+    # merges into. That is recoverable in one click via the explicit re-allow the
+    # ADR requires, and is visible on the settings page — whereas the failure in
+    # the other direction is silent and is a re-grant of revoked access. The
+    # tombstone KEEPS its own stamp: revocation is a historical fact about that
+    # account, its session cookie still resolves to the row, and nothing in this
+    # merge is entitled to un-revoke an account.
+    if ephemeral_revoked_at is not None:
+        await db.execute(
+            update(User)
+            .where(User.id == to_user_id, User.agent_access_revoked_at.is_(None))
+            .values(agent_access_revoked_at=ephemeral_revoked_at)
         )
 
     # Tombstone: keep the row (and its session tokens) so the guest's cookie

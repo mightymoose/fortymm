@@ -17,7 +17,7 @@ class AgentAccessState(StrEnum):
     """Which panel the settings page renders — a closed set, decided on the
     server so the client never re-derives it from a handful of nullable fields.
 
-    The four members are ordered by the precedence
+    The five members are ordered by the precedence
     :func:`app.agent_access.resolve_agent_access_state` applies, which is the
     actual decision (and is tested as one). They are mutually exclusive by
     construction: exactly one is returned.
@@ -33,6 +33,13 @@ class AgentAccessState(StrEnum):
     #: the page offers to request it rather than showing setup steps that would
     #: end in a 401.
     GATED = "gated"
+
+    #: The player has switched agent access off themselves
+    #: (``users.agent_access_revoked_at``). Distinct from ``ready`` on purpose:
+    #: revocation is sticky, so a revoked account that is shown the bare setup
+    #: panel would follow the steps and hit a silent 401 forever. This state is
+    #: what lets the page offer the re-allow control instead of a dead end.
+    REVOKED = "revoked"
 
     #: Permitted, with no Auth0 identity bound yet — show the setup steps.
     READY = "ready"
@@ -84,5 +91,5 @@ class AgentAccessResponse(BaseModel):
     #: The connector pair, or ``None`` when this deployment has no MCP OAuth
     #: configuration. **Independent of ``state``**: it reports what the *server*
     #: is configured with, not what the player has done, so it populates
-    #: identically in all four states.
+    #: identically in every state.
     connector: AgentAccessConnector | None

@@ -1,8 +1,10 @@
 import { useId } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Lock, Mail, TriangleAlert } from 'lucide-react'
+import { Lock, Mail, PowerOff, TriangleAlert } from 'lucide-react'
 
 import type { ClaudeAccessStatus } from '../claude-access-query'
+import { AllowAccessButton } from './status-row/allow-access-button'
+import { DisconnectButton } from './status-row/disconnect-button'
 
 export interface StatusRowProps {
   /** The single status this page is in — resolved on the way out of the query,
@@ -44,7 +46,7 @@ export function StatusRow({ status }: StatusRowProps) {
   )
 }
 
-/** The four non-connected states, which share one compact row. */
+/** The five non-connected states, which share one compact row. */
 function CompactRow({
   status,
 }: {
@@ -84,6 +86,13 @@ function rowPill(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {
           NOT ENABLED
         </span>
       )
+    case 'revoked':
+      return (
+        <span className="fmm-claude__pill fmm-claude__pill--off">
+          <PowerOff aria-hidden="true" size={13} strokeWidth={2.5} />
+          TURNED OFF
+        </span>
+      )
     case 'ready':
       return (
         <span className="fmm-claude__pill fmm-claude__pill--ready">
@@ -102,6 +111,10 @@ function rowCopy(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {
       return 'Claude signs in by email. Add one to your account first.'
     case 'gated':
       return "We're switching Claude access on club by club. Requests are declined until yours is on."
+    case 'revoked':
+      // Says "no agent", not "Claude", because the revocation is per-account:
+      // it stops everything signed in with this email at once.
+      return 'Claude access is switched off for your account. No agent can read or change anything until you turn it back on.'
     case 'ready':
       return (
         <>
@@ -129,6 +142,11 @@ function rowAction(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {
           Ask for access
         </a>
       )
+    case 'revoked':
+      // The one action on this page that is not a link: revocation is sticky,
+      // so nothing but this button clears it, and without it the row would be
+      // a dead end that quietly 401s every agent request for ever.
+      return <AllowAccessButton />
     // "Reload the page" is the whole instruction for `unavailable`, and the
     // browser already has that control; `ready` is answered by the setup panel
     // below it, not by a row action.
@@ -142,8 +160,8 @@ function rowAction(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {
  * a player has to be able to check — *which* account an agent signed in as, and
  * when the link was made — and a row has no room for a labelled pair.
  *
- * The Disconnect button belongs here, to the right of the pill. It is not built
- * yet; the layout leaves the space.
+ * The Disconnect button sits in the card head, after the pill and its line of
+ * copy: the state, then what it means, then the one thing to do about it.
  */
 function ConnectedCard({
   email,
@@ -160,6 +178,7 @@ function ConnectedCard({
           CONNECTED
         </span>
         <p className="fmm-claude__card-copy">Claude can act on your account</p>
+        <DisconnectButton />
       </div>
       <dl className="fmm-claude__fields">
         <dt className="fmm-claude__field-label">Signed in as</dt>

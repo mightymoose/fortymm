@@ -2,6 +2,8 @@ import { screen, within, type Container } from '@/test/utilities'
 import { renderWithRoutes } from '@/test/router'
 import { StatusRow, type StatusRowProps } from './status-row'
 import { buildStatusRowProps } from './status-row.factory'
+import { allowAccessButtonPage } from './status-row/allow-access-button.page'
+import { disconnectButtonPage } from './status-row/disconnect-button.page'
 
 const scoped = (container: Container) => ({
   /** The status region — present in every state. */
@@ -43,6 +45,14 @@ const scoped = (container: Container) => ({
     if (!value) throw new Error(`No value follows the "${label}" label.`)
     return value
   },
+  // Spread, not namespaced: the re-allow button IS this row's action in the
+  // revoked state, so it reads naturally as one of the row's own queries — and
+  // its accessor names (`…AllowButton`, `…AllowNote`) collide with nothing here.
+  ...allowAccessButtonPage.within(container),
+  // The same for the connected card's action, whose dialog is portalled out of
+  // the row — so these resolve against `screen`, which is what every
+  // composition of this object passes.
+  ...disconnectButtonPage.within(container),
 })
 
 /**
@@ -56,6 +66,16 @@ export const statusRowPage = {
     const props = buildStatusRowProps(overrides)
     renderWithRoutes(<StatusRow {...props} />, { linkTargets: ['/settings'] })
   },
+
+  /** Override `POST /v1/settings/agent-access/allow` — the revoked row's write. */
+  mockAllowEndpoint: allowAccessButtonPage.mockEndpoint,
+
+  /** Press the revoked row's "Allow Claude to connect". */
+  clickAllow: allowAccessButtonPage.clickAllow,
+
+  /** Override `POST /v1/settings/agent-access/disconnect` — the connected
+   * card's write. */
+  mockDisconnectEndpoint: disconnectButtonPage.mockEndpoint,
 
   within(container: Container = screen) {
     return scoped(container)

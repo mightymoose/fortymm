@@ -62,8 +62,9 @@ async def resolve_or_provision_user(
     2. **Verified email present** (``email`` truthy and ``email_verified`` is
        ``True``):
        - an existing live account holds that email (case-insensitive) → bind
-         ``auth0_sub`` to it and return it (**match**) — unless it already holds
-         a *different* ``auth0_sub``, in which case return ``None`` (see below);
+         ``auth0_sub`` to it and return it (**match**) — unless that account has
+         *revoked* agent access, or it already holds a *different* ``auth0_sub``,
+         in which case return ``None`` (see below);
        - no account holds it → create a registered account (coolname username,
          email set, ``confirmed_at`` stamped, ``auth0_sub`` bound, default role +
          default league) and return it (**provision**).
@@ -93,6 +94,18 @@ async def resolve_or_provision_user(
     email = email.lower()
     matched = await _resolve_live_user_by_email(db, email)
     if matched is not None:
+        if matched.agent_access_revoked_at is not None:
+            # The player switched agent access off. Matching must not bind here,
+            # or a disconnected account would silently re-acquire an
+            # ``auth0_sub`` on the agent's very next request and the database
+            # would claim "linked" about an account the player turned off (ADR
+            # ``20260728-disconnecting-an-agent-is-a-user-held-revocation-
+            # checked-at-the-mcp-transport``, decision #3). Refusing *here*
+            # rather than falling through is deliberate: provisioning a second
+            # account on the same email would split the player's identity in
+            # two, which is worse than the bind we are refusing. Only an
+            # explicit re-allow (clearing the stamp) lets the email match again.
+            return None
         if matched.auth0_sub is None:
             matched.auth0_sub = sub
             # Stamp *when* the identity bound, for "Connected <date>". This is a

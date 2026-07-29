@@ -81,7 +81,11 @@ const TROUBLESHOOTING: DetailAccordionItem[] = [
  * The setup panel sits between the summary and the accordions, and appears in
  * exactly one state: `ready`. A connected player is past it, a guest and a
  * gated player cannot act on it, and `unavailable` has nothing to put in its
- * fields. The connector null-check is the *parent's* here — `ready` already
+ * fields. **A `revoked` player is the case that matters most**: the steps would
+ * work exactly as printed and still leave every agent request 401ing, because
+ * the transport refuses a revoked account whatever it pastes — so the panel is
+ * withheld and the row's "Allow Claude to connect" is the only thing on offer.
+ * The connector null-check is the *parent's* here — `ready` already
  * implies a connector (`resolveStatus` collapses the other way round), so this
  * is belt-and-braces against a panel with an empty field to copy, which is the
  * one thing it must never render.

@@ -7,6 +7,8 @@ import {
 import { server } from '@/mocks/server'
 import { ClaudeAccessPage } from './claude-access-page'
 import { claudeAccessViewPage } from './claude-access-page/claude-access-view.page'
+import { allowAccessButtonPage } from './claude-access-page/claude-access-view/status-row/allow-access-button.page'
+import { disconnectButtonPage } from './claude-access-page/claude-access-view/status-row/disconnect-button.page'
 
 const scoped = (container: Container) => ({
   /** The page's H1. */
@@ -34,6 +36,16 @@ export const claudeAccessPagePage = {
   mockEndpoint(resolver: AgentAccessResolver) {
     mockAgentAccessEndpoint(server, resolver)
   },
+
+  /** Override `POST /v1/settings/agent-access/allow` — the revoked row's write. */
+  mockAllowEndpoint: allowAccessButtonPage.mockEndpoint,
+
+  /** Press "Allow Claude to connect" on the revoked row. */
+  clickAllow: allowAccessButtonPage.clickAllow,
+
+  /** Override `POST /v1/settings/agent-access/disconnect` — the connected
+   * card's write. */
+  mockDisconnectEndpoint: disconnectButtonPage.mockEndpoint,
 
   render() {
     renderWithRoutes(<ClaudeAccessPage />, { linkTargets: ['/settings'] })

@@ -39,6 +39,19 @@ class User(Base):
     agent_access_linked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the *player* switched agent access off. This is the user's own
+    # revocation — distinct from the operator's RBAC ``mcp.access`` grant and
+    # from the ``auth0_sub`` binding; both of those can be present while this is
+    # set, and a set value wins. It is enforced at the MCP transport
+    # (``app.mcp_server.FortymmAuth0TokenVerifier.verify_token``), *after* the
+    # token resolves to a user, so it defeats an already-issued, still-valid
+    # Auth0 JWT: re-binding the ``sub`` does not help a caller whose user is
+    # revoked. Sticky — there is no timer and no implicit clear; only an
+    # explicit re-allow sets it back to NULL. See ADR ``20260728-disconnecting-
+    # an-agent-is-a-user-held-revocation-checked-at-the-mcp-transport``.
+    agent_access_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

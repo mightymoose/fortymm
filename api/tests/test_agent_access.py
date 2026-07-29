@@ -1,10 +1,15 @@
-"""``GET /v1/settings/agent-access`` — the Claude-access settings page's one read.
+"""The Claude-access settings page's one read and its two write actions.
 
-The endpoint's whole job is a **decision**: collapse "has an email", "holds
-``mcp.access``" and "has an Auth0 identity bound" into one of four panels. So the
-precedence between them is what is tested here, both as a pure function and
-through the wire, with the pair that used to be ambiguous — no email AND no
-permission — pinned explicitly.
+The read's whole job is a **decision**: collapse "has an email", "holds
+``mcp.access``", "has revoked their own access" and "has an Auth0 identity
+bound" into one of five panels. So the precedence between them is what is tested
+here, both as a pure function and through the wire, with the pairs that are real
+orderings rather than fallthroughs — no email AND no permission; revoked AND
+still bound — pinned explicitly.
+
+The two actions are tested as the round trip the ADR describes (disconnect →
+re-allow), for their effect on the persisted flag the MCP transport reads, and
+for idempotence in both directions.
 """
 
 from dataclasses import dataclass
@@ -24,6 +29,10 @@ CONNECTOR_URL = "https://uat.fortymm.com/api/mcp/"
 CONNECTOR_CLIENT_ID = "client-abc"
 
 LINKED_AT = datetime(2026, 7, 20, 15, 30, tzinfo=UTC)
+REVOKED_AT = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)
+
+DISCONNECT_URL = "/v1/settings/agent-access/disconnect"
+ALLOW_URL = "/v1/settings/agent-access/allow"
 
 
 def _configure_connector(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,6 +53,7 @@ async def _sign_in_as(
     grant_mcp_access: bool = False,
     auth0_sub: str | None = None,
     linked_at: datetime | None = None,
+    revoked_at: datetime | None = None,
 ) -> User:
     """Mint a session and put its user in the requested state.
 
@@ -56,6 +66,7 @@ async def _sign_in_as(
     user.email = email
     user.auth0_sub = auth0_sub
     user.agent_access_linked_at = linked_at
+    user.agent_access_revoked_at = revoked_at
     await db_session.commit()
     if grant_mcp_access:
         await grant_permissions(db_session, user, [MCP_ACCESS_PERMISSION])
@@ -70,13 +81,19 @@ class _StateSetup:
     grant_mcp_access: bool = False
     auth0_sub: str | None = None
     linked_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
-#: The four states, and the account that lands in each. Reused by the connector
+#: Every state, and the account that lands in each. Reused by the connector
 #: tests below, which must hold in *every* state.
 STATE_SETUPS: dict[AgentAccessState, _StateSetup] = {
     AgentAccessState.GUEST: _StateSetup(),
     AgentAccessState.GATED: _StateSetup(email="gated@example.com"),
+    AgentAccessState.REVOKED: _StateSetup(
+        email="switched-off@example.com",
+        grant_mcp_access=True,
+        revoked_at=REVOKED_AT,
+    ),
     AgentAccessState.READY: _StateSetup(
         email="ready@example.com", grant_mcp_access=True
     ),
@@ -89,6 +106,12 @@ STATE_SETUPS: dict[AgentAccessState, _StateSetup] = {
 }
 
 
+def test_every_state_has_a_setup() -> None:
+    """``STATE_SETUPS`` drives the parametrised connector tests, so a new member
+    that nobody added a setup for would silently go uncovered there."""
+    assert set(STATE_SETUPS) == set(AgentAccessState)
+
+
 async def _sign_in_for(
     api_client: AsyncClient, db_session: AsyncSession, setup: _StateSetup
 ) -> User:
@@ -99,6 +122,7 @@ async def _sign_in_for(
         grant_mcp_access=setup.grant_mcp_access,
         auth0_sub=setup.auth0_sub,
         linked_at=setup.linked_at,
+        revoked_at=setup.revoked_at,
     )
 
 
@@ -108,24 +132,35 @@ async def _sign_in_for(
 
 
 @pytest.mark.parametrize(
-    "email, has_mcp_access, linked_sub, expected",
+    "email, has_mcp_access, revoked_at, linked_sub, expected",
     [
-        (None, True, None, AgentAccessState.GUEST),
-        ("player@example.com", False, None, AgentAccessState.GATED),
-        ("player@example.com", True, None, AgentAccessState.READY),
-        ("player@example.com", True, "auth0|abc", AgentAccessState.CONNECTED),
+        (None, True, None, None, AgentAccessState.GUEST),
+        ("player@example.com", False, None, None, AgentAccessState.GATED),
+        ("player@example.com", True, REVOKED_AT, None, AgentAccessState.REVOKED),
+        ("player@example.com", True, None, None, AgentAccessState.READY),
+        ("player@example.com", True, None, "auth0|abc", AgentAccessState.CONNECTED),
     ],
-    ids=["no-email", "no-permission", "permitted-unbound", "permitted-bound"],
+    ids=[
+        "no-email",
+        "no-permission",
+        "self-revoked",
+        "permitted-unbound",
+        "permitted-bound",
+    ],
 )
-def test_state_resolves_from_the_three_facts(
+def test_state_resolves_from_the_four_facts(
     email: str | None,
     has_mcp_access: bool,
+    revoked_at: datetime | None,
     linked_sub: str | None,
     expected: AgentAccessState,
 ) -> None:
     assert (
         resolve_agent_access_state(
-            email=email, has_mcp_access=has_mcp_access, linked_sub=linked_sub
+            email=email,
+            has_mcp_access=has_mcp_access,
+            revoked_at=revoked_at,
+            linked_sub=linked_sub,
         )
         is expected
     )
@@ -146,9 +181,63 @@ def test_no_email_beats_no_permission(linked_sub: str | None) -> None:
     """
     assert (
         resolve_agent_access_state(
-            email=None, has_mcp_access=False, linked_sub=linked_sub
+            email=None, has_mcp_access=False, revoked_at=None, linked_sub=linked_sub
         )
         is AgentAccessState.GUEST
+    )
+
+
+def test_revoked_beats_connected() -> None:
+    """The second real ordering. A revoked account can still carry a bound
+    ``auth0_sub`` — an account revoked before this feature cleared the binding,
+    or one re-bound by a path that isn't disconnect — and ``connected`` would be
+    a false claim: the transport refuses a revoked user after resolving the
+    token, so nothing that identity does works."""
+    assert (
+        resolve_agent_access_state(
+            email="player@example.com",
+            has_mcp_access=True,
+            revoked_at=REVOKED_AT,
+            linked_sub="auth0|abc",
+        )
+        is AgentAccessState.REVOKED
+    )
+
+
+def test_revoked_and_ready_do_not_collapse() -> None:
+    """The point of the state. Two accounts with no binding differ only by the
+    revocation stamp, and must not report the same panel: the revoked one needs
+    the re-allow control, and showing it the bare setup steps walks it into a
+    silent 401 with no way out."""
+    never_connected = resolve_agent_access_state(
+        email="player@example.com",
+        has_mcp_access=True,
+        revoked_at=None,
+        linked_sub=None,
+    )
+    switched_off = resolve_agent_access_state(
+        email="player@example.com",
+        has_mcp_access=True,
+        revoked_at=REVOKED_AT,
+        linked_sub=None,
+    )
+
+    assert never_connected is AgentAccessState.READY
+    assert switched_off is AgentAccessState.REVOKED
+
+
+def test_no_permission_beats_revoked() -> None:
+    """Operator revocation and player revocation are independent and both fail
+    closed, but only one panel can be shown — ``gated`` wins, because re-allowing
+    would not restore access while the grant is missing."""
+    assert (
+        resolve_agent_access_state(
+            email="player@example.com",
+            has_mcp_access=False,
+            revoked_at=REVOKED_AT,
+            linked_sub=None,
+        )
+        is AgentAccessState.GATED
     )
 
 
@@ -157,7 +246,9 @@ def test_an_empty_email_is_no_email(email: str | None) -> None:
     """``users.email`` is nullable, but an empty string is the same nothing —
     it must not resolve as an address Claude could sign in with."""
     assert (
-        resolve_agent_access_state(email=email, has_mcp_access=True, linked_sub=None)
+        resolve_agent_access_state(
+            email=email, has_mcp_access=True, revoked_at=None, linked_sub=None
+        )
         is AgentAccessState.GUEST
     )
 
@@ -283,10 +374,265 @@ async def test_a_bound_identity_without_the_grant_still_reports_gated(
     assert body["connected_on"] is None
 
 
-async def test_it_requires_a_session(api_client: AsyncClient) -> None:
-    response = await api_client.get("/v1/settings/agent-access")
+async def test_a_revoked_account_reports_revoked(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _sign_in_as(
+        api_client,
+        db_session,
+        email="switched-off@example.com",
+        grant_mcp_access=True,
+        revoked_at=REVOKED_AT,
+    )
+
+    body = (await api_client.get("/v1/settings/agent-access")).json()
+
+    assert body["state"] == "revoked"
+    assert body["email"] == "switched-off@example.com"
+    assert body["connected_on"] is None
+
+
+async def test_a_revoked_account_still_bound_reports_revoked_not_connected(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The stamp is what holds, not the binding — so a row carrying both must
+    not be reported as a working connection."""
+    await _sign_in_as(
+        api_client,
+        db_session,
+        email="switched-off@example.com",
+        grant_mcp_access=True,
+        auth0_sub="auth0|still-bound",
+        linked_at=LINKED_AT,
+        revoked_at=REVOKED_AT,
+    )
+
+    body = (await api_client.get("/v1/settings/agent-access")).json()
+
+    assert body["state"] == "revoked"
+    assert body["connected_on"] is None
+
+
+async def test_revoked_is_distinguishable_from_never_connected_over_the_wire(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """One account, read twice, with the stamp as the only difference between
+    the reads — so nothing but the revocation can account for a change in state.
+
+    If ``revoked`` collapsed into ``ready`` the client could not tell the two
+    apart, could not offer the re-allow control, and the player would dead-end.
+    """
+    user = await _sign_in_as(
+        api_client, db_session, email="player@example.com", grant_mcp_access=True
+    )
+    never_connected = (await api_client.get("/v1/settings/agent-access")).json()
+
+    user.agent_access_revoked_at = REVOKED_AT
+    await db_session.commit()
+    switched_off = (await api_client.get("/v1/settings/agent-access")).json()
+
+    assert never_connected["state"] == "ready"
+    assert switched_off["state"] == "revoked"
+
+
+@pytest.mark.parametrize(
+    "method, url",
+    [
+        ("get", "/v1/settings/agent-access"),
+        ("post", DISCONNECT_URL),
+        ("post", ALLOW_URL),
+    ],
+    ids=["read", "disconnect", "allow"],
+)
+async def test_it_requires_a_session(
+    api_client: AsyncClient, method: str, url: str
+) -> None:
+    response = await api_client.request(method, url)
 
     assert response.status_code == 401
+
+
+# --------------------------------------------------------------------------
+# Disconnect and re-allow
+# --------------------------------------------------------------------------
+
+
+async def test_disconnect_revokes_and_unbinds(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The stamp is the enforcement and the clear is the honesty — both happen.
+
+    ``agent_access_revoked_at`` is the flag the MCP transport reads, so
+    asserting it is persisted is asserting the disconnect took effect against
+    the transport (which chore 2a already proved honours it).
+    """
+    user = await _sign_in_as(
+        api_client,
+        db_session,
+        email="connected@example.com",
+        grant_mcp_access=True,
+        auth0_sub="auth0|connected",
+        linked_at=LINKED_AT,
+    )
+
+    response = await api_client.post(DISCONNECT_URL)
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "revoked"
+    await db_session.refresh(user)
+    assert user.agent_access_revoked_at is not None
+    assert user.auth0_sub is None
+
+
+async def test_disconnect_is_idempotent(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A second disconnect is not an error and is a genuine no-op — it keeps the
+    moment the player actually switched agent access off rather than rewriting
+    it to now."""
+    user = await _sign_in_as(
+        api_client,
+        db_session,
+        email="connected@example.com",
+        grant_mcp_access=True,
+        auth0_sub="auth0|connected",
+    )
+
+    first = await api_client.post(DISCONNECT_URL)
+    await db_session.refresh(user)
+    revoked_at = user.agent_access_revoked_at
+    second = await api_client.post(DISCONNECT_URL)
+    await db_session.refresh(user)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert user.agent_access_revoked_at == revoked_at
+
+
+async def test_disconnecting_a_never_connected_account_still_revokes(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """There is nothing bound to clear, but the revocation is still the player's
+    own state and must stick — otherwise the page would bounce back to
+    ``ready``."""
+    user = await _sign_in_as(
+        api_client, db_session, email="ready@example.com", grant_mcp_access=True
+    )
+
+    response = await api_client.post(DISCONNECT_URL)
+
+    assert response.json()["state"] == "revoked"
+    await db_session.refresh(user)
+    assert user.agent_access_revoked_at is not None
+
+
+async def test_allow_clears_the_revocation(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _sign_in_as(
+        api_client,
+        db_session,
+        email="switched-off@example.com",
+        grant_mcp_access=True,
+        revoked_at=REVOKED_AT,
+    )
+
+    response = await api_client.post(ALLOW_URL)
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "ready"
+    await db_session.refresh(user)
+    assert user.agent_access_revoked_at is None
+
+
+async def test_allow_does_not_reconnect_anything(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Re-allowing only lifts the block. The binding is re-made by the next
+    agent that signs in, not by this endpoint."""
+    user = await _sign_in_as(
+        api_client,
+        db_session,
+        email="switched-off@example.com",
+        grant_mcp_access=True,
+        revoked_at=REVOKED_AT,
+    )
+
+    body = (await api_client.post(ALLOW_URL)).json()
+
+    assert body["state"] == "ready"
+    assert body["connected_on"] is None
+    await db_session.refresh(user)
+    assert user.auth0_sub is None
+
+
+async def test_allow_is_idempotent(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Allowing an account that was never revoked changes nothing and is not an
+    error."""
+    user = await _sign_in_as(
+        api_client, db_session, email="ready@example.com", grant_mcp_access=True
+    )
+
+    first = await api_client.post(ALLOW_URL)
+    second = await api_client.post(ALLOW_URL)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["state"] == "ready"
+    assert second.json() == first.json()
+    await db_session.refresh(user)
+    assert user.agent_access_revoked_at is None
+
+
+async def test_the_round_trip(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """connect (implicit) → disconnect → re-allow → connectable again, as the
+    ADR describes it, through the page's own endpoints."""
+    await _sign_in_as(
+        api_client,
+        db_session,
+        email="player@example.com",
+        grant_mcp_access=True,
+        auth0_sub="auth0|player",
+        linked_at=LINKED_AT,
+    )
+
+    async def state() -> str:
+        body = (await api_client.get("/v1/settings/agent-access")).json()
+        assert isinstance(body["state"], str)
+        return body["state"]
+
+    assert await state() == "connected"
+    await api_client.post(DISCONNECT_URL)
+    assert await state() == "revoked"
+    await api_client.post(ALLOW_URL)
+    assert await state() == "ready"
+
+
+async def test_a_gated_account_can_still_disconnect(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The actions are not conditioned on the grant. A player whose ``mcp.access``
+    was pulled while an agent was linked can still switch their own access off —
+    and the page keeps reporting ``gated``, because that is the thing standing in
+    their way."""
+    user = await _sign_in_as(
+        api_client,
+        db_session,
+        email="gated@example.com",
+        auth0_sub="auth0|gated",
+    )
+
+    body = (await api_client.post(DISCONNECT_URL)).json()
+
+    assert body["state"] == "gated"
+    await db_session.refresh(user)
+    assert user.agent_access_revoked_at is not None
+    assert user.auth0_sub is None
 
 
 # --------------------------------------------------------------------------

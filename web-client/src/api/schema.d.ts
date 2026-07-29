@@ -1671,6 +1671,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/agent-access/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect Agent Access
+         * @description Switch agent access off for the calling player, and report the page's new
+         *     state.
+         *
+         *     This stops **every** agent signed in with this account's email — Claude,
+         *     Claude Code, anything else — because the binding is one Auth0 identity, not
+         *     one per connector.
+         *
+         *     It takes effect against tokens that have already been issued and are still
+         *     valid: the MCP transport re-reads this flag on every request after resolving
+         *     the token to a user, so there is no window in which an agent keeps working.
+         *
+         *     Disconnecting an account that is already disconnected is not an error; it
+         *     changes nothing.
+         */
+        post: operations["disconnect_agent_access_v1_settings_agent_access_disconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/agent-access/allow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Allow Agent Access
+         * @description Let agents connect to this account again, and report the page's new state.
+         *
+         *     This clears the player's own revocation and nothing else — it does not
+         *     reconnect anything. The next agent that signs in with this account's email
+         *     binds itself, as it did the first time.
+         *
+         *     It exists because revocation is deliberately sticky: with no explicit way
+         *     back, a disconnected player who followed the connector setup steps again
+         *     would be refused by the transport with a silent 401, forever.
+         *
+         *     Allowing an account that was never revoked is not an error; it changes
+         *     nothing.
+         */
+        post: operations["allow_agent_access_v1_settings_agent_access_allow_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -1911,13 +1974,13 @@ export interface components {
          * @description Which panel the settings page renders — a closed set, decided on the
          *     server so the client never re-derives it from a handful of nullable fields.
          *
-         *     The four members are ordered by the precedence
+         *     The five members are ordered by the precedence
          *     :func:`app.agent_access.resolve_agent_access_state` applies, which is the
          *     actual decision (and is tested as one). They are mutually exclusive by
          *     construction: exactly one is returned.
          * @enum {string}
          */
-        AgentAccessState: "guest" | "gated" | "ready" | "connected";
+        AgentAccessState: "guest" | "gated" | "revoked" | "ready" | "connected";
         /**
          * BroadcastRecipient
          * @description One selectable player in the admin recipient picker.
@@ -8142,6 +8205,68 @@ export interface operations {
         };
     };
     get_agent_access_v1_settings_agent_access_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_agent_access_v1_settings_agent_access_disconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    allow_agent_access_v1_settings_agent_access_allow_post: {
         parameters: {
             query?: never;
             header?: never;

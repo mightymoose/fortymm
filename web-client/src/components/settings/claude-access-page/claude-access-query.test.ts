@@ -13,6 +13,11 @@ describe('selectClaudeAccess', () => {
     expect(
       selectClaudeAccess(buildAgentAccess({ state: 'gated' })).status,
     ).toEqual({ kind: 'gated' })
+    // The player's own switch-off, which is NOT `gated` (the operator's) and
+    // must not collapse into it: only one of the two has a way back on screen.
+    expect(
+      selectClaudeAccess(buildAgentAccess({ state: 'revoked' })).status,
+    ).toEqual({ kind: 'revoked' })
     expect(
       selectClaudeAccess(
         buildAgentAccess({ state: 'ready', email: 'rita@club.tt' }),
@@ -49,7 +54,13 @@ describe('selectClaudeAccess', () => {
   })
 
   it('reports every state as unavailable when the deployment has no connector', () => {
-    for (const state of ['guest', 'gated', 'ready', 'connected'] as const) {
+    for (const state of [
+      'guest',
+      'gated',
+      'revoked',
+      'ready',
+      'connected',
+    ] as const) {
       expect(
         selectClaudeAccess(buildAgentAccess({ state, connector: null })).status,
       ).toEqual({ kind: 'unavailable' })
@@ -66,7 +77,7 @@ describe('selectClaudeAccess', () => {
   })
 
   it('keeps the grant summary until an agent is actually connected', () => {
-    for (const state of ['guest', 'gated', 'ready'] as const) {
+    for (const state of ['guest', 'gated', 'revoked', 'ready'] as const) {
       expect(
         selectClaudeAccess(buildAgentAccess({ state })).showsPermissionsSummary,
       ).toBe(true)

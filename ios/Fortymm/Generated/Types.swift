@@ -1037,6 +1037,43 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/settings/agent-access`.
     /// - Remark: Generated from `#/paths//v1/settings/agent-access/get(get_agent_access_v1_settings_agent_access_get)`.
     func getAgentAccessV1SettingsAgentAccessGet(_ input: Operations.GetAgentAccessV1SettingsAgentAccessGet.Input) async throws -> Operations.GetAgentAccessV1SettingsAgentAccessGet.Output
+    /// Disconnect Agent Access
+    ///
+    /// Switch agent access off for the calling player, and report the page's new
+    /// state.
+    ///
+    /// This stops **every** agent signed in with this account's email — Claude,
+    /// Claude Code, anything else — because the binding is one Auth0 identity, not
+    /// one per connector.
+    ///
+    /// It takes effect against tokens that have already been issued and are still
+    /// valid: the MCP transport re-reads this flag on every request after resolving
+    /// the token to a user, so there is no window in which an agent keeps working.
+    ///
+    /// Disconnecting an account that is already disconnected is not an error; it
+    /// changes nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/disconnect`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/disconnect/post(disconnect_agent_access_v1_settings_agent_access_disconnect_post)`.
+    func disconnectAgentAccessV1SettingsAgentAccessDisconnectPost(_ input: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Input) async throws -> Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output
+    /// Allow Agent Access
+    ///
+    /// Let agents connect to this account again, and report the page's new state.
+    ///
+    /// This clears the player's own revocation and nothing else — it does not
+    /// reconnect anything. The next agent that signs in with this account's email
+    /// binds itself, as it did the first time.
+    ///
+    /// It exists because revocation is deliberately sticky: with no explicit way
+    /// back, a disconnected player who followed the connector setup steps again
+    /// would be refused by the transport with a silent 401, forever.
+    ///
+    /// Allowing an account that was never revoked is not an error; it changes
+    /// nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/allow`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/allow/post(allow_agent_access_v1_settings_agent_access_allow_post)`.
+    func allowAgentAccessV1SettingsAgentAccessAllowPost(_ input: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Input) async throws -> Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -2612,6 +2649,47 @@ extension APIProtocol {
     internal func getAgentAccessV1SettingsAgentAccessGet(headers: Operations.GetAgentAccessV1SettingsAgentAccessGet.Input.Headers = .init()) async throws -> Operations.GetAgentAccessV1SettingsAgentAccessGet.Output {
         try await getAgentAccessV1SettingsAgentAccessGet(Operations.GetAgentAccessV1SettingsAgentAccessGet.Input(headers: headers))
     }
+    /// Disconnect Agent Access
+    ///
+    /// Switch agent access off for the calling player, and report the page's new
+    /// state.
+    ///
+    /// This stops **every** agent signed in with this account's email — Claude,
+    /// Claude Code, anything else — because the binding is one Auth0 identity, not
+    /// one per connector.
+    ///
+    /// It takes effect against tokens that have already been issued and are still
+    /// valid: the MCP transport re-reads this flag on every request after resolving
+    /// the token to a user, so there is no window in which an agent keeps working.
+    ///
+    /// Disconnecting an account that is already disconnected is not an error; it
+    /// changes nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/disconnect`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/disconnect/post(disconnect_agent_access_v1_settings_agent_access_disconnect_post)`.
+    internal func disconnectAgentAccessV1SettingsAgentAccessDisconnectPost(headers: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Input.Headers = .init()) async throws -> Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output {
+        try await disconnectAgentAccessV1SettingsAgentAccessDisconnectPost(Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Input(headers: headers))
+    }
+    /// Allow Agent Access
+    ///
+    /// Let agents connect to this account again, and report the page's new state.
+    ///
+    /// This clears the player's own revocation and nothing else — it does not
+    /// reconnect anything. The next agent that signs in with this account's email
+    /// binds itself, as it did the first time.
+    ///
+    /// It exists because revocation is deliberately sticky: with no explicit way
+    /// back, a disconnected player who followed the connector setup steps again
+    /// would be refused by the transport with a silent 401, forever.
+    ///
+    /// Allowing an account that was never revoked is not an error; it changes
+    /// nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/allow`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/allow/post(allow_agent_access_v1_settings_agent_access_allow_post)`.
+    internal func allowAgentAccessV1SettingsAgentAccessAllowPost(headers: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Input.Headers = .init()) async throws -> Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output {
+        try await allowAgentAccessV1SettingsAgentAccessAllowPost(Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Input(headers: headers))
+    }
     /// Health
     ///
     /// - Remark: HTTP `GET /v1/health`.
@@ -3300,7 +3378,7 @@ internal enum Components {
         /// Which panel the settings page renders — a closed set, decided on the
         /// server so the client never re-derives it from a handful of nullable fields.
         ///
-        /// The four members are ordered by the precedence
+        /// The five members are ordered by the precedence
         /// :func:`app.agent_access.resolve_agent_access_state` applies, which is the
         /// actual decision (and is tested as one). They are mutually exclusive by
         /// construction: exactly one is returned.
@@ -3309,6 +3387,7 @@ internal enum Components {
         internal enum AgentAccessState: String, Codable, Hashable, Sendable, CaseIterable {
             case guest = "guest"
             case gated = "gated"
+            case revoked = "revoked"
             case ready = "ready"
             case connected = "connected"
         }
@@ -26679,6 +26758,355 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.GetAgentAccessV1SettingsAgentAccessGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Disconnect Agent Access
+    ///
+    /// Switch agent access off for the calling player, and report the page's new
+    /// state.
+    ///
+    /// This stops **every** agent signed in with this account's email — Claude,
+    /// Claude Code, anything else — because the binding is one Auth0 identity, not
+    /// one per connector.
+    ///
+    /// It takes effect against tokens that have already been issued and are still
+    /// valid: the MCP transport re-reads this flag on every request after resolving
+    /// the token to a user, so there is no window in which an agent keeps working.
+    ///
+    /// Disconnecting an account that is already disconnected is not an error; it
+    /// changes nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/disconnect`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/disconnect/post(disconnect_agent_access_v1_settings_agent_access_disconnect_post)`.
+    internal enum DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost {
+        internal static let id: Swift.String = "disconnect_agent_access_v1_settings_agent_access_disconnect_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/settings/agent-access/disconnect/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/settings/agent-access/disconnect/POST/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/settings/agent-access/disconnect/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.AgentAccessResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AgentAccessResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/settings/agent-access/disconnect/post(disconnect_agent_access_v1_settings_agent_access_disconnect_post)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/settings/agent-access/disconnect/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/settings/agent-access/disconnect/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/settings/agent-access/disconnect/post(disconnect_agent_access_v1_settings_agent_access_disconnect_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.DisconnectAgentAccessV1SettingsAgentAccessDisconnectPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Allow Agent Access
+    ///
+    /// Let agents connect to this account again, and report the page's new state.
+    ///
+    /// This clears the player's own revocation and nothing else — it does not
+    /// reconnect anything. The next agent that signs in with this account's email
+    /// binds itself, as it did the first time.
+    ///
+    /// It exists because revocation is deliberately sticky: with no explicit way
+    /// back, a disconnected player who followed the connector setup steps again
+    /// would be refused by the transport with a silent 401, forever.
+    ///
+    /// Allowing an account that was never revoked is not an error; it changes
+    /// nothing.
+    ///
+    /// - Remark: HTTP `POST /v1/settings/agent-access/allow`.
+    /// - Remark: Generated from `#/paths//v1/settings/agent-access/allow/post(allow_agent_access_v1_settings_agent_access_allow_post)`.
+    internal enum AllowAgentAccessV1SettingsAgentAccessAllowPost {
+        internal static let id: Swift.String = "allow_agent_access_v1_settings_agent_access_allow_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/settings/agent-access/allow/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/settings/agent-access/allow/POST/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/settings/agent-access/allow/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.AgentAccessResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.AgentAccessResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/settings/agent-access/allow/post(allow_agent_access_v1_settings_agent_access_allow_post)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/settings/agent-access/allow/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/settings/agent-access/allow/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/settings/agent-access/allow/post(allow_agent_access_v1_settings_agent_access_allow_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.AllowAgentAccessV1SettingsAgentAccessAllowPost.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

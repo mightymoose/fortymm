@@ -2340,3 +2340,241 @@ async def test_merge_is_a_no_op_when_the_ephemeral_has_no_auth0_sub(
         "the survivor's link is untouched when the ephemeral never linked"
     )
     assert subs[ephemeral.id] is None
+
+
+# ----- the agent-access state riding alongside that binding ----------------
+#
+# ADR ``20260728-disconnecting-an-agent-is-a-user-held-revocation-checked-at-the-
+# mcp-transport``: "account_merge must carry the flag: merging a revoked account
+# into another must not silently re-enable agent access." Two columns, two rules:
+#
+#   * ``agent_access_linked_at`` is a fact about the BINDING ("Connected <date>"),
+#     so it moves exactly where the ``auth0_sub`` moves.
+#   * ``agent_access_revoked_at`` is a per-user, sticky fact the PLAYER set, so the
+#     merge takes the union — set on the survivor if either party had it set,
+#     never cleared. It does not depend on a binding moving, because disconnect
+#     clears ``auth0_sub`` as it stamps the revocation: a revoked account normally
+#     has no binding left to move.
+
+
+async def _agent_access(
+    db: AsyncSession, *user_ids: uuid.UUID
+) -> dict[uuid.UUID, tuple[str | None, datetime | None, datetime | None]]:
+    """``(auth0_sub, agent_access_linked_at, agent_access_revoked_at)`` per user,
+    read straight from the rows (``populate_existing`` — the merge writes with
+    bulk statements the identity map never sees)."""
+    rows = (
+        (
+            await db.execute(
+                select(
+                    User.id,
+                    User.auth0_sub,
+                    User.agent_access_linked_at,
+                    User.agent_access_revoked_at,
+                )
+                .where(User.id.in_(user_ids))
+                .execution_options(populate_existing=True)
+            )
+        )
+        .tuples()
+        .all()
+    )
+    return {row[0]: (row[1], row[2], row[3]) for row in rows}
+
+
+async def test_merge_carries_a_revoked_ephemerals_revocation_onto_the_survivor(
+    db_session: AsyncSession,
+):
+    """THE SECURITY CASE. The ephemeral switched agent access off and still holds
+    the Auth0 binding; the survivor has neither. The binding follows the merge — so
+    the revocation must follow it too, or the merge hands the survivor a *working*
+    agent connection the player had explicitly switched off (the MCP transport only
+    refuses a revoked user, so an already-issued JWT for that ``sub`` would resolve
+    to the survivor and be allowed straight through)."""
+    revoked_at = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    linked_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|revoked-sub"
+    ephemeral.agent_access_linked_at = linked_at
+    ephemeral.agent_access_revoked_at = revoked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    # Asserted on its own, ahead of the tuple compare below, so this failing means
+    # the silent re-grant and nothing else.
+    assert state[verified.id][2] == revoked_at, (
+        "the adopted binding must arrive still revoked — a merge may not switch "
+        "agent access back on for an identity the player switched off"
+    )
+    assert state[verified.id] == ("auth0|revoked-sub", linked_at, revoked_at)
+    assert state[ephemeral.id][0] is None
+    assert state[ephemeral.id][1] is None
+
+
+async def test_merge_carries_revocation_even_when_no_binding_moves(
+    db_session: AsyncSession,
+):
+    """The shape a real disconnect leaves: ``agent_access_revoked_at`` stamped and
+    ``auth0_sub`` already NULL (disconnect clears it). Nothing moves through the
+    binding block at all — so a carry gated on a moved binding would be dead code
+    in exactly the case the ADR is about. The survivor inherits the revocation, and
+    its own binding is left in place: the transport refuses a revoked user, so
+    clearing the ``sub`` too would only be cosmetic and is not this code's job."""
+    revoked_at = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    survivor_linked_at = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.agent_access_revoked_at = revoked_at
+    verified.auth0_sub = "auth0|survivor-sub"
+    verified.agent_access_linked_at = survivor_linked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    assert state[verified.id] == (
+        "auth0|survivor-sub",
+        survivor_linked_at,
+        revoked_at,
+    ), "the player's revocation is a per-user fact and does not need a binding to ride"
+    assert state[ephemeral.id][2] == revoked_at, (
+        "the tombstone keeps its own revocation — nothing here may un-revoke an "
+        "account, and its session cookie still resolves to this row"
+    )
+
+
+async def test_merge_adopting_a_binding_does_not_clear_a_revoked_survivor(
+    db_session: AsyncSession,
+):
+    """The other direction, through the BINDING block. The survivor switched agent
+    access off; the ephemeral is unrevoked and holds a binding. Adopting that binding
+    must not hand the survivor a usable connection either — the survivor's own
+    revocation stands, at its own moment, un-rewritten.
+
+    Note what this does NOT reach: the ephemeral is unrevoked, so
+    ``ephemeral_revoked_at is None`` and the revocation carry never runs at all. The
+    guard *inside* that carry — the survivor's ``IS NULL`` predicate — is pinned by
+    ``test_merge_keeps_a_revoked_survivors_own_revocation_moment`` below, which is
+    the both-revoked case this one cannot express."""
+    survivor_revoked_at = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    linked_at = datetime(2026, 7, 25, 9, 0, tzinfo=UTC)
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|guest-linked-sub"
+    ephemeral.agent_access_linked_at = linked_at
+    verified.agent_access_revoked_at = survivor_revoked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    assert state[verified.id] == (
+        "auth0|guest-linked-sub",
+        linked_at,
+        survivor_revoked_at,
+    ), "adopting a binding must not clear the survivor's own revocation"
+
+
+async def test_merge_keeps_a_revoked_survivors_own_revocation_moment(
+    db_session: AsyncSession,
+):
+    """BOTH parties revoked — the only case that exercises the carry's survivor
+    guard (``agent_access_revoked_at IS NULL``), and the reason it is a guard rather
+    than an unconditional write.
+
+    The union is already satisfied here: the survivor is revoked, so there is nothing
+    to inherit. What is at stake is *whose moment* the survivor ends up holding. The
+    column is when THIS account's holder switched agent access off — the settings
+    page's "Disconnected <date>", and the audit answer to "when did I turn this off".
+    Overwriting it with the guest session's later stamp would silently rewrite that
+    history to a moment this account's holder never acted at, and would make a
+    re-allow's "off since" read wrong.
+
+    Both stamps are set with no binding anywhere — the shape a real disconnect leaves
+    (``disconnect_agent_access`` clears ``auth0_sub`` as it stamps) — so the binding
+    block is a no-op and the only thing under test is the carry.
+    """
+    survivor_revoked_at = datetime(2026, 6, 15, 8, 0, tzinfo=UTC)
+    ephemeral_revoked_at = datetime(2026, 7, 25, 17, 0, tzinfo=UTC)
+    assert ephemeral_revoked_at != survivor_revoked_at, (
+        "the two moments must differ or the assertion below cannot tell them apart"
+    )
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.agent_access_revoked_at = ephemeral_revoked_at
+    verified.agent_access_revoked_at = survivor_revoked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    assert state[verified.id][2] == survivor_revoked_at, (
+        "an already-revoked survivor keeps its OWN revocation moment — the carry "
+        "exists to make a revocation stick, not to restamp one that already did"
+    )
+    assert state[ephemeral.id][2] == ephemeral_revoked_at, (
+        "the tombstone keeps its own moment too — revocation is a historical fact "
+        "about that account and the merge does not rewrite either party's"
+    )
+
+
+async def test_merge_moves_the_link_time_with_an_adopted_binding(
+    db_session: AsyncSession,
+):
+    """The honesty case. A survivor that adopts a binding reads ``connected`` on the
+    settings page, so it must arrive with the binding's "Connected <date>" rather
+    than a connection with no date — and the tombstone must not keep a stamp for a
+    link it no longer holds. Neither party is revoked, so neither ends up revoked:
+    the carry above is a union, not a blanket."""
+    linked_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|guest-linked-sub"
+    ephemeral.agent_access_linked_at = linked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    assert state[verified.id] == ("auth0|guest-linked-sub", linked_at, None), (
+        "the link time follows the binding, so the survivor is not 'connected' "
+        "with a blank date"
+    )
+    assert state[ephemeral.id] == (None, None, None), (
+        "the tombstone holds neither the binding nor a stamp describing it"
+    )
+
+
+async def test_merge_leaves_the_survivors_link_time_when_its_own_binding_stands(
+    db_session: AsyncSession,
+):
+    """Both parties are linked, so the ephemeral's binding is dropped rather than
+    adopted. The survivor's stamp describes the link it kept — the dropped binding's
+    date must not overwrite it — while the tombstone's stamp goes with the binding
+    it lost."""
+    survivor_linked_at = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    ephemeral_linked_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    ephemeral.auth0_sub = "auth0|guest-sub"
+    ephemeral.agent_access_linked_at = ephemeral_linked_at
+    verified.auth0_sub = "auth0|survivor-sub"
+    verified.agent_access_linked_at = survivor_linked_at
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    state = await _agent_access(db_session, ephemeral.id, verified.id)
+    assert state[verified.id] == ("auth0|survivor-sub", survivor_linked_at, None), (
+        "a dropped binding's link time is not the survivor's to inherit"
+    )
+    assert state[ephemeral.id] == (None, None, None)

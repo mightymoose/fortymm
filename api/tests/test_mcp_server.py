@@ -7,7 +7,8 @@ Auth0 OAuth Resource-Server verifier (``FortymmAuth0TokenVerifier`` behind a
 ``Client(mcp)`` would bypass it. The point is that only a valid Auth0 JWT for an
 explicitly linked user holding ``mcp.access`` is admitted; every other case
 (missing / bad-signature / wrong-``aud`` / wrong-``iss`` / unlinked-``sub`` /
-un-permitted / tombstoned) is rejected **before** any tool body, at the transport.
+un-permitted / tombstoned / self-revoked) is rejected **before** any tool body, at
+the transport.
 
 **Auth harness.** The module-level ``mcp`` is built with ``AUTH0_*`` empty (its
 fail-closed reject-all verifier), so the autouse ``_mcp_auth0_verifier`` fixture
@@ -86,6 +87,7 @@ from app.models import (
 )
 from app.models.tournament import DrawType, EventFormat
 from app.rate_limiting import RedisRateLimiter
+from app.rbac import user_has_permission
 from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -377,6 +379,56 @@ async def test_tombstoned_linked_users_token_is_rejected(
         await _assert_rejected(client)
 
 
+async def test_revoked_user_is_rejected_though_token_and_permission_still_hold(
+    db_session: AsyncSession,
+) -> None:
+    """A player who switched agent access off is refused at the transport **with the
+    very token that worked a moment ago**.
+
+    The token is minted once and used twice: the first handshake succeeds, which is
+    what proves the JWT genuinely verifies (right key / ``iss`` / ``aud`` / unexpired)
+    and that the user genuinely holds ``mcp.access``. Nothing about the token or the
+    RBAC grant changes between the two halves — the only edit is stamping
+    ``agent_access_revoked_at`` — so the 401 can only come from the revocation. That
+    is the property the disconnect control rests on: an already-issued, still-valid
+    Auth0 JWT stops working immediately, rather than at ``exp``. See ADR
+    ``20260728-disconnecting-an-agent-is-a-user-held-revocation-checked-at-the-mcp-transport``.
+    """
+    user = await make_user(db_session, "mcp-revoked-owner")
+    token = await _mint(db_session, user)
+
+    async with _mcp_client(token) as client, client:
+        tools = await client.list_tools()
+    assert "get_match" in {tool.name for tool in tools}
+
+    user.agent_access_revoked_at = datetime.now(UTC)
+    await db_session.commit()
+
+    # Same token, same grant, same link — only the player's own flag moved.
+    assert user.auth0_sub is not None
+    assert await user_has_permission(db_session, user.id, MCP_ACCESS_PERMISSION)
+    async with _mcp_client(token) as client:
+        await _assert_rejected(client)
+
+
+async def test_revoking_covers_every_tool_because_it_gates_the_transport(
+    db_session: AsyncSession,
+) -> None:
+    """Revocation refuses the connection itself, so no tool body is reachable — the
+    caller cannot even enumerate the tools, let alone call one. This is why the check
+    lives in the verifier and not in 28 tool bodies a new tool could forget."""
+    user = await make_user(db_session, "mcp-revoked-tool-caller")
+    token = await _mint(db_session, user)
+    user.agent_access_revoked_at = datetime.now(UTC)
+    await db_session.commit()
+
+    async with _mcp_client(token) as client:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            async with client:
+                await client.call_tool("list_my_matches", {})
+    assert exc_info.value.response.status_code == 401
+
+
 def _email_verifier() -> FortymmAuth0TokenVerifier:
     """A ``FortymmAuth0TokenVerifier`` keyed to the test static key, for calling
     ``verify_token`` directly — so a test can assert on the minted ``AccessToken``
@@ -459,6 +511,32 @@ async def test_linked_sub_still_authorizes_via_verify_token(
 
     assert access is not None
     assert access.claims["user_id"] == str(user.id)
+
+
+async def test_revoked_user_is_rejected_even_if_the_sub_can_re_bind_by_email(
+    db_session: AsyncSession,
+) -> None:
+    """Clearing ``auth0_sub`` alone would be self-undoing: the next token misses
+    ``resolve_linked_user``, falls through to the verified-email match, and re-binds
+    the same subject. This is that exact shape — unlinked account, matchable verified
+    email, ``mcp.access`` held, valid signature — and it is still refused, because the
+    revocation is checked on the resolved *user*, downstream of whatever resolution
+    did. Revocation, not unlinking, is what actually holds."""
+    user = await make_user(db_session, "mcp-revoked-rebind-owner")
+    user.email = "revoked-rebind@example.com"
+    user.auth0_sub = None  # as a disconnect leaves it
+    user.agent_access_revoked_at = datetime.now(UTC)
+    await db_session.commit()
+    await _grant_mcp_access(db_session, user)
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={
+            AUTH0_EMAIL_CLAIM: "revoked-rebind@example.com",
+            AUTH0_EMAIL_VERIFIED_CLAIM: True,
+        },
+    )
+
+    assert await _email_verifier().verify_token(token) is None
 
 
 def _pin_client_ip(monkeypatch: pytest.MonkeyPatch, host: str) -> None:

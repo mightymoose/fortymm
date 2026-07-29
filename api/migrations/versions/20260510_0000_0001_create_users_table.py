@@ -71,6 +71,17 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=True,
         ),
+        # When the player switched agent access off. The user's own revocation,
+        # distinct from the operator's RBAC ``mcp.access`` grant and from the
+        # ``auth0_sub`` binding; enforced at the MCP transport after the token
+        # resolves to a user, so it holds against an already-issued, still-valid
+        # Auth0 JWT. NULL means agent access is not revoked. See ADR
+        # ``20260728-disconnecting-an-agent-is-a-user-held-revocation-checked-at-the-mcp-transport``.
+        sa.Column(
+            "agent_access_revoked_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
         sa.UniqueConstraint("username", name="uq_users_username"),
         sa.UniqueConstraint("email", name="uq_users_email"),
         sa.UniqueConstraint("auth0_sub", name="uq_users_auth0_sub"),

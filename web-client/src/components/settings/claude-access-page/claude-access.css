@@ -169,6 +169,15 @@
   background: var(--bg-live-soft);
 }
 
+/* Switched off BY THE PLAYER — deliberately neutral rather than the warn amber
+   the three "you can't do this yet" rows wear. Nothing has gone wrong here; the
+   account is exactly as the player left it. The glyph carries the state. */
+.fmm-claude__pill--off {
+  color: var(--fg-3);
+  border-color: var(--border-default);
+  background: var(--bg-panel);
+}
+
 .fmm-claude__mono {
   font-family: var(--font-mono);
   color: var(--fg-1);
@@ -200,6 +209,70 @@
   border-color: var(--ball-500);
 }
 
+/* The one action here that is a <button> rather than a link — it POSTs. */
+button.fmm-claude__action {
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+/* Filled, because it is the only way out of the revoked state: an outlined
+   button beside a plain sentence reads as optional, and this one isn't. */
+.fmm-claude__action--primary {
+  background: var(--ball-500);
+  border-color: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.fmm-claude__action--primary:hover:not(:disabled) {
+  background: var(--ball-400);
+  border-color: var(--ball-400);
+}
+
+/* Destructive: the loss red on the border and the label, over a transparent
+   fill. Not a filled red button — this is one of two choices on the card and in
+   the dialog, and a solid block of red would read as the recommended one. */
+.fmm-claude__action--danger {
+  border-color: var(--loss);
+  color: var(--loss);
+  background: transparent;
+}
+
+.fmm-claude__action--danger:hover:not(:disabled) {
+  background: rgba(255, 77, 109, 0.12);
+  border-color: var(--loss);
+}
+
+.fmm-claude__action:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+/* ---------- Re-allow control ----------
+   Button plus the live region under it, as one column so the note sits beneath
+   the button rather than beside the row's copy. */
+.fmm-claude__allow {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.fmm-claude__allow-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+/* Idle, the region is present-but-empty so a screen reader is already watching
+   it; it must not reserve a row of whitespace while it waits. */
+.fmm-claude__allow-note:empty {
+  display: none;
+}
+
+.fmm-claude__allow-note--failed {
+  color: var(--loss);
+}
+
 /* ---------- Connected card ---------- */
 .fmm-claude__card {
   padding: 16px;
@@ -221,6 +294,13 @@
   margin: 0;
   font-size: 14px;
   color: var(--fg-2);
+}
+
+/* Disconnect sits at the trailing edge of the head — state, then what it means,
+   then the one thing to do about it. The 900px block drops it to its own
+   full-width line with the other row actions. */
+.fmm-claude__card-head > .fmm-claude__action {
+  margin-left: auto;
 }
 
 .fmm-claude__fields {
@@ -246,6 +326,57 @@
   min-width: 0;
   font-size: 14px;
   color: var(--fg-1);
+}
+
+/* ---------- Disconnect confirmation ----------
+   The dialog is PORTALLED to <body>, so it renders outside `.fmm-claude` and
+   picks up none of that block's descendant rules — the theme tokens still
+   resolve (they live on `body.dark.fortymm-theme`), but the box-sizing reset and
+   the focus ring above do not. Both are restated here, scoped to the dialog. */
+.fmm-claude__confirm,
+.fmm-claude__confirm *,
+.fmm-claude__confirm *::before,
+.fmm-claude__confirm *::after {
+  box-sizing: border-box;
+}
+
+.fmm-claude__confirm {
+  font-family: var(--font-ui);
+  overflow-wrap: anywhere;
+}
+
+.fmm-claude__confirm button:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+  border-radius: var(--r-sm, 6px);
+}
+
+/* Same bullets as the grant summary — a player reading "what you're granting"
+   and then "what disconnecting does" is reading one list twice, so it looks like
+   one list. `.fmm-claude__grant-item` is reused on the <li>s themselves. */
+.fmm-claude__confirm-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fmm-claude__confirm-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+/* Idle, the region is present-but-empty so a screen reader is already watching
+   it; it must not reserve a row of whitespace while it waits. */
+.fmm-claude__confirm-note:empty {
+  display: none;
+}
+
+.fmm-claude__confirm-note--failed {
+  color: var(--loss);
 }
 
 /* ---------- Permissions summary ---------- */
@@ -671,8 +802,10 @@
     margin-bottom: 20px;
   }
   /* The action drops to its own full-width line rather than squeezing the copy
-     into a two-word column. */
-  .fmm-claude__action {
+     into a two-word column. The re-allow control is a wrapper around one, so it
+     takes the same rule. */
+  .fmm-claude__action,
+  .fmm-claude__allow {
     flex: 1 1 100%;
   }
   .fmm-claude__fields {
