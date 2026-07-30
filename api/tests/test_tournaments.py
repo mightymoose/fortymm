@@ -5350,6 +5350,15 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     strategy, a results strategy and a seeded row, so it is now a slug this boundary
     ACCEPTS, which the create tests beside this one assert. That is the mechanism
     working: the list of refused slugs shrinks by exactly the format that shipped.
+
+    **The accepted slugs are pinned as literals, never re-derived from ``DrawType``.**
+    Pydantic composes that ``expected`` message *out of* the enum, so comparing it back
+    against ``{t.value for t in DrawType}`` is the enum measured against itself: it
+    holds for any set of members, including one somebody added by accident. Written
+    down, this line is the alarm that reds when a member arrives. Adding a draw type
+    takes five coordinated changes (the enum, a strategy, a results strategy, a seeded
+    ``draw_types`` row, the web client's picker), so being made to come and look here is
+    the point.
     """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
@@ -5363,10 +5372,11 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     body = response.json()
     (error,) = [e for e in body["detail"] if e["loc"][-1] == "draw_type"]
     # The 422 names the slugs that run, and nothing else — a client reading it learns
-    # exactly what it may send.
+    # exactly what it may send. Pydantic renders a three-member list as
+    # ``'a', 'b' or 'c'``, so the final " or " becomes a comma before the split.
     assert set(
         error["ctx"]["expected"].replace("'", "").replace(" or ", ", ").split(", ")
-    ) == {t.value for t in DrawType}, error
+    ) == {"round-robin", "single-elim", "rr-then-ko"}, error
     # Refused at the boundary means refused before persistence: no event exists.
     detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
     assert detail["events"] == []

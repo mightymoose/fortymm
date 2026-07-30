@@ -95,6 +95,7 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
 def fixture_state(
     fixture: TournamentFixture,
     game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
+    voided_match_ids: frozenset[uuid.UUID] = frozenset(),
 ) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
@@ -114,6 +115,16 @@ def fixture_state(
     :attr:`~app.draws.FixtureState.games` as ``None`` — the same absence a fixture with
     no match at all gets. Passing nothing (the default) is "no games are known for any
     fixture", which is what every caller that does not tabulate wants.
+
+    ``voided_match_ids`` rides in the same way, and is the whole of what the domain
+    knows about a match's status: a fixture whose match id is in it projects
+    :attr:`~app.draws.FixtureState.match_voided` ``True``. The ``MatchStatus`` enum
+    stops here — ``app.draws`` asks one question of a match's status ("can this pairing
+    still produce a result?"), so it is answered once, here, as a ``bool``, and that
+    module stays free of the ORM. The ids come off the same outer join the completed
+    ones do (``_fixtures_with_match_statuses``), so this costs no extra query and both
+    facts are read at one instant. The default — nothing is voided — is the truth for
+    every caller whose fixtures have no matches at all.
 
     **side 1 ← ``entry_a``, side 2 ← ``entry_b``** (#788), the same fixed convention the
     completion seam maps a winning side back to an entry with, so the ``(side_1,
@@ -153,6 +164,9 @@ def fixture_state(
             FixtureGames(entry_a_games=games[0], entry_b_games=games[1])
             if games is not None
             else None
+        ),
+        match_voided=(
+            fixture.match_id is not None and fixture.match_id in voided_match_ids
         ),
     )
 

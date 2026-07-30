@@ -7,7 +7,7 @@ point of keeping the strategies pure.
 import dataclasses
 import uuid
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 
@@ -1310,6 +1310,49 @@ def _played(
     return played
 
 
+def _voided(
+    fixtures: Sequence[FixtureState],
+    pairs: Collection[frozenset[int]],
+    *,
+    keep_winner: bool = True,
+) -> list[FixtureState]:
+    """Void the fixtures whose seed pair appears in ``pairs`` — what an account merge's
+    self-play collision leaves behind (ADR-0013): a terminal match that can never
+    produce a result, and therefore no games.
+
+    ``keep_winner`` is the nastier of the two real shapes and the default: the match was
+    **completed first**, so the completion wrote ``winner_entry_id`` back onto the
+    fixture, and voiding does not clear it (``app.match_voiding.void_match`` touches the
+    match and its sides, not the draw). The fixture is left reading *decided, with no
+    games* — which is exactly the shape ``MissingFixtureGames`` fires on for an
+    unvoided fixture, so this is also what pins that guard's exclusion. ``False`` is the
+    other shape: voided before anybody played, no winner ever written.
+    """
+    voided: list[FixtureState] = []
+    for index, fixture in enumerate(fixtures):
+        pair = (
+            frozenset({fixture.entry_a_id.int, fixture.entry_b_id.int})
+            if fixture.entry_a_id is not None and fixture.entry_b_id is not None
+            else None
+        )
+        if pair is None or pair not in pairs:
+            voided.append(fixture)
+            continue
+        voided.append(
+            dataclasses.replace(
+                fixture,
+                match_voided=True,
+                games=None,
+                winner_entry_id=(fixture.entry_a_id if keep_winner else None),
+                # A voided fixture always has a match — voiding is something done TO
+                # one — so it keeps the id ``_played`` gave it, or gets one here if it
+                # was voided without ever being scored.
+                match_id=fixture.match_id or MatchId(uuid.UUID(int=4000 + index)),
+            )
+        )
+    return voided
+
+
 def _lower_seed_wins(
     fixtures: Sequence[FixtureState],
 ) -> dict[frozenset[int], tuple[int, int, int]]:
@@ -1770,3 +1813,87 @@ class TestRrThenKoAdvance:
         plan = _rr_then_ko(2).advance(in_flux)
 
         assert plan.side_fills == ()
+
+    def test_rr_then_ko_finishes_a_pool_holding_a_voided_pairing(self) -> None:
+        # THE claim of the voided-fixture fix: a **voided** pairing can never produce a
+        # result, so it is left OUT of "every fixture carries a score" instead of
+        # counting as a score that never arrives. Requiring it would hold the pool one
+        # outcome short forever — never finished, its qualifiers never seated, the
+        # knockout never ready, nothing a director could do about it — while the
+        # standings, which already exclude voided pairings from a pool's
+        # ``fixture_count``, called that same pool ``complete``.
+        #
+        # And the order is genuinely the one the REMAINING results produce, not a
+        # leftover: played in full, this pool finishes 2, 1, 3, 4 and qualifies {2, 1}
+        # (``CYCLIC_POOL_FINISHING_ORDER``). With 1-v-4 voided, 1 drops to a single win
+        # and 3 rises past it, so the pool finishes 2, 3, 1, 4 and qualifies **{2, 3}**:
+        # a different runner-up, which is what makes this evidence about the ordering
+        # and not just about the seating.
+        cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
+        voided_pair = frozenset({1, 4})
+        played = _played(
+            cut,
+            {
+                pair: result
+                for pair, result in CYCLIC_POOL_RESULTS.items()
+                if pair != voided_pair
+            },
+        )
+        fixtures = _voided(played, {voided_pair})
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert _knockout_sides(_apply(fixtures, plan)) == {
+            (1, 1, "a"): 2,
+            (1, 1, "b"): 3,
+        }
+
+    def test_rr_then_ko_seats_nobody_out_of_a_pool_whose_every_pairing_was_voided(
+        self,
+    ) -> None:
+        # The floor under the rule above. Skipping voided fixtures cannot become
+        # "finish a pool on no results at all": with nothing to rank on, the tiebreak
+        # chain falls through to its entry-id fallback and would hand back an order that
+        # is arbitrary rather than earned. So the pool is not finished, and nobody is
+        # seated — the one place this deliberately parts company with the standings,
+        # which call such a pool ``complete`` and show a table of zeros.
+        cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
+        fixtures = _voided(cut, set(CYCLIC_POOL_RESULTS))
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert plan.side_fills == ()
+
+    def test_rr_then_ko_does_not_read_a_voided_pairing_as_a_lost_projection(
+        self,
+    ) -> None:
+        # ``MissingFixtureGames`` fires on "decided, and no games anywhere", and a
+        # completed-then-voided fixture reads exactly like that: voiding takes the match
+        # out of ``completed`` (so the games go away) without clearing the
+        # ``winner_entry_id`` the completion wrote back. Left in the guard's sights, a
+        # single voided pairing in a draw nobody else has scored yet would be a 500.
+        cut = self._cut()
+        fixtures = _voided(cut, {frozenset({1, 6})})
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert plan.side_fills == (), "pool A has five pairings still to play"
+
+    def test_rr_then_ko_still_refuses_a_lost_projection_beside_a_voided_pairing(
+        self,
+    ) -> None:
+        # The other half: excluding voided fixtures must not blunt the guard. A pool
+        # played out and then projected WITHOUT its game counts still raises, and the
+        # count it reports is the fixtures that should have had games — five of pool A's
+        # six, because the sixth is voided and genuinely has none.
+        played = _played(self._cut(), POOL_A_RESULTS)
+        gameless = [
+            dataclasses.replace(f, games=None) if f.pool_id is not None else f
+            for f in played
+        ]
+        fixtures = _voided(gameless, {frozenset({1, 6})})
+
+        with pytest.raises(MissingFixtureGames) as excinfo:
+            _rr_then_ko(2).advance(fixtures)
+
+        assert "5 decided pool fixtures" in str(excinfo.value)

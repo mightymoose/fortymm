@@ -30,8 +30,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import match_calls
+from app.match_voiding import void_match
 from app.models import (
     DrawType,
+    Match,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -773,6 +775,129 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         # Nothing is ready to play: every knockout fixture still has a TBD side, so none
         # of them materialized into a match.
         assert all(f.match_id is None for f in bracket)
+
+
+async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**A voided pairing must not wedge the event.**
+
+    The same twelve entrants, the same pool A, and the same five scorelines as the
+    test above — except that pool A's sixth pairing (6 v 12) is played and then
+    **voided**, which is what an account merge's self-play collision does to a match
+    that has already been scored (ADR-0013). Voiding takes it out of ``completed`` (so
+    its games go away) but leaves the ``winner_entry_id`` the completion wrote back on
+    the fixture, so the fixture reads *decided, with no games* forever.
+
+    Before the fix, "a pool is finished when every fixture carries a score" counted
+    that pairing, so pool A sat one score short of finishing **permanently**: its
+    qualifiers were never seated, the knockout never became ready, no champion was ever
+    crowned, and there was nothing a director could do about it. Meanwhile the
+    standings — which already exclude voided pairings from a pool's ``fixture_count`` —
+    showed that very pool ``complete``. Two layers disagreeing about whether the pool
+    was over.
+
+    **The runner-up flips, which is what makes this evidence about the ordering.** With
+    6 v 12 counted, 6, 7 and 12 form a beat-cycle on one win apiece and game difference
+    seats **7**. With it voided, 6 and 7 are a plain two-way tie that head-to-head
+    settles for **6**: a different qualifier, reachable only by ordering the pool on
+    the results that survive. And it is asserted against the standings table read back
+    off the tournament payload rather than against a hardcoded pair, so "the qualifiers
+    are the top of the table a director is reading" is checked, not assumed.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "void-b") as (client_b, user_b),
+        opponent_session(db_session, "void-c") as (client_c, user_c),
+        opponent_session(db_session, "void-d") as (client_d, user_d),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        players = {1: owner, 6: user_b, 7: user_c, 12: user_d}
+        entries: dict[int, TournamentEntry] = {}
+        for seed in range(1, 13):
+            user = players.get(seed) or await make_user(db_session, f"voidextra{seed}")
+            entries[seed] = await _enter(
+                db_session, event_id, user, seed=seed, minutes=seed
+            )
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (
+            await client.post(
+                f"/v1/tournaments/{tournament_id}/transitions", json={"to": "live"}
+            )
+        ).status_code == 201
+
+        pool_a = [
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+        ]
+        await _call(db_session, tournament_id, pool_a)
+        pool_a = [
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+        ]
+        clients = {
+            entries[1].id: client,
+            entries[6].id: client_b,
+            entries[7].id: client_c,
+            entries[12].id: client_d,
+        }
+        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in pool_a}
+
+        def fixture_between(a: int, b: int) -> TournamentFixture:
+            return by_pair[frozenset({entries[a].id, entries[b].id})]
+
+        # Played first, so the completion writes a winner back onto the fixture — then
+        # voided, which strands that winner with no games. The nastiest of the two real
+        # shapes, and the one a naive "decided but gameless" check mistakes for a
+        # projection that forgot to load its game counts.
+        collision = fixture_between(6, 12)
+        await _win(
+            collision,
+            clients_by_entry=clients,
+            winner_entry_id=entries[12].id,
+            games=(2, 0),
+        )
+        match = await db_session.get(Match, collision.match_id)
+        assert match is not None
+        await void_match(db_session, match)
+        await db_session.commit()
+
+        for winner, loser, games in (
+            (1, 6, (2, 1)),
+            (1, 7, (2, 0)),
+            (1, 12, (2, 0)),
+            (6, 7, (2, 1)),
+            (7, 12, (2, 0)),
+        ):
+            await _win(
+                fixture_between(winner, loser),
+                clients_by_entry=clients,
+                winner_entry_id=entries[winner].id,
+                games=games,
+            )
+
+        results = (await _event_read(client, tournament_id))["results"]
+
+    bracket = [f for f in await _fixtures(db_session, event_id) if f.pool_id is None]
+    seated = {
+        entry_id
+        for f in bracket
+        for entry_id in (f.entry_a_id, f.entry_b_id)
+        if entry_id is not None
+    }
+    assert seated == {entries[1].id, entries[6].id}, (
+        "the pool finished on the five results that survived the void, and seated the "
+        "two the surviving results put on top — 6, not the 7 the beat-cycle would have"
+    )
+    # And the two layers agree, which is the whole point: the pool the bracket treated
+    # as over is the pool the director's table calls ``complete``, and the qualifiers
+    # are its top two rows.
+    (pool_a_read,) = [pool for pool in results["pools"] if pool["pool_id"] == "p-a"]
+    assert pool_a_read["complete"] is True
+    assert [row["entry_id"] for row in pool_a_read["rows"][:2]] == [
+        str(entries[1].id),
+        str(entries[6].id),
+    ]
 
 
 async def test_the_results_read_out_as_both_stages(

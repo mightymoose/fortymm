@@ -212,6 +212,36 @@ deliberately out of scope — a freshly cut bracket is entirely TBD-sided, so
 knockout scheduling is inherently *incremental* (placeable only as pools resolve),
 which is a different solver contract rather than a bigger one.
 
+**A voided pool pairing is left out of the "pool is finished" test, not counted as
+a missing score.** A voided match is terminal and never produces a result. The
+standings already take this position: `PoolInput.fixture_count` counts only the
+pairings that can still yield a result, so a pool that hit one still reaches
+`complete`. The draw side must agree, because the qualifiers are meant to be the
+top of the table a director is reading. If it counted the voided pairing instead,
+the pool would sit one score short forever. Its qualifiers would never seat, the
+knockout would never become ready, and no director action could clear it, while
+the table on screen called that same pool complete. Two layers would disagree
+about the one fact they exist to share.
+
+The voided pairing's **entrants** still count as seated in the pool. A player
+whose only pairing was voided appears in the finishing order with a row of zeros,
+which is what the standings table shows.
+
+**A pool with no usable result at all is refused, not served.** When every pairing
+in a pool is voided, the only thing left to rank on is the entry-id fallback at
+the end of the tiebreak chain, so the qualifiers would be arbitrary. This is the
+one place the two layers part company on purpose. The standings call such a pool
+complete and show a table of zeros, which is honest to look at. Seating
+qualifiers off it would not be. Voiding has exactly one producer today, an
+account merge's self-play collision (ADR-0013), so reaching this needs every
+pairing in one pool to be voided.
+
+Nothing re-advances a draw at void time. `account_merge` calls `void_match` and
+never `materialize_event`, so the seating catches up on the next result
+completion in that event. If the voided pairing is the last thing outstanding in
+the whole event, no further completion happens and those qualifiers stay
+unseated. Making the void path re-advance the event would close that gap.
+
 ## Consequences
 
 The client is not free, and one of its failure modes is silent. `DRAW_TYPES` must

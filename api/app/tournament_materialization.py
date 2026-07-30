@@ -113,7 +113,11 @@ async def materialize_event(
     ``match`` over the draw type with no catch-all, so a new one cannot arrive here
     having quietly opted out of a load its strategy needs.
     """
-    fixtures, completed_match_ids = await _fixtures_with_completed_matches(db, event.id)
+    (
+        fixtures,
+        completed_match_ids,
+        voided_match_ids,
+    ) = await _fixtures_with_match_statuses(db, event.id)
     if not fixtures:
         # An event with no draw materializes nothing — but go-live's precondition means
         # this is unreachable on that path (every event has a current draw). Guarding it
@@ -125,7 +129,9 @@ async def materialize_event(
         if reads_fixture_games(event.draw_settings.draw_type)
         else {}
     )
-    plan = strategy.advance([fixture_state(f, game_counts) for f in fixtures])
+    plan = strategy.advance(
+        [fixture_state(f, game_counts, voided_match_ids) for f in fixtures]
+    )
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
     # fixture made whole by them seats its match in this same transaction. A fill only
     # ever seats a still-empty side (``advance()`` never plans one over a filled side,
@@ -141,7 +147,11 @@ async def materialize_event(
     # a fixture the fills completed is seen ready here. Fills only add sides (never a
     # match or a winner), so this recomputed ready set is a superset of the first
     # plan's and needs no second side-fill pass beyond the loop above.
-    ready = set(ready_fixtures([fixture_state(f, game_counts) for f in fixtures]))
+    ready = set(
+        ready_fixtures(
+            [fixture_state(f, game_counts, voided_match_ids) for f in fixtures]
+        )
+    )
     ready_fixture_rows = [f for f in fixtures if f.id in ready]
     if not ready_fixture_rows:
         return
@@ -174,11 +184,11 @@ async def materialize_event(
         fixture.match_id = match.id
 
 
-async def _fixtures_with_completed_matches(
+async def _fixtures_with_match_statuses(
     db: AsyncSession, event_id: uuid.UUID
-) -> tuple[list[TournamentFixture], list[uuid.UUID]]:
-    """This event's fixtures, and the ids of the matches among them that are **currently
-    completed** — in ONE statement.
+) -> tuple[list[TournamentFixture], list[uuid.UUID], frozenset[uuid.UUID]]:
+    """This event's fixtures, the ids of the matches among them that are **currently
+    completed**, and the ids of the ones that are **voided** — in ONE statement.
 
     The status rides along on the fixture load rather than being asked for separately:
     a fixture's match is reached by an outer join (outer, because most fixtures have no
@@ -195,10 +205,19 @@ async def _fixtures_with_completed_matches(
     how a result under correction un-finishes the pool it was in rather than freezing a
     stale qualifier list (ADR 20260727).
 
-    The ids are handed to :func:`app.tournament_queries.game_counts_by_match` — the same
-    loader the read path projects standings through, so the qualifiers a draw seats and
-    the table a director is reading are counted by one implementation — and only when
-    the draw type reads them at all.
+    The completed ids are handed to
+    :func:`app.tournament_queries.game_counts_by_match` — the same loader the read path
+    projects standings through, so the qualifiers a draw seats and the table a director
+    is reading are counted by one implementation — and only when the draw type reads
+    them at all.
+
+    The **voided** ids are the other half of the same fact, and they are collected
+    unconditionally: they cost nothing (the status is already in hand), and no draw type
+    can afford to be blind to them. A voided pairing can never produce a result, so a
+    strategy that treated it as a missing score would hold its pool permanently
+    unfinished — one score short forever — while the standings, which exclude voided
+    pairings from a pool's ``fixture_count``, showed that same pool ``complete``
+    (:attr:`app.draws.FixtureState.match_voided`).
     """
     rows = (
         await db.execute(
@@ -209,11 +228,16 @@ async def _fixtures_with_completed_matches(
     ).all()
     fixtures: list[TournamentFixture] = []
     completed_match_ids: list[uuid.UUID] = []
+    voided_match_ids: set[uuid.UUID] = set()
     for fixture, status in rows:
         fixtures.append(fixture)
-        if fixture.match_id is not None and status is MatchStatus.completed:
+        if fixture.match_id is None:
+            continue
+        if status is MatchStatus.completed:
             completed_match_ids.append(fixture.match_id)
-    return fixtures, completed_match_ids
+        elif status is MatchStatus.voided:
+            voided_match_ids.add(fixture.match_id)
+    return fixtures, completed_match_ids, frozenset(voided_match_ids)
 
 
 async def _entry_user_ids(

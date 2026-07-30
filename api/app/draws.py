@@ -343,6 +343,23 @@ class FixtureState:
     #: :func:`reads_fixture_games` is where that is said once so a caller knows whether
     #: it has to load the counts at all.
     games: FixtureGames | None = None
+    #: Whether this fixture's match is **voided** — terminal, and contributing nothing
+    #: (ADR-0013). A voided pairing genuinely produced no result and never will: the
+    #: match is closed to proposals, and ``ready_fixtures`` will not re-materialize a
+    #: fixture that already has a ``match_id``.
+    #:
+    #: A plain ``bool``, not the ``MatchStatus`` it is read off, because this module is
+    #: constructible from literals and imports nothing from the ORM. Voided-ness is the
+    #: only thing about a match's status any strategy asks, so the bridge
+    #: (:func:`app.tournament_draws.fixture_state`) answers that one question and the
+    #: enum stays on its own side of the seam.
+    #:
+    #: It is what stops a voided pairing wedging its pool: without it the pool would sit
+    #: one score short of "every fixture carries a score" forever — never finished, its
+    #: qualifiers never seated — while the standings, which already exclude voided
+    #: pairings from a pool's ``fixture_count`` (:class:`app.results.PoolInput`), showed
+    #: that same pool ``complete``. Two layers disagreeing about whether a pool is over.
+    match_voided: bool = False
 
     @property
     def is_pending(self) -> bool:
@@ -675,12 +692,18 @@ class RrThenKoStrategy:
     decided, with B and C still playing. A knockout fixture simply is not ``ready``
     until both its sides are seated, which :func:`ready_fixtures` already handles.
 
-    **A pool is finished when every one of its fixtures has a score** — the live-outcome
-    view (:attr:`FixtureState.games`), the same one the standings are projected from,
-    not the written-back ``winner_entry_id`` that no read reads. So a result under
-    correction un-finishes its pool rather than freezing a stale qualifier list, and a
-    pool whose match was **voided** never finishes: that pairing genuinely produced no
-    result, and this shape cannot tell a voided pairing from an unplayed one.
+    **A pool is finished when every one of its fixtures that can still produce a
+    result has a score** — the live-outcome view (:attr:`FixtureState.games`), the
+    same one the standings are projected from, not the written-back
+    ``winner_entry_id`` that no read reads. So a result under correction un-finishes
+    its pool rather than freezing a stale qualifier list. A **voided** pairing is the
+    one exception: it never will produce a result, so it is left out of the
+    requirement rather than counted-but-missing, exactly as the standings leave it out
+    of a pool's ``fixture_count`` (:class:`app.results.PoolInput`). Counting it would
+    hold the pool one score short forever — never finished, its qualifiers never
+    seated, the knockout never ready, and no remedy a director could reach — while the
+    table on screen called that same pool ``complete``. See
+    :func:`_finished_pool_order`.
 
     **A correction that changes who qualified does not re-seat the bracket**,
     knowingly (ADR): a :class:`SideFill` only ever fills an *empty* side, so a pool
@@ -823,23 +846,44 @@ def _finished_pool_order(
 ) -> list[EntryTally] | None:
     """This pool's finishing order, or ``None`` if the pool is **not finished**.
 
-    Finished = every fixture in it carries a score. The order itself is
-    :func:`~app.pool_finishing_order.finishing_order` — *the* definition of how a pool
-    finished, the same call :class:`~app.results.RoundRobinResults` makes for the
-    standings table — so the qualifiers are exactly the top of the table a director is
-    reading, structurally and not by coincidence.
+    Finished = every fixture in it that can still produce a result carries a score. The
+    order itself is :func:`~app.pool_finishing_order.finishing_order` — *the* definition
+    of how a pool finished, the same call :class:`~app.results.RoundRobinResults` makes
+    for the standings table — so the qualifiers are exactly the top of the table a
+    director is reading, structurally and not by coincidence.
+
+    Which is why a **voided** fixture is skipped rather than treated as a missing score:
+    it can never produce one (the match is terminal, and ``ready_fixtures`` will not
+    re-materialize a fixture that has a ``match_id``), and the standings already exclude
+    it from the ``fixture_count`` they call a pool ``complete`` against
+    (:class:`app.results.PoolInput`). Requiring its score here would leave the pool
+    permanently un-finished and its qualifiers permanently unseated while the table on
+    screen said the pool was over — the two layers disagreeing about the one fact this
+    function exists to share. Its **entrants** still count: they are seated in the pool
+    and appear in the standings, so a player whose only pairing was voided is in the
+    order with a row of zeros, exactly as the table shows them.
+
+    A pool with **no** usable outcome at all — every fixture voided — is ``None``, not
+    an order. The only thing left to rank on would be the entry-id fallback at the end
+    of the tiebreak chain, so "the qualifiers" would be arbitrary. This is the one
+    place the two layers part company on purpose: the standings call such a pool
+    ``complete`` (0 outcomes of 0 countable fixtures) and show a table of zeros, which
+    is honest to look at, and seating qualifiers off it would not be. It takes every
+    pairing in a pool being voided to reach, and voiding has exactly one producer today
+    (an account merge's self-play collision, ADR-0013), so it is a shape to refuse
+    rather than to serve.
     """
     entrants: dict[EntryId, None] = {}
     outcomes: list[MatchOutcome] = []
     for fixture in pool_fixtures:
-        if (
-            fixture.entry_a_id is None
-            or fixture.entry_b_id is None
-            or fixture.games is None
-        ):
+        if fixture.entry_a_id is None or fixture.entry_b_id is None:
             return None
         entrants[fixture.entry_a_id] = None
         entrants[fixture.entry_b_id] = None
+        if fixture.match_voided:
+            continue
+        if fixture.games is None:
+            return None
         outcomes.append(
             MatchOutcome(
                 entry_a_id=fixture.entry_a_id,
@@ -858,11 +902,23 @@ def _refuse_gameless_pool_results(
 ) -> None:
     """Raise :class:`MissingFixtureGames` when pool fixtures are decided and the whole
     input carries no game counts — see that class for why this is loud rather than
-    tolerated."""
+    tolerated.
+
+    A **voided** fixture is not evidence of the wiring bug and is excluded. Voiding
+    does not clear the ``winner_entry_id`` a completion wrote back, but it does take
+    the match out of ``completed``, so its games go away: "decided, and no games" is
+    that fixture's ordinary settled state, not a projection that forgot to load them.
+    Counting it would turn a single voided pairing in a draw nobody has scored yet into
+    a 500. What the guard still catches is unchanged, because it needs a decided fixture
+    that *should* carry games: project a played-out pool without its counts and every
+    one of its scored fixtures lands in this list.
+    """
     gameless = [
         fixture
         for fixture in pooled
-        if fixture.winner_entry_id is not None and fixture.games is None
+        if fixture.winner_entry_id is not None
+        and fixture.games is None
+        and not fixture.match_voided
     ]
     if not gameless or any(fixture.games is not None for fixture in fixtures):
         return
