@@ -626,6 +626,43 @@ class TournamentTable(BaseModel):
     court: str
 
 
+PoolPosition = Annotated[
+    int,
+    Field(
+        ge=0,
+        description=(
+            "Where this pool sits in its event's pool order: 0-based, and **assigned "
+            "by the server** from the pool's index in the `pools` list you sent. It "
+            "is read-only — a non-negative `position` on a write payload is "
+            "overwritten rather than honoured, so to reorder an event's pools, send "
+            "them in the order you want. (A negative one is a 422: the bound is "
+            "checked before the reordering, so it is refused rather than corrected.) "
+            "Two pools of one event never share a position."
+        ),
+    ),
+]
+"""A pool's place in its event's pool order — 0-based, server-assigned, never
+client-supplied.
+
+Pool order is a **fact about the event**, and until this field existed it was carried by
+two things that are both about to disappear (ADR 20260801, "Pools carry an explicit
+``position``"): the JSONB array's order, and the lexicographic sort of the client-minted
+``p-1-…``/``p-2-…`` ids. Under the random UUID primary keys the pools table will have,
+sorting by id is *arbitrary* — pools would render in a random order and the snake would
+seed against a random order, producing a draw that still cuts but seeds differently.
+Invisible to the type checker; findable only by QA. An explicit ordering column is the
+only thing that survives the id change, so it is written now, while the array order is
+still there to derive it from.
+
+It is **not** a field a client sets. The write boundary
+(:func:`_positions_are_the_event_pool_order`, on the :data:`EventPools` alias both write
+verbs share) stamps it from the index on the way in, so a client that echoes a stored
+``position`` back — which the event editor does, it PATCHes the whole form — gets the
+order it actually sent rather than a 422 for a field it never authored. That is also
+what makes "two pools of one event share a position" unrepresentable through the API:
+the positions are ``range(len(pools))`` by construction, not by review."""
+
+
 class Pool(BaseModel):
     """A slice of tables reserved for a window of time within an event.
 
@@ -640,12 +677,21 @@ class Pool(BaseModel):
     something — it is what the director clicks, what the conflict warnings quote, and
     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
     is three blank rows is not a thing anyone could act on.
+
+    Its ``position`` is the pool's place in the event's pool ORDER, and it is the one
+    field here the client does not author: the server stamps it from the index of the
+    list it was sent in (:data:`PoolPosition`). It defaults to ``0`` so that pools
+    stored before this field existed stay *readable* — a read boundary must not turn a
+    history it cannot change into a ``ValidationError`` (the same asymmetry
+    :data:`AddressComponent` is about) — and every pool written through
+    :data:`EventPools` carries a real one.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     id: ValueObjectId
     name: str = Field(min_length=1)
+    position: PoolPosition = 0
     slot: Slot
     table_ids: list[str]
 
@@ -715,18 +761,66 @@ def _pool_ids_are_unique(pools: list[Pool]) -> list[Pool]:
     return pools
 
 
-EventPools = Annotated[list[Pool], AfterValidator(_pool_ids_are_unique)]
-"""An event's pools: any number of them, no two sharing an ``id``.
+def _positions_are_the_event_pool_order(pools: list[Pool]) -> list[Pool]:
+    """Stamp each pool's ``position`` with its index in the list the client sent.
+
+    The pool order an event has is the order its pools arrived in — that is what the
+    director dragged into place, and it is what every ordered read has always meant.
+    This is the one place that fact becomes a stored value (ADR 20260801, "Pools carry
+    an explicit ``position``"), so that the order stops being carried by things that are
+    about to stop existing: the JSONB array's order, and the lexicographic sort of the
+    client-minted pool ids.
+
+    It **overwrites** rather than validates, and that is deliberate on both counts:
+
+    * *Overwrites*, so a ``position`` on the payload cannot decide anything. The event
+      editor PATCHes the whole event form back — pools included, positions and all — so
+      refusing a client-sent ``position`` with a 422 would break the ordinary round trip
+      of a page that is only echoing what we handed it. Ignoring it is the same rule
+      (the client does not get to choose) without the collateral damage.
+    * *From the index*, so two pools of one event cannot share a position: what is
+      written is ``range(len(pools))``, by construction. There is no pools table yet
+      and so no ``UNIQUE (event_id, position)`` to catch a duplicate — the constraint
+      the ADR specifies arrives with the table — which is exactly why the value must
+      not be assembled from anything a caller could repeat.
+
+    It lives on :data:`EventPools`, the alias **both** write verbs share, for the reason
+    ``_pool_ids_are_unique`` does: "the patch path is the hole" is the same bug wearing
+    a different verb, and an event born with positions and then patched without them
+    would be an event whose order silently reverted to whatever the ids sorted as.
+
+    ``model_copy(update=…)`` rather than a mutation, and that detail is load-bearing on
+    the patch path: it marks ``position`` as **explicitly set**, and the update verb
+    serializes its payload with ``model_dump(exclude_unset=True)``. A stamp that left
+    the field merely defaulted would be dropped from that dump, and the column would
+    come back from a PATCH with no ``position`` key at all.
+    """
+    return [
+        pool.model_copy(update={"position": index}) for index, pool in enumerate(pools)
+    ]
+
+
+EventPools = Annotated[
+    list[Pool],
+    AfterValidator(_pool_ids_are_unique),
+    AfterValidator(_positions_are_the_event_pool_order),
+]
+"""An event's pools: any number of them, no two sharing an ``id``, each carrying the
+server-assigned ``position`` of its place in this very list
+(:func:`_positions_are_the_event_pool_order`).
 
 Shared verbatim by ``TournamentEventCreate`` and ``TournamentEventUpdate``, so the
 uniqueness rule cannot drift between the two verbs — sharing the alias is what makes
-them impossible to drift apart, exactly as it is for ``EventMaxPlayers``.
+them impossible to drift apart, exactly as it is for ``EventMaxPlayers``. The position
+stamp is on the same alias for the same reason, and it is why a *patch* re-orders an
+event's pools by simply sending them re-ordered.
 
-An ``AfterValidator``, deliberately: it runs on the parsed ``list[Pool]`` (so it reads
-``pool.id``, not ``pool["id"]``) and it contributes **nothing** to the JSON schema, so
-the OpenAPI shape of ``pools`` is unchanged and the generated clients keep the array
-they already had. A rule a client cannot express in a schema keyword is not a reason to
-let the server hold a state it cannot survive."""
+Both are ``AfterValidator``s, deliberately: they run on the parsed ``list[Pool]`` (so
+they read ``pool.id``, not ``pool["id"]``) and they contribute **nothing** to the JSON
+schema — the array keyword-for-keyword is what it was, and what the generated clients
+learn about ``position`` they learn from the field on :class:`Pool`, not from here. A
+rule a client cannot express in a schema keyword is not a reason to let the server hold
+a state it cannot survive."""
 
 
 # ----- read models ----------------------------------------------------------

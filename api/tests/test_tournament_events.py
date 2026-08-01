@@ -210,6 +210,172 @@ async def test_create_on_a_missing_tournament_raises_not_found(
         )
 
 
+# ----- pool positions ------------------------------------------------------
+#
+# A pool's ``position`` is the one field on it the client does not author: the write
+# boundary stamps it from the pool's index in the list that was sent, on BOTH verbs
+# (ADR 20260801, "Pools carry an explicit ``position``"). These tests are what says the
+# stamp is the *order sent* and nothing else — every pool below is named and id'd so
+# that alphabetical order (by either) is a DIFFERENT answer from the order sent, which
+# is what makes them able to fail. Asserting "each pool has a position" would pass
+# against an implementation that assigned all zeros, sorted by name, or wrote back
+# whatever the client asked for.
+
+
+def _pool(pool_id: str, name: str, **extra: Any) -> dict[str, Any]:
+    """One pool payload, valid but for whatever ``extra`` the caller adds."""
+    return {
+        "id": pool_id,
+        "name": name,
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+        "table_ids": ["t1"],
+        **extra,
+    }
+
+
+def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
+    """``(name, position)`` per stored pool, read off the JSONB in **column order**.
+
+    Names, not ids, because a pool named "Pool C" sitting at position 0 is the whole
+    claim: it is the pool the director put first, and it is not the alphabetically first
+    one. Read from the raw column rather than through ``Pool`` so a default the schema
+    supplies could not stand in for a value the write path failed to store.
+    """
+    return [(pool["name"], pool["position"]) for pool in event.pools]
+
+
+async def test_create_positions_pools_by_the_order_they_were_sent(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Three pools sent as **C, A, B** are stored as positions 0, 1, 2 *in that order*.
+
+    Sorted by name — or by id, which is how pool order used to be recovered — the
+    answer would be C=2, A=0, B=1. Sorted by nothing at all it would be three zeros.
+    The event's pool order is the order the director sent, and this is the assertion
+    that distinguishes the three.
+    """
+    owner = await make_user(db_session, "events-create-pool-positions")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            pools=[
+                _pool("p-c", "Pool C"),
+                _pool("p-a", "Pool A"),
+                _pool("p-b", "Pool B"),
+            ]
+        ),
+    )
+    event_id = event.id
+
+    assert _named_positions(event) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
+
+    # Persisted, not merely returned — and read back off the row.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert _named_positions(row) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
+    # No two pools of one event share a position.
+    positions = [pool["position"] for pool in row.pools]
+    assert len(set(positions)) == len(positions)
+
+
+async def test_create_overwrites_a_client_supplied_pool_position(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """``position`` is server-assigned: three pools that all claim position ``7`` are
+    stored as 0, 1, 2.
+
+    The event editor PATCHes the whole event form back, pools included, so a client
+    *will* send this field once it can read it — and the values it sends must decide
+    nothing. There is no pools table yet and so no ``UNIQUE (event_id, position)``
+    underneath to catch three sevens; the boundary is the whole enforcement.
+    """
+    owner = await make_user(db_session, "events-create-pool-position-override")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            pools=[
+                _pool("p-c", "Pool C", position=7),
+                _pool("p-a", "Pool A", position=7),
+                _pool("p-b", "Pool B", position=7),
+            ]
+        ),
+    )
+
+    assert _named_positions(event) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
+
+
+async def test_update_repositions_pools_by_the_order_they_were_patched(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The patch path is the other half of the same rule: the event is born C, A, B and
+    patched to B, C, A, and its stored positions follow the payload.
+
+    Guarding only ``create`` would leave the order to rot on the first edit — an event
+    born with positions and then patched without them would silently fall back to
+    whatever the ids happened to sort as, which is the exact failure the explicit
+    position exists to end. The event is deliberately **un-drawn**, so the pool-set
+    freeze is not what is being tested here: the same three ids go in, re-ordered.
+    """
+    owner = await make_user(db_session, "events-update-pool-positions")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            pools=[
+                _pool("p-c", "Pool C"),
+                _pool("p-a", "Pool A"),
+                _pool("p-b", "Pool B"),
+            ]
+        ),
+    )
+    event_id = event.id
+
+    updated, _ = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                "pools": [
+                    _pool("p-b", "Pool B"),
+                    _pool("p-c", "Pool C"),
+                    _pool("p-a", "Pool A"),
+                ]
+            }
+        ),
+    )
+
+    assert _named_positions(updated) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert _named_positions(row) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
+    positions = [pool["position"] for pool in row.pools]
+    assert len(set(positions)) == len(positions)
+
+
 # ----- delete --------------------------------------------------------------
 
 
