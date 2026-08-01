@@ -92,6 +92,8 @@ from tests._helpers import (
     grant_permissions,
     make_user,
     start_session,
+    venue_tables,
+    with_table_aliases,
 )
 
 MCP_URL = "http://testserver/mcp/"
@@ -1401,7 +1403,7 @@ def _tournament_payload() -> dict[str, object]:
             "postal": "94703",
             "country": "USA",
         },
-        "table_catalogue": [{"id": "t1", "label": "Table 1", "court": "A"}],
+        "table_catalogue": [{"label": "Table 1", "court": "A"}],
     }
 
 
@@ -1544,7 +1546,6 @@ async def _seed_owned_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[],
         league_id=league.id,
         created_by_user_id=owner.id,
         status=status,
@@ -2103,10 +2104,7 @@ async def _seed_drawable_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,
@@ -2125,7 +2123,7 @@ async def _seed_drawable_tournament(
         slot={"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[_DRAW_POOL_A, _DRAW_POOL_B],
+        pools=with_table_aliases(tournament, [_DRAW_POOL_A, _DRAW_POOL_B]),
     )
     db_session.add(event)
     await db_session.commit()
@@ -2643,10 +2641,7 @@ async def _seed_previewable_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=status,
@@ -2665,14 +2660,21 @@ async def _seed_previewable_tournament(
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
         timezone="America/Los_Angeles",
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": "2030-01-01", "start": "09:00", "end": "17:00"},
-                "table_ids": ["t1", "t2"],
-            }
-        ],
+        pools=with_table_aliases(
+            tournament,
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {
+                        "date": "2030-01-01",
+                        "start": "09:00",
+                        "end": "17:00",
+                    },
+                    "table_ids": ["t1", "t2"],
+                }
+            ],
+        ),
     )
     db_session.add(event)
     await db_session.commit()
@@ -3999,10 +4001,7 @@ async def _seed_placeable_fixture(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,
@@ -4021,14 +4020,17 @@ async def _seed_placeable_fixture(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[
-            {
-                "id": "p-os-1",
-                "name": "Pool A",
-                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1"],
-            }
-        ],
+        pools=with_table_aliases(
+            tournament,
+            [
+                {
+                    "id": "p-os-1",
+                    "name": "Pool A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                    "table_ids": ["t1"],
+                }
+            ],
+        ),
     )
     db.add(event)
     await db.commit()

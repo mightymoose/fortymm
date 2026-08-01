@@ -84,7 +84,7 @@ def _tournament_payload() -> dict[str, Any]:
             "postal": "94703",
             "country": "USA",
         },
-        "table_catalogue": [{"id": "t1", "label": "Table 1", "court": "A"}],
+        "table_catalogue": [{"label": "Table 1", "court": "A"}],
     }
 
 

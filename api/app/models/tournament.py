@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_fixture import TournamentFixture
+    from app.models.tournament_table import VenueTable
 
 
 class TournamentStatus(enum.Enum):
@@ -71,9 +72,10 @@ class Tournament(Base):
     "standalone, not tied to a league" until an event's rating predicate needed a
     ladder to mean anything; ``league_id`` is NOT NULL, and an omitted one resolves
     to the default league at create. Names are owner-scoped, not globally unique,
-    so there's no unique constraint on ``name``. ``address`` and
-    ``table_catalogue`` are typed JSONB value-objects decoded to Pydantic models at
-    the API boundary."""
+    so there's no unique constraint on ``name``. ``address`` is a typed JSONB
+    value-object decoded to a Pydantic model at the API boundary; the venue catalogue
+    is **not** — it is ``tables``, a real child table (ADR 20260801 "a placement names
+    a real table")."""
 
     __tablename__ = "tournaments"
     __table_args__ = (
@@ -120,9 +122,11 @@ class Tournament(Base):
     address: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
-    table_catalogue: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'[]'::jsonb")
-    )
+    # There is deliberately no ``table_catalogue`` column. The venue catalogue was a
+    # NOT NULL JSONB list of ``{id, label, court}`` value-objects keyed by
+    # client-supplied strings; it is the ``tables`` relationship below now, so a
+    # placement can foreign-key the table it names (ADR 20260801).
+    #
     # The ladder that judges this tournament's eligibility rules (ADR-0783).
     # RESTRICT on delete, like ``Match.league_id``: the league a tournament is run
     # on cannot be deleted out from under it.
@@ -151,6 +155,41 @@ class Tournament(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="TournamentEvent.created_at",
+    )
+
+    # The venue catalogue (ADR 20260801). Ordered by the director's own order, which
+    # is what ``VenueTable.position`` carries.
+    #
+    # ``lazy="selectin"``, and eagerly rather than by an option at each call site, for
+    # the reason ``TournamentEvent.draw_settings`` is eager: async SQLAlchemy raises
+    # instead of emitting a lazy load, so every one of the ~10 places that loads a
+    # ``Tournament`` and reads its catalogue (the serializer, the dashboard panel, the
+    # call copy, the solver's input load, the preview) would need to remember an
+    # option. ``selectin`` and not ``joined`` because this is a one-to-many: joined
+    # would multiply the parent rows, which the list endpoint's ordering could not
+    # survive. It batches over the whole result set, so the tournament LIST pays ONE
+    # extra statement however many tournaments it returns — the statement-count pins
+    # in ``tests/test_tournaments.py`` moved by exactly one.
+    #
+    # ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` is the delete path, the same
+    # shape ``events`` uses: deleting a tournament takes its tables with it.
+    #
+    # With one honest difference from ``events``, caused by the eager load above: the
+    # collection is already in the session when the delete runs, so the unit of work
+    # issues the child ``DELETE`` itself and the database cascade never fires on the
+    # ORM path. It is not decoration — it is what covers every path that does NOT load
+    # the collection first (a raw ``DELETE``, psql, a future bulk reap), and
+    # ``test_the_venue_tables_fk_cascades_in_the_database`` is one of those paths
+    # precisely because the ORM-path test stays green without it.
+    #
+    # ``delete-orphan`` is what the catalogue *write* leans on — a table dropped from
+    # the submitted list is removed by taking it out of this collection.
+    tables: Mapped[list["VenueTable"]] = relationship(
+        back_populates="tournament",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="VenueTable.position",
     )
 
 

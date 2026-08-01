@@ -38,7 +38,10 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    venue_tables,
+)
 
 # Two pools, so the snake has somewhere to snake to and a fixture's ``pool_id`` is a
 # ref that resolves against the right one — the same shape ``test_tournaments.py``'s
@@ -76,10 +79,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,

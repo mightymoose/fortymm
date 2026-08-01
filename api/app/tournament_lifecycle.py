@@ -57,6 +57,7 @@ from app.tournament_errors import (
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_realtime import stage_tournament_entrant_hints
+from app.tournament_tables import stored_tables
 
 # The lifecycle runs forward only, and exactly three transitions exist (ADR-0017):
 # ``draft`` → ``published`` (publish), ``published`` → ``live`` (go live), and
@@ -130,8 +131,10 @@ async def create_tournament(
       than attempted-and-forgiven precisely because a blank address composes to ``""``,
       which resolves to zero candidates — an organizer with no venue would otherwise be
       told their nonexistent venue could not be found.
-    * The value-objects (``address``, ``table_catalogue``) persist as plain JSONB;
-      the dicts ``model_dump`` produces don't propagate beyond this write boundary.
+    * The ``address`` value-object persists as plain JSONB; the dict ``model_dump``
+      produces doesn't propagate beyond this write boundary. The ``table_catalogue``
+      does **not**: it becomes ``tournament_tables`` rows (ADR 20260801), each carrying
+      a server-minted UUID id and the ``position`` of its place in the submitted list.
     * **No** ``status`` is set: it isn't on the create schema (ADR-0017), so a
       tournament is born ``draft`` from the column's server default — one source for
       the starting status — and the ``refresh`` below reads it back.
@@ -164,7 +167,10 @@ async def create_tournament(
         start_date=payload.start_date,
         end_date=payload.end_date,
         address=address.model_dump() if address is not None else None,
-        table_catalogue=[t.model_dump() for t in payload.table_catalogue],
+        # The catalogue is child ROWS now (ADR 20260801), not a JSONB column, and the
+        # ids on them are the database's — ``stored_tables`` sets no id, only the
+        # ``position`` each table's index in the submitted list gives it.
+        tables=stored_tables(payload.table_catalogue),
         league_id=league.id,
         created_by_user_id=actor.id,
     )

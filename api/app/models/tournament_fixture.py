@@ -144,11 +144,13 @@ class TournamentFixture(Base):
         ForeignKey("matches.id", ondelete="SET NULL"),
         nullable=True,
     )
-    #: A **placement**'s table: a *string ref* into the tournament's
-    #: ``table_catalogue`` JSONB (names a ``TournamentTable.id``), the same string-ref
-    #: pattern as ``pool_id`` — deliberately not a foreign key, there is no tables
-    #: table. ``NULL`` = unassigned. ``(table_id, scheduled_start) = (NULL, NULL)``
-    #: means the fixture is unplaced (ADR-0790).
+    #: A **placement**'s table: a *string ref* naming a ``tournament_tables`` row's id,
+    #: the same string-ref pattern as ``pool_id``. Not a foreign key **yet** — the
+    #: catalogue only became a real table in ADR 20260801, which also makes "the table
+    #: exists" an invariant, so the key (and the ``ON DELETE RESTRICT`` behind its
+    #: named 409) is the step after this one. ``NULL`` = unassigned.
+    #: ``(table_id, scheduled_start) = (NULL, NULL)`` means the fixture is unplaced
+    #: (ADR-0790).
     table_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: A **placement**'s predicted start — a ``timestamptz`` **instant**
     #: (``TIMESTAMP WITH TIME ZONE``), the server composes it from the event's Slot

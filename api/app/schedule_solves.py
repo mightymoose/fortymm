@@ -743,15 +743,19 @@ async def _load_solver_inputs(
             match_status[match_id] = status
             match_completed_at[match_id] = completed_at
 
-    # Parse the JSONB value-objects once, at this boundary, with the same
-    # models the write boundary validated them with (parse, don't validate).
+    # Parse the value-objects once, at this boundary, with the same models the write
+    # boundary validated them with (parse, don't validate). The catalogue is rows now
+    # (ADR 20260801), eagerly loaded on the tournament and already in the director's
+    # order; the solver's ``TableId`` stays a string, so a table's UUID id crosses into
+    # it as its text — the same text a pool's ``table_ids`` and a fixture's ``table_id``
+    # hold.
     parsed_tables = [
-        TournamentTable.model_validate(table) for table in tournament.table_catalogue
+        TournamentTable.model_validate(table) for table in tournament.tables
     ]
-    catalogue = tuple(TableId(table.id) for table in parsed_tables)
+    catalogue = tuple(TableId(str(table.id)) for table in parsed_tables)
     # table_id → catalogue label: the DB-aware resolution a placement conflict's
     # shared table is humanized through (mirrors ``load_copy_ingredients``).
-    table_labels = {table.id: table.label for table in parsed_tables}
+    table_labels = {str(table.id): table.label for table in parsed_tables}
     parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Pool]]] = [
         (
             event,

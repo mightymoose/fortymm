@@ -45,7 +45,10 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_solve_service import request_schedule_solve
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    venue_tables,
+)
 
 DATE = "2030-01-01"
 
@@ -75,6 +78,7 @@ async def _make_tournament(
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Scheduled Open",
         status=TournamentStatus.published,
@@ -88,9 +92,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -116,7 +118,7 @@ async def _make_tournament(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )

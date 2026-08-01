@@ -18,7 +18,7 @@ instead of stacking a new one.
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -46,6 +46,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTable,
 )
 from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
@@ -54,6 +55,7 @@ from tests._helpers import (
     make_user,
     opponent_session,
     start_session,
+    venue_tables,
 )
 
 DATE = "2030-01-01"
@@ -85,6 +87,7 @@ async def _make_tournament(
     matches."""
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Trigger Open",
         status=TournamentStatus.published,
@@ -98,9 +101,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -121,7 +122,7 @@ async def _make_tournament(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )
@@ -465,17 +466,33 @@ async def test_a_completion_during_a_running_solve_sets_the_rerun_flag(
 # cut draw to place.
 
 
-def _catalogue(*table_ids: str) -> list[dict[str, str]]:
-    """A table-catalogue payload in the shape ``_make_tournament`` stores."""
+def _catalogue(*labels: str) -> list[dict[str, str]]:
+    """A table-catalogue payload in the shape ``_make_tournament`` stores.
+
+    Labels only: a table's id is minted by the server (ADR 20260801), so the write
+    shape has no ``id`` and the catalogue is applied **by position** — the i-th entry
+    here is the i-th table the tournament already holds."""
+    return [{"label": label, "court": "Main"} for label in labels]
+
+
+async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
+    """The tournament's venue-table ids, in catalogue order — what a pool's
+    ``table_ids`` must name now that they are server-minted UUIDs."""
     return [
-        {"id": table_id, "label": table_id.upper(), "court": "Main"}
-        for table_id in table_ids
+        str(table_id)
+        for table_id in (
+            await db.execute(
+                select(VenueTable.id)
+                .where(VenueTable.tournament_id == tournament_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
     ]
 
 
-def _pools_payload(
-    *, end: str, table_ids: tuple[str, ...] = ("t1", "t2")
-) -> list[dict[str, Any]]:
+def _pools_payload(*, end: str, table_ids: Sequence[str]) -> list[dict[str, Any]]:
     """The event's one pool, re-sent with the same id (the pool-set freeze
     demands it) and whatever window/tables the test is moving."""
     return [
@@ -521,7 +538,7 @@ async def test_a_table_catalogue_edit_on_a_drawn_tournament_requests_a_settings_
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("t1", "t2", "t3")},
+        json={"table_catalogue": _catalogue("T1", "T2", "T3")},
     )
 
     assert response.status_code == 200, response.text
@@ -545,7 +562,7 @@ async def test_a_rename_only_tournament_patch_requests_no_settings_solve(
     )
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("t1", "t2")},
+        json={"table_catalogue": _catalogue("T1", "T2")},
     )
 
     assert renamed.status_code == 200, renamed.text
@@ -564,7 +581,7 @@ async def test_a_table_catalogue_edit_with_no_drawn_event_requests_no_settings_s
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("t1", "t2", "t3")},
+        json={"table_catalogue": _catalogue("T1", "T2", "T3")},
     )
 
     assert response.status_code == 200, response.text
@@ -581,10 +598,11 @@ async def test_a_pool_window_edit_requests_a_settings_solve(
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"win-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
+    table_ids = await _catalogue_ids(db_session, tournament_id)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"pools": _pools_payload(end="18:00")},
+        json={"pools": _pools_payload(end="18:00", table_ids=table_ids)},
     )
 
     assert response.status_code == 200, response.text
@@ -601,6 +619,7 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"nm-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
+    table_ids = await _catalogue_ids(db_session, tournament_id)
 
     renamed = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
@@ -608,7 +627,7 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     )
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"pools": _pools_payload(end="17:00")},
+        json={"pools": _pools_payload(end="17:00", table_ids=table_ids)},
     )
 
     assert renamed.status_code == 200, renamed.text

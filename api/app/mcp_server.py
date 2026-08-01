@@ -1031,10 +1031,10 @@ async def edit_tournament(
     surfaces can never drift on what a valid edit is.
 
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
-    field replaces the current value. ``name``, ``table_catalogue`` and ``league_id``
-    back NOT NULL columns, so an explicit ``null`` for any of them is rejected (send
-    them only to set a real value); ``description`` / ``start_date`` / ``end_date``
-    are nullable and may be cleared with ``null``.
+    field replaces the current value. ``name`` and ``league_id`` back NOT NULL columns
+    and ``table_catalogue`` backs a whole child table, so an explicit ``null`` for any
+    of them is rejected (send them only to set a real value); ``description`` /
+    ``start_date`` / ``end_date`` are nullable and may be cleared with ``null``.
 
     ``address`` (the venue) has THREE cases, so read this before sending one: OMIT it
     to leave the current venue and its coordinates untouched; send a real address to
@@ -1044,7 +1044,11 @@ async def edit_tournament(
     booked, or a private tournament withholding its address), so do not invent a
     placeholder address to fill the field.
 
-    ``table_catalogue`` replaces wholesale when present.
+    ``table_catalogue``, when present, is the venue catalogue IN FULL and IN ORDER, and
+    each entry is a ``label`` and a ``court`` only — a table's id is minted by the
+    server, so sending one is rejected. It is applied BY POSITION: the i-th table sent
+    updates the i-th table stored, a longer list adds tables and a shorter one removes
+    from the end. Send the catalogue you read back, edited, rather than a fresh list.
     ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
     published the ladder is settled. ``status`` is not editable here (it moves only
     across the guarded lifecycle transitions). Returns the updated

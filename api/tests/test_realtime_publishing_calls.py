@@ -50,7 +50,10 @@ from app.models import (
     User,
 )
 from app.realtime import EventKind, RealtimeBroker
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    venue_tables,
+)
 from tests._realtime import watch_hints
 
 DATE = "2030-01-01"
@@ -104,10 +107,7 @@ async def _stage(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": "t1", "label": "T1", "court": "Main"},
-            {"id": "t2", "label": "T2", "court": "Main"},
-        ],
+        tables=venue_tables(("T1", "Main"), ("T2", "Main")),
         league_id=league.id,
         created_by_user_id=owner.id,
     )
