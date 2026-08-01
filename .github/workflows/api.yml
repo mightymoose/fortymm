@@ -82,7 +82,7 @@ jobs:
             echo "api=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.changes.outputs.api == 'true'
         with:
           python-version: '3.13'
