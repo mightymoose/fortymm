@@ -52,11 +52,22 @@ cd "$CLAUDE_PROJECT_DIR"
 # Trust the config (mise refuses to auto-install from untrusted files)
 mise trust --yes
 
-# Idempotent: skips anything already installed
-mise install
+# node + python only. helm and k3d are UAT-only (mise run redeploy-uat), which
+# is out of scope for a cloud session anyway (targets the persistent shared
+# k3d/Tailscale cluster). Skipping them also sidesteps a real download risk: a
+# cloud session's GitHub release-asset requests only reach repos attached to
+# the session, and helm/k3d's release assets live in unattached repos.
+mise install node python
 
 # Persist mise's env into subsequent bash calls in this session.
 # $CLAUDE_ENV_FILE is sourced by Claude Code before each Bash tool call.
 mise env -s bash >> "$CLAUDE_ENV_FILE"
+
+# Project dependencies. Guarded so a resumed session (hook reruns every
+# startup/resume) doesn't reinstall on every turn.
+[ -d api/.venv ] || (cd api && python -m venv .venv && .venv/bin/pip install -e '.[dev]')
+[ -d node_modules ] || npm ci
+[ -d web-client/node_modules ] || (cd web-client && npm ci)
+[ -d e2e/node_modules ] || (cd e2e && npm ci)
 
 exit 0

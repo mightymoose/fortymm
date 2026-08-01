@@ -84,6 +84,35 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 
 **Always reap a QA stack once its branch merges** (`land-the-plane` Step 8). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
 
+## Cloud sessions
+
+This repo runs in Claude Code cloud sessions (claude.ai/code). `.claude/settings.json` wires a
+SessionStart hook, `scripts/install_tools.sh`. On a cloud session, the hook installs `mise`'s
+`node` and `python` tools. It then installs project dependencies: `api/.venv`, root
+`node_modules`, `web-client/node_modules`, and `e2e/node_modules`.
+
+The cloud environment lives in your claude.ai account, not in this repo. It holds network access,
+environment variables, and a setup script that installs `mise`. Configure or check it at
+claude.ai/code, under the cloud icon above the message box.
+
+A setup script for this repo already exists, based on comments in `scripts/install_tools.sh`.
+Before you create a new one, open the existing environment and check its setup script.
+
+If you create a new setup script, note one gap. Trusted network access covers npm, PyPI, and
+Docker Hub, but not `mise.run`, the domain `mise`'s own installer uses. Add `mise.run` under
+Custom network access, or install `mise` through a method that stays inside the Trusted list.
+
+What runs in a cloud session, unmodified:
+- `pytest` in `api/`. Docker comes pre-installed, so testcontainers can start Postgres.
+- The root `e2e/` Docker Compose suite.
+- `scripts/qa-up.sh`. The session's disk is disposable, so you do not need to run
+  `scripts/qa-down.sh` there.
+
+What does not run, by design:
+- `ios/` work. Cloud sessions run Ubuntu. The iOS build needs Xcode.
+- `mise run redeploy-uat`. It targets the shared k3d/Tailscale cluster, not a throwaway session.
+  The cloud-session hook skips `helm` and `k3d` for this reason.
+
 ## Cross-cutting invariants
 
 **OpenAPI is the source of truth for client/server types.** `web-client/src/api/schema.d.ts` is generated from the API's `openapi.json` (`npm run gen:api`, consumed by `openapi-fetch` in `web-client/src/api/client.ts`). The `openapi-schema` CI workflow fails if the committed file drifts. Whenever you change FastAPI routes or pydantic schemas (docstrings count — they become OpenAPI descriptions), run `mise run regen-api-types` and commit `schema.d.ts` in the same PR.
