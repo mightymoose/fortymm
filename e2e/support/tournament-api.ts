@@ -69,6 +69,26 @@ export interface TableSpec {
   readonly court: string
 }
 
+/** One pool of the event's draw, as a **client sends it** (`PoolWrite` on the wire).
+ *
+ * It carries no `position`, and that is not an omission this helper could choose to fix:
+ * `PoolWrite` is `extra="forbid"`, so a create/patch body carrying a `position` is a
+ * **422** naming the field. The server stamps the position from the pool's index in the
+ * list it was sent (ADR 20260801, "Pools carry an explicit `position`"), which makes the
+ * **order of `SeedTournamentOptions.pools`** the payload's one statement about pool
+ * order — and the thing `tournament-pool-order.spec.ts` seeds deliberately at odds with
+ * the ids' lexicographic order.
+ *
+ * `tableIds` is optional because the single-pool default reserves the whole catalogue; a
+ * multi-pool seed usually wants a table each, so ten pools raise no double-booking
+ * warning over one shared table. */
+export interface PoolSpec {
+  readonly id: string
+  readonly name: string
+  /** The catalogue tables this pool reserves. Omitted = **every** seeded table. */
+  readonly tableIds?: ReadonlyArray<string>
+}
+
 /** A venue's six free-text address components (`AddressInput` on the wire). The
  * server geocodes these to coordinates at write time via the injected
  * `Geocoder` — the e2e compose stack declares `GEOCODER: fake`
@@ -118,6 +138,14 @@ export interface SeedTournamentOptions {
   readonly slot?: SlotSpec
   /** The table catalogue; the pool references every listed table. */
   readonly tables?: ReadonlyArray<TableSpec>
+  /** The event's pools, **in the director's order** — omitted = the original single
+   * `Pool A` over the whole catalogue, so existing specs are untouched.
+   *
+   * The list's order is the whole point of the option: it is what the server turns into
+   * the stored `position`s, and therefore what the draw, the deal and the rendered pool
+   * sections are all ordered by. A caller seeding several pools is making a statement
+   * about their order whether it means to or not. */
+  readonly pools?: ReadonlyArray<PoolSpec>
   /** The event's `max_players` cap. Omitted = uncapped (the original minimal
    * shape). The schedule-preview spec sets a small cap so the synthetic field a
    * preview auto-fills to (an uncapped event defaults to 16) is small enough that
@@ -144,8 +172,12 @@ export interface SeedTournamentOptions {
 export interface SeededTournament {
   readonly tournamentId: string
   readonly eventId: string
-  /** The event's single pool id, so a spec can scope its standings assertions. */
+  /** The event's **first** pool id — its only one under the default seed — so a spec
+   * can scope its standings assertions. */
   readonly poolId: string
+  /** Every seeded pool id, **in the order they were sent** — which is the order the
+   * server stamped their positions from, and so the order the draw must read in. */
+  readonly poolIds: ReadonlyArray<string>
 }
 
 /**
@@ -206,7 +238,8 @@ export async function createTournament(
 /**
  * Create a **draft** tournament with one singles, **round-robin**, **unrated**,
  * best-of-1 event, drawn across a single pool that holds one table — the minimal
- * shape that can go live and produce a champion.
+ * shape that can go live and produce a champion. `options.pools` seeds several
+ * instead, in the order given (see `PoolSpec`).
  *
  * `rated: false` + `length_games: 1` is load-bearing, not incidental: an unrated
  * tournament match takes the immediate self-accept completion path, so recording
@@ -229,6 +262,7 @@ export async function seedTournament(
     end: '17:00',
   }
   const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
+  const pools = options.pools ?? [{ id: POOL_ID, name: 'Pool A' }]
   // Resolve the catalogue HERE and pass it down, rather than letting
   // `createTournament` default it again: the pool below references these tables
   // by id, so the two must be the same list by construction.
@@ -260,14 +294,17 @@ export async function seedTournament(
         slot,
         match_settings: { rated: false, length_games: 1 },
         predicates: [],
-        pools: [
-          {
-            id: POOL_ID,
-            name: 'Pool A',
-            slot,
-            table_ids: tables.map((table) => table.id),
-          },
-        ],
+        // Sent in the caller's order and NEVER re-sorted here: this array's order is
+        // what `stored_pools` stamps the pools' `position`s from, so re-ordering it —
+        // even "tidily", by id — would silently seed a different event than the one the
+        // spec asked for. No pool carries a `position` key either; sending one is a 422
+        // (`PoolWrite` is `extra="forbid"`).
+        pools: pools.map((pool) => ({
+          id: pool.id,
+          name: pool.name,
+          slot,
+          table_ids: [...(pool.tableIds ?? tables.map((table) => table.id))],
+        })),
       },
     },
   )
@@ -278,7 +315,12 @@ export async function seedTournament(
   }
   const eventId = ((await eventRes.json()) as { id: string }).id
 
-  return { tournamentId, eventId, poolId: POOL_ID }
+  return {
+    tournamentId,
+    eventId,
+    poolId: pools[0].id,
+    poolIds: pools.map((pool) => pool.id),
+  }
 }
 
 /**
@@ -360,6 +402,47 @@ export async function findEventByName(
     )
   }
   return event
+}
+
+/** A pool as the event **reads back** (`Pool` on the wire): what the client sent, plus
+ * the 0-based `position` the server stamped on it from its index in the list it was sent
+ * (ADR 20260801). Only the three fields an ordering assertion is about are named; the
+ * window and tables ride along untyped. */
+export interface StoredPool {
+  readonly id: string
+  readonly name: string
+  readonly position: number
+}
+
+/**
+ * Read an event's pools back off the tournament detail, **as stored**.
+ *
+ * This is the one seam that can say whether the server took the order the director sent
+ * and made it a fact: a client cannot send a `position` at all (`PoolWrite` is
+ * `extra="forbid"` — it is a 422), so every position on the wire was assigned here. A
+ * spec that only read the rendered page could not tell "the server ordered them" from
+ * "the client re-derived an order that happened to agree".
+ *
+ * The pools are returned **exactly as the payload carries them**, unsorted, so a caller
+ * asserting on the order is asserting on the server's, not on this helper's.
+ */
+export async function getEventPools(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredPool>> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  const detail = (await res.json()) as {
+    events: ReadonlyArray<{ id: string; pools: ReadonlyArray<StoredPool> }>
+  }
+  const event = detail.events.find((e) => e.id === eventId)
+  if (!event) {
+    throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
+  }
+  return event.pools
 }
 
 /**
@@ -454,6 +537,11 @@ export interface FixtureTime {
 
 export interface FixtureDetail {
   readonly id: string
+  /** The pool this fixture was drawn into, or `null` for an un-pooled one (a knockout
+   * slot). Read because the detail's fixtures arrive **ordered by their pool's
+   * position** (ADR 20260801) — so the order these ids first appear in *is* the
+   * server's statement of the event's pool order, before any client touches it. */
+  readonly pool_id: string | null
   readonly entry_a_id: string | null
   readonly entry_b_id: string | null
   readonly match_id: string | null
