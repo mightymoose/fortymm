@@ -67,8 +67,9 @@ const fixtureTimeSchema = fixtureTimeWireSchema.transform(
  * below so the *runtime* contract is legible next to the generated type it mirrors. */
 const fixtureWireSchema = z.object({
   id: z.string(),
-  /** `null` = an un-pooled draw (single-elim), or the knockout stage of a combined
-   * draw type (#787, not an enum member today).
+  /** `null` = an un-pooled draw (single-elim), or the **knockout stage** of an
+   * `rr-then-ko` one (#1227) — `pool_id IS NULL` *is* the stage discriminator, and there
+   * is no other column that says so.
    * When set it is a **string ref** into the event's own `pools` — not a foreign key,
    * because pools are JSONB value-objects (ADR-0786). */
   pool_id: z.string().nullable(),

@@ -23,7 +23,7 @@
 // rather than asserted through a DOM.
 
 import { nameByEntryId, nameOf } from './entrant-names'
-import type { StandingRow, TournamentEvent } from './types'
+import type { StandingRow, StandingsResults, TournamentEvent } from './types'
 
 /** One standings line, ready to render: the server's row, plus the entrant's name joined
  * from the event. The row's every number is carried through unchanged — see the module
@@ -45,10 +45,26 @@ export interface PoolStandingsView {
   complete: boolean
 }
 
-/** An event's results, shaped for the reader: named pool tables, whether the event is
+/**
+ * The fields `eventStandings` actually reads — a **standings block**: the pool tables,
+ * whether that block is decided, and its champion when it has one.
+ *
+ * A whole round-robin event's `StandingsResults` is one of these; so is the **pool stage**
+ * of a two-stage event, which is not a `StandingsResults` at all (`./two-stage`). The
+ * parameter is this rather than the tagged arm precisely so a composite can hand over the
+ * block it genuinely holds instead of minting a `kind: 'standings'` value the server would
+ * never send — a boundary type is parsed at the edge and carried inward, never constructed
+ * inward (`.claude/rules/parse-at-boundaries.md`).
+ */
+export type StandingsBlock = Omit<StandingsResults, 'kind'>
+
+/** A standings block, shaped for the reader: named pool tables, whether the block is
  * complete, and the champion's *name* (joined) when there is one. */
 export interface StandingsView {
   pools: PoolStandingsView[]
+  /** True when **this standings block** is decided — every fixture of every pool played.
+   * For a round-robin event that is the event itself; for the pool stage of a two-stage
+   * event it is that *stage*, which is decided long before the event is (`./two-stage`). */
   complete: boolean
   /** The champion's username when the event is a complete single pool, else `null` — the
    * server's own `champion`, joined to a name. `null` while any fixture is unplayed, and
@@ -57,9 +73,17 @@ export interface StandingsView {
 }
 
 /**
- * An event's results, shaped for the reader — or `null` when the event has none (an uncut
- * or non-round-robin event; `results` is `null` on the wire, and this returns `null`
- * straight through, so the panel renders nothing).
+ * A **standings block**, shaped for the reader — always a view, never `null`.
+ *
+ * It is handed the block rather than digging one out of the event, so it does not decide
+ * whether it applies: **the caller that switches on `results.kind` does**
+ * (`ResultsPanel`), and it is the only place that knows an event may have no results at
+ * all. Everything here is a total function of the two arguments — the block, plus the
+ * `event` the two id joins need (entry id → username, pool id → pool name).
+ *
+ * The block is a `StandingsBlock`, not the `standings` arm itself, so the pool stage of a
+ * two-stage event can be rendered through this same selector without anybody forging a
+ * `kind` for it.
  *
  * The rows are mapped **in the order the server sent them**: standings are a total order
  * the server computed (wins → two-way head-to-head → game difference → games won), and
@@ -67,13 +91,10 @@ export interface StandingsView {
  * guessing a result it does not own, and would silently disagree the day a tiebreaker the
  * client cannot see (head-to-head) decides two equal rows.
  */
-export function eventStandings(event: TournamentEvent): StandingsView | null {
-  const results = event.results
-  // Only the `standings` arm of the results union stands here (ADR-0785). `null` (no
-  // results) and the `finishes` arm (single-elimination — a placement list, `./finishes`)
-  // both render nothing off this view-model.
-  if (results === null || results.kind !== 'standings') return null
-
+export function eventStandings(
+  event: TournamentEvent,
+  results: StandingsBlock,
+): StandingsView {
   const names = nameByEntryId(event)
   const poolNameById = new Map(event.pools.map((p) => [p.id, p.name]))
 

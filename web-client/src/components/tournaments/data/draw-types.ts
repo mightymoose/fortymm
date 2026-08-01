@@ -25,20 +25,29 @@ import type { components } from '@/api/schema'
  * `satisfies` pins it to the generated enum, so a slug the API does not hold is a
  * compile error here; `draw-types.test.ts` pins the other direction (a member of the
  * API's enum *missing* from this array is a compile failure there), so the two
- * cannot drift apart. */
+ * cannot drift apart.
+ *
+ * ⚠️ **This list is the one client edit a new draw type needs that nothing shouts
+ * about.** The catalogue parser below *filters* the served rows against it, silently —
+ * so a slug the server seeds and this array omits does not error, warn or log: the
+ * option simply is not on the menu. That is exactly how `rr-then-ko` was predicted to
+ * need "no client change" and would instead have vanished (ADR "rr-then-ko cuts both
+ * stages upfront and seeds qualifiers rematch-free", Context). Adding the slug here is
+ * step one of adding a draw type to this client; the compiler will find the rest. */
 export const DRAW_TYPES = [
   'round-robin',
   'single-elim',
+  'rr-then-ko',
 ] as const satisfies readonly components['schemas']['DrawType'][]
 
 /** The runtime parser for a single draw-type slug — what the event form validates
  * `drawType` with, so the form cannot accept a slug the catalogue parser would drop. */
 export const drawTypeSchema = z.enum(DRAW_TYPES)
 
-/** The draw types the API accepts — **exactly two**, and deliberately not a
- * roadmap (ADR 20260726 "a draw type is a seeded row"): a member exists iff the
- * server has a strategy that can plan it, so `double-elim`, `rr-then-ko` and
- * `swiss` were removed from the API's enum and are a 422 at the boundary now.
+/** The draw types the API accepts — deliberately not a roadmap (ADR 20260726 "a draw
+ * type is a seeded row"): a member exists iff the server has a strategy that can plan
+ * it. `double-elim` and `swiss` were removed from the API's enum and are a 422 at the
+ * boundary now; `rr-then-ko` came back in #1227 when its strategy landed.
  *
  * Inferred from `DRAW_TYPES` above rather than hand-written, and pinned to the
  * generated `components['schemas']['DrawType']` by a compile-time assertion in

@@ -81,6 +81,16 @@ DRAW_TYPE_SEED = [
         "match, and a field that is not a power of two gives the top seeds byes.",
         2,
     ),
+    (
+        "rr-then-ko",
+        # The director-facing copy is pinned by the ADR "rr-then-ko cuts both
+        # stages upfront and seeds qualifiers rematch-free" — it is seed data, so
+        # changing either string is a migration.
+        "Round-robin then knockout",
+        "Pools play all-play-all, then the top finishers from each pool meet in a "
+        "knockout bracket.",
+        3,
+    ),
 ]
 
 
@@ -150,6 +160,13 @@ def upgrade() -> None:
             sa.ForeignKey("draw_types.key", ondelete="RESTRICT"),
             nullable=False,
         ),
+        # **K** — how many of each pool's finishers advance into the knockout
+        # stage. Only ``rr-then-ko`` has one, so the column is NULLABLE and the
+        # CHECK below is what pairs it with the draw type: NOT NULL and >= 1 for
+        # ``rr-then-ko``, NULL for every other slug. Added in place per the
+        # pre-deploy convention (api/CLAUDE.md), not as a chained ALTER —
+        # revision ids and the down_revision chain stay frozen.
+        sa.Column("qualifiers_per_pool", sa.Integer(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -161,6 +178,13 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
+        ),
+        sa.CheckConstraint(
+            "CASE WHEN draw_type_key = 'rr-then-ko'"
+            " THEN qualifiers_per_pool IS NOT NULL AND qualifiers_per_pool >= 1"
+            " ELSE qualifiers_per_pool IS NULL"
+            " END",
+            name="ck_tournament_event_draw_settings_qualifiers_per_pool",
         ),
     )
 

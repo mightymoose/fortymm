@@ -7,6 +7,7 @@ point of keeping the strategies pure.
 import dataclasses
 import uuid
 from collections import Counter
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 
@@ -19,17 +20,24 @@ from app.draws import (
     DrawError,
     Entrant,
     EntryId,
+    FixtureGames,
     FixtureId,
     FixtureState,
     MatchId,
+    MissingBracketSlot,
+    MissingFixtureGames,
     OrderedEntrant,
     PlannedFixture,
     PoolId,
+    QualifierSeat,
     RoundRobinStrategy,
+    RrThenKoStrategy,
     Side,
     SideFill,
     SingleElimStrategy,
     order_entrants,
+    qualifier_seed_assignment,
+    reads_fixture_games,
     ready_fixtures,
     strategy_for,
 )
@@ -195,11 +203,34 @@ class TestOrderEntrants:
 
 class TestStrategyRegistry:
     def test_round_robin_resolves_to_the_round_robin_strategy(self) -> None:
-        assert isinstance(strategy_for(DrawType.round_robin), RoundRobinStrategy)
+        assert isinstance(
+            strategy_for(DrawType.round_robin, qualifiers_per_pool=None),
+            RoundRobinStrategy,
+        )
 
     def test_single_elim_resolves_to_the_single_elim_strategy(self) -> None:
         # The second implemented arm (ADR-0785).
-        assert isinstance(strategy_for(DrawType.single_elim), SingleElimStrategy)
+        assert isinstance(
+            strategy_for(DrawType.single_elim, qualifiers_per_pool=None),
+            SingleElimStrategy,
+        )
+
+    def test_rr_then_ko_resolves_to_the_configured_rr_then_ko_strategy(self) -> None:
+        """The third arm (ADR 20260727) — and the first whose strategy is *configured*:
+        the qualifier count is not a detail of the dispatch, it is what the strategy
+        cuts with, so it is asserted to have arrived rather than merely to have been
+        accepted."""
+        strategy = strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=3)
+
+        assert strategy == RrThenKoStrategy(qualifiers_per_pool=3)
+
+    def test_rr_then_ko_without_a_qualifier_count_refuses_loudly(self) -> None:
+        """A wiring bug, not a director's mistake: the request boundary and the settings
+        table's CHECK both refuse an ``rr-then-ko`` configuration with no count, so the
+        only way here is a caller that dropped the column. Silently defaulting it would
+        cut a bracket for a K nobody chose."""
+        with pytest.raises(ValueError, match="qualifiers_per_pool"):
+            strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=None)
 
     def test_every_draw_type_resolves_to_a_strategy_and_none_refuses(self) -> None:
         """``strategy_for`` is **total** — the enum holds only draw types that run (ADR
@@ -210,9 +241,69 @@ class TestStrategyRegistry:
         without a strategy — alongside the type error the catch-all-free ``match``
         already is. It replaces the old "unimplemented types raise": that refusal has
         no input any more, because Pydantic rejects an un-backed slug at the request
-        boundary instead."""
+        boundary instead.
+
+        Every member is handed a qualifier count, because handing one to a draw type
+        that takes none must be *harmless* — a configuration-free strategy ignores it —
+        while the one that needs it must not be left guessing."""
         for draw_type in DrawType:
-            assert strategy_for(draw_type) is not None
+            assert strategy_for(draw_type, qualifiers_per_pool=2) is not None
+
+    def test_the_games_gate_names_every_draw_type_and_only_the_one_that_reads_them(
+        self,
+    ) -> None:
+        """``reads_fixture_games`` is what lets the materialization seam — which runs
+        inside the score-accept transaction on **every** result — skip loading game
+        counts nothing will read.
+
+        A whole-enum equality, so a new ``DrawType`` reds here as well as failing to
+        type-check in the catch-all-free ``match``: the gate is a claim about which
+        strategies read ``FixtureState.games``, and a wrong answer is either a discarded
+        query per result (harmless, slow) or a ``MissingFixtureGames`` on the seam
+        (loud), never a silently mis-seated qualifier.
+        """
+        assert {
+            draw_type: reads_fixture_games(draw_type) for draw_type in DrawType
+        } == {
+            DrawType.round_robin: False,
+            DrawType.single_elim: False,
+            DrawType.rr_then_ko: True,
+        }
+
+    def test_a_draw_type_the_gate_clears_advances_the_same_without_its_games(
+        self,
+    ) -> None:
+        """And the gate's answer is *true of the strategies*, not just asserted about
+        them: for every draw type it clears, a fully-played draw advances
+        byte-identically with the game counts stripped out.
+
+        This is the falsifiable half. A strategy that started reading the field would
+        plan something different from the two states and red here, rather than silently
+        advancing on ``games=None`` at the one seam that would have skipped the load.
+        """
+        for draw_type in DrawType:
+            if reads_fixture_games(draw_type):
+                continue
+            strategy = strategy_for(draw_type, qualifiers_per_pool=None)
+            cut = _persisted(strategy.plan_initial(_config(2), _ordered(8)))
+            with_games = _played(
+                cut,
+                {
+                    frozenset({f.entry_a_id.int, f.entry_b_id.int}): (
+                        min(f.entry_a_id.int, f.entry_b_id.int),
+                        3,
+                        1,
+                    )
+                    for f in cut
+                    if f.entry_a_id is not None and f.entry_b_id is not None
+                },
+            )
+            without_games = [dataclasses.replace(f, games=None) for f in with_games]
+            assert any(f.games is not None for f in with_games), (
+                f"{draw_type.value}: the two states must actually differ"
+            )
+
+            assert strategy.advance(with_games) == strategy.advance(without_games)
 
     def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
         self,
@@ -981,3 +1072,828 @@ class TestSingleElimAdvance:
         assert by_rp[(2, 2)].fixture_id in ready  # both-byes semifinal, fully known
         assert by_rp[(2, 1)].fixture_id not in ready  # one side still TBD
         assert by_rp[(3, 1)].fixture_id not in ready  # final, both sides TBD
+
+
+#: The legal configuration space the ADR defines: ``K ≥ 1`` (Pydantic, at the request
+#: boundary) and ``P × K ≥ 2`` (at the cut). Swept whole rather than sampled — the
+#: guarantee is universal, so a handful of hand-picked cases would not be evidence for
+#: it. ``P`` runs past any club-night pool count and ``K`` past any plausible cut.
+LEGAL_QUALIFIER_CONFIGURATIONS = [
+    (pool_count, per_pool)
+    for pool_count in range(1, 9)
+    for per_pool in range(1, 5)
+    if pool_count * per_pool >= 2
+]
+
+
+def _pool_letter(pool_index: int) -> str:
+    """``0 → 'A'`` — the same labelling :func:`_pool_ids` gives the pools themselves."""
+    return chr(ord("A") + pool_index)
+
+
+def _seat_label(seat: QualifierSeat) -> str:
+    """``A1`` — pool A's winner; ``C2`` — pool C's runner-up."""
+    return f"{_pool_letter(seat.pool_index)}{seat.place}"
+
+
+def _round_one_seed_pairs(qualifier_count: int) -> list[tuple[int, int]]:
+    """Which **seed numbers** meet in round one of a bracket holding this many
+    qualifiers.
+
+    Reconstructed by cutting a real single-elimination bracket over that many entrants,
+    rather than by restating ``B+1−s``: the knockout stage of an rr-then-ko draw is the
+    same bracket shape (the ADR reuses ``_seed_slots`` unchanged), and reading it off
+    the public cutter keeps the property test independent of the assignment's own idea
+    of who plays whom. Byed seeds have no round-1 fixture, so they simply do not appear
+    — which is correct, a bye can never be a rematch.
+    """
+    fixtures = SingleElimStrategy().plan_initial(
+        DrawConfig(), _ordered(qualifier_count)
+    )
+    return [
+        (_seed_of(f.entry_a_id), _seed_of(f.entry_b_id))
+        for f in fixtures
+        if f.round == 1
+    ]
+
+
+class TestQualifierSeedAssignment:
+    """Seeding pool qualifiers into the knockout bracket (ADR "rr-then-ko cuts both
+    stages upfront and seeds qualifiers rematch-free").
+
+    The claim these defend is absolute, not statistical: across the *whole* legal
+    configuration space, no round-one knockout fixture holds two qualifiers out of the
+    same pool — and the one-pool case is exempt on purpose, which is asserted as its own
+    positive property rather than skipped.
+    """
+
+    def test_no_round_one_pairing_holds_two_qualifiers_from_the_same_pool(
+        self,
+    ) -> None:
+        offenders = [
+            f"P={pool_count} K={per_pool}: seeds {left} v {right} are both out of "
+            f"pool {_pool_letter(assignment[left].pool_index)} "
+            f"({_seat_label(assignment[left])} vs {_seat_label(assignment[right])})"
+            for pool_count, per_pool in LEGAL_QUALIFIER_CONFIGURATIONS
+            # One pool is a waiver, asserted positively in its own test below.
+            if pool_count >= 2
+            for assignment in [qualifier_seed_assignment(pool_count, per_pool)]
+            for left, right in _round_one_seed_pairs(pool_count * per_pool)
+            if assignment[left].pool_index == assignment[right].pool_index
+        ]
+
+        assert offenders == []
+
+    def test_one_pool_seeds_qualifiers_by_place_and_is_all_rematches_by_design(
+        self,
+    ) -> None:
+        # The waiver, stated as a property rather than an exclusion: with a single pool
+        # every knockout match *is* a rematch, because every qualifier came out of the
+        # same pool. That is "league, then a playoff" working, not the guarantee
+        # failing — so assert it holds rather than skipping the case.
+        for per_pool in (2, 3, 4):
+            assignment = qualifier_seed_assignment(1, per_pool)
+
+            assert assignment == {
+                seed: QualifierSeat(pool_index=0, place=seed)
+                for seed in range(1, per_pool + 1)
+            }
+            pairs = _round_one_seed_pairs(per_pool)
+            assert pairs, f"K={per_pool} should have a round-1 match to be a rematch"
+            assert all(
+                assignment[left].pool_index == assignment[right].pool_index
+                for left, right in pairs
+            )
+
+    def test_seeds_are_place_major_and_each_qualifier_is_seeded_exactly_once(
+        self,
+    ) -> None:
+        # The shape the guarantee is built on: place block k owns seeds kP+1..kP+P, and
+        # holds every pool exactly once — which is what makes an intra-block round-one
+        # pair safe for free, and what leaves the pool order free to be chosen.
+        for pool_count, per_pool in LEGAL_QUALIFIER_CONFIGURATIONS:
+            assignment = qualifier_seed_assignment(pool_count, per_pool)
+            qualifier_count = pool_count * per_pool
+
+            assert sorted(assignment) == list(range(1, qualifier_count + 1))
+            assert len(set(assignment.values())) == qualifier_count
+            for block in range(per_pool):
+                seeds = range(block * pool_count + 1, (block + 1) * pool_count + 1)
+                assert {assignment[seed].place for seed in seeds} == {block + 1}
+                assert {assignment[seed].pool_index for seed in seeds} == set(
+                    range(pool_count)
+                )
+
+    def test_the_same_qualifier_configuration_always_gets_the_same_seeds(self) -> None:
+        # A re-cut must reproduce the bracket, exactly as `order_entrants` promises for
+        # the draw order — the augmenting search walks pools in ascending index order
+        # precisely so its answer is a function of the inputs and not of iteration luck.
+        # Collected rather than asserted in the loop so a red names *which* (P, K)
+        # wobbled, and how, instead of dying on the first one.
+        offenders = [
+            f"P={pool_count} K={per_pool}: "
+            f"{ {seed: _seat_label(s) for seed, s in first.items()} } "
+            f"then { {seed: _seat_label(s) for seed, s in second.items()} }"
+            for pool_count, per_pool in LEGAL_QUALIFIER_CONFIGURATIONS
+            for first in [qualifier_seed_assignment(pool_count, per_pool)]
+            for second in [qualifier_seed_assignment(pool_count, per_pool)]
+            if first != second
+        ]
+
+        assert offenders == []
+
+    def test_a_configuration_outside_the_legal_space_is_refused(self) -> None:
+        # Programmer errors, not director errors: the director-facing refusals are the
+        # strategy's `DegenerateDraw`s at the cut, where the entrant count is in hand.
+        with pytest.raises(ValueError):
+            qualifier_seed_assignment(0, 2)
+        with pytest.raises(ValueError):
+            qualifier_seed_assignment(2, 0)
+        with pytest.raises(ValueError):
+            # A "bracket" of one qualifier has nobody to play.
+            qualifier_seed_assignment(1, 1)
+
+
+# ── round-robin then knockout ────────────────────────────────────────────────────
+#
+# The cut matrix, spelled out by hand rather than recomputed: (pools, entrants,
+# qualifiers per pool) → the qualifier count, the derived bracket size, the round-1
+# positions that exist (the byed ones are *absent*), and the per-round knockout fixture
+# counts. Bracket size is the smallest power of two ≥ P × K and is never configured.
+RR_THEN_KO_MATRIX: list[tuple[int, int, int, int, int, set[int], dict[int, int]]] = [
+    # P, N, K, qualifiers, bracket, round-1 positions, per-round counts
+    (1, 4, 2, 2, 2, {1}, {1: 1}),  # one pool: league, then a playoff
+    (2, 8, 2, 4, 4, {1, 2}, {1: 2, 2: 1}),  # exact power of two: no byes
+    (3, 12, 1, 3, 4, {2}, {1: 1, 2: 1}),  # 1 bye — seed 1 walks into the final
+    (3, 12, 2, 6, 8, {2, 3}, {1: 2, 2: 2, 3: 1}),  # 2 byes into the semifinals
+    (4, 16, 1, 4, 4, {1, 2}, {1: 2, 2: 1}),
+    (5, 20, 3, 15, 16, {2, 3, 4, 5, 6, 7, 8}, {1: 7, 2: 4, 3: 2, 4: 1}),
+]
+RR_THEN_KO_IDS = [f"P={p},N={n},K={k}" for p, n, k, _, _, _, _ in RR_THEN_KO_MATRIX]
+
+#: Pool A of the 3-pool, 12-entrant cut — seeds 1, 6, 7 and 12 — played out so that
+#: the finishing order is 6, 12, 7, 1: the top seed loses everything and the pool's
+#: second seed wins it. Keyed by the *pair* and valued ``(winner, winner's games,
+#: loser's games)``, so a result reads the same whichever way round the fixture seated
+#: the two.
+POOL_A_RESULTS: dict[frozenset[int], tuple[int, int, int]] = {
+    frozenset({1, 12}): (12, 3, 0),
+    frozenset({6, 7}): (6, 3, 1),
+    frozenset({1, 7}): (7, 3, 2),
+    frozenset({12, 6}): (6, 3, 2),
+    frozenset({1, 6}): (6, 3, 0),
+    frozenset({7, 12}): (12, 3, 1),
+}
+POOL_A_FINISHING_ORDER = [6, 12, 7, 1]
+
+#: A four-entrant pool with a **three-way tie on wins** — 1 beat 2 beat 3 beat 1, and
+#: all three beat 4. A cycle cannot be broken head-to-head, so the order falls through
+#: to the game tiebreakers, which is the whole point: it settles 2 above 1 *even though
+#: 1 beat 2*, so an order computed on wins (+ head-to-head, + entry id) cannot make it.
+CYCLIC_POOL_RESULTS: dict[frozenset[int], tuple[int, int, int]] = {
+    frozenset({1, 2}): (1, 3, 2),
+    frozenset({2, 3}): (2, 3, 0),
+    frozenset({1, 3}): (3, 3, 1),
+    frozenset({1, 4}): (1, 3, 0),
+    frozenset({2, 4}): (2, 3, 1),
+    frozenset({3, 4}): (3, 3, 2),
+}
+#: Game difference: 2 → +4, 1 → +2, 3 → 0, 4 → −6.
+CYCLIC_POOL_FINISHING_ORDER = [2, 1, 3, 4]
+
+
+def _rr_then_ko(qualifiers_per_pool: int) -> RrThenKoStrategy:
+    return RrThenKoStrategy(qualifiers_per_pool=qualifiers_per_pool)
+
+
+def _knockout(fixtures: Sequence[PlannedFixture]) -> list[PlannedFixture]:
+    """The knockout stage — which *is* ``pool_id IS NULL`` (ADR-0786), no new column."""
+    return [f for f in fixtures if f.pool_id is None]
+
+
+def _pooled(fixtures: Sequence[PlannedFixture]) -> list[PlannedFixture]:
+    return [f for f in fixtures if f.pool_id is not None]
+
+
+def _played(
+    fixtures: Sequence[FixtureState],
+    results: Mapping[frozenset[int], tuple[int, int, int]],
+) -> list[FixtureState]:
+    """Play out every fixture whose seed pair appears in ``results`` — what the
+    completion seam leaves behind: a written-back ``winner_entry_id``, the match's game
+    counts oriented ``entry_a`` ↔ side 1, and a materialized match."""
+    played: list[FixtureState] = []
+    for index, fixture in enumerate(fixtures):
+        if fixture.entry_a_id is None or fixture.entry_b_id is None:
+            played.append(fixture)
+            continue
+        result = results.get(
+            frozenset({fixture.entry_a_id.int, fixture.entry_b_id.int})
+        )
+        if result is None:
+            played.append(fixture)
+            continue
+        winner_seed, winner_games, loser_games = result
+        winner = _entry_id(winner_seed)
+        a_won = fixture.entry_a_id == winner
+        played.append(
+            dataclasses.replace(
+                fixture,
+                winner_entry_id=winner,
+                games=FixtureGames(
+                    entry_a_games=winner_games if a_won else loser_games,
+                    entry_b_games=loser_games if a_won else winner_games,
+                ),
+                match_id=MatchId(uuid.UUID(int=3000 + index)),
+            )
+        )
+    return played
+
+
+def _voided(
+    fixtures: Sequence[FixtureState],
+    pairs: Collection[frozenset[int]],
+    *,
+    keep_winner: bool = True,
+) -> list[FixtureState]:
+    """Void the fixtures whose seed pair appears in ``pairs`` — what an account merge's
+    self-play collision leaves behind (ADR-0013): a terminal match that can never
+    produce a result, and therefore no games.
+
+    ``keep_winner`` is the nastier of the two real shapes and the default: the match was
+    **completed first**, so the completion wrote ``winner_entry_id`` back onto the
+    fixture, and voiding does not clear it (``app.match_voiding.void_match`` touches the
+    match and its sides, not the draw). The fixture is left reading *decided, with no
+    games* — which is exactly the shape ``MissingFixtureGames`` fires on for an
+    unvoided fixture, so this is also what pins that guard's exclusion. ``False`` is the
+    other shape: voided before anybody played, no winner ever written.
+    """
+    voided: list[FixtureState] = []
+    for index, fixture in enumerate(fixtures):
+        pair = (
+            frozenset({fixture.entry_a_id.int, fixture.entry_b_id.int})
+            if fixture.entry_a_id is not None and fixture.entry_b_id is not None
+            else None
+        )
+        if pair is None or pair not in pairs:
+            voided.append(fixture)
+            continue
+        voided.append(
+            dataclasses.replace(
+                fixture,
+                match_voided=True,
+                games=None,
+                winner_entry_id=(fixture.entry_a_id if keep_winner else None),
+                # A voided fixture always has a match — voiding is something done TO
+                # one — so it keeps the id ``_played`` gave it, or gets one here if it
+                # was voided without ever being scored.
+                match_id=fixture.match_id or MatchId(uuid.UUID(int=4000 + index)),
+            )
+        )
+    return voided
+
+
+def _lower_seed_wins(
+    fixtures: Sequence[FixtureState],
+) -> dict[frozenset[int], tuple[int, int, int]]:
+    """A whole-draw sweep in which the better seed always wins 3-1, so every pool
+    finishes in seed order and the qualifiers are its two best seeds."""
+    return {
+        pair: (min(pair), 3, 1)
+        for fixture in fixtures
+        if fixture.pool_id is not None
+        and fixture.entry_a_id is not None
+        and fixture.entry_b_id is not None
+        for pair in [frozenset({fixture.entry_a_id.int, fixture.entry_b_id.int})]
+    }
+
+
+def _knockout_sides(
+    fixtures: Sequence[FixtureState],
+) -> dict[tuple[int, int, str], int | None]:
+    """Every knockout side as ``(round, position, "a"/"b") → seed`` (``None`` = still
+    unknown), which is how a director reads a half-seeded bracket."""
+    sides: dict[tuple[int, int, str], int | None] = {}
+    for fixture in fixtures:
+        if fixture.pool_id is not None:
+            continue
+        for side, entry_id in (("a", fixture.entry_a_id), ("b", fixture.entry_b_id)):
+            sides[(fixture.round, fixture.position, side)] = (
+                None if entry_id is None else entry_id.int
+            )
+    return sides
+
+
+def _apply(fixtures: Sequence[FixtureState], plan: AdvancePlan) -> list[FixtureState]:
+    """Apply a plan's side-fills, exactly as ``materialize_event`` does before it
+    decides readiness — the state a *second* ``advance()`` sees, and so the input every
+    idempotence claim is made against."""
+    filled = {f.fixture_id: f for f in fixtures}
+    for fill in plan.side_fills:
+        target = filled[fill.fixture_id]
+        filled[fill.fixture_id] = dataclasses.replace(
+            target,
+            **(
+                {"entry_a_id": fill.entry_id}
+                if fill.side is Side.a
+                else {"entry_b_id": fill.entry_id}
+            ),
+        )
+    return [filled[f.fixture_id] for f in fixtures]
+
+
+class TestRrThenKoCut:
+    """One stroke cuts both stages: every pool's round-robin *and* the whole bracket,
+    the latter entirely TBD-sided (ADR "rr-then-ko cuts both stages upfront")."""
+
+    def test_rr_then_ko_cuts_the_pool_stage_a_round_robin_draw_would_have_cut(
+        self,
+    ) -> None:
+        # Structural, not "equivalent": the pool fixtures are round-robin's own cut,
+        # so the two cannot drift.
+        cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+
+        assert _pooled(cut) == RoundRobinStrategy().plan_initial(
+            _config(3), _ordered(12)
+        )
+
+    @pytest.mark.parametrize(
+        ("pool_count", "entrants", "per_pool", "qualifiers", "bracket", "r1", "counts"),
+        RR_THEN_KO_MATRIX,
+        ids=RR_THEN_KO_IDS,
+    )
+    def test_rr_then_ko_cuts_the_whole_bracket_with_every_side_unknown(
+        self,
+        pool_count: int,
+        entrants: int,
+        per_pool: int,
+        qualifiers: int,
+        bracket: int,
+        r1: set[int],
+        counts: dict[int, int],
+    ) -> None:
+        cut = _rr_then_ko(per_pool).plan_initial(
+            _config(pool_count), _ordered(entrants)
+        )
+        knockout = _knockout(cut)
+
+        assert pool_count * per_pool == qualifiers
+        # Bracket size is *derived* (smallest power of two ≥ P × K), never configured.
+        assert 2 ** len(counts) == bracket
+        assert Counter(f.round for f in knockout) == counts
+        # Nobody has qualified, so every knockout side is TBD — and a TBD side is a
+        # ``None``, never a placeholder entry.
+        assert all(f.entry_a_id is None and f.entry_b_id is None for f in knockout)
+
+    @pytest.mark.parametrize(
+        ("pool_count", "entrants", "per_pool", "qualifiers", "bracket", "r1", "counts"),
+        RR_THEN_KO_MATRIX,
+        ids=RR_THEN_KO_IDS,
+    )
+    def test_rr_then_ko_byes_are_absent_round_one_fixtures_never_null_sided_rows(
+        self,
+        pool_count: int,
+        entrants: int,
+        per_pool: int,
+        qualifiers: int,
+        bracket: int,
+        r1: set[int],
+        counts: dict[int, int],
+    ) -> None:
+        # Which seeds bye is settled at cut time — the top B − Q of them — even though
+        # nobody has played, which is exactly what lets the bracket be cut upfront.
+        cut = _rr_then_ko(per_pool).plan_initial(
+            _config(pool_count), _ordered(entrants)
+        )
+
+        positions = {f.position for f in _knockout(cut) if f.round == 1}
+        assert positions == r1
+        byed_seeds = set(range(1, qualifiers + 1)) - {
+            seed
+            for pair in _single_elim_round_one(
+                SingleElimStrategy().plan_initial(DrawConfig(), _ordered(qualifiers))
+            ).values()
+            for seed in pair
+        }
+        assert byed_seeds == set(range(1, bracket - qualifiers + 1))
+
+    def test_rr_then_ko_cuts_the_bracket_a_single_elim_over_the_qualifiers_would(
+        self,
+    ) -> None:
+        # The knockout stage *is* a single-elimination bracket — the same shape, byes
+        # and all — with its seats not yet known. Asserted against the real cutter
+        # rather than a restatement, so the two cannot drift.
+        cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+
+        assert _knockout(cut) == [
+            dataclasses.replace(f, entry_a_id=None, entry_b_id=None)
+            for f in SingleElimStrategy().plan_initial(DrawConfig(), _ordered(6))
+        ]
+
+    def test_rr_then_ko_knockout_rounds_restart_at_one_in_their_own_namespace(
+        self,
+    ) -> None:
+        # The unique constraint is ``(event_id, pool_id, round, position)`` with NULLS
+        # NOT DISTINCT, so ``pool_id IS NULL`` is its own numbering namespace and the
+        # knockout starts again at round 1 — a pool round 1 and a knockout round 1 are
+        # different keys, and nothing in the cut collides.
+        cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+
+        assert min(f.round for f in _knockout(cut)) == 1
+        assert min(f.round for f in _pooled(cut)) == 1
+        keys = [(f.pool_id, f.round, f.position) for f in cut]
+        assert len(set(keys)) == len(keys)
+
+    def test_rr_then_ko_cuts_the_same_draw_twice(self) -> None:
+        first = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+        second = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+
+        assert first == second
+
+    def test_rr_then_ko_takes_the_whole_pool_when_everyone_qualifies(self) -> None:
+        # K = ⌊N/P⌋ is legal: the pool stage then exists purely to *seed* the knockout.
+        cut = _rr_then_ko(4).plan_initial(_config(4), _ordered(16))
+
+        assert len(_knockout(cut)) == 8 + 4 + 2 + 1  # a full 16-slot bracket, no byes
+        assert {f.position for f in _knockout(cut) if f.round == 1} == set(range(1, 9))
+
+    def test_rr_then_ko_a_single_pool_is_legal_and_is_league_then_a_playoff(
+        self,
+    ) -> None:
+        # The one-pool waiver: every knockout match is necessarily a rematch, which is
+        # the format working as intended, not a refusal.
+        cut = _rr_then_ko(2).plan_initial(_config(1), _ordered(5))
+
+        assert {f.pool_id for f in _pooled(cut)} == {PoolId("A")}
+        assert len(_knockout(cut)) == 1  # a two-qualifier final
+
+    def test_rr_then_ko_refuses_to_take_more_qualifiers_than_the_smallest_pool_holds(
+        self,
+    ) -> None:
+        with pytest.raises(DegenerateDraw) as excinfo:
+            # 7 entrants over 2 pools deals 3 and 4, so 4 qualifiers per pool is more
+            # than the smaller pool has players.
+            _rr_then_ko(4).plan_initial(_config(2), _ordered(7))
+
+        assert str(excinfo.value) == (
+            "Taking 4 qualifiers from each pool is more than the 3 entrants in the "
+            "smallest pool — take fewer qualifiers from each pool, or add entrants."
+        )
+        assert isinstance(excinfo.value, DrawError)
+
+    def test_rr_then_ko_refuses_a_knockout_stage_of_fewer_than_two_qualifiers(
+        self,
+    ) -> None:
+        with pytest.raises(DegenerateDraw) as excinfo:
+            _rr_then_ko(1).plan_initial(_config(1), _ordered(5))
+
+        assert str(excinfo.value) == (
+            "Taking 1 qualifier from a single pool leaves one player in the knockout "
+            "stage, who would have nobody to play — take more qualifiers from each "
+            "pool, or configure more pools."
+        )
+
+    def test_rr_then_ko_refuses_a_pool_of_fewer_than_two(self) -> None:
+        # Inherited from the snake, unchanged: the pool floor comes free with the pool
+        # stage, so rr-then-ko does not restate it.
+        with pytest.raises(DegenerateDraw) as excinfo:
+            _rr_then_ko(1).plan_initial(_config(3), _ordered(5))
+
+        assert "fewer than 2 entrants" in str(excinfo.value)
+
+    def test_rr_then_ko_refuses_fewer_than_one_qualifier_per_pool_at_construction(
+        self,
+    ) -> None:
+        # A *programmer* error, not a director one — K ≥ 1 is a static constraint at the
+        # request boundary — so it is a ValueError, and the illegal strategy cannot even
+        # be built.
+        with pytest.raises(ValueError, match="qualifiers_per_pool must be at least 1"):
+            RrThenKoStrategy(qualifiers_per_pool=0)
+
+
+class TestRrThenKoAdvance:
+    """Each pool seats its qualifiers the moment *it* is decided, into slots settled at
+    the cut — with the other pools still playing."""
+
+    def _cut(self) -> list[FixtureState]:
+        """The 3-pool, 12-entrant, top-2 draw as it reads back after the cut. The snake
+        deals pool A seeds 1, 6, 7, 12; B 2, 5, 8, 11; C 3, 4, 9, 10."""
+        return _persisted(_rr_then_ko(2).plan_initial(_config(3), _ordered(12)))
+
+    def test_rr_then_ko_seats_a_finished_pools_qualifiers_and_nobody_elses(
+        self,
+    ) -> None:
+        # THE claim: pool A is decided while B and C are still playing, and A's two
+        # qualifiers take their predetermined slots at once. The slots are fixed by
+        # ``qualifier_seed_assignment(3, 2)``, which never sees a result: pool A's
+        # winner is seed 1 (which byes into semifinal 1) and its runner-up is seed 6
+        # (round 1, position 3, side b).
+        fixtures = _played(self._cut(), POOL_A_RESULTS)
+        by_slot = {(f.round, f.position): f for f in fixtures if f.pool_id is None}
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert plan.side_fills == (
+            SideFill(
+                fixture_id=by_slot[(2, 1)].fixture_id,
+                side=Side.a,
+                entry_id=_entry_id(6),
+            ),
+            SideFill(
+                fixture_id=by_slot[(1, 3)].fixture_id,
+                side=Side.b,
+                entry_id=_entry_id(12),
+            ),
+        )
+        # Every other knockout side is still unknown: B and C have not finished.
+        assert _knockout_sides(_apply(fixtures, plan)) == {
+            (1, 2, "a"): None,
+            (1, 2, "b"): None,
+            (1, 3, "a"): None,
+            (1, 3, "b"): 12,
+            (2, 1, "a"): 6,
+            (2, 1, "b"): None,
+            (2, 2, "a"): None,
+            (2, 2, "b"): None,
+            (3, 1, "a"): None,
+            (3, 1, "b"): None,
+        }
+
+    def test_rr_then_ko_qualifiers_are_the_top_of_the_pools_finishing_order(
+        self,
+    ) -> None:
+        # The qualifiers are the top K of *the* finishing order — the same function the
+        # standings table is built from — and this pool proves the whole tiebreak chain
+        # is live: a three-way cycle on wins is settled on game difference, which seats
+        # entry 2 above entry 1 even though 1 beat 2 head-to-head. An order computed on
+        # wins alone (or wins + head-to-head + entry id) puts 1 first.
+        cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
+        fixtures = _played(cut, CYCLIC_POOL_RESULTS)
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert _knockout_sides(_apply(fixtures, plan)) == {
+            (1, 1, "a"): CYCLIC_POOL_FINISHING_ORDER[0],
+            (1, 1, "b"): CYCLIC_POOL_FINISHING_ORDER[1],
+        }
+
+    def test_rr_then_ko_seats_nothing_for_a_pool_that_is_still_playing(self) -> None:
+        # Per-pool, not all-or-nothing — and the converse: a pool with results in it but
+        # a fixture still to play seats nobody, because its order is not settled.
+        cut = self._cut()
+        partial = dict(list(POOL_A_RESULTS.items())[:-1])
+
+        assert _rr_then_ko(2).advance(_played(cut, partial)).side_fills == ()
+
+    def test_rr_then_ko_is_idempotent_once_the_qualifiers_are_seated(self) -> None:
+        # THE idempotence claim: apply the plan, feed the result back, and the second
+        # advance seats nobody — a SideFill only ever fills an *empty* side.
+        fixtures = _played(self._cut(), POOL_A_RESULTS)
+        first = _rr_then_ko(2).advance(fixtures)
+
+        assert _rr_then_ko(2).advance(_apply(fixtures, first)).side_fills == ()
+
+    def test_rr_then_ko_plans_nothing_at_all_over_its_own_fully_applied_plan(
+        self,
+    ) -> None:
+        # The stronger form: with the fills applied *and* the newly-ready fixtures
+        # materialized (what ``materialize_event`` does in the same transaction), the
+        # whole plan is empty — which is what makes re-running after every result safe.
+        fixtures = _played(self._cut(), POOL_A_RESULTS)
+        applied = _apply(fixtures, _rr_then_ko(2).advance(fixtures))
+        materialized = [
+            dataclasses.replace(f, match_id=MatchId(uuid.UUID(int=4000 + i)))
+            if f.match_id is None
+            else f
+            for i, f in enumerate(applied)
+        ]
+
+        assert _rr_then_ko(2).advance(materialized) == AdvancePlan()
+
+    def test_rr_then_ko_advances_the_knockout_as_a_single_elim_bracket_does(
+        self,
+    ) -> None:
+        # Once the bracket is under way it is single-elim's own forward seating: a
+        # decided knockout fixture seats its winner into its successor slot.
+        cut = self._cut()
+        seeded = [
+            dataclasses.replace(
+                f,
+                entry_a_id=_entry_id(3),
+                entry_b_id=_entry_id(6),
+                winner_entry_id=_entry_id(3),
+            )
+            if (f.pool_id, f.round, f.position) == (None, 1, 3)
+            else f
+            for f in cut
+        ]
+        by_slot = {(f.round, f.position): f for f in seeded if f.pool_id is None}
+
+        plan = _rr_then_ko(2).advance(seeded)
+
+        # Round 1 position 3 is odd → side a of round 2, position 2.
+        assert (
+            SideFill(
+                fixture_id=by_slot[(2, 2)].fixture_id,
+                side=Side.a,
+                entry_id=_entry_id(3),
+            )
+            in plan.side_fills
+        )
+
+    def test_rr_then_ko_never_seats_a_pool_winner_forward_into_a_knockout_slot(
+        self,
+    ) -> None:
+        # A pool fixture has no successor — its ``(round, position)`` lives in the
+        # pool's own namespace, and reading it as a bracket coordinate would seat a pool
+        # winner into a knockout slot belonging to somebody else. Only the *finished*
+        # pool's qualifier seating touches the bracket, so a half-played pool fills
+        # nothing.
+        cut = self._cut()
+        partial = dict(list(POOL_A_RESULTS.items())[:2])
+
+        assert _rr_then_ko(2).advance(_played(cut, partial)).side_fills == ()
+
+    def test_rr_then_ko_round_one_never_pairs_two_qualifiers_out_of_one_pool(
+        self,
+    ) -> None:
+        # The rematch-free guarantee, end to end through a real cut and advance rather
+        # than on the seed map alone.
+        planned = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+        pool_of = {
+            seed: pool_id
+            for pool_id, seeds in _members_by_pool(_pooled(planned)).items()
+            for seed in seeds
+        }
+        cut = _persisted(planned)
+        fixtures = _played(cut, _lower_seed_wins(cut))
+
+        seeded = _apply(fixtures, _rr_then_ko(2).advance(fixtures))
+
+        round_one = [
+            (f.entry_a_id, f.entry_b_id)
+            for f in seeded
+            if f.pool_id is None and f.round == 1
+        ]
+        assert round_one
+        for entry_a, entry_b in round_one:
+            assert entry_a is not None and entry_b is not None
+            assert pool_of[entry_a.int] != pool_of[entry_b.int]
+
+    def test_rr_then_ko_a_freshly_cut_draw_is_ready_only_in_its_pools(self) -> None:
+        # At the cut every pool pairing is known and every knockout side is TBD, so the
+        # pool stage materializes at go-live and the bracket waits.
+        cut = self._cut()
+
+        plan = _rr_then_ko(2).advance(cut)
+
+        assert plan.side_fills == ()
+        assert set(plan.ready_fixture_ids) == {
+            f.fixture_id for f in cut if f.pool_id is not None
+        }
+
+    def test_rr_then_ko_refuses_to_order_a_pool_it_cannot_see_the_games_of(
+        self,
+    ) -> None:
+        # THE trap this raise exists for: ``FixtureState.games`` is populated by the ORM
+        # projection, but the materialization seam does not pass game counts yet, so
+        # every fixture reaching advance() carries ``games=None``. Ordering a pool
+        # without them would silently fall back to wins alone and choose different
+        # qualifiers from the standings on screen — with the whole suite still green,
+        # because nothing else reads the field. So it fails loudly instead.
+        gameless = [
+            dataclasses.replace(f, winner_entry_id=f.entry_a_id)
+            if f.pool_id is not None
+            else f
+            for f in self._cut()
+        ]
+
+        with pytest.raises(MissingFixtureGames) as excinfo:
+            _rr_then_ko(2).advance(gameless)
+
+        assert "no game counts" in str(excinfo.value)
+        assert "18 decided pool fixtures" in str(excinfo.value)
+        # Not a DrawError: this is a wiring bug, not something a director can fix by
+        # re-cutting, so it must not be dressed up as a 422.
+        assert not isinstance(excinfo.value, DrawError)
+
+    def test_rr_then_ko_refuses_a_bracket_that_was_cut_for_a_different_k(self) -> None:
+        # The sibling of the gameless refusal above, and the same reasoning: a bracket
+        # cut for K=1 advanced at K=2 has qualifiers whose predetermined slot does not
+        # exist. Skipping them seats *some* of the qualifiers and leaves the draw
+        # quietly wrong — the outcome the event editor's 409 freeze calls unacceptable —
+        # the domain says so instead of the freeze being the only thing standing between
+        # a director and a half-seated bracket.
+        cut = _persisted(_rr_then_ko(1).plan_initial(_config(2), _ordered(4)))
+        fixtures = _played(cut, _lower_seed_wins(cut))
+
+        with pytest.raises(MissingBracketSlot) as excinfo:
+            _rr_then_ko(2).advance(fixtures)
+
+        assert "cut for a different number of qualifiers" in str(excinfo.value)
+        # Not a DrawError: a frozen K means nothing a director can type reaches this, so
+        # it is a wiring bug and a 500, not a 422 they could act on.
+        assert not isinstance(excinfo.value, DrawError)
+
+    def test_rr_then_ko_tolerates_one_result_in_flux_among_scored_neighbours(
+        self,
+    ) -> None:
+        # The other side of that raise, and why it is scoped the way it is: a *single*
+        # fixture whose match left ``completed`` (a correction under review) keeps its
+        # written-back winner while its games go away. That is an ordinary live state —
+        # its pool is simply not finished — and must not blow up the whole advance.
+        fixtures = _played(self._cut(), POOL_A_RESULTS)
+        in_flux = [
+            dataclasses.replace(f, games=None)
+            if f.games is not None and f.round == 1 and f.position == 1
+            else f
+            for f in fixtures
+        ]
+
+        plan = _rr_then_ko(2).advance(in_flux)
+
+        assert plan.side_fills == ()
+
+    def test_rr_then_ko_finishes_a_pool_holding_a_voided_pairing(self) -> None:
+        # THE claim of the voided-fixture fix: a **voided** pairing can never produce a
+        # result, so it is left OUT of "every fixture carries a score" instead of
+        # counting as a score that never arrives. Requiring it would hold the pool one
+        # outcome short forever — never finished, its qualifiers never seated, the
+        # knockout never ready, nothing a director could do about it — while the
+        # standings, which already exclude voided pairings from a pool's
+        # ``fixture_count``, called that same pool ``complete``.
+        #
+        # And the order is genuinely the one the REMAINING results produce, not a
+        # leftover: played in full, this pool finishes 2, 1, 3, 4 and qualifies {2, 1}
+        # (``CYCLIC_POOL_FINISHING_ORDER``). With 1-v-4 voided, 1 drops to a single win
+        # and 3 rises past it, so the pool finishes 2, 3, 1, 4 and qualifies **{2, 3}**:
+        # a different runner-up, which is what makes this evidence about the ordering
+        # and not just about the seating.
+        cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
+        voided_pair = frozenset({1, 4})
+        played = _played(
+            cut,
+            {
+                pair: result
+                for pair, result in CYCLIC_POOL_RESULTS.items()
+                if pair != voided_pair
+            },
+        )
+        fixtures = _voided(played, {voided_pair})
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert _knockout_sides(_apply(fixtures, plan)) == {
+            (1, 1, "a"): 2,
+            (1, 1, "b"): 3,
+        }
+
+    def test_rr_then_ko_seats_nobody_out_of_a_pool_whose_every_pairing_was_voided(
+        self,
+    ) -> None:
+        # The floor under the rule above. Skipping voided fixtures cannot become
+        # "finish a pool on no results at all": with nothing to rank on, the tiebreak
+        # chain falls through to its entry-id fallback and would hand back an order that
+        # is arbitrary rather than earned. So the pool is not finished, and nobody is
+        # seated — the one place this deliberately parts company with the standings,
+        # which call such a pool ``complete`` and show a table of zeros.
+        cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
+        fixtures = _voided(cut, set(CYCLIC_POOL_RESULTS))
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert plan.side_fills == ()
+
+    def test_rr_then_ko_does_not_read_a_voided_pairing_as_a_lost_projection(
+        self,
+    ) -> None:
+        # ``MissingFixtureGames`` fires on "decided, and no games anywhere", and a
+        # completed-then-voided fixture reads exactly like that: voiding takes the match
+        # out of ``completed`` (so the games go away) without clearing the
+        # ``winner_entry_id`` the completion wrote back. Left in the guard's sights, a
+        # single voided pairing in a draw nobody else has scored yet would be a 500.
+        cut = self._cut()
+        fixtures = _voided(cut, {frozenset({1, 6})})
+
+        plan = _rr_then_ko(2).advance(fixtures)
+
+        assert plan.side_fills == (), "pool A has five pairings still to play"
+
+    def test_rr_then_ko_still_refuses_a_lost_projection_beside_a_voided_pairing(
+        self,
+    ) -> None:
+        # The other half: excluding voided fixtures must not blunt the guard. A pool
+        # played out and then projected WITHOUT its game counts still raises, and the
+        # count it reports is the fixtures that should have had games — five of pool A's
+        # six, because the sixth is voided and genuinely has none.
+        played = _played(self._cut(), POOL_A_RESULTS)
+        gameless = [
+            dataclasses.replace(f, games=None) if f.pool_id is not None else f
+            for f in played
+        ]
+        fixtures = _voided(gameless, {frozenset({1, 6})})
+
+        with pytest.raises(MissingFixtureGames) as excinfo:
+            _rr_then_ko(2).advance(fixtures)
+
+        assert "5 decided pool fixtures" in str(excinfo.value)

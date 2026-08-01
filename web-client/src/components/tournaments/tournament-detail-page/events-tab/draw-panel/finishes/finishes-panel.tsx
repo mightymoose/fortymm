@@ -10,23 +10,37 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-import { eventFinishes } from '../../../../data/finishes'
-import type { TournamentEvent } from '../../../../data/types'
+import type { FinishesView } from '../../../../data/finishes'
 import { ChampionBanner } from '../champion-banner'
 
 export interface FinishesPanelProps {
-  event: TournamentEvent
+  /** The event the finishes belong to — its id is what the panel's own test hooks hang off
+   * (`finishes-panel-…`, `finishes-champion-…`), so a card showing more than one results
+   * block still names each one. */
+  eventId: string
+  /** The event's name, for the table's accessible label ("Finishes for …") — a screen
+   * reader meets the table out of context and needs to know whose finishes these are. */
+  eventName: string
+  /** The finishes to render, already selected and joined to names (`eventFinishes`).
+   * **Never null**: whether an event *has* finishes is the caller's decision, not this
+   * panel's — see the note above. */
+  finishes: FinishesView
 }
 
 /**
- * A single-elimination event's **results** as its **finishes** (ADR-0785): a placement list
- * — each entrant at the finishing position the server derived from the round it was
+ * A **finishes block** on an event's card in the Events tab (ADR-0785): a placement list —
+ * each entrant at the finishing position the server derived from the round it was
  * eliminated in — and, once the final is decided, its champion. The `finishes` twin of
- * `StandingsPanel`; the two are switched between by `ResultsPanel` on the results `kind`.
+ * `StandingsPanel`; which of the two is shown is decided in one place, `ResultsPanel`,
+ * switching on the results `kind`.
  *
- * It renders **nothing** when the event has no finishes (`eventFinishes` returns `null`: no
- * results, or a `standings` round-robin) — a designed data state, not a gap. `ResultsPanel`
- * only mounts it for the `finishes` arm, but the guard keeps it safe to render directly.
+ * ## It renders what it is handed
+ *
+ * Like its twin, it takes its finishes as a prop instead of reading them off an event and
+ * deciding whether they apply — so it can be shown for any event that *has* a finishes
+ * block, whatever the rest of its results look like (a plain single-elimination bracket
+ * today, the knockout stage of a multi-stage event tomorrow). A panel that re-checked
+ * `results.kind` would silently render nothing the moment it met a shape it did not know.
  *
  * ## Live, and never computed here
  *
@@ -38,17 +52,16 @@ export interface FinishesPanelProps {
  * tie** (`T3`, `T5`), because single-elimination genuinely does not rank them against each
  * other (`eventFinishes` marks the tie; this only renders it).
  */
-export const FinishesPanel = ({ event }: FinishesPanelProps) => {
+export const FinishesPanel = ({
+  eventId,
+  eventName,
+  finishes,
+}: FinishesPanelProps) => {
   const headingId = useId()
-  const finishes = eventFinishes(event)
-
-  // No finishes to place: no results, or a round-robin (`standings`). Render nothing — a
-  // designed data state, not a spinner and not a gap.
-  if (finishes === null) return null
 
   return (
     <section
-      data-testid={`finishes-panel-${event.id}`}
+      data-testid={`finishes-panel-${eventId}`}
       aria-labelledby={headingId}
       className="mt-2.5"
     >
@@ -65,13 +78,13 @@ export const FinishesPanel = ({ event }: FinishesPanelProps) => {
       {finishes.complete && finishes.champion !== null && (
         <ChampionBanner
           name={finishes.champion}
-          testId={`finishes-champion-${event.id}`}
+          testId={`finishes-champion-${eventId}`}
         />
       )}
 
       {/* A real `<table>`, like the standings: placement is tabular data (a position and a
           name per row), which a screen reader reads by column. */}
-      <Table aria-label={`Finishes for ${event.name}`} className="mt-2 text-[13px]">
+      <Table aria-label={`Finishes for ${eventName}`} className="mt-2 text-[13px]">
         <TableHeader>
           <TableRow>
             <TableHead className="w-12 text-right font-mono tabular-nums">

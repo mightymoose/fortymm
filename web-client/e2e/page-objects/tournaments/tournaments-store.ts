@@ -15,6 +15,7 @@ import {
   buildEventResultsRead,
   buildPoolStandingsRead,
   buildStandingRowRead,
+  buildStandingsThenFinishesResultsRead,
   buildTournamentDetailRead,
   buildTournamentEventRead,
   buildTournamentEntrantRead,
@@ -38,6 +39,8 @@ type Pool = components['schemas']['Pool']
  * hold — the catalogue and the enum are the same set by construction. */
 type DrawTypeRead = components['schemas']['DrawTypeRead']
 type StandingsResultsRead = components['schemas']['StandingsResultsRead']
+type StandingsThenFinishesResultsRead =
+  components['schemas']['StandingsThenFinishesResultsRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 /** The wire's status enum — the specs drive the store with it, so it is the
  * generated schema's, not a re-typed union of four strings. */
@@ -159,6 +162,12 @@ export const EVENT = {
    * user-reachable path: without it that arm could be reverted to anything at all and
    * this suite would stay green. */
   LONE: 'Novice Singles',
+  /** The **two-stage** seed's event (`twoStage: true`): singles, `rr-then-ko`, six entrants
+   * across two pools, two qualifying from each (ADR 20260727). The only user-reachable path
+   * to the results union's THIRD arm (`kind: "standings_then_finishes"`) in a real browser —
+   * and the one that matters most, because `parseResults` **throws** on a shape it has no
+   * arm for, which fails the whole query rather than degrading one panel. */
+  TWO_STAGE: 'Cup Singles',
 } as const
 
 /** How many people are already in the crowded event before I enter it. Comfortably
@@ -341,6 +350,74 @@ const JOURNEY_RESULTS: StandingsResultsRead = buildEventResultsRead({
   ],
 })
 
+// ----- the TWO-STAGE seed (`rr-then-ko`, ADR 20260727) ----------------------
+
+/** The two pools of `EVENT.TWO_STAGE`. Their ids are `p-a` / `p-b` because that is what
+ * `buildStandingsThenFinishesResultsRead`'s pool blocks name — the results fixture and the
+ * event's own `pools` have to agree, or the tables would title themselves from a raw id. */
+const CUP_POOLS: Pool[] = [
+  {
+    id: 'p-a',
+    name: 'Pool A',
+    slot: { date: '2026-06-13', start: '09:00', end: '11:00' },
+    table_ids: ['t1', 't2'],
+  },
+  {
+    id: 'p-b',
+    name: 'Pool B',
+    slot: { date: '2026-06-13', start: '11:00', end: '13:00' },
+    table_ids: ['t3', 't4'],
+  },
+]
+
+/** The two-stage event's field: six entrants with **plain** ids (`entry-1`…`entry-6`), not
+ * the `crowd()` helper's `entry-crowd-N`, because the results fixture names entries by those
+ * plain ids — and an id the event does not list joins to "Withdrawn", which is exactly the
+ * bug a browser spec about names is meant to catch. */
+const CUP_ENTRANTS: TournamentEntrantRead[] = Array.from({ length: 6 }, (_, i) =>
+  buildTournamentEntrantRead({
+    id: `entry-${i + 1}`,
+    user_id: `u-cup-${i + 1}`,
+    username: `player.${i + 1}`,
+  }),
+)
+
+/** The played-out two-stage result for `EVENT.TWO_STAGE`: both pools decided, the bracket
+ * run to a final, and a champion — `player.4` — who **tops neither pool**. The snake deals
+ * `p-a` entries 1, 4, 5 and `p-b` entries 2, 3, 6, and the fixture's standings stand over
+ * exactly those memberships. */
+const CUP_RESULTS: StandingsThenFinishesResultsRead =
+  buildStandingsThenFinishesResultsRead()
+
+/** The same event one match from home: pools decided, the final seated and unplayed. So
+ * `complete` is false, there is no champion, and the finishes list **starts at position 3**
+ * — the two beaten semifinalists are all the bracket has placed. */
+const CUP_RESULTS_MID_FLIGHT: StandingsThenFinishesResultsRead =
+  buildStandingsThenFinishesResultsRead({
+    complete: false,
+    champion: null,
+    finishes: CUP_RESULTS.finishes.filter((f) => f.position === 3),
+  })
+
+/** The two-stage event (`twoStage: true`), added to the drawable seed rather than replacing
+ * it — opt-in for the same reason `bracket` is: its six entrants would move the
+ * tournament-level Entries total the journey spec narrates. */
+function twoStageEvents(): TournamentEventRead[] {
+  return [
+    buildTournamentEventRead({
+      id: 'ev-cup',
+      name: EVENT.TWO_STAGE,
+      format: 'singles',
+      draw_type: 'rr-then-ko',
+      // The director's own K, which sizes the bracket at the cut (`P × K` = 2 × 2 = 4).
+      qualifiers_per_pool: 2,
+      max_players: 32,
+      entrants: CUP_ENTRANTS,
+      pools: CUP_POOLS,
+    }),
+  ]
+}
+
 /** The round-robin tournament: two events, both cuttable, nothing cut yet. `drawn`
  * decides which of them arrive with a draw already standing.
  *
@@ -368,6 +445,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       pools: PLAY_POOLS,
     }),
     ...(options.bracket ?? false ? bracketEvents() : []),
+    ...(options.twoStage ?? false ? twoStageEvents() : []),
   ]
 }
 
@@ -670,6 +748,19 @@ export interface TournamentsStoreOptions {
    * event's draw. Its rows name the drawable JOURNEY's own two entrants (`entry-1`,
    * `entry-2`), so the FE's name join lands. */
   standings?: boolean
+  /** Add the **two-stage** (`rr-then-ko`) event to the drawable seed — which it also turns
+   * on, since it extends that seed: `EVENT.TWO_STAGE`, six entrants across two pools.
+   *
+   * Opt-in for the same reason `bracket` is (its entrants would move the Entries total the
+   * journey spec narrates), and it is the ONLY browser-reachable path to the results union's
+   * third arm. Pair it with `twoStageResults` to attach a played-out or mid-flight result;
+   * on its own it is an uncut two-stage event. */
+  twoStage?: boolean
+  /** Attach the **two-stage** result to `EVENT.TWO_STAGE` (ADR 20260727) — `'complete'` for
+   * a bracket run to a final with a champion, `'mid-flight'` for decided pools and an
+   * unplayed final (no champion, finishes starting at position 3). Only meaningful with
+   * `twoStage`. */
+  twoStageResults?: 'complete' | 'mid-flight'
   /** The tournament's latest **schedule solve** ledger row when the page loads (ADR
    * "the schedule is solved") — how a spec starts on a `succeeded`, `infeasible` or
    * `failed` strip without walking the whole run. Built with
@@ -882,6 +973,13 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
     event.draw_type,
     drawOrder(event.entrants).map((e) => e.id),
     event.pools.map((p) => p.id),
+    // **The event's own K** (ADR 20260727) — the count the director configured and the
+    // PATCH stored, passed through unchanged. It is what sizes an `rr-then-ko` draw's
+    // bracket (`P × K`), so substituting anything would cut a `P × 1` bracket for an event
+    // configured otherwise: a well-formed draw of the wrong size, with nothing anywhere
+    // reporting the substitution. `null` is the honest value for a count-less draw type,
+    // and only the arm that never reads it can see it.
+    event.qualifiers_per_pool,
   )
 }
 
@@ -993,6 +1091,17 @@ export class TournamentsStore {
     if (options.standings ?? false) {
       const event = this.eventNamed(EVENT.JOURNEY)
       this.mutateEvent(event.id, (e) => ({ ...e, results: JOURNEY_RESULTS }))
+    }
+    // The two-stage result (ADR 20260727), on the same footing: it rides on the seeded
+    // `EVENT.TWO_STAGE` draw rather than inventing one, and its pool standings stand over
+    // the pools that draw's snake actually dealt.
+    if (options.twoStageResults) {
+      const event = this.eventNamed(EVENT.TWO_STAGE)
+      const results =
+        options.twoStageResults === 'complete'
+          ? CUP_RESULTS
+          : CUP_RESULTS_MID_FLIGHT
+      this.mutateEvent(event.id, (e) => ({ ...e, results }))
     }
     // The seeded solve ledger row, if any — a terminal strip state the spec starts on.
     if (options.latestSolve) {

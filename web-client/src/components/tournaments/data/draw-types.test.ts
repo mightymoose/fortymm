@@ -23,8 +23,9 @@ const row = (over: Partial<Record<string, unknown>> = {}) => ({
  * `DrawType` used to name five types while the server could plan two, so a director
  * could pick "Swiss" from the picker, create the event, enter a whole field, and only
  * discover at the moment they cut the draw that it was never possible. The API's enum
- * now holds exactly the two that run, and the three that did not are a **422 at the
- * request boundary**.
+ * now holds exactly what runs, and what does not is a **422 at the request boundary** —
+ * a set that moves in both directions: `rr-then-ko` was removed with the other three and
+ * came back in #1227 the moment its strategy landed.
  *
  * What survives on the client is a *vocabulary*, not an offer, and it is declared
  * **once**: `DRAW_TYPES` in `./draw-types`, with `drawTypeSchema` (the event form's
@@ -91,6 +92,30 @@ describe('parseDrawTypeCatalogue', () => {
     ])
 
     expect(options).toEqual([{ value: 'round-robin', label: 'Round robin' }])
+  })
+
+  /** The sharp edge of the rule above, and the reason `DRAW_TYPES` is not a formality:
+   * "unknown slug" and "slug this build simply forgot to list" are indistinguishable
+   * here, and both are dropped **silently**. `rr-then-ko` is the row that proved it —
+   * seeded on the server, in the payload, and absent from the picker with nothing said
+   * (ADR "rr-then-ko cuts both stages upfront and seeds qualifiers rematch-free",
+   * Context). This pins the served row all the way through the filter. */
+  it('keeps the rr-then-ko row the server seeds, rather than dropping it', () => {
+    // The slug is written out, NOT mapped from `DRAW_TYPES` — a test that fed the parser
+    // its own allowlist would agree with itself in every state, including the broken one.
+    const options = parseDrawTypeCatalogue([
+      row({ key: 'round-robin', name: 'Round robin', display_order: 1 }),
+      row({
+        key: 'rr-then-ko',
+        name: 'Round-robin then knockout',
+        display_order: 3,
+      }),
+    ])
+
+    expect(options).toEqual([
+      { value: 'round-robin', label: 'Round robin' },
+      { value: 'rr-then-ko', label: 'Round-robin then knockout' },
+    ])
   })
 
   /** A malformed row is a different thing from an unknown one, and gets the other

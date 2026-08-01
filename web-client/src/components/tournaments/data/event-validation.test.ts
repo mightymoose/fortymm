@@ -9,6 +9,9 @@ import {
   PLAYERS_MAX,
   poolNameIssues,
   poolNameSchema,
+  QUALIFIERS_PER_POOL_MAX,
+  QUALIFIERS_PER_POOL_MIN,
+  qualifiersPerPoolSchema,
 } from './event-validation'
 
 /** Longer than `tournament_events.name` (`VARCHAR(255)`) — the 422 the organizer used
@@ -95,6 +98,71 @@ describe('the player limit (`EventMaxPlayers | None`, ADR-0935)', () => {
     // The boundary is a real answer: a 512-player draw is nine rounds of single
     // elimination, and an event that big must still save.
     expect(messageFor(maxPlayersSchema, PLAYERS_MAX)).toBeUndefined()
+  })
+})
+
+/**
+ * **K** — the qualifier count (`QualifiersPerPool`: `ge=1`, `le=1000`).
+ *
+ * The floor and its three messages already shipped; what #1231's QA pass found was the
+ * OTHER end, open. The bound is asserted here as a message, not as "it failed", because
+ * the number is the only thing the director can act on.
+ */
+describe('the qualifier count (`QualifiersPerPool`, #1231 QA)', () => {
+  /** The messages that already worked, pinned so the new ceiling cannot quietly take one
+   * of their places: three different faults, three different sentences. */
+  it('keeps the three messages the floor already gave', () => {
+    expect(messageFor(qualifiersPerPoolSchema, null)).toBe(
+      'Say how many players advance from each pool.',
+    )
+    expect(messageFor(qualifiersPerPoolSchema, 0)).toBe(
+      'At least 1 player must advance from each pool.',
+    )
+    expect(messageFor(qualifiersPerPoolSchema, -1)).toBe(
+      'At least 1 player must advance from each pool.',
+    )
+    expect(messageFor(qualifiersPerPoolSchema, 1.5)).toBe(
+      'Qualifiers per pool must be a whole number.',
+    )
+  })
+
+  /**
+   * ⚠️ **The value that DETONATED THE SERVER**, one field over from the player limit's
+   * version of it. `2147483648` is one past what an `Integer` column holds: it satisfied
+   * `ge=1`, went out, and came back a **500** — which the editor reported as "Something
+   * went wrong on our end. Nothing you did caused it". That sentence was false. They
+   * typed a number into a box, and the box had no ceiling.
+   */
+  it('refuses the count that 500’d the server, in words that name the limit', () => {
+    expect(messageFor(qualifiersPerPoolSchema, 2_147_483_648)).toBe(
+      'At most 1,000 players can advance from each pool.',
+    )
+  })
+
+  /** The quieter half of the same fault, and the worse one: `999999999` was **accepted**.
+   * No error anywhere — just an event whose knockout stage could never be cut. */
+  it('refuses a count that saves and then cannot be drawn', () => {
+    expect(messageFor(qualifiersPerPoolSchema, 999_999_999)).toBe(
+      'At most 1,000 players can advance from each pool.',
+    )
+  })
+
+  it('refuses one player past the bound, and accepts the bound itself', () => {
+    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MAX + 1)).toBe(
+      'At most 1,000 players can advance from each pool.',
+    )
+    // ⚠️ The boundary is the server's, inclusive (`le=1000`) — so it must SAVE. A form
+    // that refused 1,000 would refuse a save the API accepts, which is the mirror image
+    // of the bug and just as wrong.
+    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MAX)).toBeUndefined()
+    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MIN)).toBeUndefined()
+  })
+
+  /** The number itself, not just the behaviour: the client's bound and the server's
+   * `le=1000` are the same value stated twice, and a drift either way is a refusal one
+   * layer makes and the other does not. */
+  it('mirrors the server’s number exactly', () => {
+    expect(QUALIFIERS_PER_POOL_MAX).toBe(1000)
   })
 })
 

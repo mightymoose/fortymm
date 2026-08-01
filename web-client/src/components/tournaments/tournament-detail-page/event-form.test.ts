@@ -34,6 +34,81 @@ describe('eventSchema', () => {
     expect(rejectedFields(formFor({ maxPlayers: 0 }))).toEqual(['maxPlayers'])
   })
 
+  /**
+   * **K is judged with its draw type, never alone** (ADR 20260727) — the resolver's half
+   * of the server's tagged union.
+   *
+   * The pair is the whole design. A field-level rule would have to answer "is a null
+   * qualifier count wrong?" without knowing the draw type, and both answers are wrong
+   * half the time: for `rr-then-ko`, `null` is a missing answer; for the other two it is
+   * the only legal value — and a red raised there would refuse the save with a message
+   * under a control that is not even rendered.
+   */
+  describe('the qualifier count', () => {
+    const twoStage = (qualifiersPerPool: number | null) =>
+      formFor({ drawType: 'rr-then-ko', qualifiersPerPool })
+
+    it('requires a count for rr-then-ko, and blames the field by name', () => {
+      expect(rejectedFields(twoStage(null))).toEqual(['qualifiersPerPool'])
+    })
+
+    // `ge=1` on the server (`QualifiersPerPool`). Zero advances nobody into the
+    // knockout stage, and a negative count is not a count.
+    it.each([0, -1, 1.5])('refuses %s', (bad) => {
+      expect(rejectedFields(twoStage(bad))).toEqual(['qualifiersPerPool'])
+    })
+
+    it('accepts the smallest legal count, and a larger one', () => {
+      expect(rejectedFields(twoStage(1))).toEqual([])
+      expect(rejectedFields(twoStage(4))).toEqual([])
+    })
+
+    /**
+     * ⚠️ **`le=1000` on the server, and the resolver has to know it too** (#1231 QA).
+     * `2147483648` overflows the `Integer` column and came back a 500; `999999999` was
+     * accepted and made an event nobody could draw. Both are refused HERE now, so
+     * neither is ever sent — and the message names the number, since the number is the
+     * only thing the director can change.
+     */
+    it.each([1001, 999_999_999, 2_147_483_648])('refuses %s', (tooMany) => {
+      expect(rejectedFields(twoStage(tooMany))).toEqual(['qualifiersPerPool'])
+    })
+
+    it('speaks the schema’s own sentence about the ceiling', () => {
+      const result = eventSchema.safeParse(twoStage(1001))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].message).toBe(
+        'At most 1,000 players can advance from each pool.',
+      )
+    })
+
+    // The server's bound is INCLUSIVE, so the boundary itself must save — a form that
+    // refused 1,000 would refuse a save the API accepts.
+    it('accepts the ceiling itself', () => {
+      expect(rejectedFields(twoStage(1000))).toEqual([])
+    })
+
+    // ⚠️ The inverse, and the one a field-level rule would get wrong: a round-robin
+    // event carries `null` and must SAVE. A schema that demanded a count regardless
+    // would dead-end every single-stage event, with a red nobody could see or fix.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'asks nothing of %s, whose count is null',
+      (drawType) => {
+        expect(rejectedFields(formFor({ drawType, qualifiersPerPool: null }))).toEqual([])
+      },
+    )
+
+    // …and does not complain about a STALE count left behind by a draw-type switch:
+    // the control unmounted, but React-Hook-Form keeps the value, and the write body
+    // omits it anyway (`eventToApiFields`). A rule that fired here would block the save
+    // over a number that is never sent.
+    it('ignores a leftover count once the draw type no longer has a knockout stage', () => {
+      expect(
+        rejectedFields(formFor({ drawType: 'round-robin', qualifiersPerPool: 2 })),
+      ).toEqual([])
+    })
+  })
+
   it('requires an entry fee, and takes zero for a free event', () => {
     expect(rejectedFields(formFor({ entryFee: Number.NaN }))).toEqual(['entryFee'])
     expect(rejectedFields(formFor({ entryFee: 0 }))).toEqual([])
@@ -139,6 +214,14 @@ describe('firstInvalidSection', () => {
     expect(firstInvalidSection({ maxPlayers: { type: 'custom', message: 'x' } })).toBe(
       'basics',
     )
+  })
+
+  // It lives on Basics, beside the draw type that decides whether it is asked at all —
+  // and a save refused on a tab you cannot see is indistinguishable from a dead button.
+  it('sends a broken qualifier count to Basics', () => {
+    expect(
+      firstInvalidSection({ qualifiersPerPool: { type: 'custom', message: 'x' } }),
+    ).toBe('basics')
   })
 
   it('sends a broken timezone to Basics', () => {

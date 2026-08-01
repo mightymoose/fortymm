@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildFixtureTimeRead,
   DRAW_TYPE_CATALOGUE,
+  planDraw,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   createEvent,
@@ -1296,6 +1297,295 @@ describe('cutting a single-elimination draw', () => {
   })
 })
 
+// Cutting a ROUND-ROBIN-THEN-KNOCKOUT draw (#1227, ADR "rr-then-ko cuts both stages
+// upfront and seeds qualifiers rematch-free"). The format the enum lost in #1219 and got
+// back once it had a strategy — and the one whose two stages live in one event, so the
+// claims worth pinning are all about the SEAM: that a single cut produces pools *and* a
+// bracket, that the bracket is un-pooled (which is what routes it to the bracket view
+// rather than into a pool's list), and that its rounds restart at 1.
+describe('cutting a round-robin-then-knockout draw', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  /** Sixteen entrants — enough to deal four pools of four (a full 4-slot bracket) or
+   * three of 6/5/5 (a 3-qualifier bracket, where a bye is visible). */
+  const TWO_STAGE = FULL_SINGLES
+
+  const eventOf = (eventId: string) =>
+    findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
+
+  const poolNamed = (id: string) => ({ id, name: id, slot: SLOT, table_ids: [] })
+
+  /** Re-type an event as two-stage, across `poolCount` pools, taking `qualifiers` out of
+   * each. The draw type and the pool set both FREEZE while a draw stands (ADR-0786), so
+   * any standing draw comes off first — the route a director would take through the UI.
+   *
+   * The qualifier count is patched **with** the draw type, because that is the only way
+   * it can be: the two are one configuration (ADR 20260727), and the server 422s a count
+   * that arrives without its type. It defaults to `1` so the cases below that predate it
+   * still describe the field they were written for — but it is now genuinely STORED and
+   * read back out at the cut, rather than a planner default nobody chose. */
+  function asRrThenKo(eventId: string, poolCount: number, qualifiers = 1) {
+    expect(uncutDraw(TOURNAMENT, eventId).ok).toBe(true)
+    const patched = updateEvent(TOURNAMENT, eventId, {
+      draw_type: 'rr-then-ko',
+      qualifiers_per_pool: qualifiers,
+      pools: Array.from({ length: poolCount }, (_, i) => poolNamed(`p-${i + 1}`)),
+    })
+    if (!patched.ok) throw new Error(`could not re-type ${eventId}`)
+  }
+
+  /** Cut `eventId`, failing loudly on a refusal — so a test that meant to assert about a
+   * two-stage draw never quietly asserts about `undefined`. */
+  function cut(eventId: string) {
+    const result = cutDraw(TOURNAMENT, eventId)
+    if (!result.ok) {
+      throw new Error(
+        `expected a cut, got ${result.status}: ${'detail' in result ? result.detail : ''}`,
+      )
+    }
+    return result.fixtures
+  }
+
+  /** The two stages, split the way the wire splits them: `pool_id IS NULL` **is** the
+   * knockout stage (ADR-0786), and there is no other column that says so. */
+  const pooled = (fixtures: ReturnType<typeof cut>) =>
+    fixtures.filter((f) => f.pool_id !== null)
+  const knockout = (fixtures: ReturnType<typeof cut>) =>
+    fixtures.filter((f) => f.pool_id === null)
+
+  it('cuts BOTH stages in one stroke — the pools and the whole bracket', () => {
+    // Not a convenience (ADR): `advance()` can only ever FILL a side of an existing
+    // fixture, never create one, so a bracket that did not exist at the cut could never
+    // come into being. The qualifier count is `P × K` = 4 × 1, known before anybody
+    // plays, so the bracket's size is settled at cut time.
+    asRrThenKo(TWO_STAGE, 4) // 16 entrants → four pools of four
+
+    const fixtures = cut(TWO_STAGE)
+
+    // Four pools of four: C(4,2) = 6 pairs each.
+    expect(pooled(fixtures)).toHaveLength(24)
+    // Four qualifiers → a 4-slot bracket: two semis and a final.
+    expect(knockout(fixtures)).toHaveLength(3)
+    // …and the store really kept them — a plan that never landed is not a draw.
+    expect(eventOf(TWO_STAGE).fixtures).toEqual(fixtures)
+  })
+
+  it('lays the pool stage out exactly as a round-robin draw', () => {
+    asRrThenKo(TWO_STAGE, 4)
+
+    const stage = pooled(cut(TWO_STAGE))
+
+    // Every fixture names one of THIS event's pools…
+    expect(new Set(stage.map((f) => f.pool_id))).toEqual(
+      new Set(eventOf(TWO_STAGE).pools.map((p) => p.id)),
+    )
+    // …every pair meets exactly once…
+    const pairs = stage.map((f) => [f.entry_a_id, f.entry_b_id].sort().join('|'))
+    expect(new Set(pairs).size).toBe(pairs.length)
+    // …nobody plays twice in a (pool, round), and no pool fixture is ever TBD: the pool
+    // stage is fully known at the cut, unlike the bracket hanging off it.
+    for (const fixture of stage) {
+      const sameRound = stage.filter(
+        (f) => f.pool_id === fixture.pool_id && f.round === fixture.round,
+      )
+      const players = sameRound.flatMap((f) => [f.entry_a_id, f.entry_b_id])
+      expect(new Set(players).size).toBe(players.length)
+      expect(fixture.entry_a_id).not.toBeNull()
+      expect(fixture.entry_b_id).not.toBeNull()
+    }
+  })
+
+  it('leaves the knockout stage UN-POOLED and entirely TBD', () => {
+    asRrThenKo(TWO_STAGE, 4)
+
+    const bracket = knockout(cut(TWO_STAGE))
+
+    // `pool_id IS NULL` is not cosmetic — it is the whole stage discriminator, and what
+    // sends these rows to the bracket view instead of a pool's fixture list.
+    expect(bracket.every((f) => f.pool_id === null)).toBe(true)
+    // Nobody has qualified yet, so every side is TBD. A bracket cut with entrants
+    // already in it would be seating people the pools have not chosen.
+    for (const fixture of bracket) {
+      expect([fixture.entry_a_id, fixture.entry_b_id]).toEqual([null, null])
+    }
+  })
+
+  it('restarts the knockout rounds at 1, rather than continuing the pool numbering', () => {
+    // Continuing was rejected as ill-defined, not merely ugly (ADR): pools may differ in
+    // size, so there is no single "last pool round" to offset from. Restarting is also
+    // what lets the client's bracket — which names rounds relative to the maximum it is
+    // handed — say "Final / Semifinals" with no change at all.
+    asRrThenKo(TWO_STAGE, 3) // 16 → pools of 6, 5, 5: the pool rounds differ in length
+
+    const fixtures = cut(TWO_STAGE)
+
+    // The longest pool runs to round 5, so a continuation would start the bracket at 6.
+    expect(Math.max(...pooled(fixtures).map((f) => f.round))).toBe(5)
+    expect(
+      [...new Set(knockout(fixtures).map((f) => f.round))].sort(),
+    ).toEqual([1, 2])
+  })
+
+  it('renders a bye as a MISSING round-1 slot, never an extra null-sided row', () => {
+    // Three pools taking one qualifier each → three qualifiers in a 4-slot bracket, so
+    // the top seed byes. A planner that emitted a "bye" row would give TWO round-1
+    // fixtures here; a bye is the ABSENCE of one (ADR-0786), leaving a gap in the
+    // position sequence — position 1 is simply not there.
+    asRrThenKo(TWO_STAGE, 3)
+
+    const bracket = knockout(cut(TWO_STAGE))
+    const roundOne = bracket.filter((f) => f.round === 1)
+
+    expect(roundOne).toHaveLength(1)
+    expect(roundOne[0].position).toBe(2)
+    expect(bracket.filter((f) => f.round === 2)).toHaveLength(1)
+  })
+
+  it('refuses a single pool taking a single qualifier, in the server’s words', () => {
+    // The one `P × K < 2` shape reachable at all (`K ≥ 1` is a bound at the request
+    // boundary, and the snake guarantees `P ≥ 1`): one pool, one qualifier, one player
+    // alone in the knockout stage.
+    asRrThenKo(TWO_STAGE, 1)
+
+    const result = cutDraw(TOURNAMENT, TWO_STAGE)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+    expect(result.status === 422 && result.detail).toContain(
+      'leaves one player in the knockout stage',
+    )
+  })
+
+  it('makes the POOL stage’s refusals first, in round-robin’s own words', () => {
+    // The server runs `_snake` before it consults the qualifier count at all, so an
+    // rr-then-ko event with no pools is refused with the sentence about a *round-robin*
+    // draw. That reads oddly and is right: the pool stage of an rr-then-ko draw IS a
+    // round-robin, and inventing a second wording would put a sentence in the server's
+    // mouth it never says.
+    const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      draw_type: 'rr-then-ko',
+      pools: [],
+    })
+    expect(patched.ok).toBe(true)
+
+    const result = cutDraw(TOURNAMENT, EMPTY_SINGLES)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status === 422 && result.detail).toContain('at least one pool')
+  })
+
+  /**
+   * **The store's K reaches the planner** (ADR 20260727) — the seam that was missing, and
+   * the reason the count had to be stored at all.
+   *
+   * ⚠️ This is the *silent* mismatch, which is why it needs pinning by size rather than
+   * by an error: a count substituted on the way to `planDraw` cuts a perfectly well-formed
+   * bracket — just one sized for a K nobody chose. Nothing throws, nothing warns, and
+   * `npm run dev` and vitest both look healthy while an event configured at K=2 runs a
+   * K=1 knockout. (The planner having no default is what makes *dropping* the argument a
+   * type error; this pins the value that actually arrives.)
+   *
+   * Two pools of sixteen entrants, so the two candidate brackets are unmistakably
+   * different: `P × K` = 2 × 2 = 4 slots (2 semis + 1 final = **3** fixtures) against the
+   * default's 2 × 1 = 2 slots (**1** fixture).
+   */
+  it('cuts the bracket from the event’s OWN qualifier count, not the planner’s default', () => {
+    asRrThenKo(TWO_STAGE, 2, 2)
+
+    const bracket = knockout(cut(TWO_STAGE))
+
+    // 4 qualifiers → two semifinals and a final. A K=1 fallback would give exactly 1.
+    expect(bracket).toHaveLength(3)
+    expect(bracket.filter((f) => f.round === 1)).toHaveLength(2)
+  })
+
+  it('keeps the count on the stored event, so a re-read still knows it', () => {
+    asRrThenKo(TWO_STAGE, 2, 2)
+
+    // Not merely accepted by the PATCH — actually held, which is what the *next* cut
+    // (and the editor re-opening on this event) reads.
+    expect(eventOf(TWO_STAGE).qualifiers_per_pool).toBe(2)
+  })
+
+  // The pair moves together (ADR 20260727): a draw type with no knockout stage has no
+  // count, so re-typing away from rr-then-ko must not strand the old K on the event —
+  // that is a configuration the server's tagged union cannot even represent.
+  it('clears the count when the event is re-typed to a format with no knockout stage', () => {
+    asRrThenKo(TWO_STAGE, 2, 2)
+    expect(uncutDraw(TOURNAMENT, TWO_STAGE).ok).toBe(true)
+
+    const patched = updateEvent(TOURNAMENT, TWO_STAGE, { draw_type: 'round-robin' })
+
+    expect(patched.ok).toBe(true)
+    expect(eventOf(TWO_STAGE).qualifiers_per_pool).toBeNull()
+  })
+
+  it('survives a re-cut and an un-cut like any other draw', () => {
+    asRrThenKo(TWO_STAGE, 4)
+
+    const first = cut(TWO_STAGE)
+    // Nothing about either stage is random, so the same field cuts the same draw —
+    // bracket included, because its shape is a pure function of `P × K`.
+    expect(cut(TWO_STAGE)).toEqual(first)
+    expect(uncutDraw(TOURNAMENT, TWO_STAGE)).toEqual({ ok: true })
+    // Both stages go: a draw is just fixtures, whichever stage they belong to.
+    expect(eventOf(TWO_STAGE).fixtures).toEqual([])
+  })
+})
+
+// The qualifier count as a PARAMETER of the rr-then-ko planner. The store now stores it
+// and passes it in (see "cuts the bracket from the event's OWN qualifier count" above),
+// so the seam is covered end to end; these stay because they exercise `planDraw` directly
+// at counts the store's fixtures would need contorting to reach, and because the two
+// refusals that depend on K read most clearly next to the arithmetic that produces them.
+describe('planDraw, rr-then-ko, with a qualifier count', () => {
+  const entrants = (n: number) => Array.from({ length: n }, (_, i) => `entry-${i + 1}`)
+  const pools = (n: number) => Array.from({ length: n }, (_, i) => `p-${i + 1}`)
+
+  it('takes pool winners only at K = 1 — the smallest legal count', () => {
+    // 8 entrants across 2 pools of 4, K = 1, so 2 qualifiers meet in a one-fixture
+    // bracket. The count is passed explicitly like every other: the planner has no
+    // default, so "pool winners only" is a configuration, never an omission.
+    const plan = planDraw('rr-then-ko', entrants(8), pools(2), 1)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(1)
+  })
+
+  it('sizes the bracket from P × K — derived, never configured', () => {
+    // 2 pools × 3 qualifiers = 6, padded to an 8-slot bracket: 7 slots, of which the two
+    // byed seeds' round-1 rows are absent → 2 round-1 + 2 semis + 1 final.
+    const plan = planDraw('rr-then-ko', entrants(12), pools(2), 3)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(5)
+  })
+
+  it('refuses taking more qualifiers than the smallest pool holds', () => {
+    // 9 entrants across 2 pools → 5 and 4; taking 5 from each is more than the 4 the
+    // smaller pool has, and the sentence names both numbers.
+    const plan = planDraw('rr-then-ko', entrants(9), pools(2), 5)
+
+    expect(plan.ok).toBe(false)
+    if (plan.ok) return
+    expect(plan.detail).toBe(
+      'Taking 5 qualifiers from each pool is more than the 4 entrants in the ' +
+        'smallest pool — take fewer qualifiers from each pool, or add entrants.',
+    )
+  })
+
+  it('allows a ONE-POOL draw once more than one player qualifies', () => {
+    // "League, then a playoff" is a real format (ADR), and so is K = ⌊N/P⌋, where
+    // everyone qualifies and the pool stage exists purely to seed.
+    const plan = planDraw('rr-then-ko', entrants(4), pools(1), 4)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(3)
+  })
+})
+
 // The DRAW-TYPE CATALOGUE (ADR 20260726) — the `draw_types` table, served on the page
 // that picks one. It is served rather than hardcoded client-side precisely so that "the
 // table gates what a director can pick" is a fact about the running system; a mock that
@@ -1307,10 +1597,14 @@ describe('the draw-type catalogue', () => {
     const catalogue = findTournament(TOURNAMENT)!.draw_type_catalogue
 
     expect(catalogue).toEqual(DRAW_TYPE_CATALOGUE)
-    // A row exists exactly when the type has an implementation, so the keys are the two
-    // members of `DrawType` — both of which `cutDraw` above can now plan.
-    expect(catalogue!.map((d) => d.key)).toEqual(['round-robin', 'single-elim'])
-    expect(catalogue!.map((d) => d.display_order)).toEqual([1, 2])
+    // A row exists exactly when the type has an implementation, so the keys are the
+    // members of `DrawType` — every one of which `cutDraw` above can now plan.
+    expect(catalogue!.map((d) => d.key)).toEqual([
+      'round-robin',
+      'single-elim',
+      'rr-then-ko',
+    ])
+    expect(catalogue!.map((d) => d.display_order)).toEqual([1, 2, 3])
     // The copy is what a director reads while choosing; neither field is ever empty.
     for (const drawType of catalogue!) {
       expect(drawType.name.length).toBeGreaterThan(0)
@@ -1648,5 +1942,278 @@ describe('the venue on a create/update', () => {
     expect(findTournament(created.id)!.address).toMatchObject({
       venue: 'Oakland Arena',
     })
+  })
+})
+
+// ----- the seeded TWO-STAGE events (ADR 20260727) --------------------------------
+//
+// `rr-then-ko` reads out as the results union's THIRD arm,
+// `kind: "standings_then_finishes"` — one standings block per pool plus the bracket's
+// finishes — and this store derives none of it: every seeded event hardcodes its own
+// `results`, and `cutDraw` never writes one. So the shape exists in `npm run dev` and in
+// vitest only because the seed spells it out, and a hand-written block with nothing
+// checking it is a block whose arithmetic rots the first time somebody edits a row.
+//
+// These are the checks that stop that. Each one is a claim the server really makes and
+// that slice 4c's rendering leans on:
+//
+//   - the champion is the **bracket final's winner** — never a pool leader, because the
+//     pool stage only seeds the bracket (topping a pool wins nothing);
+//   - the finishes follow single-elimination's own placement shape
+//     (`2 ** (final_round − round) + 1`), so same-round losers SHARE a position;
+//   - each pool's standings add up across that pool's own fixtures;
+//   - `complete` is **both** stages decided, not either.
+//
+// They are asserted against the STORE, not through `apiToTournament`: `parseResults` does
+// not know this `kind` yet (that is 4c), and the seed's honesty is a fact about the
+// payload regardless of who can currently read it.
+describe('the seeded two-stage (rr-then-ko) events', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const GOLDEN_STATE = 'golden-state-classic-2026'
+  const FINISHED = 'ev-challenge-cup' // pools decided, bracket decided, champion crowned
+  const MID_FLIGHT = 'ev-shield' // pools decided, the final still to be played
+
+  type Fixture = components['schemas']['TournamentFixtureRead']
+  type TwoStageResults =
+    components['schemas']['StandingsThenFinishesResultsRead']
+
+  const eventOf = (eventId: string) =>
+    findTournament(GOLDEN_STATE)!.events.find((e) => e.id === eventId)!
+
+  /** The event's results, having first asserted they really are the two-stage arm — so
+   * every check below is reading the shape it claims to read. */
+  function resultsOf(eventId: string): TwoStageResults {
+    const results = eventOf(eventId).results
+    expect(results?.kind).toBe('standings_then_finishes')
+    return results as TwoStageResults
+  }
+
+  /** The knockout stage: `pool_id IS NULL` IS the bracket (ADR-0786), which is exactly
+   * how the server tells the two stages apart. */
+  const bracketOf = (eventId: string): Fixture[] =>
+    eventOf(eventId).fixtures.filter((f) => f.pool_id === null)
+
+  /** The FINAL — the single fixture in the bracket's last round. Its winner is the
+   * event's champion, and `null` there is why an unfinished event has none. */
+  function finalOf(eventId: string): Fixture {
+    const bracket = bracketOf(eventId)
+    const lastRound = Math.max(...bracket.map((f) => f.round))
+    const final = bracket.filter((f) => f.round === lastRound)
+    expect(final).toHaveLength(1)
+    return final[0]
+  }
+
+  /** Wins and losses per entry, counted off a pool's FIXTURES — the independent reading
+   * the hardcoded standings block is checked against. */
+  function recordFromFixtures(fixtures: Fixture[]) {
+    const record = new Map<string, { wins: number; losses: number }>()
+    const bump = (id: string, key: 'wins' | 'losses') => {
+      const row = record.get(id) ?? { wins: 0, losses: 0 }
+      row[key] += 1
+      record.set(id, row)
+    }
+    for (const fixture of fixtures) {
+      const { entry_a_id: a, entry_b_id: b, winner_entry_id: winner } = fixture
+      expect(a).not.toBeNull()
+      expect(b).not.toBeNull()
+      expect(winner).not.toBeNull()
+      bump(winner!, 'wins')
+      bump(winner === a ? b! : a!, 'losses')
+    }
+    return record
+  }
+
+  it.each([FINISHED, MID_FLIGHT])(
+    '%s is an rr-then-ko event whose results are the standings_then_finishes arm',
+    (eventId) => {
+      const event = eventOf(eventId)
+
+      expect(event.draw_type).toBe('rr-then-ko')
+      // The count that sized the bracket at the cut — NOT null, unlike every count-less
+      // draw type in the seed.
+      expect(event.qualifiers_per_pool).toBe(2)
+      const results = resultsOf(eventId)
+      // Both blocks, always: a two-stage event that sent only one of them would be a
+      // shape neither existing panel can read.
+      expect(results.pools.length).toBeGreaterThan(0)
+      expect(Array.isArray(results.finishes)).toBe(true)
+    },
+  )
+
+  it.each([FINISHED, MID_FLIGHT])(
+    "%s's bracket is the one planDraw would cut — played out, not hand-drawn",
+    (eventId) => {
+      const event = eventOf(eventId)
+      const plan = planDraw(
+        'rr-then-ko',
+        event.entrants.map((e) => e.id),
+        event.pools.map((p) => p.id),
+        // The event's own count, unasserted: the planner takes `number | null` and
+        // refuses the impossible pair loudly, so there is nothing here to talk past.
+        event.qualifiers_per_pool,
+      )
+      if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+
+      // The SHAPE — every fixture's id, stage, round and position — is the cut's. Only
+      // the sides and the winners differ, which is precisely what playing an event does
+      // to a draw. A bracket of a different size (or one that renumbered its rounds)
+      // would be a draw this store could never have produced.
+      const shapeOf = (fixtures: Fixture[]) =>
+        fixtures.map((f) => ({
+          id: f.id,
+          pool_id: f.pool_id,
+          round: f.round,
+          position: f.position,
+        }))
+      expect(shapeOf(event.fixtures)).toEqual(shapeOf(plan.fixtures))
+    },
+  )
+
+  it.each([FINISHED, MID_FLIGHT])(
+    "%s's pool standings add up across that pool's own fixtures",
+    (eventId) => {
+      const event = eventOf(eventId)
+      const results = resultsOf(eventId)
+
+      for (const pool of results.pools) {
+        const fixtures = event.fixtures.filter((f) => f.pool_id === pool.pool_id)
+        expect(fixtures.length).toBeGreaterThan(0)
+        const played = recordFromFixtures(fixtures)
+
+        // The table names exactly the pool's players, once each, ranked 1..n.
+        expect(pool.rows.map((r) => r.rank)).toEqual(
+          pool.rows.map((_, i) => i + 1),
+        )
+        expect(new Set(pool.rows.map((r) => r.entry_id)).size).toBe(
+          pool.rows.length,
+        )
+        expect(new Set(pool.rows.map((r) => r.entry_id))).toEqual(
+          new Set(played.keys()),
+        )
+
+        for (const row of pool.rows) {
+          const actual = played.get(row.entry_id)!
+          // The wins/losses a director reads are the ones the fixtures RECORD…
+          expect({ entry: row.entry_id, ...actual }).toEqual({
+            entry: row.entry_id,
+            wins: row.wins,
+            losses: row.losses,
+          })
+          // …every match counts as played exactly once…
+          expect(row.played).toBe(row.wins + row.losses)
+          // …and the difference is the server's own reduction of the two counts beside
+          // it, never a third independent number.
+          expect(row.game_difference).toBe(row.games_won - row.games_lost)
+        }
+
+        // Every game won by somebody was lost by somebody else, so a pool's two game
+        // columns balance. This is the check a typo in one cell cannot survive.
+        const sum = (pick: (r: (typeof pool.rows)[number]) => number) =>
+          pool.rows.reduce((total, row) => total + pick(row), 0)
+        expect(sum((r) => r.games_won)).toBe(sum((r) => r.games_lost))
+        // …and one win is one loss.
+        expect(sum((r) => r.wins)).toBe(fixtures.length)
+        expect(sum((r) => r.losses)).toBe(fixtures.length)
+      }
+    },
+  )
+
+  it.each([FINISHED, MID_FLIGHT])(
+    "%s's finishes follow single-elimination's tie shape",
+    (eventId) => {
+      const results = resultsOf(eventId)
+      const finalRound = finalOf(eventId).round
+
+      // `2 ** (final_round − round) + 1` for a loser, 1 for the champion — the SAME
+      // arithmetic `SingleElimResults` uses, which is what makes the two-stage arm's
+      // finishes block the single-elim one rather than a near-copy of it.
+      for (const finish of results.finishes) {
+        const expected =
+          finish.eliminated_in_round === null
+            ? 1
+            : 2 ** (finalRound - finish.eliminated_in_round) + 1
+        expect({ entry: finish.entry_id, position: finish.position }).toEqual({
+          entry: finish.entry_id,
+          position: expected,
+        })
+      }
+
+      // Same round out ⇒ same position, and no two entrants share a position without
+      // sharing a round: inventing an order between two semifinal losers would fabricate
+      // a result the bracket never produced.
+      const roundsByPosition = new Map<number, Set<number | null>>()
+      for (const finish of results.finishes) {
+        const rounds = roundsByPosition.get(finish.position) ?? new Set()
+        rounds.add(finish.eliminated_in_round)
+        roundsByPosition.set(finish.position, rounds)
+      }
+      for (const rounds of roundsByPosition.values()) {
+        expect(rounds.size).toBe(1)
+      }
+
+      // Ordered by position, as the wire sends it — the client renders it untouched.
+      const positions = results.finishes.map((f) => f.position)
+      expect(positions).toEqual([...positions].sort((a, b) => a - b))
+      // Nobody is placed twice.
+      expect(new Set(results.finishes.map((f) => f.entry_id)).size).toBe(
+        results.finishes.length,
+      )
+    },
+  )
+
+  // THE decision of ADR 20260727, and the one property 4c's rendering hangs on: the
+  // champion comes from the BRACKET. A fixture whose champion also happened to top a pool
+  // would leave "crowned from the knockout" and "crowned from the standings"
+  // indistinguishable on screen — and a renderer that read the wrong one would look
+  // right.
+  it('crowns the FINAL’s winner — who is nobody’s pool leader', () => {
+    const results = resultsOf(FINISHED)
+    const final = finalOf(FINISHED)
+
+    expect(final.winner_entry_id).not.toBeNull()
+    expect(results.champion).toBe(final.winner_entry_id)
+    // …and that entrant tops NO pool.
+    const poolLeaders = results.pools.map((p) => p.rows[0].entry_id)
+    expect(poolLeaders).not.toContain(results.champion)
+    // The champion is a real entrant of this event and is placed 1st in the finishes.
+    expect(eventOf(FINISHED).entrants.map((e) => e.id)).toContain(
+      results.champion,
+    )
+    expect(results.finishes[0]).toMatchObject({
+      entry_id: results.champion,
+      position: 1,
+      eliminated_in_round: null,
+    })
+    // Both pool leaders are still IN the finishes — they just lost, and are tied 3rd.
+    for (const leader of poolLeaders) {
+      expect(results.finishes.map((f) => f.entry_id)).toContain(leader)
+    }
+  })
+
+  // `complete` is BOTH stages decided. The mid-flight event is what makes that a real
+  // claim rather than a restatement of "the pools are done": every one of its pools says
+  // `complete`, and the event does not.
+  it('is complete only when the pools AND the bracket are decided', () => {
+    const finished = resultsOf(FINISHED)
+    expect(finished.pools.every((p) => p.complete)).toBe(true)
+    expect(finalOf(FINISHED).winner_entry_id).not.toBeNull()
+    expect(finished.complete).toBe(true)
+
+    const midFlight = resultsOf(MID_FLIGHT)
+    // Stage one: done, every pool of it.
+    expect(midFlight.pools.every((p) => p.complete)).toBe(true)
+    // Stage two: the final is SEATED — both sides known, `advance()` carried the
+    // semifinal winners in — and unplayed.
+    const final = finalOf(MID_FLIGHT)
+    expect(final.entry_a_id).not.toBeNull()
+    expect(final.entry_b_id).not.toBeNull()
+    expect(final.winner_entry_id).toBeNull()
+    // …so there is no champion, and the event is NOT complete.
+    expect(midFlight.champion).toBeNull()
+    expect(midFlight.complete).toBe(false)
+    // The finishes hold only what the bracket has actually settled: the two beaten
+    // semifinalists, tied 3rd. No 1st, no 2nd — those do not exist yet.
+    expect(midFlight.finishes.map((f) => f.position)).toEqual([3, 3])
   })
 })

@@ -64,6 +64,22 @@ export interface EventEditorProps {
    * everything the organizer had typed went with it). */
   onSave: (event: TournamentEvent) => void | Promise<void>
   onDelete: (id: string) => void
+  /**
+   * Whether the save MUTATION is still in flight — the repo's pending-mutation gate
+   * (`mutation.isPending` → `disabled`, as `EnterEventControl` and `LifecycleActions`
+   * do it), threaded down because the mutations live at the route and the editor is
+   * handed an `onSave`.
+   *
+   * ⚠️ It is **not** the same fact as React-Hook-Form's `isSubmitting`, and that is the
+   * whole reason it exists (#1231 QA: five rapid clicks on Create event made five
+   * identical events). `isSubmitting` is true only while the `onSave` promise is
+   * unsettled. `isPending` stays true until the mutation has SETTLED — including
+   * `onSuccess`, which awaits `invalidateTournament`'s refetch — and that is the window
+   * the duplicates came through: the sheet is still on screen (Radix keeps the content
+   * mounted through its close animation) with a button that had already re-enabled
+   * itself. Two windows, one button: it is disabled for the union of them.
+   */
+  saving?: boolean
 }
 
 const SECTIONS = [
@@ -110,6 +126,7 @@ export const EventEditor = ({
   canEdit,
   onSave,
   onDelete,
+  saving = false,
 }: EventEditorProps) => {
   const [section, setSection] = useState('basics')
   const [seenEvent, setSeenEvent] = useState(event)
@@ -190,6 +207,10 @@ export const EventEditor = ({
     form.setValue('name', next.name, opts)
     form.setValue('format', next.format, opts)
     form.setValue('drawType', next.drawType, opts)
+    // Written back beside the draw type, because the resolver judges the two as one pair
+    // (ADR 20260727): a draw type set without its count would be validated against a
+    // stale K, and a count without its type against a stale arm.
+    form.setValue('qualifiersPerPool', next.qualifiersPerPool, opts)
     form.setValue('maxPlayers', next.maxPlayers, opts)
     form.setValue('entryFee', next.entryFee, opts)
     form.setValue('timezone', next.timezone, opts)
@@ -225,6 +246,7 @@ export const EventEditor = ({
 
   const basicsErrors = {
     name: errors.name?.message,
+    qualifiersPerPool: errors.qualifiersPerPool?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
     timezone: errors.timezone?.message,
@@ -373,7 +395,15 @@ export const EventEditor = ({
             // Disabled only while the save is in the air — never on validity
             // (`CLAUDE.md`, `## Forms`): pressing it is how the organizer finds out
             // what is wrong, and a dead button explains nothing.
-            <Button disabled={!draft || isSubmitting} onClick={submit}>
+            //
+            // "In the air" is TWO facts, and one of them is not this component's to
+            // know (see `saving` on the props): `isSubmitting` ends when the `onSave`
+            // promise settles, while the mutation behind it stays pending through its
+            // own success work. Five rapid clicks got five events through the gap
+            // (#1231 QA). Both are asked, so it re-enables only once BOTH are done —
+            // and a rejected save re-enables it, because both go false, which is what
+            // lets the organizer retry the failure the `Alert` above is reporting.
+            <Button disabled={!draft || isSubmitting || saving} onClick={submit}>
               <Check size={16} />
               {isNew ? 'Create event' : 'Save changes'}
             </Button>

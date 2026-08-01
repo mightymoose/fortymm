@@ -115,9 +115,17 @@ async def create_event(
         # The event's draw configuration as a row, created here with the event and
         # flushed ahead of it by the relationship — the FK is NOT NULL, so an event
         # without one is not a row Postgres will accept. This is the ONLY place the
-        # requested draw type is persisted; there is no column beside it to keep in
-        # step.
-        draw_settings=TournamentEventDrawSettings.for_draw_type(payload.draw_type),
+        # requested draw configuration is persisted; there is no column beside it to
+        # keep in step.
+        #
+        # Written from the parsed union arm, never from the two loose payload fields:
+        # the boundary has already refused a qualifier count that does not belong to
+        # the draw type beside it (ADR 20260727), so what is written here is a pair
+        # the settings table's ``CHECK`` will accept.
+        draw_settings=TournamentEventDrawSettings.for_draw_type(
+            payload.draw_settings.draw_type,
+            qualifiers_per_pool=payload.draw_settings.qualifiers_per_pool,
+        ),
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
         timezone=payload.timezone,
@@ -225,6 +233,35 @@ def _draw_type_frozen_detail(current: DrawType) -> str:
     )
 
 
+def _qualifiers_per_pool_frozen_detail(
+    current: DrawType, qualifiers: int | None
+) -> str:
+    """The 409 sentence for a ``qualifiers_per_pool`` change on an event whose draw is
+    already cut — the same freeze as the draw type's, about the other half of the same
+    configuration (ADR 20260727).
+
+    It is not hypothetical and it is not cosmetic. The knockout bracket is cut
+    **upfront** from ``P × K``, and the qualifiers are seated into predetermined slots
+    as each pool finishes: a bracket cut at ``K = 2`` and then advanced at ``K = 3`` has
+    three pools' worth of thirds with nowhere to sit. So the count is frozen exactly as
+    the type is, and the way out is the same one.
+
+    This is the **first** line of defence, not the only one: past it,
+    :meth:`app.draws.RrThenKoStrategy.advance` raises
+    :class:`~app.draws.MissingBracketSlot` rather than seating the qualifiers it finds
+    slots for and dropping the rest. Which is why the 409 is worth having — it is the
+    refusal a director can act on, in their own language, before the domain has to shout
+    about a state nothing they typed could have produced.
+    """
+    return (
+        "This event's draw is already cut, so the number of qualifiers per pool is "
+        f"frozen: its knockout bracket was cut for the top {qualifiers} out of each "
+        f"pool of a “{current.value}” draw, and changing that count would leave "
+        "qualifiers with no slot to be seated into. To change it, remove the draw "
+        "first, then cut it again."
+    )
+
+
 async def _enforce_pool_set_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
@@ -276,11 +313,12 @@ async def _enforce_pool_set_frozen(
     )
 
 
-async def _enforce_draw_type_frozen(
+async def _enforce_draw_settings_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
-    """Raise :class:`DrawTypeFrozenError` once a ``draw_type`` payload would change the
-    draw type of an event that **has a draw** (ADR-0786).
+    """Raise :class:`DrawTypeFrozenError` once a draw-configuration payload would change
+    the **draw type or its qualifier count** on an event that **has a draw** (ADR-0786,
+    ADR 20260727).
 
     A draw type is not a label on an event — it is the strategy that dealt the event's
     fixtures, and the fixtures are the shape that strategy prescribes. Patch it under a
@@ -288,29 +326,54 @@ async def _enforce_draw_type_frozen(
     cannot catch it (currency compares the seated entrant set against the active
     entrants, and re-labelling moves neither), which is why this guard has to exist.
 
-    **Presence is not enough — the change is what is refused.** A ``draw_type`` equal to
-    the one the event already has changes nothing, so a page PATCHing the whole event
-    form back (draw type included) to move a pool's tables is the very edit the freeze
-    exists to permit. Asked **before** anything is written, under the tournament's row
-    lock the verb holds.
+    ``qualifiers_per_pool`` is frozen by the **same** guard rather than a parallel one,
+    because it is the same fact wearing a second column: an ``rr-then-ko`` draw's
+    bracket is cut upfront for ``P × K``, so a K the fixtures were not cut for is
+    exactly as contradictory as a type they were not dealt by — and quieter (see
+    :func:`_qualifiers_per_pool_frozen_detail`). One comparison over the whole
+    configuration is also what keeps a payload that moves *both* from being judged
+    twice.
 
-    The type the event *currently* has is read off its ``draw_settings`` row — the one
-    home of that fact (ADR "an event's draw configuration is a row, not a column") —
-    and read once, before the caller's ``setattr`` loop, so what is compared is the
-    stored draw type and not the one the payload is asking for.
+    **Presence is not enough — the change is what is refused.** A configuration equal to
+    the one the event already has changes nothing, so a page PATCHing the whole event
+    form back (draw type and count included) to move a pool's tables is the very edit
+    the freeze exists to permit. Asked **before** anything is written, under the
+    tournament's row lock the verb holds.
+
+    What the event *currently* has is read off its ``draw_settings`` row — the one home
+    of that fact (ADR "an event's draw configuration is a row, not a column") — and read
+    once, before the caller's ``setattr`` loop, so what is compared is the stored
+    configuration and not the one the payload is asking for.
     """
-    current = event.draw_settings.draw_type
-    if updates.draw_type is None or updates.draw_type is current:
+    # ``None`` is "this patch does not touch the draw configuration": the schema refuses
+    # an explicit ``null`` on ``draw_type`` (422) and refuses a ``qualifiers_per_pool``
+    # with no ``draw_type`` beside it, so an absent draw type means an absent pair.
+    incoming = updates.draw_settings
+    if incoming is None:
         return
-    # Only now the query — and only for a payload that really moves the draw type. It is
-    # the same ``event_has_draw`` the pool freeze asks; a payload that changes both asks
-    # it twice — two COUNTs on an indexed column under a lock we hold, in exchange for
-    # two guards that each read as one rule.
+    current = event.draw_settings.draw_type
+    current_qualifiers = event.draw_settings.qualifiers_per_pool
+    if (
+        incoming.draw_type is current
+        and incoming.qualifiers_per_pool == current_qualifiers
+    ):
+        return
+    # Only now the query — and only for a payload that really moves the configuration.
+    # It is the same ``event_has_draw`` the pool freeze asks; a payload that changes
+    # both
+    # asks it twice — two COUNTs on an indexed column under a lock we hold, in exchange
+    # for two guards that each read as one rule.
     if not await event_has_draw(db, event.id):
         return
-    raise DrawTypeFrozenError(
-        _draw_type_frozen_detail(current), draw_type=current.value
+    # The draw type is named first when both moved: it is the bigger claim, and the
+    # qualifier-count sentence would be describing a bracket the event is no longer
+    # asking to have.
+    detail = (
+        _draw_type_frozen_detail(current)
+        if incoming.draw_type is not current
+        else _qualifiers_per_pool_frozen_detail(current, current_qualifiers)
     )
+    raise DrawTypeFrozenError(detail, draw_type=current.value)
 
 
 def _event_scheduling_facts(
@@ -426,8 +489,9 @@ async def update_event(
       :class:`EventNotFoundError`.
     * **409** — once the event's draw is cut, two things freeze (ADR-0786): a ``pools``
       payload that changes *which pools* the event has raises
-      :class:`PoolSetFrozenError`, and a ``draw_type`` payload that changes the type
-      raises :class:`DrawTypeFrozenError`. Both are judged **before** anything is
+      :class:`PoolSetFrozenError`, and a draw-configuration payload that changes the
+      draw type **or its qualifier count** (ADR 20260727) raises
+      :class:`DrawTypeFrozenError`. Both are judged **before** anything is
       written, so a refusal persists nothing.
 
     Then the partial apply (``model_dump(exclude_unset=True)`` serializes the nested
@@ -435,8 +499,9 @@ async def update_event(
     scalar columns alike), with three side effects — the first new, the other two
     preserved exactly from the router:
 
-    * a **draw_type** edit is applied to the event's ``draw_settings`` row, the only
-      place an event's draw type is stored. It is deliberately taken out of the
+    * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
+      qualifier count) is applied to the event's ``draw_settings`` row, the only place
+      an event's draw configuration is stored. Both are deliberately taken out of the
       ``setattr`` loop: there is no ``draw_type`` attribute on the mapped event, so
       the loop would bind an unmapped Python attribute and drop the edit;
     * a **timezone** edit re-anchors every placed fixture's ``scheduled_start`` so its
@@ -466,37 +531,43 @@ async def update_event(
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_pool_set_frozen(db, event, updates)
-    await _enforce_draw_type_frozen(db, event, updates)
+    await _enforce_draw_settings_frozen(db, event, updates)
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
     # recover it.
     old_timezone = event.timezone
     changes = updates.model_dump(exclude_unset=True)
-    # ``draw_type`` is NOT a column on the event — it is the ``draw_type_key`` slug
-    # on the settings row the event points at — so it is routed OUT of the generic
-    # setattr loop rather than through it. This is not decoration: SQLAlchemy's
-    # declarative instances accept any attribute, so ``setattr(event, "draw_type",
-    # ...)`` would bind a plain Python attribute the mapper never persists — the
-    # edit would be silently accepted and silently dropped. Popping it leaves the
-    # loop below touching mapped columns only.
-    #
-    # ``None`` here means "absent", never "clear it": ``TournamentEventUpdate``
-    # rejects an explicit ``null`` on ``draw_type`` at the boundary (422), so a key
-    # that is present carries a real :class:`DrawType`.
-    draw_type: DrawType | None = changes.pop("draw_type", None)
+    # Neither half of the draw configuration is a column on the event — the draw type is
+    # the ``draw_type_key`` slug on the settings row the event points at, and the
+    # qualifier count is that row's ``qualifiers_per_pool`` — so both are routed OUT of
+    # the generic setattr loop rather than through it. This is not decoration:
+    # SQLAlchemy's declarative instances accept any attribute, so
+    # ``setattr(event, "draw_type", ...)`` would bind a plain Python attribute the
+    # mapper
+    # never persists — the edit would be silently accepted and silently dropped. Popping
+    # them leaves the loop below touching mapped columns only.
+    changes.pop("draw_type", None)
+    changes.pop("qualifiers_per_pool", None)
+    # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
+    # does not touch the draw configuration, and when it is not, the pair it carries is
+    # one the settings table's ``CHECK`` accepts (ADR 20260727).
+    draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
-    if draw_type is not None:
-        # The one place an event's draw type moves after create (the freeze above
-        # has already refused this on a cut draw). Assigned through the settings
-        # row's ``draw_type`` property, not its ``draw_type_key`` column, so the
-        # enum→slug conversion stays in the single place that owns it
-        # (``TournamentEventDrawSettings.draw_type``'s setter, which
-        # ``for_draw_type`` also goes through at create). The settings row is
-        # loaded with the event (``lazy="joined"``), so this is a plain attribute
+    if draw_settings is not None:
+        # The one place an event's draw configuration moves after create (the freeze
+        # above has already refused this on a cut draw). Assigned through the settings
+        # row's ``configure``, not its columns, so the enum→slug conversion and the
+        # "these two columns are one fact" pairing stay in the single place that owns
+        # them — the same door ``for_draw_type`` goes through at create. The settings
+        # row
+        # is loaded with the event (``lazy="joined"``), so this is a plain attribute
         # write, not a lazy load in async context.
-        event.draw_settings.draw_type = draw_type
+        event.draw_settings.configure(
+            draw_settings.draw_type,
+            qualifiers_per_pool=draw_settings.qualifiers_per_pool,
+        )
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a
         # no-op): recompose every placement so its local reading is unchanged and only

@@ -7,7 +7,7 @@ import {
   screen,
   waitFor as waitForRaw,
 } from '@testing-library/react'
-import { HttpResponse } from 'msw'
+import { http, HttpResponse } from 'msw'
 import type { StrictResponse } from 'msw'
 import { toast } from 'sonner'
 import { Component, type ReactNode } from 'react'
@@ -43,7 +43,10 @@ import {
 } from '@/mocks/tournaments-store'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
+import { buildEvent } from './seed.factory'
 import {
+  apiToEvent,
+  eventToUpdateBody,
   useCreateTournament,
   useCutDraw,
   useEnterEvent,
@@ -53,6 +56,7 @@ import {
   useTournaments,
   useTransitionTournament,
   useUncutDraw,
+  useUpdateEvent,
   useUpdateTournament,
   useWithdrawEntry,
 } from './api'
@@ -323,6 +327,93 @@ describe('useUpdateTournament', () => {
         description: 'You do not have permission to edit this tournament.',
       }),
     )
+  })
+})
+
+/**
+ * **The bytes that leave the client** (ADR 20260727).
+ *
+ * Every other test of the qualifier count stops at a mapper's return value or at a spy's
+ * argument. This one intercepts the real `PATCH` at the fetch boundary and reads the body
+ * off the `Request` — the only assertion in the suite that cannot pass while the field is
+ * dropped somewhere between `eventToUpdateBody` and `openapi-fetch`, and the closest
+ * vitest can get to the e2e suite's `page.route` (which runs with MSW off and would not
+ * catch a mismatch here either way round).
+ */
+describe('useUpdateEvent — the draw configuration on the wire', () => {
+  /** Capture the next event PATCH's decoded body. */
+  function captureEventPatch() {
+    const sent: { body?: Record<string, unknown> } = {}
+    server.use(
+      http.patch(
+        '*/v1/tournaments/:tournamentId/events/:eventId',
+        async ({ request }) => {
+          sent.body = (await request.json()) as Record<string, unknown>
+          return HttpResponse.json(
+            buildTournamentEventRead({
+              draw_type: 'rr-then-ko',
+              qualifiers_per_pool: 2,
+            }),
+          )
+        },
+      ),
+    )
+    return sent
+  }
+
+  it('puts the configured qualifier count in the PATCH body', async () => {
+    const sent = captureEventPatch()
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
+    result.current.mutate({
+      eventId: 'ev-1',
+      body: eventToUpdateBody(
+        buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+      ),
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+    expect(sent.body).toMatchObject({
+      draw_type: 'rr-then-ko',
+      qualifiers_per_pool: 2,
+    })
+  })
+
+  // …and the negative half, which is the one that would 422: the other two arms of the
+  // server's draw-settings union declare no such field and are `extra="forbid"`, so the
+  // key must be ABSENT from the JSON — not present and null.
+  it('sends no such key at all for a draw type with no knockout stage', async () => {
+    const sent = captureEventPatch()
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
+    result.current.mutate({
+      eventId: 'ev-1',
+      body: eventToUpdateBody(buildEvent({ drawType: 'round-robin' })),
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+    expect(sent.body).toHaveProperty('draw_type', 'round-robin')
+    expect(sent.body && 'qualifiers_per_pool' in sent.body).toBe(false)
+  })
+
+  // The round trip, across the real decode: what the handler answered comes back through
+  // `apiToEvent` as the domain's `qualifiersPerPool`.
+  it('reads the stored count back off the response', async () => {
+    captureEventPatch()
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
+    result.current.mutate({
+      eventId: 'ev-1',
+      body: eventToUpdateBody(
+        buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+      ),
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+    expect(apiToEvent(result.current.data!).qualifiersPerPool).toBe(2)
   })
 })
 

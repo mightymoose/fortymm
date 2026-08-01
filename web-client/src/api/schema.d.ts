@@ -2237,7 +2237,7 @@ export interface components {
          * DrawType
          * @enum {string}
          */
-        DrawType: "single-elim" | "round-robin";
+        DrawType: "single-elim" | "round-robin" | "rr-then-ko";
         /**
          * DrawTypeRead
          * @description One selectable draw format, as the ``draw_types`` table holds it.
@@ -4382,10 +4382,11 @@ export interface components {
          *
          *     ``champion`` is the leader of a **complete, single-pool** event — a pure
          *     round-robin's winner. A multi-pool round-robin has no single champion without a
-         *     knockout stage to join its pool winners (a pools-then-knockout draw type, a later
-         *     slice), so it is
-         *     ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
-         *     played.
+         *     knockout stage to join its pool winners, so it is ``null`` there even when
+         *     ``complete``; and ``null`` while any fixture is still to be played. An event that
+         *     *does* have a knockout stage to join them is a ``rr-then-ko`` draw, which reads out
+         *     as the ``standings_then_finishes`` arm below and is crowned from its bracket — a
+         *     different shape, not an exception to this one.
          */
         StandingsResultsRead: {
             /**
@@ -4395,6 +4396,45 @@ export interface components {
             kind: "standings";
             /** Pools */
             pools: components["schemas"]["PoolStandingsRead"][];
+            /** Complete */
+            complete: boolean;
+            /** Champion */
+            champion: string | null;
+        };
+        /**
+         * StandingsThenFinishesResultsRead
+         * @description The **two-stage** shape of an event's results (ADR 20260727) — the
+         *     round-robin-then-knockout arm of the ``results`` discriminated union, tagged
+         *     ``kind: "standings_then_finishes"``.
+         *
+         *     One block per stage: ``pools`` is the pool stage's standings, exactly the
+         *     :class:`PoolStandingsRead` a round-robin event reads out, and ``finishes`` is the
+         *     knockout stage's ranked :class:`FinishRowRead`\ s, exactly the ones a
+         *     single-elimination event reads out. They are the *same* models rather than
+         *     two-stage-flavoured near-copies, so a client renders each stage with the panel it
+         *     already has and the two shapes cannot drift apart.
+         *
+         *     A third arm rather than a restructuring of the union into a composite: making
+         *     ``standings`` and ``finishes`` sub-objects of one wrapper would change how the
+         *     existing two arms are read, forcing round-robin and single-elim client changes that
+         *     buy nothing.
+         *
+         *     ``champion`` is the **knockout final's winner, never a pool leader** — the pool
+         *     stage only seeds the bracket, so topping a pool wins nothing — and ``null`` until
+         *     that final is decided. ``complete`` is **both stages decided**. Live and partial
+         *     like every other results shape: the pool tables fill in as pool matches land, and
+         *     the finishes list grows as the bracket is played out.
+         */
+        StandingsThenFinishesResultsRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "standings_then_finishes";
+            /** Pools */
+            pools: components["schemas"]["PoolStandingsRead"][];
+            /** Finishes */
+            finishes: components["schemas"]["FinishRowRead"][];
             /** Complete */
             complete: boolean;
             /** Champion */
@@ -4599,6 +4639,8 @@ export interface components {
             name: string;
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
+            /** Qualifiers Per Pool */
+            qualifiers_per_pool?: number | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */
@@ -4628,6 +4670,8 @@ export interface components {
             name: string;
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
+            /** Qualifiers Per Pool */
+            qualifiers_per_pool: number | null;
             /** Max Players */
             max_players: number | null;
             /** Entry Fee */
@@ -4657,7 +4701,7 @@ export interface components {
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
             /** Results */
-            results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"]) | null;
+            results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"] | components["schemas"]["StandingsThenFinishesResultsRead"]) | null;
             /**
              * Entered
              * @description The registration count. Derived — there is no stored counter (ADR-0016).
@@ -4695,6 +4739,8 @@ export interface components {
             name?: string | null;
             format?: components["schemas"]["EventFormat"] | null;
             draw_type?: components["schemas"]["DrawType"] | null;
+            /** Qualifiers Per Pool */
+            qualifiers_per_pool?: number | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */
@@ -4771,8 +4817,7 @@ export interface components {
          *       state without a per-slot round-trip; it is the match's *current* status, read
          *       live, not a copy frozen at go-live.
          *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-         *       un-pooled (single-elim), or this is the knockout stage of a future
-         *       pools-then-knockout draw type. When
+         *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
          *       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
          *       JSONB, not a foreign key, because pools are value-objects with no table.
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means

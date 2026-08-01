@@ -7,6 +7,9 @@ reads the event's field, hands it to the strategy, and writes what comes back. T
 split is what lets every rule about *what a draw looks like* be tested with literals,
 and leaves this module with only the three things a database is actually needed for:
 
+- **the strategy** (``strategy_for_event``) — the one door onto ``app.draws``'
+  dispatch, because picking a strategy now takes the event's whole draw configuration
+  (its type *and*, for ``rr-then-ko``, its qualifier count) rather than a bare enum.
 - **the field** (``active_draw_entrants``) — the *active* entries, in the shape
   ``order_entrants`` wants. Withdrawal is a soft-delete, so a withdrawn entry is not an
   entrant (ADR-0016) and has no place in a draw.
@@ -26,15 +29,17 @@ that field must not be separated by another writer's entry (see the route).
 
 import enum
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
     DrawConfig,
+    DrawStrategy,
     Entrant,
     EntryId,
+    FixtureGames,
     FixtureId,
     FixtureState,
     MatchId,
@@ -87,7 +92,11 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
-def fixture_state(fixture: TournamentFixture) -> FixtureState:
+def fixture_state(
+    fixture: TournamentFixture,
+    game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
+    voided_match_ids: frozenset[uuid.UUID] = frozenset(),
+) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
 
@@ -96,7 +105,44 @@ def fixture_state(fixture: TournamentFixture) -> FixtureState:
     lets every rule about the *shape* of a draw be tested without a database. Shared by
     every path that advances a draw (materialization at go-live #788, completion #789),
     so the projection is written once.
+
+    ``game_counts`` is the games each **side** won, keyed by match id, exactly as
+    :func:`app.tournament_queries.game_counts_by_match` returns it — and it holds
+    **only completed matches**, because that is what its caller batches over
+    (``completed_match_ids``, which filters on ``MatchStatus.completed``). An
+    in-progress match's part-scored board is not a result, so a fixture whose match has
+    not completed is simply not a key here and projects
+    :attr:`~app.draws.FixtureState.games` as ``None`` — the same absence a fixture with
+    no match at all gets. Passing nothing (the default) is "no games are known for any
+    fixture", which is what every caller that does not tabulate wants.
+
+    ``voided_match_ids`` rides in the same way, and is the whole of what the domain
+    knows about a match's status: a fixture whose match id is in it projects
+    :attr:`~app.draws.FixtureState.match_voided` ``True``. The ``MatchStatus`` enum
+    stops here — ``app.draws`` asks one question of a match's status ("can this pairing
+    still produce a result?"), so it is answered once, here, as a ``bool``, and that
+    module stays free of the ORM. The ids come off the same outer join the completed
+    ones do (``_fixtures_with_match_statuses``), so this costs no extra query and both
+    facts are read at one instant. The default — nothing is voided — is the truth for
+    every caller whose fixtures have no matches at all.
+
+    **side 1 ← ``entry_a``, side 2 ← ``entry_b``** (#788), the same fixed convention the
+    completion seam maps a winning side back to an entry with, so the ``(side_1,
+    side_2)`` pair is ``(entry_a, entry_b)``'s. Getting this backwards would hand a
+    strategy a mirrored scoreline that still looks like a plausible result, which is
+    what ``tests/test_tournament_draws.py`` asserts with an asymmetric one.
+
+    It is the caller — not this function — that loads the counts, because
+    ``advance()``'s current caller
+    (:func:`app.tournament_materialization.materialize_event`) loads fixtures and
+    nothing else. Reading the games here would mean a query per fixture inside the
+    projection; the batched load belongs at the seam, alongside the fixture load.
     """
+    games = (
+        game_counts.get(fixture.match_id)
+        if game_counts is not None and fixture.match_id is not None
+        else None
+    )
     return FixtureState(
         fixture_id=FixtureId(fixture.id),
         pool_id=PoolId(fixture.pool_id) if fixture.pool_id is not None else None,
@@ -114,6 +160,14 @@ def fixture_state(fixture: TournamentFixture) -> FixtureState:
             else None
         ),
         match_id=MatchId(fixture.match_id) if fixture.match_id is not None else None,
+        games=(
+            FixtureGames(entry_a_games=games[0], entry_b_games=games[1])
+            if games is not None
+            else None
+        ),
+        match_voided=(
+            fixture.match_id is not None and fixture.match_id in voided_match_ids
+        ),
     )
 
 
@@ -123,9 +177,8 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     against.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with
-    (``strategy_for(event.draw_settings.draw_type)``), and it does so before this config
-    exists; copying it in here as well gave the domain
+    is what ``cut_draw`` picks the *strategy* with (``strategy_for_event(event)``), and
+    it does so before this config exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
@@ -142,6 +195,27 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     """
     return DrawConfig(
         pool_ids=tuple(PoolId(Pool.model_validate(pool).id) for pool in event.pools),
+    )
+
+
+def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
+    """The strategy that cuts and advances **this event's** draw — the one production
+    door onto :func:`app.draws.strategy_for`.
+
+    ``strategy_for`` is keyword-strict about the qualifier count and has no default, so
+    somebody has to read it off the event; this is that somebody, and it is one function
+    rather than three call sites each reaching into ``event.draw_settings`` for a pair
+    of columns. Which matters because forgetting the second column does not fail — it
+    produces a differently-configured strategy — and because the two facts live on one
+    row precisely so they are read together (ADR "an event's draw configuration is a
+    row, not a column").
+
+    The settings row rides along with the event (``lazy="joined"``), so this is
+    attribute access, not a lazy load in async context.
+    """
+    return strategy_for(
+        event.draw_settings.draw_type,
+        qualifiers_per_pool=event.draw_settings.qualifiers_per_pool,
     )
 
 
@@ -405,7 +479,7 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for(event.draw_settings.draw_type)
+    strategy = strategy_for_event(event)
     planned = strategy.plan_initial(
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )

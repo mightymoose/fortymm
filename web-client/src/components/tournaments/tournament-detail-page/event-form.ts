@@ -7,6 +7,7 @@ import {
   maxPlayersSchema,
   nameSchema,
   poolNameSchema,
+  qualifiersPerPoolSchema,
   type EventSection,
 } from '../data/event-validation'
 import { browserTimezone } from '../data/helpers'
@@ -117,6 +118,13 @@ export const eventSchema = z.object({
   // `data/draw-types`, pinned to the generated schema by a compile-time assertion in
   // `data/draw-types.test.ts`.
   drawType: drawTypeSchema,
+  // **K**, held as `number | null` and judged BELOW, with the draw type beside it — the
+  // shape rule only (ADR 20260727). `null` is the honest value for the two draw types
+  // that have no knockout stage, and it is the *blank box* for the one that does; which
+  // of those two things it is depends on `drawType`, which a field-level rule cannot
+  // see. See `qualifiersPerPoolSchema` (`data/event-validation`) for why the pair, and
+  // not the field, carries the bound.
+  qualifiersPerPool: z.number().nullable(),
   maxPlayers: maxPlayersSchema,
   entryFee: entryFeeSchema,
   // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`
@@ -153,6 +161,31 @@ export const eventSchema = z.object({
   }),
   pools: z.array(poolSchema),
 })
+  // The **draw configuration** is judged as a pair, because that is what it is: the
+  // server parses `(draw_type, qualifiers_per_pool)` into a union tagged by the draw
+  // type, one arm of which requires a count and two of which forbid the key outright
+  // (ADR 20260727). So the count's bound is asked here, where both halves are in scope,
+  // rather than on the field.
+  //
+  // Only the `rr-then-ko` arm is asked at all: for the other two, `qualifiersPerPool` is
+  // `null`, there is no control on screen (the Basics tab renders it only for the
+  // two-stage type), and the write body omits the key entirely (`eventToApiFields`,
+  // `data/api`) — so a rule that fired there would refuse a save for a reason the
+  // director cannot see, let alone fix. The issue is raised **at the field's own path**,
+  // so React-Hook-Form reports it as `errors.qualifiersPerPool` and the red lands under
+  // the box, exactly as a field-level rule's would.
+  .superRefine((values, ctx) => {
+    if (values.drawType !== 'rr-then-ko') return
+    const result = qualifiersPerPoolSchema.safeParse(values.qualifiersPerPool)
+    if (result.success) return
+    ctx.addIssue({
+      code: 'custom',
+      path: ['qualifiersPerPool'],
+      // The schema's own sentence, never a second one typed beside it — the same rule
+      // `poolNameIssues` follows for the pool names.
+      message: result.error.issues[0].message,
+    })
+  })
 
 // The schema mirrors the domain types (`Predicate`, `Pool`) so the nested-array
 // sub-forms are validated by this one resolver; the section code that rebuilds a
@@ -164,6 +197,9 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   name: '',
   format: 'singles',
   drawType: 'single-elim',
+  // …and a bracket has no pools to qualify out of, so no qualifier count (ADR 20260727).
+  // `null` is the only value the server's `single-elim` arm admits.
+  qualifiersPerPool: null,
   // A new event starts **uncapped**, not at an invented number: `null` is a valid,
   // saveable answer (ADR-0935), so an organizer who never touches the box gets an
   // event with no cap — rather than a form that silently refuses to submit.
@@ -191,6 +227,9 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     name: event.name,
     format: event.format,
     drawType: event.drawType,
+    // The count the SERVER sent back, straight onto the control — this projection is the
+    // near half of the round trip the read shape's `qualifiers_per_pool` exists for.
+    qualifiersPerPool: event.qualifiersPerPool,
     maxPlayers: event.maxPlayers,
     entryFee: event.entryFee,
     timezone: event.timezone,
@@ -217,7 +256,15 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
-  if (errors.name || errors.maxPlayers || errors.entryFee || errors.timezone)
+  // `qualifiersPerPool` lives on Basics beside the draw type that decides whether it is
+  // asked at all, so a refused two-stage save opens the tab holding the empty box.
+  if (
+    errors.name ||
+    errors.qualifiersPerPool ||
+    errors.maxPlayers ||
+    errors.entryFee ||
+    errors.timezone
+  )
     return 'basics'
   if (errors.predicates) return 'eligibility'
   // A pool with a cleared name (`poolNameSchema`). RHF reports it per row

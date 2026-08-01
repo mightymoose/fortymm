@@ -31,6 +31,7 @@ from app.models import (
 from tests._helpers import counted_statements, opponent_session
 from tests.test_tournaments import (
     POOL_A,
+    POOL_B,
     _call_fixtures,
     _cut_the_draw,
     _enter,
@@ -819,3 +820,99 @@ async def test_panel_statement_count_does_not_grow_with_events(
         assert event.match.round_label == (
             "Group match 1" if n % 2 == 0 else "Round 1"
         ), (event.name, event.match.round_label)
+
+
+async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A two-stage event's round wording is a property of the **fixture's stage**, not
+    of the event (ADR 20260727).
+
+    ``pool_id IS NULL`` is already how the knockout stage is spelled everywhere else, so
+    ``_round_label`` reads the discriminator off the row: a pooled fixture is a "Group
+    match N", an un-pooled one a "Round N" — both vocabularies verbatim from the
+    one-stage draw types, because the same match must not read differently depending on
+    which event it happens to be in.
+
+    Driven end to end: four players, two pools of two, top one out of each, so the pool
+    winners meet in a single final. The caller's card is asserted **twice** — once while
+    their pool match is the focus, once after the final has materialized — which is what
+    makes this about the stage rather than about the event's draw type. ``stage_label``
+    stays minimal ("In play"), deliberately: naming which stage is live needs plumbing
+    this ticket does not buy, and "Group complete" on an event whose bracket is still
+    being played would announce it over.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "rrko-panel-2") as (client_2, user_2),
+        opponent_session(db_session, "rrko-panel-3") as (client_3, user_3),
+        opponent_session(db_session, "rrko-panel-4") as (client_4, user_4),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(
+            client,
+            _rr_payload(
+                POOL_A,
+                POOL_B,
+                draw_type="rr-then-ko",
+                qualifiers_per_pool=1,
+                match_settings={"rated": False, "length_games": 3},
+                predicates=[],
+            ),
+        )
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        entries = [
+            await _enter(
+                db_session,
+                event["id"],
+                user,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+            for seed, user in ((1, owner), (2, user_2), (3, user_3), (4, user_4))
+        ]
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        clients = dict(
+            zip(
+                [entry.id for entry in entries],
+                [client, client_2, client_3, client_4],
+                strict=True,
+            )
+        )
+
+        # -- the pool stage: the caller's own pool match is the focus, and it is a
+        #    "Group match".
+        pools = [f for f in await _fixture_rows(db_session, event["id"]) if f.pool_id]
+        await _call_fixtures(db_session, tournament_id, pools)
+        pools = [f for f in await _fixture_rows(db_session, event["id"]) if f.pool_id]
+        (panel,) = await _panels(client)
+        (pool_event,) = panel["events"]
+        assert pool_event["match"]["round_label"] == "Group match 1"
+        assert pool_event["stage_label"] == "In play"
+
+        # -- both pools decided: each winner is seated into the final, which becomes a
+        #    real match in the same transaction.
+        for fixture in pools:
+            assert fixture.entry_a_id is not None
+            await _win_fixture_match(
+                fixture,
+                clients_by_entry=clients,
+                # ``entry_a`` is the higher seed in both pools (1 over 4, 2 over 3).
+                winner_entry_id=fixture.entry_a_id,
+                rated=False,
+            )
+
+        (panel,) = await _panels(client)
+
+    (ko_event,) = panel["events"]
+    assert ko_event["draw_type"] == "rr-then-ko"
+    assert ko_event["match"]["round_label"] == "Round 1", (
+        "the knockout fixture is un-pooled, so it is a Round, not a Group match"
+    )
+    assert ko_event["match"]["opponent_username"] == "rrko-panel-2", (
+        "the caller's final is against the other pool's winner"
+    )
+    assert ko_event["stage_label"] == "In play"
+    assert [row["label"] for row in ko_event["fixtures"]] == ["M1", "M2"]

@@ -306,17 +306,56 @@ export interface FinishesResults {
 }
 
 /**
- * An event's **results**, a discriminated union tagged by shape (ADR-0785): `standings`
- * for round-robin, `finishes` for single-elimination. Each draw type's results strategy
- * returns its own shape; the BFF emits the `kind` tag; the client switches on it. A future
- * draw type is a type error until it declares its shape.
+ * A **round-robin-then-knockout** event's results (ADR 20260727): both stages at once —
+ * the pool stage's standings and the knockout stage's finishes. The
+ * `standings_then_finishes` arm of the `EventResults` discriminated union.
+ *
+ * Its two blocks are the **same models** the other two arms send (`PoolStandings[]`,
+ * `FinishRow[]`), not two-stage-flavoured near-copies, so each stage renders through the
+ * panel that already exists and the shapes cannot drift apart. That is also why this is a
+ * third arm rather than a restructuring of the union into a composite: making `standings`
+ * and `finishes` sub-objects of one wrapper would change how the existing two arms are
+ * read, forcing round-robin and single-elim changes that buy nothing.
+ *
+ * Live and partial like every other results shape: the pool tables fill in as pool matches
+ * land, and the finishes list grows as the bracket is played out — so a mid-flight event
+ * has complete pools and a finishes list that **starts below 1st** (only the entrants the
+ * bracket has actually placed).
+ */
+export interface StandingsThenFinishesResults {
+  kind: 'standings_then_finishes'
+  /** The **pool stage**: one standings table per pool, in the server's finishing order. */
+  pools: PoolStandings[]
+  /** The **knockout stage**: the placements so far, position ascending, ties sharing a
+   * position — exactly what a single-elimination event reads out. Empty until the bracket
+   * settles its first fixture. */
+  finishes: FinishRow[]
+  /** True when **both** stages are decided — every pool played out *and* the bracket run to
+   * its final. Not either one: a two-stage event with decided pools and an unplayed final
+   * is not complete. */
+  complete: boolean
+  /** The winning **entry id** — the **knockout final's winner, never a pool leader**. The
+   * pool stage only seeds the bracket, so topping a pool wins nothing here. `null` until
+   * that final is decided. Joined to a username at render, like a row's `entryId`. */
+  champion: string | null
+}
+
+/**
+ * An event's **results**, a discriminated union tagged by shape (ADR-0785, widened by ADR
+ * 20260727): `standings` for round-robin, `finishes` for single-elimination,
+ * `standings_then_finishes` for round-robin-then-knockout. Each draw type's results
+ * strategy returns its own shape; the BFF emits the `kind` tag; the client switches on it.
+ * A future draw type is a type error until it declares its shape.
  *
  * On the event it is `null` for an event with **no draw** — nothing to stand — an honest
  * "no results", never an empty table that would read as a played event with nobody in it.
- * Every draw type a director can pick reads out results of one shape or the other, so
+ * Every draw type a director can pick reads out results of one of these shapes, so
  * "cut, but no results block" is not a state.
  */
-export type EventResults = StandingsResults | FinishesResults
+export type EventResults =
+  | StandingsResults
+  | FinishesResults
+  | StandingsThenFinishesResults
 
 /** One *active* entry in an event. Withdrawn entries are not entrants — they
  * appear in neither this list nor the `entered` count (ADR-0016).
@@ -394,6 +433,25 @@ export interface TournamentEvent {
   name: string
   format: EventFormat
   drawType: DrawType
+  /** **K** — how many of each pool's finishers advance into the knockout stage of an
+   * `rr-then-ko` draw, or `null` for a draw type that has no knockout stage to qualify
+   * for (ADR 20260727).
+   *
+   * ⚠️ `null` is not "unset" — it is the **only** legal value for `round-robin` and
+   * `single-elim`, and the server says so at the request boundary: the draw
+   * configuration is a union tagged by the draw type, and the two count-less arms are
+   * `extra="forbid"`, so a qualifier count sent alongside either of them is a 422 rather
+   * than a value quietly dropped. That is why `eventToApiFields` (`./api`) **omits** the
+   * key for those two types instead of sending `null` — and why the editor's control for
+   * it is rendered only for `rr-then-ko`.
+   *
+   * For `rr-then-ko` it is **required**, at least 1, and it is not a number this client
+   * may assume: "2" is a convention, not a fact about the event, and a bracket cut for a
+   * K the director never chose is the failure that looks like it worked. It is also what
+   * sizes the bracket (`P × K`), which is why it is carried on the read model at all —
+   * the mock planner and every reader take the director's real value rather than a
+   * default. */
+  qualifiersPerPool: number | null
   /** The entrant cap, or `null` for an uncapped event. `null` means "no cap",
    * never zero (ADR-0935): a blank player-limit field submits `null`, and every
    * reader must handle the no-cap branch rather than dividing by it. */

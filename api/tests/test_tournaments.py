@@ -68,7 +68,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
-from app.tournament_materialization import materialize_live_draw
+from app.tournament_materialization import materialize_event, materialize_live_draw
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
@@ -4201,14 +4201,18 @@ async def test_the_detail_payload_carries_the_seeded_draw_types_in_display_order
     seeded one, in ``display_order``, each with the copy to render it.
 
     Order is asserted as a list, not a set: a picker whose options move between two
-    loads is a real defect, and the round-robin/single-elim sequence is the one the seed
-    states."""
+    loads is a real defect, and the round-robin/single-elim/rr-then-ko sequence is the
+    one the seed states."""
     client, _ = authed_client
     tournament_id, _ = await _tournament_with_events(client)
 
     catalogue = await _catalogue_of(client, tournament_id)
 
-    assert [row["key"] for row in catalogue] == ["round-robin", "single-elim"]
+    assert [row["key"] for row in catalogue] == [
+        "round-robin",
+        "single-elim",
+        "rr-then-ko",
+    ]
     assert [row["display_order"] for row in catalogue] == sorted(
         row["display_order"] for row in catalogue
     )
@@ -4225,11 +4229,11 @@ async def test_the_draw_type_catalogue_is_the_table_not_the_draw_type_enum(
     """**The test that makes the design structural.** Delete a ``draw_types`` row and
     the payload loses that option — because the payload is a read of the table.
 
-    A catalogue derived from the ``DrawType`` enum instead would answer both formats
-    here, which is why the enum is asserted to still hold both: the two sources are the
-    same set in every other test in the suite, so this is the only arrangement in which
-    "reads the table" and "iterates the enum" give different answers. If a future
-    refactor swaps one for the other, this is what reds.
+    A catalogue derived from the ``DrawType`` enum instead would answer every format
+    here, which is why the enum is asserted to still hold the deleted one: the two
+    sources are the same set in every other test in the suite, so this is the only
+    arrangement in which "reads the table" and "iterates the enum" give different
+    answers. If a future refactor swaps one for the other, this is what reds.
 
     The event is a ROUND-ROBIN one so the row being deleted is unreferenced — the FK is
     ``ON DELETE RESTRICT`` and would otherwise refuse (see
@@ -4244,10 +4248,10 @@ async def test_the_draw_type_catalogue_is_the_table_not_the_draw_type_enum(
 
     catalogue = await _catalogue_of(client, tournament_id)
 
-    assert [row["key"] for row in catalogue] == ["round-robin"]
-    # And the enum still holds both, so "it followed the table" is the only reading of
-    # the assertion above.
-    assert {t.value for t in DrawType} == {"round-robin", "single-elim"}
+    assert [row["key"] for row in catalogue] == ["round-robin", "rr-then-ko"]
+    # And the enum still holds the deleted one, so "it followed the table" is the only
+    # reading of the assertion above.
+    assert {t.value for t in DrawType} == {"round-robin", "single-elim", "rr-then-ko"}
 
 
 async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
@@ -4257,9 +4261,10 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
     """The other half of the same claim: the label, the help text and the order a client
     renders all come off the row, so a copy change is a seed change and nothing else.
 
-    Rewriting the two rows swaps their order and their words; a catalogue assembled from
-    a Python dict of labels keyed by enum member would answer the old copy in the old
-    order, whatever the table says."""
+    Rewriting two of the rows swaps their order and their words; a catalogue assembled
+    from a Python dict of labels keyed by enum member would answer the old copy in the
+    old order, whatever the table says. The third row is left alone and asserted last,
+    so the rewrite is shown to have moved the two it names and nothing else."""
     client, _ = authed_client
     tournament_id, _ = await _tournament_with_events(client)
     await db_session.execute(
@@ -4291,6 +4296,12 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
     assert [(row["key"], row["name"], row["description"]) for row in catalogue] == [
         ("single-elim", "Knockout", "Lose once and you are out."),
         ("round-robin", "Everybody plays everybody", "One pool, every pairing."),
+        (
+            "rr-then-ko",
+            "Round-robin then knockout",
+            "Pools play all-play-all, then the top finishers from each pool meet in "
+            "a knockout bracket.",
+        ),
     ]
 
 
@@ -5317,7 +5328,7 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
 # ----- the draws this event cannot produce (422) ----------------------------
 
 
-@pytest.mark.parametrize("draw_type", ["double-elim", "rr-then-ko", "swiss"])
+@pytest.mark.parametrize("draw_type", ["double-elim", "swiss"])
 async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_boundary(
     authed_client: tuple[AsyncClient, User],
     draw_type: str,
@@ -5329,12 +5340,25 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     This is the ticket's actual complaint (#1086) fixed at the layer that made it. It
     used to be ``test_cutting_an_unimplemented_draw_type_is_422``: a director could
     configure a ``swiss`` event, enter a field, and only discover it was never possible
-    at the moment they cut the draw. ``DrawType`` now holds exactly the two types that
-    run, so Pydantic rejects the slug at the edge with a 422 that NAMES the valid
-    values, no custom validator required — and no event row is written at all.
+    at the moment they cut the draw. ``DrawType`` holds exactly the types that run, so
+    Pydantic rejects the slug at the edge with a 422 that NAMES the valid values, no
+    custom validator required — and no event row is written at all.
 
-    The parametrized subjects are deliberately the three ex-members: they are the
-    values a stale client (or a stale hardcoded picker) would still send.
+    The parametrized subjects are the ex-members that are STILL unimplemented: they are
+    the values a stale client (or a stale hardcoded picker) would still send.
+    ``rr-then-ko`` used to be among them and is deliberately gone — #1227 gave it a
+    strategy, a results strategy and a seeded row, so it is now a slug this boundary
+    ACCEPTS, which the create tests beside this one assert. That is the mechanism
+    working: the list of refused slugs shrinks by exactly the format that shipped.
+
+    **The accepted slugs are pinned as literals, never re-derived from ``DrawType``.**
+    Pydantic composes that ``expected`` message *out of* the enum, so comparing it back
+    against ``{t.value for t in DrawType}`` is the enum measured against itself: it
+    holds for any set of members, including one somebody added by accident. Written
+    down, this line is the alarm that reds when a member arrives. Adding a draw type
+    takes five coordinated changes (the enum, a strategy, a results strategy, a seeded
+    ``draw_types`` row, the web client's picker), so being made to come and look here is
+    the point.
     """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
@@ -5347,12 +5371,12 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     assert response.status_code == 422, response.text
     body = response.json()
     (error,) = [e for e in body["detail"] if e["loc"][-1] == "draw_type"]
-    # The 422 names the two slugs that run, and nothing else — a client reading it
-    # learns exactly what it may send.
-    assert set(error["ctx"]["expected"].replace("'", "").split(" or ")) == {
-        "round-robin",
-        "single-elim",
-    }, error
+    # The 422 names the slugs that run, and nothing else — a client reading it learns
+    # exactly what it may send. Pydantic renders a three-member list as
+    # ``'a', 'b' or 'c'``, so the final " or " becomes a comma before the split.
+    assert set(
+        error["ctx"]["expected"].replace("'", "").replace(" or ", ", ").split(", ")
+    ) == {"round-robin", "single-elim", "rr-then-ko"}, error
     # Refused at the boundary means refused before persistence: no event exists.
     detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
     assert detail["events"] == []
@@ -6980,6 +7004,76 @@ async def test_go_live_materialization_is_idempotent(
     assert await _match_count(db_session) == before, (
         "a second advance over already-materialized fixtures must create nothing"
     )
+
+
+async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_counts(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """``materialize_event`` runs on the **completion seam** — every result submission
+    re-runs it, inside the score-accept transaction, under the match row lock — so what
+    it costs is not a micro-optimization.
+
+    Two things are pinned, and both are invisible in every assertion about the
+    resulting matches. **The game counts are not loaded at all** for a draw type whose
+    ``advance()`` never reads them (``app.draws.reads_fixture_games``): round-robin
+    picks no qualifiers, so the counts were 200–500 score rows fetched and discarded on
+    a mature event. And **the fixtures' match status rides along on the fixture load**
+    rather than costing a second SELECT — the read path already learns it that way
+    (``completed_match_ids`` filters rows it has), so the write seam has no reason to
+    pay a round trip the read seam does not.
+
+    Run against an already-materialized draw with a **completed** match in it, which is
+    exactly what the completion seam sees: nothing is ready, so the whole call is the
+    load — and the completed match is what would make the game-count load fire, without
+    which the "no game counts" half of this pin would be vacuous.
+    ``match_game_scores`` is asserted by name as well as by count, so a regression that
+    folds the game load into the fixture statement still reds.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    played = (
+        (
+            await db_session.execute(
+                select(TournamentFixture).where(
+                    TournamentFixture.event_id == uuid.UUID(event["id"])
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert played is not None and played.match_id is not None
+    match = await db_session.get(Match, played.match_id)
+    assert match is not None
+    match.status = MatchStatus.completed
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        tournament = (
+            await session.execute(
+                select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+            )
+        ).scalar_one()
+        event_row = (
+            await session.execute(
+                select(TournamentEvent).where(
+                    TournamentEvent.id == uuid.UUID(event["id"])
+                )
+            )
+        ).scalar_one()
+        # Only the seam's own statements are counted, not the two loads that stand in
+        # for the caller already holding these rows.
+        statements.clear()
+        await materialize_event(session, tournament, event_row)
+
+    assert len(statements) == 1, statements
+    assert not [s for s in statements if "match_game_scores" in s], statements
 
 
 async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(

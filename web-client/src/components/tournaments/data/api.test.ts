@@ -739,6 +739,11 @@ const event: TournamentEvent = {
   name: 'U1500 Singles',
   format: 'singles',
   drawType: 'round-robin',
+  // A round-robin event has no knockout stage to qualify for, so it carries NO qualifier
+  // count (ADR 20260727). `null` is the only value its draw settings admit — and the
+  // write bodies below must OMIT the key entirely rather than send this `null`, because
+  // that arm of the server's draw-settings union is `extra="forbid"`.
+  qualifiersPerPool: null,
   maxPlayers: 48,
   entryFee: 30,
   timezone: 'America/Chicago',
@@ -813,6 +818,12 @@ describe('eventToCreateBody', () => {
       // `max_players` is optional on the create body (`null`/absent = no cap,
       // ADR-0935); the read shape is `number | null`.
       max_players: wire.max_players ?? null,
+      // The create body OMITS the qualifier count for a round-robin event (the server's
+      // union forbids the key on that arm), while the read shape carries it as an
+      // explicit `null`. Supplying it here is what makes the round trip land back on
+      // `event` — and the assertion below is therefore also the proof that the omission
+      // and the `null` mean the same thing.
+      qualifiers_per_pool: null,
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
@@ -886,6 +897,72 @@ describe('eventToUpdateBody', () => {
     const body = eventToUpdateBody({ ...event, maxPlayers: null })
     expect('max_players' in body).toBe(true)
     expect(body.max_players).toBeNull()
+  })
+
+  // ⚠️ The claim these make is about **the bytes on the wire**, never about form state:
+  // the whole point of the server-side detour (ADR 20260727) is that the count the
+  // director configured reaches the API, and a director's `2` that a mapper drops is a
+  // bracket cut for a K they never chose — silent, well-formed and wrong.
+  describe('the draw configuration on the wire (ADR 20260727)', () => {
+    const twoStage: TournamentEvent = {
+      ...event,
+      drawType: 'rr-then-ko',
+      qualifiersPerPool: 2,
+    }
+
+    it('SENDS the qualifier count for rr-then-ko, on both verbs', () => {
+      expect(eventToCreateBody(twoStage).qualifiers_per_pool).toBe(2)
+      expect(eventToUpdateBody(twoStage).qualifiers_per_pool).toBe(2)
+    })
+
+    it('sends the DIRECTOR’s count, never a default', () => {
+      // `1` is what the planner falls back to when nobody says otherwise, so a fixture
+      // of 1 could not tell "threaded through" from "fell back". Three is neither the
+      // fallback nor the convention.
+      const body = eventToUpdateBody({ ...twoStage, qualifiersPerPool: 3 })
+      expect(body.qualifiers_per_pool).toBe(3)
+    })
+
+    // The two count-less arms of the server's draw-settings union are `extra="forbid"`
+    // and declare no `qualifiers_per_pool` field at all, so the key is a **422** there —
+    // not a `null` politely ignored. Omission is therefore the only correct spelling, and
+    // `toBeNull()` would pass against the payload that gets refused.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'OMITS the key entirely for %s — where sending it is a 422, not a no-op',
+      (drawType) => {
+        const create = eventToCreateBody({ ...event, drawType })
+        const update = eventToUpdateBody({ ...event, drawType })
+
+        expect('qualifiers_per_pool' in create).toBe(false)
+        expect('qualifiers_per_pool' in update).toBe(false)
+      },
+    )
+
+    // The far half of the round trip the read shape's `qualifiers_per_pool` was added
+    // for: what the server stored comes back, and reaches the control.
+    it('reads the stored count back off the wire', () => {
+      const read = apiToEvent(
+        buildTournamentEventRead({ draw_type: 'rr-then-ko', qualifiers_per_pool: 4 }),
+      )
+
+      expect(read.qualifiersPerPool).toBe(4)
+    })
+
+    it('reads a count-less draw type back as null, never as a number', () => {
+      const read = apiToEvent(buildTournamentEventRead({ draw_type: 'round-robin' }))
+
+      expect(read.qualifiersPerPool).toBeNull()
+    })
+
+    it('round-trips a two-stage event: configure 2, send 2, read 2 back', () => {
+      const sent = eventToUpdateBody(twoStage)
+      const stored = buildTournamentEventRead({
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: sent.qualifiers_per_pool,
+      })
+
+      expect(apiToEvent(stored).qualifiersPerPool).toBe(2)
+    })
   })
 
   it('omits the server-owned entered count so a PATCH never clobbers it', () => {

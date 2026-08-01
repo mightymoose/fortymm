@@ -153,12 +153,16 @@ async def _add_event(
     length_games: int = 5,
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
+    draw_type: DrawType = DrawType.round_robin,
+    qualifiers_per_pool: int | None = None,
 ) -> TournamentEvent:
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        draw_settings=TournamentEventDrawSettings.for_draw_type(
+            draw_type, qualifiers_per_pool=qualifiers_per_pool
+        ),
         max_players=max_players,
         entry_fee=Decimal("0"),
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
@@ -334,6 +338,118 @@ async def test_preview_solve_reports_byes_for_an_odd_field(
     assert result.total_matches == 10  # C(5, 2)
     assert result.total_byes == 5
     assert result.events[0].byes == 5
+
+
+#: The two pools an rr-then-ko subject is drawn over, with distinct ids (the shared
+#: ``_pool`` helper's id is fixed, and two pools of one event may not collide).
+_TWO_POOLS: list[dict[str, object]] = [
+    {
+        "id": "p-a",
+        "name": "Pool A",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        "table_ids": ["t1"],
+    },
+    {
+        "id": "p-b",
+        "name": "Pool B",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        "table_ids": ["t2"],
+    },
+]
+
+#: The exact honest note an rr-then-ko event earns, pinned so the wording a director
+#: reads cannot drift silently. Six entrants over two pools taking the top 2 each
+#: gives 4 qualifiers → a 4-slot bracket → 3 knockout fixtures, none of them
+#: scheduled.
+_KNOCKOUT_NOTE = (
+    "Only the pool stage of Championship is scheduled here: its knockout "
+    "bracket (3 further matches) is played after the pools finish and is not "
+    "in this estimate."
+)
+
+
+async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_scheduled(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """The preview plans an rr-then-ko event's whole draw but schedules only its pool
+    stage (ADR 20260727 — a freshly cut bracket is entirely TBD-sided, so it is
+    placeable only incrementally as the pools resolve; that is #1228). Silently showing
+    the director a schedule that covers part of their event is the failure this note
+    prevents, so the strip says so in as many words.
+
+    The tournament also holds a plain round-robin event, which is the discriminating
+    part: its pools are scheduled beside the rr-then-ko event's (both events' match
+    counts are asserted), and **it** earns no such note — the strip names the event
+    that is actually missing a stage, not every event on the day.
+    """
+    owner = await make_user(db_session, "prev-rrko-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Open Singles",
+        max_players=4,
+        pools=[_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=6,
+        pools=_TWO_POOLS,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+    )
+
+    await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    # Both events' POOL fixtures are previewed: C(4, 2) = 6 for the round-robin, and
+    # 2 × C(3, 2) = 6 for the rr-then-ko event's two pools of three. Its 3 knockout
+    # fixtures are not counted — they are what the note is about.
+    assert {e.name: e.matches for e in result.events} == {
+        "Open Singles": 6,
+        "Championship": 6,
+    }
+    assert result.total_matches == 12
+
+    assert _KNOCKOUT_NOTE in result.notes
+    # Exactly one event is called out, and it is not the round-robin one.
+    knockout_notes = [n for n in result.notes if "knockout" in n]
+    assert knockout_notes == [_KNOCKOUT_NOTE]
+    assert not any("Open Singles" in n for n in knockout_notes)
+    # The rest of the strip is untouched — the note is an addition, not a swap.
+    assert any("more than one event" in n for n in result.notes)
+    assert "Assumed 6 entrants for Championship." in result.notes
+
+
+async def test_a_round_robin_only_previews_notes_carry_no_knockout_caveat(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """The other direction: a tournament with no rr-then-ko event has no stage left
+    out, so its strip is exactly the two notes it always carried. Asserted as full
+    equality rather than a ``"knockout" not in`` scan, because an always-on note is
+    the failure mode a one-sided test would wave through."""
+    owner = await make_user(db_session, "prev-rr-only-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(db_session, tournament, name="Open Singles", max_players=4)
+
+    await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    assert result.notes == [
+        "This estimate assumes no player is entered in more than one event; a "
+        "real multi-event field would take longer.",
+        "Assumed 4 entrants for Open Singles.",
+    ]
 
 
 async def test_preview_solve_refuses_a_non_owner(

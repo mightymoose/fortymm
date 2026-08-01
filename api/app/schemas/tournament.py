@@ -10,6 +10,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
+    TypeAdapter,
+    ValidationError,
     computed_field,
     field_validator,
     model_validator,
@@ -114,6 +117,170 @@ EventEntryFee = Annotated[
 ]
 """An event's entry fee: a non-negative amount in whole cents that the
 ``Numeric(8, 2)`` column can hold. ``0`` is a real answer — a free event."""
+
+# ----- the draw configuration, as a union tagged by the draw type -----------
+
+MAX_QUALIFIERS_PER_POOL = 1000
+"""The ceiling on **K** — the same 1000 the web client's event form enforces.
+
+It is not the domain rule. K can never exceed the smallest pool's size in a real event,
+and the cut already refuses that with a message naming both numbers
+(``DegenerateDraw``). This is the *boundary* refusing counts that are nonsense on their
+face and would otherwise reach the column: 1000 is far above any pool a table-tennis
+event will ever have, and far below the ``Integer`` column's 2,147,483,647.
+
+The number that matters is the one past the column, not the one past 1000. A K of
+2,147,483,648 was a **500** — the driver refused it, deep behind the boundary, and the
+client's generic error copy then told the organizer that nothing they did caused it,
+which was false. A K of 999,999,999 was worse in the quieter way: ``201 Created``, and
+an event whose draw can never be cut. Both are a 422 now, under the field, where the
+organizer can see which number they meant."""
+
+QualifiersPerPool = Annotated[int, Field(ge=1, le=MAX_QUALIFIERS_PER_POOL)]
+"""**K** — how many of each pool's finishers advance into an ``rr-then-ko`` draw's
+knockout stage.
+
+``1 <= K <= MAX_QUALIFIERS_PER_POOL`` is the **static** half of the ADR's legal
+configuration space ("rr-then-ko cuts both stages upfront and seeds qualifiers
+rematch-free"): zero advances nobody, a negative count is not a count, and a count in
+the billions is not a qualifier count at all, whatever the field looks like. It is
+stated once, here, and shared by the create schema, the patch schema and the union arm
+below, so the three cannot drift.
+
+The two bounds that **move with the entrant count** — ``P × K >= 2`` and
+``K <= ⌊N/P⌋`` — are deliberately *not* here. They are refused at the cut as
+``DegenerateDraw``, because a configuration that was legal when it was written must not
+become unwritable when a player withdraws (the same split ``_snake`` already uses for
+its own pool floor)."""
+
+
+class RoundRobinDrawSettingsWrite(BaseModel):
+    """A round-robin event's draw configuration: the draw type, and nothing else.
+
+    ``extra="forbid"`` is doing real work on this arm — it is what makes
+    ``qualifiers_per_pool`` on a round-robin event a **422 at the boundary** rather than
+    a value silently dropped on the way to a column that cannot hold it (the settings
+    table's ``CHECK`` says ``NULL`` for every draw type but ``rr-then-ko``). A director
+    who names a qualifier count for a format that has no knockout stage has
+    misunderstood something, and the useful answer is to say so, not to run the event
+    they did not ask for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    draw_type: Literal[DrawType.round_robin] = DrawType.round_robin
+
+    @property
+    def qualifiers_per_pool(self) -> int | None:
+        """``None`` — this draw type has no knockout stage to qualify for.
+
+        A read-side **property**, not a field: the field's absence is what refuses the
+        key on the wire, and this is what lets a caller holding the parsed union ask
+        every arm the same question without an ``isinstance`` ladder."""
+        return None
+
+
+class SingleElimDrawSettingsWrite(BaseModel):
+    """A single-elimination event's draw configuration: the draw type, and nothing else.
+    See :class:`RoundRobinDrawSettingsWrite` for why ``extra="forbid"`` is the rule and
+    not decoration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    draw_type: Literal[DrawType.single_elim] = DrawType.single_elim
+
+    @property
+    def qualifiers_per_pool(self) -> int | None:
+        """``None`` — a bracket has no pools to qualify out of."""
+        return None
+
+
+class RrThenKoDrawSettingsWrite(BaseModel):
+    """A round-robin-then-knockout event's draw configuration: the draw type **and** its
+    qualifier count (ADR 20260727).
+
+    ``qualifiers_per_pool`` is **required** here, with no default. There is no
+    defensible number to assume — "2" is a convention, not a fact about the event — and
+    a draw silently cut for a K the director never chose is the worst of the available
+    failures: it looks like it worked."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    draw_type: Literal[DrawType.rr_then_ko] = DrawType.rr_then_ko
+    qualifiers_per_pool: QualifiersPerPool
+
+
+DrawSettingsWriteArm = (
+    RoundRobinDrawSettingsWrite
+    | SingleElimDrawSettingsWrite
+    | RrThenKoDrawSettingsWrite
+)
+"""The **arms** of the draw-settings union, listed once.
+
+A parsed draw configuration is one of these — the type a caller holds after
+:data:`DrawSettingsWrite` has done its work, and the type the parse itself returns. It
+is named because the list of arms was being spelled three times (the discriminated
+alias, its ``TypeAdapter``, and the parse's return type), which made "add a draw type"
+three edits with nothing to catch a fourth spelling that fell behind. Now it is one, and
+the three are the same list by construction rather than by review."""
+
+DrawSettingsWrite = Annotated[DrawSettingsWriteArm, Field(discriminator="draw_type")]
+"""An event's draw configuration as it arrives: a **discriminated union tagged by the
+draw-type slug** (ADR 20260727, promised by ADR 20260726's companion and first built
+here).
+
+One arm per :class:`DrawType`, carrying exactly the configuration that draw type has —
+which for two of the three is nothing at all. That is the whole point: "a round-robin
+event with 2 qualifiers per pool" is not a payload this type can hold, so it cannot be
+half-honoured, and the settings table's ``CHECK`` and this union say the same thing at
+two different boundaries rather than one of them silently absorbing what the other
+refuses.
+
+Adding a draw type is an arm in :data:`DrawSettingsWriteArm` above (one list, read by
+this alias, its ``TypeAdapter`` and the parse alike), and it is *not* a type error until
+it has one — the
+enum's exhaustiveness is enforced at the four dispatch sites, and a missing arm surfaces
+as ``_draw_settings_write`` refusing a payload the enum accepts. Which is loud, at the
+boundary, and in the director's request."""
+
+_DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettingsWrite)
+
+
+def _draw_settings_write(
+    draw_type: DrawType, qualifiers_per_pool: int | None
+) -> DrawSettingsWriteArm:
+    """Parse a ``(draw_type, qualifiers_per_pool)`` pair into the union arm it names, or
+    raise :class:`ValueError` — a 422 — when it names none.
+
+    The pair is **flat on the wire** and a union in the interior. Nesting it
+    (``draw: {…}``) would express the union in the generated clients too, at the cost of
+    changing the shape of every event create and patch that has ever been written; the
+    same rule is enforced either way, and this is the shape that lets the draw type stay
+    where every existing caller already sends it.
+
+    ``None`` means "no qualifier count was sent" and is therefore *omitted* rather than
+    passed as ``null``: an absent key and an explicit ``null`` mean the same thing for
+    this field — the draw type takes no count — and ``extra="forbid"`` would reject the
+    explicit one on the two arms that have no such field.
+
+    The refusal text is the **union's own**, re-raised as a ``ValueError`` so FastAPI
+    renders it as an ordinary 422 body. Composing a friendlier sentence here would be a
+    second statement of a rule the arms already make, and the two would drift.
+    """
+    payload: dict[str, object] = {"draw_type": draw_type}
+    if qualifiers_per_pool is not None:
+        payload["qualifiers_per_pool"] = qualifiers_per_pool
+    try:
+        return _DRAW_SETTINGS_WRITE.validate_python(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            f"“{draw_type.value}” draw settings: "
+            + "; ".join(
+                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                for error in exc.errors()
+            )
+        ) from exc
+
 
 # ----- value-objects (typed JSONB) -----------------------------------------
 
@@ -747,8 +914,7 @@ class TournamentFixtureRead(BaseModel):
       state without a per-slot round-trip; it is the match's *current* status, read
       live, not a copy frozen at go-live.
     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-      un-pooled (single-elim), or this is the knockout stage of a future
-      pools-then-knockout draw type. When
+      un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
       JSONB, not a foreign key, because pools are value-objects with no table.
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
@@ -962,10 +1128,11 @@ class StandingsResultsRead(BaseModel):
 
     ``champion`` is the leader of a **complete, single-pool** event — a pure
     round-robin's winner. A multi-pool round-robin has no single champion without a
-    knockout stage to join its pool winners (a pools-then-knockout draw type, a later
-    slice), so it is
-    ``null`` there even when ``complete``; and ``null`` while any fixture is still to be
-    played."""
+    knockout stage to join its pool winners, so it is ``null`` there even when
+    ``complete``; and ``null`` while any fixture is still to be played. An event that
+    *does* have a knockout stage to join them is a ``rr-then-ko`` draw, which reads out
+    as the ``standings_then_finishes`` arm below and is crowned from its bracket — a
+    different shape, not an exception to this one."""
 
     # The tag that discriminates the ``results`` union on the wire (ADR-0785): a client
     # switches on ``kind`` — a ``standings`` table here vs. a ``finishes`` list —
@@ -1017,14 +1184,46 @@ class FinishesResultsRead(BaseModel):
     champion: uuid.UUID | None
 
 
+class StandingsThenFinishesResultsRead(BaseModel):
+    """The **two-stage** shape of an event's results (ADR 20260727) — the
+    round-robin-then-knockout arm of the ``results`` discriminated union, tagged
+    ``kind: "standings_then_finishes"``.
+
+    One block per stage: ``pools`` is the pool stage's standings, exactly the
+    :class:`PoolStandingsRead` a round-robin event reads out, and ``finishes`` is the
+    knockout stage's ranked :class:`FinishRowRead`\\ s, exactly the ones a
+    single-elimination event reads out. They are the *same* models rather than
+    two-stage-flavoured near-copies, so a client renders each stage with the panel it
+    already has and the two shapes cannot drift apart.
+
+    A third arm rather than a restructuring of the union into a composite: making
+    ``standings`` and ``finishes`` sub-objects of one wrapper would change how the
+    existing two arms are read, forcing round-robin and single-elim client changes that
+    buy nothing.
+
+    ``champion`` is the **knockout final's winner, never a pool leader** — the pool
+    stage only seeds the bracket, so topping a pool wins nothing — and ``null`` until
+    that final is decided. ``complete`` is **both stages decided**. Live and partial
+    like every other results shape: the pool tables fill in as pool matches land, and
+    the finishes list grows as the bracket is played out."""
+
+    kind: Literal["standings_then_finishes"] = "standings_then_finishes"
+    pools: list[PoolStandingsRead]
+    finishes: list[FinishRowRead]
+    complete: bool
+    champion: uuid.UUID | None
+
+
 # An event's results cross the wire as a **discriminated union tagged by shape**
 # (ADR-0785): a round-robin reads out ``standings``, a single-elim reads out
-# ``finishes``. Coercing finishes into the standings row shape was rejected — a bracket
-# has no wins/game-difference columns, so every such row would carry meaningless
-# nullable fields, the tri-state smell ``api/CLAUDE.md`` warns against. Each shape is
-# its own model; the client switches on ``kind``.
+# ``finishes``, and a round-robin-then-knockout reads out ``standings_then_finishes`` —
+# both blocks at once (ADR 20260727). Coercing finishes into the standings row shape was
+# rejected — a bracket has no wins/game-difference columns, so every such row would
+# carry meaningless nullable fields, the tri-state smell ``api/CLAUDE.md`` warns
+# against. Each shape is its own model; the client switches on ``kind``.
 EventResultsRead = Annotated[
-    StandingsResultsRead | FinishesResultsRead, Field(discriminator="kind")
+    StandingsResultsRead | FinishesResultsRead | StandingsThenFinishesResultsRead,
+    Field(discriminator="kind"),
 ]
 
 
@@ -1036,6 +1235,24 @@ class TournamentEventRead(BaseModel):
     name: str
     format: EventFormat
     draw_type: DrawType
+    # **K** — how many of each pool's finishers advance into the knockout stage — read
+    # back flat beside the ``draw_type`` it belongs to, exactly as the write schemas
+    # send the pair (ADR 20260727). Both halves come off the same ``draw_settings`` row,
+    # so this is the stored configuration and not a second copy of it.
+    #
+    # ``null`` for a round-robin or single-elim event, and that is a *fact* rather than
+    # missing data: neither draw type has a qualifier count, which is what the settings
+    # table's ``CHECK`` says in DDL and what the write union says at the boundary. This
+    # read is the third statement of the same pairing and it cannot disagree with
+    # either, because it does not decide anything — it reports the column.
+    #
+    # It is on the read at all because the client edits the pair as a unit. The event
+    # editor always sends ``draw_type``, and the server parses ``(draw_type, K)``
+    # together with K required and no default — so every PATCH of an rr-then-ko event,
+    # even a rename, has to carry a K. Without this field the client would have to guess
+    # one, which pre-draw silently overwrites the director's number and post-draw trips
+    # the freeze with a 409 for an edit nobody made.
+    qualifiers_per_pool: int | None
     # ``null`` means the event is uncapped — there is no entrant limit (ADR-0935).
     max_players: int | None
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
@@ -1089,11 +1306,12 @@ class TournamentEventRead(BaseModel):
     # The event's RESULTS: a discriminated union tagged by shape (ADR-0785), derived
     # live from the fixtures' completed matches — ``kind: "standings"`` (a per-pool
     # table, ADR-0788) for a round-robin, ``kind: "finishes"`` (a ranked placement list)
-    # for a single-elimination bracket. Either fills in as results land and crowns a
-    # champion when the last one does. ``null`` for an event with no draw cut (nothing
-    # to stand) or one whose draw type has no results strategy yet — round-robin and
-    # single-elim have one today. It rides on this same payload for the same
-    # one-endpoint-per-page reason ``fixtures`` does: results are part of the
+    # for a single-elimination bracket, ``kind: "standings_then_finishes"`` (both, one
+    # block per stage, ADR 20260727) for a round-robin-then-knockout event. Each fills
+    # in as results land and crowns a champion when the last one does. ``null`` only for
+    # an event with no draw cut — nothing to stand; every draw type has a results
+    # strategy, because the enum holds only what runs. It rides on this same payload for
+    # the same one-endpoint-per-page reason ``fixtures`` does: results are part of the
     # tournament-detail page, not a second round-trip.
     results: EventResultsRead | None
 
@@ -1364,6 +1582,14 @@ class TournamentEventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     format: EventFormat
     draw_type: DrawType
+    # **K**, and only for the one draw type that has one. It is flat beside
+    # ``draw_type`` on the wire and a *union* in the interior: the pair is parsed into
+    # ``DrawSettingsWrite`` by the validator below, so a qualifier count on a
+    # round-robin or single-elim event is a 422 here and never a value quietly dropped
+    # (ADR 20260727). ``QualifiersPerPool`` is the same ``1 <= K <= 1000`` alias the
+    # union arm carries, restated on the field so both bounds reach the generated
+    # clients too.
+    qualifiers_per_pool: QualifiersPerPool | None = None
     # ``None`` (or omitted) is the uncapped event — the "no cap" sentinel of ADR-0935,
     # not a cap of zero. When a cap IS supplied it is an ``EventMaxPlayers``: ``gt=0``
     # (a cap of zero admits nobody, which is not an event) and ``le=512`` (the column
@@ -1388,6 +1614,41 @@ class TournamentEventCreate(BaseModel):
     # (a fixture names its pool by that string, and a duplicate id 500'd the cut). The
     # same alias the patch schema carries, so the rule holds on both verbs.
     pools: EventPools = Field(default_factory=list)
+
+    #: The arm :meth:`_parse_draw_settings` parsed, kept rather than re-derived. Set by
+    #: that validator and by nothing else; it cannot fall out of step with the two
+    #: fields it was parsed from because a request model is **read-only after
+    #: validation** — nothing assigns to ``draw_type``/``qualifiers_per_pool`` and
+    #: nothing ``model_copy(update=…)``s one, which are the two gestures that would
+    #: move a field without re-running the validator. It has no default because a model
+    #: that exists has run the validator, and reading it on one that has not is a
+    #: programmer error worth an ``AttributeError`` rather than a plausible-looking
+    #: second parse.
+    _draw_settings: DrawSettingsWriteArm = PrivateAttr()
+
+    @property
+    def draw_settings(self) -> DrawSettingsWriteArm:
+        """The parsed draw configuration — the union arm this payload names.
+
+        Total by the time anybody can call it **because the validator ran**:
+        :meth:`_parse_draw_settings` parsed this pair during validation and kept the
+        arm, so a model that exists is a model whose pair is legal and already parsed.
+        The totality is the validator's, not this property's — which is why reading it
+        twice (``create_event`` reads two attributes off it) costs one parse, not three.
+        Callers take the *arm*, never the two loose fields, which is what keeps "which
+        draw types carry a qualifier count" a fact stated in one place."""
+        return self._draw_settings
+
+    @model_validator(mode="after")
+    def _parse_draw_settings(self) -> "TournamentEventCreate":
+        """Parse at the boundary: an illegal ``(draw_type, qualifiers_per_pool)`` pair
+        is a 422 on the create, not a row the settings table's ``CHECK`` rejects later
+        with a 500. The arm it parses is **kept** (:attr:`_draw_settings`) rather than
+        discarded — parse once, at the boundary, and carry the parsed value inward."""
+        self._draw_settings = _draw_settings_write(
+            self.draw_type, self.qualifiers_per_pool
+        )
+        return self
 
 
 class TournamentEventUpdate(BaseModel):
@@ -1416,6 +1677,11 @@ class TournamentEventUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     format: EventFormat | None = None
     draw_type: DrawType | None = None
+    # **K**, patched *with* its draw type and never alone — see ``_parse_draw_settings``
+    # below. An explicit ``null`` is meaningful here and means the same as absent from
+    # the pair's point of view ("this draw type takes no qualifier count"), which is why
+    # it is not in the ``_reject_explicit_null`` list.
+    qualifiers_per_pool: QualifiersPerPool | None = None
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee | None = None
     # The same validated IANA zone create requires — correcting the venue timezone is a
@@ -1446,10 +1712,55 @@ class TournamentEventUpdate(BaseModel):
     @classmethod
     def _reject_explicit_null(cls, value: Any) -> Any:
         # ``max_players`` is deliberately absent here: it is a nullable column and
-        # an explicit ``null`` is meaningful — it clears the cap (ADR-0935).
+        # an explicit ``null`` is meaningful — it clears the cap (ADR-0935). So is
+        # ``qualifiers_per_pool``, for the same reason in a different key: ``null``
+        # there says "this draw type takes no qualifier count", which is exactly what
+        # patching an ``rr-then-ko`` event back to a round-robin means.
         if value is None:
             raise ValueError("must not be null")
         return value
+
+    #: The arm :meth:`_parse_draw_settings` parsed, or ``None`` when this patch does not
+    #: touch the draw configuration. Kept rather than re-derived, exactly as the create
+    #: schema's is — and here it is worth more, because the update path reads it twice
+    #: (the freeze guard, then the write). ``None`` is a real answer on this verb, so
+    #: unlike create's it carries that default.
+    _draw_settings: DrawSettingsWriteArm | None = PrivateAttr(default=None)
+
+    @property
+    def draw_settings(self) -> DrawSettingsWriteArm | None:
+        """The parsed draw configuration this patch asks for, or ``None`` when it is not
+        patching the draw configuration at all.
+
+        Total by the time anybody can call it, exactly as the create schema's is and
+        for the same reason: :meth:`_parse_draw_settings` ran the parse during
+        validation and kept the arm."""
+        return self._draw_settings
+
+    @model_validator(mode="after")
+    def _parse_draw_settings(self) -> "TournamentEventUpdate":
+        """The draw configuration is patched **as a unit**: a ``qualifiers_per_pool``
+        without a ``draw_type`` beside it is a 422.
+
+        Not pedantry — it is what keeps the pairing rule *at the boundary*. Which draw
+        types carry a qualifier count is a fact about the ``(draw_type, K)`` pair, and a
+        patch carrying only ``K`` does not hold that pair: judging it would mean reading
+        the event's stored draw type, which happens two layers in, after the request has
+        been accepted. Sending both is what the event editor does anyway — it PATCHes
+        the form it rendered.
+
+        The arm it parses is **kept** (:attr:`_draw_settings`) rather than discarded, so
+        the freeze guard and the write that follows it read one parse between them."""
+        if self.draw_type is None and self.qualifiers_per_pool is not None:
+            raise ValueError(
+                "qualifiers_per_pool is part of an event's draw configuration and is "
+                "patched with it: send draw_type alongside it."
+            )
+        if self.draw_type is not None:
+            self._draw_settings = _draw_settings_write(
+                self.draw_type, self.qualifiers_per_pool
+            )
+        return self
 
 
 def _naive_wall_clock(value: datetime) -> datetime:

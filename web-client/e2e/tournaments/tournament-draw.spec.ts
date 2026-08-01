@@ -560,13 +560,17 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
  * is code the vitest suite stubs past.
  */
 test.describe('Tournaments · the draw types a director is offered', () => {
-  /** The two labels the API SEEDS, verbatim — a copy of the migration's `DRAW_TYPE_SEED`,
+  /** The labels the API SEEDS, verbatim — a copy of the migration's `DRAW_TYPE_SEED`,
    * as the stub's catalogue is. Spelled out here rather than imported for the same reason
    * `SAY` is: an assertion that read the labels out of the fixture it is asserting on
    * could only ever prove the fixture equals itself. */
-  const SEEDED_LABELS = ['Round robin', 'Single elimination']
+  const SEEDED_LABELS = [
+    'Round robin',
+    'Single elimination',
+    'Round-robin then knockout',
+  ]
 
-  test('offers exactly the two seeded draw types, in the server’s words', async ({
+  test('offers exactly the seeded draw types, in the server’s words', async ({
     page,
   }) => {
     // The default seed, whose events are all uncut — so the picker is live rather than
@@ -576,11 +580,15 @@ test.describe('Tournaments · the draw types a director is offered', () => {
     await pom.openEditor(EVENT.JOURNEY)
     await expect(pom.eventEditor).toBeVisible()
 
-    // EXACTLY these, and in this order. `toEqual` is the assertion the claim needs:
-    // "double elimination", "Swiss" and "round robin then knockout" were all on this
-    // menu, and each one let a director author an event nothing could ever cut. They
-    // left the API's enum, so they are not seeded, so they are not here — and a
-    // `toContain` pair would not have noticed if they came back.
+    // EXACTLY these, and in this order. `toEqual` is the assertion the claim needs, and
+    // it cuts both ways. "Double elimination" and "Swiss" were on this menu once, and
+    // each let a director author an event nothing could ever cut: they left the API's
+    // enum, so they are not seeded, so they are not here. **Round-robin then knockout
+    // went the other way** — it left with them in #1219 and came back in #1227 with a
+    // strategy behind it, and a client-side allowlist would have swallowed the served
+    // row without a word (ADR "rr-then-ko cuts both stages upfront…", Context). This is
+    // the browser end of that: the third row really crosses the wire, really survives
+    // the parse, and really reaches the listbox.
     expect(await pom.drawTypeOptions()).toEqual(SEEDED_LABELS)
 
     expect(store.unhandled).toEqual([])

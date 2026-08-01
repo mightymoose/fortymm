@@ -46,6 +46,7 @@ from pathlib import Path
 import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import DrawType
@@ -213,6 +214,160 @@ async def test_every_seeded_draw_type_carries_picker_copy(
     assert not blank, (
         f"seeded draw_types rows with a blank name or description: {blank}. "
         "Both are rendered in the director's draw-type picker."
+    )
+
+
+async def test_migration_creates_the_qualifiers_per_pool_column(
+    migrated_database_url: str,
+) -> None:
+    """The qualifier count exists, as a NULLABLE integer, on a database built by
+    Alembic — not by ``create_all``.
+
+    Worth its own test precisely because ``create_all`` is what the rest of the
+    suite runs on: a column added to the model and forgotten in the migration is
+    invisible to every other test in this repo and fails on the first real
+    deployment (api/CLAUDE.md, "pytest never runs the migrations"). Nullability is
+    asserted, not just presence, because ``NULL`` is the whole representation of
+    "this draw type takes no qualifier count" — a NOT NULL column would make every
+    round-robin row carry a number.
+    """
+    engine = create_async_engine(migrated_database_url)
+    try:
+        async with engine.connect() as conn:
+            column = (
+                await conn.execute(
+                    sa.text(
+                        "SELECT data_type, is_nullable, column_default"
+                        " FROM information_schema.columns"
+                        " WHERE table_name = 'tournament_event_draw_settings'"
+                        "   AND column_name = 'qualifiers_per_pool'"
+                    )
+                )
+            ).one_or_none()
+    finally:
+        await engine.dispose()
+
+    assert column is not None, (
+        "migrated database has no tournament_event_draw_settings.qualifiers_per_pool"
+        " column — the model has it and create_all builds it, so the whole suite is"
+        " green without the migration"
+    )
+    assert column.data_type == "integer", column
+    assert column.is_nullable == "YES", column
+    assert column.column_default is None, column
+
+
+# Every ``(draw_type_key, qualifiers_per_pool)`` pair the CHECK has an opinion
+# about, and the opinion. Written as data so the test below reports the WHOLE
+# outcome table on a failure rather than dying at the first disagreement — a
+# constraint that has lost one arm and a constraint that was never created look
+# very different here, and that difference is the finding.
+#
+# ``count`` is SQL text, not a bound parameter, because ``NULL`` is one of the
+# values under test and a bound ``None`` would be indistinguishable from the
+# literal in the failure message. The values are this module's own constants and
+# never touch user input.
+QUALIFIER_COUNT_CASES: list[tuple[str, str, bool]] = [
+    # No other draw type may carry a count at all: there is no cut to size for a
+    # round-robin, and no pools to cut from for a single-elim. Both are asked,
+    # because a constraint that had lost one of them looks identical on a
+    # one-slug test.
+    ("round-robin", "2", False),
+    ("single-elim", "2", False),
+    # ...and NULL is how they say so. This is the arm the verifier's `ELSE TRUE`
+    # corruption destroys while leaving everything else intact.
+    ("round-robin", "NULL", True),
+    ("single-elim", "NULL", True),
+    # ``K >= 1`` is the ADR's static bound: zero advances nobody, negative is not
+    # a count, and absent leaves the cut with no answer to "how many advance".
+    ("rr-then-ko", "0", False),
+    ("rr-then-ko", "-1", False),
+    ("rr-then-ko", "NULL", False),
+    # One qualifier per pool IS legal — two pools at K=1 is a single final
+    # between the pool winners, which the ADR names as a supported shape. Without
+    # an accepted case the refusals above would also be satisfied by a constraint
+    # that rejects everything.
+    ("rr-then-ko", "1", True),
+    ("rr-then-ko", "2", True),
+]
+
+
+async def test_migration_pairs_the_qualifier_count_with_its_draw_type(
+    migrated_database_url: str,
+) -> None:
+    """What the CHECK **does** on a migrated database, not what its text says.
+
+    An earlier version of this test asserted only that ``rr-then-ko`` and
+    ``qualifiers_per_pool`` appeared in ``pg_get_constraintdef``. That caught a
+    *missing* constraint but not a *wrong* one: corrupting the migration's ``ELSE
+    qualifiers_per_pool IS NULL`` to ``ELSE TRUE`` — keeping the ``THEN`` arm,
+    keeping the model correct — left this file green while shipping a database
+    that happily stores ``round-robin`` with two qualifiers. A wrong constraint is
+    the *likelier* mistake the next time someone edits migration 0010, since the
+    edit-in-place convention means that expression gets rewritten rather than
+    replaced.
+
+    So every case in :data:`QUALIFIER_COUNT_CASES` is actually attempted, and it
+    is the accept/reject outcome that is asserted. That also makes the test
+    immune to Postgres re-rendering the expression (it already normalises
+    ``'rr-then-ko'`` to ``'rr-then-ko'::text`` and adds its own parentheses).
+
+    The model's copy of this rule is exercised by
+    ``test_tournament_event_draw_settings.py`` against a ``create_all`` schema.
+    This is the same questions asked of the schema **Alembic** built — which is
+    the only way the two descriptions can be shown to agree.
+
+    Every slug the cases name — ``rr-then-ko`` included, since #1227 seeded it —
+    is a row the migration itself inserted, so the settings rows below FK against
+    the real seed rather than a test-local stand-in. Everything runs inside one
+    transaction that is **rolled back**, so the session-scoped migrated database
+    is left exactly as Alembic made it and the seed assertions in this file
+    cannot be affected by test ordering.
+    """
+    engine = create_async_engine(migrated_database_url)
+    outcomes: dict[tuple[str, str], bool] = {}
+    try:
+        conn = await engine.connect()
+        try:
+            transaction = await conn.begin()
+            try:
+                for slug, count, _ in QUALIFIER_COUNT_CASES:
+                    statement = sa.text(
+                        "INSERT INTO tournament_event_draw_settings"
+                        " (draw_type_key, qualifiers_per_pool)"
+                        f" VALUES (:slug, {count})"
+                    )
+                    try:
+                        # A SAVEPOINT per case: a refused INSERT poisons the
+                        # enclosing transaction, so without one the first
+                        # rejection would abort every case after it and the
+                        # outcome table would be a lie.
+                        async with conn.begin_nested():
+                            await conn.execute(statement, {"slug": slug})
+                    except IntegrityError:
+                        outcomes[(slug, count)] = False
+                    else:
+                        outcomes[(slug, count)] = True
+            finally:
+                await transaction.rollback()
+        finally:
+            await conn.close()
+    finally:
+        await engine.dispose()
+
+    expected = {
+        (slug, count): accepted for slug, count, accepted in QUALIFIER_COUNT_CASES
+    }
+    disagreed = {
+        case: f"expected {'accepted' if want else 'REFUSED'}, "
+        f"got {'accepted' if outcomes[case] else 'REFUSED'}"
+        for case, want in expected.items()
+        if outcomes[case] != want
+    }
+    assert not disagreed, (
+        "migration 0010's ck_tournament_event_draw_settings_qualifiers_per_pool "
+        "does not behave like the model's copy on a migrated database: "
+        f"{disagreed}"
     )
 
 

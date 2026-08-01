@@ -1,4 +1,5 @@
-"""Pure tests for the results strategies (ADR-0788 round-robin, ADR-0785 single-elim).
+"""Pure tests for the results strategies (ADR-0788 round-robin, ADR-0785 single-elim,
+ADR 20260727 round-robin-then-knockout).
 
 No database: ``app.results`` is pure, so every rule about how a pool stands or a bracket
 finishes is exercised against literal :class:`~app.results.MatchOutcome` /
@@ -17,6 +18,7 @@ from app.results import (
     MatchOutcome,
     PoolInput,
     RoundRobinResults,
+    RrThenKoResults,
     SingleElimResults,
     results_for,
 )
@@ -28,7 +30,7 @@ def _eid(n: int) -> EntryId:
     return EntryId(uuid.UUID(int=n))
 
 
-A, B, C, D = _eid(1), _eid(2), _eid(3), _eid(4)
+A, B, C, D, E, F = (_eid(n) for n in range(1, 7))
 
 
 def _outcome(
@@ -69,6 +71,11 @@ def test_results_for_returns_the_round_robin_strategy() -> None:
 
 def test_results_for_returns_the_single_elim_strategy() -> None:
     assert isinstance(results_for(DrawType.single_elim), SingleElimResults)
+
+
+def test_results_for_returns_the_rr_then_ko_strategy() -> None:
+    """The third arm (ADR 20260727) — a two-stage event reads out as both blocks."""
+    assert isinstance(results_for(DrawType.rr_then_ko), RrThenKoResults)
 
 
 def test_every_draw_type_reads_out_and_none_refuses() -> None:
@@ -401,3 +408,187 @@ def test_a_corrected_final_re_crowns_the_champion() -> None:
     after = SingleElimResults().tabulate([_bracket_match(1, B, A)])
     assert after.champion == B
     assert {row.entry_id: row.position for row in after.finishes} == {B: 1, A: 2}
+
+
+# ----- round-robin then knockout: both stages at once (ADR 20260727) ----------
+#
+# The two-stage event every test below reads (except the single-pool one) is the same
+# one, at different moments:
+#
+#   pool P (A, B, C) and pool Q (D, E, F), K = 2 qualifiers each → a 4-slot bracket.
+#   Both pools are won on a clean sweep: A beats B and C, B beats C  → A, B, C;
+#                                        D beats E and F, E beats F  → D, E, F.
+#   So the qualifiers are A and B out of P, D and E out of Q.
+#   Semifinals (round 1): A beats E, B beats D.   Final (round 2): **B beats A**.
+#
+# B is deliberately pool P's *runner-up*: the champion of this event is neither pool's
+# leader, which is the whole point — a champion read off the standings would name A
+# (or nobody, since a multi-pool round-robin crowns none), never B.
+
+_POOL_P = PoolInput(
+    pool_id=PoolId("p-p"),
+    entrants=(A, B, C),
+    fixture_count=3,
+    outcomes=(
+        MatchOutcome(entry_a_id=A, entry_b_id=B, entry_a_games=2, entry_b_games=0),
+        MatchOutcome(entry_a_id=A, entry_b_id=C, entry_a_games=2, entry_b_games=0),
+        MatchOutcome(entry_a_id=B, entry_b_id=C, entry_a_games=2, entry_b_games=0),
+    ),
+)
+_POOL_Q = PoolInput(
+    pool_id=PoolId("p-q"),
+    entrants=(D, E, F),
+    fixture_count=3,
+    outcomes=(
+        MatchOutcome(entry_a_id=D, entry_b_id=E, entry_a_games=2, entry_b_games=0),
+        MatchOutcome(entry_a_id=D, entry_b_id=F, entry_a_games=2, entry_b_games=0),
+        MatchOutcome(entry_a_id=E, entry_b_id=F, entry_a_games=2, entry_b_games=0),
+    ),
+)
+
+
+def _part_played(pool: PoolInput) -> PoolInput:
+    """The same pool with only its first fixture decided — a live, mid-pool table."""
+    return PoolInput(
+        pool_id=pool.pool_id,
+        entrants=pool.entrants,
+        fixture_count=pool.fixture_count,
+        outcomes=pool.outcomes[:1],
+    )
+
+
+#: The bracket as cut: two semifinals and a final, every side TBD, nobody qualified yet.
+_UNPLAYED_BRACKET = [_bracket_tbd(1), _bracket_tbd(1), _bracket_tbd(2)]
+#: Both semifinals decided (A beat E, B beat D), the final still to play.
+_SEMIS_ONLY = [_bracket_match(1, A, E), _bracket_match(1, B, D), _bracket_tbd(2)]
+#: The whole knockout stage: B beats A in the final.
+_FULL_BRACKET = [*_SEMIS_ONLY[:2], _bracket_match(2, B, A)]
+
+
+def test_rr_then_ko_reads_out_both_stages_in_one_tabulation() -> None:
+    """The headline claim: **one** tabulation returns the pool stage's standings *and*
+    the knockout stage's finishes.
+
+    Both pools stand exactly as a round-robin's do (A, B, C and D, E, F), and the
+    bracket places exactly as a single-elim's do — champion B (1), runner-up A (2), the
+    two semifinal losers D and E tied 3rd. C and F never qualified, so they hold a
+    standings row and **no finish**: a knockout finish is a fact about the bracket, not
+    about the event's field."""
+    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+
+    assert [pool.pool_id for pool in results.pools] == [PoolId("p-p"), PoolId("p-q")]
+    assert [[row.entry_id for row in pool.rows] for pool in results.pools] == [
+        [A, B, C],
+        [D, E, F],
+    ]
+    assert {row.entry_id: row.position for row in results.finishes} == {
+        B: 1,
+        A: 2,
+        D: 3,
+        E: 3,
+    }
+
+
+def test_rr_then_ko_champion_is_the_bracket_winner_not_the_pool_leader() -> None:
+    """The champion comes from the **bracket**, never from a pool (CONTEXT.md,
+    "Champion").
+
+    Every pool is won by somebody else: P by A, Q by D. B — P's *runner-up* — wins the
+    knockout, so B is the event's champion. A champion read off the standings would
+    name A or D (or ``None``, which is what a multi-pool round-robin crowns); only
+    reading the final's winner names B."""
+    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+
+    assert results.champion == B
+    pool_leaders = [pool.rows[0].entry_id for pool in results.pools]
+    assert pool_leaders == [A, D]
+    assert results.champion not in pool_leaders
+
+
+def test_rr_then_ko_with_pools_part_played_stands_live_with_no_finishes() -> None:
+    """Pools mid-play, nobody qualified: the standings are live and partial, the bracket
+    is cut but empty.
+
+    Only A–B has been played in each pool, so every seated entrant still has a row (C
+    and F on zeros) and neither pool is complete. No knockout fixture is decided, so
+    there are no finishes, no champion, and the event is not complete."""
+    results = RrThenKoResults().tabulate(
+        [_part_played(_POOL_P), _part_played(_POOL_Q)], _UNPLAYED_BRACKET
+    )
+
+    assert [len(pool.rows) for pool in results.pools] == [3, 3]
+    assert [pool.complete for pool in results.pools] == [False, False]
+    assert results.finishes == ()
+    assert results.champion is None
+    assert results.complete is False
+
+
+def test_rr_then_ko_with_the_bracket_part_played_has_finishes_but_no_champion() -> None:
+    """Pools decided, knockout mid-flight: standings complete, finishes partial, still
+    no champion.
+
+    Both semifinals are in (A beat E, B beat D) but the final is not, so D and E are
+    placed — tied 3rd, measured from the final round the TBD final fixes — while A and B
+    are still alive and have no finish at all. The champion is the final's winner, so it
+    is ``None`` until that final is decided, and the event is not complete."""
+    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _SEMIS_ONLY)
+
+    assert [pool.complete for pool in results.pools] == [True, True]
+    assert {row.entry_id: row.position for row in results.finishes} == {D: 3, E: 3}
+    assert results.champion is None
+    assert results.complete is False
+
+
+def test_rr_then_ko_is_complete_only_when_both_stages_are() -> None:
+    """``complete`` is **both stages decided**, asserted separately.
+
+    Three states of the same event: pools decided and the bracket mid-flight → not
+    complete; the bracket decided while a pool is not → **not complete either**, even
+    though the champion is already known, because the pool stage this shape was handed
+    has not finished; both decided → complete. (The middle state is unreachable
+    through ``RrThenKoStrategy``, which seats nobody out of an unfinished pool — which
+    is exactly why ``complete`` must not lean on that invariant to hold.)"""
+    pools_only = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _SEMIS_ONLY)
+    assert pools_only.complete is False
+
+    bracket_only = RrThenKoResults().tabulate(
+        [_part_played(_POOL_P), _POOL_Q], _FULL_BRACKET
+    )
+    assert bracket_only.champion == B, "the knockout stage did finish"
+    assert bracket_only.complete is False, "but a pool has not, so the event has not"
+
+    both = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+    assert both.complete is True
+
+
+def test_rr_then_ko_with_a_single_pool_is_a_league_then_a_playoff() -> None:
+    """One pool is legal (ADR 20260727) — a league, then a playoff — and it reads out
+    like any other two-stage event.
+
+    A four-player pool, all six fixtures played on clean sweeps → A, B, C, D. The top
+    two qualify and meet in a one-fixture bracket, where **B beats A**. So the league
+    leader is A and the champion is B: the pool stage seeds the playoff, it does not win
+    it. (This is the case a pool-derived champion gets *wrong* rather than empty — a
+    complete single-pool round-robin does crown its leader, and that leader is A.)"""
+    pool = _single_pool(
+        (A, B, C, D),
+        fixture_count=6,
+        outcomes=[
+            _outcome(A, B, 2, 0),
+            _outcome(A, C, 2, 0),
+            _outcome(A, D, 2, 0),
+            _outcome(B, C, 2, 0),
+            _outcome(B, D, 2, 0),
+            _outcome(C, D, 2, 0),
+        ],
+    )
+    results = RrThenKoResults().tabulate([pool], [_bracket_match(1, B, A)])
+
+    (standings,) = results.pools
+    assert [row.entry_id for row in standings.rows] == [A, B, C, D]
+    assert RoundRobinResults().tabulate([pool]).champion == A, (
+        "the pool stage on its own would crown its leader"
+    )
+    assert results.champion == B, "but the event's champion is the playoff's winner"
+    assert {row.entry_id: row.position for row in results.finishes} == {B: 1, A: 2}
+    assert results.complete is True

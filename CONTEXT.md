@@ -390,7 +390,8 @@ rating rank, never the player's index on the current page).
 
 **Draw**:
 The complete set of **fixtures** an event's draw type prescribes for its
-entrants — a bracket, a set of pools, or (later) rounds of pairings. A draw is
+entrants — a bracket, a set of pools, pools feeding a bracket, or (later)
+rounds of pairings. A draw is
 **cut** (the deliberate, reviewable act of generating it; re-cutting replaces
 it wholesale and is refused once there is any evidence of play), and it is
 **current** when its fixtures cover exactly the event's active entrants —
@@ -441,6 +442,30 @@ running tournament (a table breaks, a table frees up).
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 
+**Stage**:
+One phase of a **draw** that must finish before the next can be played. Most
+draw types have exactly one; a round-robin-then-knockout draw has two — a
+**pool stage**, whose **fixtures** each name a **pool**, and a **knockout
+stage**, whose fixtures name none. Whether a fixture has a pool *is* the
+discriminator; there is no stage of its own recorded anywhere. Both stages are
+**cut together** in one stroke, so the knockout bracket exists — with its sides
+still unknown — from the moment the draw does.
+_Avoid_: round (a **round** is one layer *within* a stage), phase, leg, group
+stage (a **pool** is not a group).
+
+**Qualifier**:
+An entrant who advances out of a **pool** into the **knockout stage**: the top
+*K* of that pool's **standings**, where *K* is the event's qualifiers-per-pool
+setting. Qualifiers are seated into the bracket **as each pool finishes**, not
+when the whole **pool stage** does. Within a finishing place, pools are **not
+ranked against each other** — every pool winner is an equal — and that freedom
+is what lets the seating guarantee no first-round knockout **fixture** pairs two
+entrants from the same pool. The guarantee holds for two or more pools; with a
+single pool every knockout match is necessarily a rematch, which is the format
+working as intended, not a failure of the rule.
+_Avoid_: seed (a **seed** is an *input* to the draw; a qualifier is what playing
+it produces), advancer, survivor, winner (that is one side of one **match**).
+
 **Materialize**:
 Turning a **ready** **fixture** into a real **match**: the fixture's two known
 sides become the match's two sides, the event's `match_settings` (rated flag,
@@ -458,7 +483,9 @@ is the schedule's concern).
 How an event turned out, computed for display — a concept **universal across draw
 types but shaped differently by each**: a round-robin's results are its
 **standings**; a single-elimination's are its **finishes** (and its
-**champion**). Computed **live from the fixtures' completed matches**, so a
+**champion**); a round-robin-then-knockout's are **both** — its pools'
+standings *and* its bracket's finishes, one per **stage**. Computed **live from
+the fixtures' completed matches**, so a
 **correction** or **voided match** is reflected at once — never stored, never a
 snapshot. An event is **complete** when every fixture is **decided**; only then
 are its results final. Each draw type computes its own results shape; the display
@@ -485,7 +512,8 @@ Same-round losers **tie**: single-elimination genuinely does not rank them
 against each other, so a shared position is honest, not a missing tiebreak.
 Computed **live from completed fixtures**, like all **results**. On the wire the
 results block is a discriminated union tagged by shape — `standings` for a
-round-robin, `finishes` for a single-elimination.
+round-robin, `finishes` for a single-elimination, `standings_then_finishes` for
+a round-robin-then-knockout, which carries one of each.
 _Avoid_: **placement** (that is a **match**'s spot in the **schedule** — table
 and time — an unrelated concept; a finish is an *entrant*'s standing in the
 bracket), standings (the round-robin shape), rank (a league rating position),
@@ -494,8 +522,12 @@ seed (a seed is an *input* to the draw; a finish is its *outcome*).
 **Champion**:
 The entrant atop a **complete** event's **results** — for a round-robin, first in
 the **standings**; for a single-elimination, the undefeated entrant, first in the
-**finishes**. **Derived, never stored**: a **correction** can re-crown, so
-the champion is always read from the current results.
+**finishes**; for a round-robin-then-knockout, the winner of the **knockout
+stage**, never the leader of a **pool**. **Derived, never stored**: a
+**correction** can re-crown, so the champion is always read from the current
+results. A **multi-pool** round-robin has **no champion even when complete** —
+there is nothing to join its pool winners, which is exactly the gap a knockout
+stage fills.
 _Avoid_: winner (a **winner** is one side of one match; the champion is the whole
 event's), first place.
 
