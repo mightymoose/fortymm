@@ -31,7 +31,6 @@ from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.schemas.tournament import (
     Address,
     AddressInput,
-    TournamentTable,
     TournamentUpdate,
 )
 from app.tournament_errors import (
@@ -41,6 +40,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_geocoding import geocode_address
+from app.tournament_tables import apply_table_catalogue
 
 
 async def _load_tournament_for_update(
@@ -89,18 +89,6 @@ async def _load_owned_tournament_for_update(
     if tournament.created_by_user_id != actor.id:
         raise NotTournamentOwnerError()
     return tournament
-
-
-def _catalogue_ids(tournament: Tournament) -> list[str]:
-    """The table catalogue reduced to its ``id`` list — the only slice of it the
-    solver reads (``_load_solver_inputs`` reduces the catalogue to ``TableId``s;
-    labels and courts are display). Parsed with the same model the write boundary
-    validated it with, so the before/after comparison is over what actually feeds
-    a solve: a rename/address/date edit and a label-only re-word trigger nothing,
-    adding/removing/re-identifying a table triggers a re-solve."""
-    return [
-        TournamentTable.model_validate(table).id for table in tournament.table_catalogue
-    ]
 
 
 #: The six free-text components of a venue address — the fields a client sends
@@ -217,12 +205,23 @@ async def edit_tournament(
     value, so both branches key on ``"address" in updates.model_fields_set``, never on
     ``updates.address is not None``.
 
+    A submitted ``table_catalogue`` is applied **by position**
+    (:func:`~app.tournament_tables.apply_table_catalogue`) rather than assigned: the
+    catalogue is child rows now (ADR 20260801), and a table's id is the server's, so the
+    i-th table sent updates the i-th table stored, a longer list adds and a shorter one
+    removes from the end. That is what stops the catalogue the web client re-sends on
+    every PATCH from re-minting every id — which would dangle every pool's ``table_ids``
+    and unplace every fixture as a side effect of a rename. (Refusing to remove a table
+    a fixture is placed at is the ADR's next step; today the removal goes through.)
+
     Then it applies the remaining fields (``model_dump(exclude_unset=True)``
     already serialized the nested value-objects to plain dicts/lists, so one
     ``setattr`` loop covers the JSONB and scalar columns alike) and, when the
-    table-catalogue ids changed AND at least one event is drawn, requests a
+    table-catalogue gained or lost a table AND at least one event is drawn, requests a
     ``settings_changed`` solve inside this transaction under the row lock (the
-    lock order ``request_solve`` requires). A ``None`` return from
+    lock order ``request_solve`` requires). Adding or removing a table changes the
+    solver's inputs (it reduces the catalogue to its ids); re-wording a label does not.
+    A ``None`` return from
     ``request_solve`` (Redis down) is deliberately ignored: the edit is what the
     owner asked for, and the missing solve is recovered by the pin tick or the
     Run-scheduler button.
@@ -309,14 +308,22 @@ async def edit_tournament(
         else:
             del fields["address"]
 
-    catalogue_ids_before = _catalogue_ids(tournament)
+    # The catalogue is child ROWS now (ADR 20260801), so it comes out of the generic
+    # ``setattr`` loop: there is no ``table_catalogue`` column to assign. It is applied
+    # by position (:func:`apply_table_catalogue`), which is what keeps a table's
+    # server-minted id — and therefore every ref that names it — alive across the
+    # catalogue the web client re-sends on every PATCH. The schema rejects an explicit
+    # ``null``, so the key being present means a real list.
+    catalogue_changed = False
+    submitted_catalogue = updates.table_catalogue
+    if submitted_catalogue is not None:
+        fields.pop("table_catalogue", None)
+        catalogue_changed = apply_table_catalogue(tournament, submitted_catalogue)
+
     for key, value in fields.items():
         setattr(tournament, key, value)
-    catalogue_ids_after = _catalogue_ids(tournament)
 
-    if catalogue_ids_after != catalogue_ids_before and await tournament_has_drawn_event(
-        db, tournament_id
-    ):
+    if catalogue_changed and await tournament_has_drawn_event(db, tournament_id):
         await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
 
     await db.commit()

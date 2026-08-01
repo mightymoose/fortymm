@@ -100,10 +100,16 @@ def _tournament_fields(
     current_user_id: uuid.UUID,
 ) -> dict[str, Any]:
     # The request-scoped fields (``created_by_username``/``can_edit``) aren't on
-    # the ORM row. The JSONB columns (``address``/``table_catalogue``) are read
-    # straight off the attributes; Pydantic validates them into
-    # Address/TournamentTable when the returned dict is fed to model_validate,
-    # so the raw dicts never leave the serialize boundary.
+    # the ORM row. The ``address`` JSONB is read straight off the attribute and
+    # Pydantic validates it into an ``Address`` when the returned dict is fed to
+    # model_validate, so the raw dict never leaves the serialize boundary.
+    #
+    # ``table_catalogue`` is no longer a column: the wire field is unchanged, but the
+    # value now comes off the ``tables`` relationship (ADR 20260801), already in the
+    # director's order and eagerly loaded (``lazy="selectin"``), so this stays a plain
+    # attribute read and the serializer still fires no query. ``TournamentTable`` is
+    # ``from_attributes``, so the ORM rows validate into the read model at the same one
+    # boundary the JSONB used to.
     return {
         "id": t.id,
         "name": t.name,
@@ -112,7 +118,7 @@ def _tournament_fields(
         "start_date": t.start_date,
         "end_date": t.end_date,
         "address": t.address,
-        "table_catalogue": t.table_catalogue,
+        "table_catalogue": t.tables,
         "league_id": t.league_id,
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,

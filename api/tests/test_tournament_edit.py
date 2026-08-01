@@ -35,9 +35,14 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTable,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.schemas.tournament import AddressInput, TournamentTable, TournamentUpdate
+from app.schemas.tournament import (
+    AddressInput,
+    TournamentTableWrite,
+    TournamentUpdate,
+)
 from app.tournament_edit import edit_tournament
 from app.tournament_errors import (
     LeagueNotEditableError,
@@ -50,6 +55,7 @@ from tests._helpers import (
     assert_tournament_address_is_sql_null,
     blank_addresses,
     make_user,
+    venue_tables,
 )
 
 # The deterministic geocoder the edit verb re-geocodes a changed address with (the
@@ -111,7 +117,7 @@ async def _make_tournament(
     owner: User,
     league: League,
     status: TournamentStatus = TournamentStatus.draft,
-    table_catalogue: list[dict[str, str]] | None = None,
+    catalogue: list[VenueTable] | None = None,
     with_venue: bool = True,
 ) -> Tournament:
     tournament = Tournament(
@@ -120,11 +126,11 @@ async def _make_tournament(
         # ``with_venue=False`` seeds the state #1206 made reachable: a tournament whose
         # address column is SQL NULL because it has no venue at all.
         address=_stored_address() if with_venue else None,
-        table_catalogue=table_catalogue
-        or [
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=(
+            catalogue
+            if catalogue is not None
+            else venue_tables(("Table 1", "A"), ("Table 2", "A"))
+        ),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=status,
@@ -163,6 +169,34 @@ async def _persisted_league_id(db: AsyncSession, tournament_id: uuid.UUID) -> uu
         .scalar_one()
         .league_id
     )
+
+
+async def _catalogue_rows(
+    db: AsyncSession, tournament_id: uuid.UUID
+) -> list[VenueTable]:
+    """The tournament's venue tables, straight off ``tournament_tables`` in the
+    director's order — read from the rows and never off an ORM instance the verb under
+    test still holds, so an assertion is about what was persisted."""
+    db.expire_all()
+    return list(
+        (
+            await db.execute(
+                select(VenueTable)
+                .where(VenueTable.tournament_id == tournament_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[uuid.UUID]:
+    return [row.id for row in await _catalogue_rows(db, tournament_id)]
+
+
+async def _catalogue_labels(db: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
+    return [row.label for row in await _catalogue_rows(db, tournament_id)]
 
 
 async def _queued_solves(
@@ -653,13 +687,13 @@ async def test_league_that_names_no_league_raises_not_found(
 # ----- table-catalogue change on a drawn tournament requests a solve --------
 
 
-async def test_table_catalogue_change_on_a_drawn_tournament_requests_a_solve(
+async def test_adding_a_table_on_a_drawn_tournament_requests_a_solve(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """Re-identifying a table changes the solver's inputs, and the tournament has a
-    cut draw, so the edit queues a ``settings_changed`` solve in the same
-    transaction."""
+    """A table the venue did not have is a new place to put a match — the solver's
+    inputs changed — and the tournament has a cut draw, so the edit queues a
+    ``settings_changed`` solve in the same transaction."""
     owner = await make_user(db_session, "owner-solve")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
@@ -677,8 +711,9 @@ async def test_table_catalogue_change_on_a_drawn_tournament_requests_a_solve(
         actor=owner,
         updates=TournamentUpdate(
             table_catalogue=[
-                TournamentTable(id="t1", label="Table 1", court="A"),
-                TournamentTable(id="t3", label="Table 3", court="B"),
+                TournamentTableWrite(label="Table 1", court="A"),
+                TournamentTableWrite(label="Table 2", court="A"),
+                TournamentTableWrite(label="Table 3", court="B"),
             ]
         ),
         geocoder=_GEOCODER,
@@ -687,6 +722,48 @@ async def test_table_catalogue_change_on_a_drawn_tournament_requests_a_solve(
     (solve,) = await _queued_solves(db_session, tournament_id)
     assert solve.trigger is ScheduleSolveTrigger.settings_changed
     assert solve.status is ScheduleSolveStatus.queued
+
+
+async def test_re_wording_a_table_on_a_drawn_tournament_requests_no_solve(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The other side of the same rule: a label and a court are DISPLAY, and the
+    catalogue the solver reads is its ids (``_load_solver_inputs`` reduces it to
+    ``TableId``s). Re-wording a table leaves that set untouched — the same rows, the
+    same ids — so a drawn tournament is not re-solved for a piece of signage.
+
+    This is what positional application buys. Rebuild the catalogue on every PATCH and
+    a re-word would mint two fresh ids, which genuinely IS an input change — so the
+    board would be re-solved, and every placement pointing at the old ids would have
+    dangled first."""
+    owner = await make_user(db_session, "owner-reword")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    await _draw_an_event(db_session, tournament)
+    table_ids_before = await _catalogue_ids(db_session, tournament_id)
+
+    await db_session.refresh(owner)
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(
+            table_catalogue=[
+                TournamentTableWrite(label="Centre Table", court="A"),
+                TournamentTableWrite(label="Table 2", court="A"),
+            ]
+        ),
+        geocoder=_GEOCODER,
+    )
+
+    assert await _queued_solves(db_session, tournament_id) == []
+    # And the re-word landed on the very rows that were already there.
+    assert await _catalogue_ids(db_session, tournament_id) == table_ids_before
+    assert await _catalogue_labels(db_session, tournament_id) == [
+        "Centre Table",
+        "Table 2",
+    ]
 
 
 async def test_table_catalogue_change_without_a_draw_requests_no_solve(
@@ -705,10 +782,39 @@ async def test_table_catalogue_change_without_a_draw_requests_no_solve(
         actor=owner,
         updates=TournamentUpdate(
             table_catalogue=[
-                TournamentTable(id="t9", label="Table 9", court="C"),
+                TournamentTableWrite(label="Table 9", court="C"),
             ]
         ),
         geocoder=_GEOCODER,
     )
 
     assert await _queued_solves(db_session, tournament_id) == []
+
+
+async def test_a_shorter_catalogue_removes_the_tables_off_the_end(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A table the director stopped sending is gone from the ``tournament_tables``
+    rows, not merely absent from a JSON blob — ``delete-orphan`` on
+    ``Tournament.tables`` is what turns dropping it out of the collection into a
+    DELETE. The table that stayed keeps the id it already had."""
+    owner = await make_user(db_session, "owner-shrink")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    first_id, _second_id = await _catalogue_ids(db_session, tournament_id)
+
+    # The catalogue read expired ``owner``; a real request holds a freshly-loaded
+    # ``current_user``, so refresh it back before handing it to the verb.
+    await db_session.refresh(owner)
+    await edit_tournament(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        updates=TournamentUpdate(
+            table_catalogue=[TournamentTableWrite(label="Table 1", court="A")]
+        ),
+        geocoder=_GEOCODER,
+    )
+
+    assert await _catalogue_ids(db_session, tournament_id) == [first_id]

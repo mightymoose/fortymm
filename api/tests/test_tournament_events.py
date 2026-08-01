@@ -43,7 +43,10 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_events import create_event, delete_event, update_event
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    venue_tables,
+)
 
 
 def _address() -> Address:
@@ -102,10 +105,7 @@ async def _make_tournament(
     tournament = Tournament(
         name="Eventful Cup",
         address=_address().model_dump(),
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,

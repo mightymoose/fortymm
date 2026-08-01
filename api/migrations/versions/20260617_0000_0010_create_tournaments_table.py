@@ -222,12 +222,14 @@ def upgrade() -> None:
         # way. The single-representation invariant is therefore enforced by the
         # model, not by this schema.
         sa.Column("address", postgresql.JSONB(), nullable=True),
-        sa.Column(
-            "table_catalogue",
-            postgresql.JSONB(),
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
+        # There is deliberately NO ``table_catalogue`` column. The venue catalogue was
+        # a NOT NULL JSONB list of ``{id, label, court}`` objects keyed by
+        # client-supplied strings; it is the ``tournament_tables`` table created below
+        # (ADR 20260801 "a placement names a real table, and only that is an
+        # invariant"), so a placement can foreign-key the table it names and the id is
+        # the database's to mint. Edited out of this migration in place, per the
+        # pre-deploy convention in api/CLAUDE.md — revision ids and the
+        # ``down_revision`` chain stay frozen.
         # The rating ladder a tournament's eligibility is judged on (ADR-0783).
         # NOT NULL: every tournament names its league, so no read of an entry
         # decision has to ask "rated against *what*?". Resolved at create — an
@@ -264,6 +266,68 @@ def upgrade() -> None:
         "ix_tournaments_created_by_user_id_created_at",
         "tournaments",
         ["created_by_user_id", sa.text("created_at DESC")],
+    )
+
+    # The venue catalogue, as rows (ADR 20260801 "a placement names a real table").
+    # Created immediately after ``tournaments`` because it FKs it, and before
+    # ``tournament_events`` only for readability — nothing in this migration references
+    # it. Added here in place per the pre-deploy convention, not as a chained ALTER.
+    #
+    # ``id`` is a server-minted UUID with the same ``gen_random_uuid()`` default every
+    # other id in this migration has: a table's identity is the database's to mint. It
+    # used to be a client-supplied string inside ``tournaments.table_catalogue``, which
+    # is exactly why a ``tournament_fixtures.table_id`` naming no table could be stored
+    # rather than refused — there was no key to point at.
+    op.create_table(
+        "tournament_tables",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        # CASCADE: deleting a tournament takes its catalogue with it, in the same
+        # statement, exactly as it takes its events (below).
+        sa.Column(
+            "tournament_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("label", sa.String(length=255), nullable=False),
+        sa.Column("court", sa.String(length=255), nullable=False),
+        # Where the table sits in the director's catalogue order: 0-based, contiguous,
+        # server-assigned from the order the catalogue was sent in. The JSONB array
+        # carried this for free; under random UUID primary keys neither ``id`` nor
+        # ``created_at`` (every row of one write shares the transaction timestamp) can,
+        # so it is a column — the same remedy ``tournament_events.pools`` got in
+        # ADR 20260801 for the same reason.
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        # Two tables of one tournament never share a place in its order.
+        sa.UniqueConstraint(
+            "tournament_id", "position", name="uq_tournament_tables_tournament_position"
+        ),
+    )
+    # Postgres indexes the REFERENCED key of a foreign key, never the referencing
+    # column, so this is what keeps the tournament-delete cascade from sequentially
+    # scanning every table row on the platform — and it is the catalogue's read order
+    # besides.
+    op.create_index(
+        "ix_tournament_tables_tournament_id_position",
+        "tournament_tables",
+        ["tournament_id", "position"],
     )
 
     op.create_table(
@@ -378,6 +442,13 @@ def downgrade() -> None:
         table_name="tournament_events",
     )
     op.drop_table("tournament_events")
+
+    # Symmetric with upgrade(): dropped before the tournaments it references.
+    op.drop_index(
+        "ix_tournament_tables_tournament_id_position",
+        table_name="tournament_tables",
+    )
+    op.drop_table("tournament_tables")
 
     op.drop_index(
         "ix_tournaments_created_by_user_id_created_at", table_name="tournaments"

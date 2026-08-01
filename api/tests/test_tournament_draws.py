@@ -42,7 +42,10 @@ from app.tournament_queries import (
     fixtures_by_event,
     game_counts_by_match,
 )
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    venue_tables,
+)
 
 POOL_A: dict[str, object] = {
     "id": "p-a",
@@ -68,7 +71,7 @@ async def _make_event(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+        tables=venue_tables(("Table 1", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.live,

@@ -61,11 +61,16 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTable,
 )
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, request_solve
 from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
-from tests._helpers import hijack_solve, make_user
+from tests._helpers import (
+    hijack_solve,
+    make_user,
+    venue_tables,
+)
 
 DATE = "2030-01-01"
 #: The event's venue timezone — the IANA zone that anchors its wall-clock pool
@@ -109,6 +114,7 @@ async def _make_tournament(
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Called Open",
         status=status,
@@ -122,9 +128,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -146,7 +150,7 @@ async def _make_tournament(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": DATE, "start": window[0], "end": window[1]},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )
@@ -201,6 +205,32 @@ async def _call_notifications(db: AsyncSession) -> Sequence[Notification]:
     )
 
 
+async def _table(db: AsyncSession, event_id: uuid.UUID, alias: str) -> str:
+    """``"t1"`` → the id of the FIRST table in this event's tournament's catalogue.
+
+    A table's id is a server-minted UUID now (ADR 20260801), so a placement cannot
+    spell one as a literal. These tests are about which *table* a fixture sits on, so
+    they keep naming it positionally and resolve here — 1-based, in catalogue order,
+    matching the ``tables=("t1", "t2")`` argument ``_make_tournament`` labels them
+    from."""
+    ids = (
+        (
+            await db.execute(
+                select(VenueTable.id)
+                .join(
+                    TournamentEvent,
+                    TournamentEvent.tournament_id == VenueTable.tournament_id,
+                )
+                .where(TournamentEvent.id == event_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return str(ids[int(alias.removeprefix("t")) - 1])
+
+
 async def _place_fixture(
     db: AsyncSession,
     event_id: uuid.UUID,
@@ -208,8 +238,9 @@ async def _place_fixture(
     table_id: str,
     start: datetime,
 ) -> uuid.UUID:
+    """``table_id`` is a positional alias (``"t1"``), resolved by :func:`_table`."""
     fixture = await _the_fixture(db, event_id)
-    fixture.table_id = table_id
+    fixture.table_id = await _table(db, event_id, table_id)
     fixture.scheduled_start = start
     await db.commit()
     return fixture.id
@@ -264,7 +295,7 @@ class TestApplyCallEvaluation:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == "t1"
+        assert fixture.table_id == await _table(db_session, event_id, "t1")
         assert fixture.scheduled_start == BASE
         assert fixture.pinned_at == BASE
         assert fixture.call_notified_count == 1
@@ -313,7 +344,7 @@ class TestApplyCallEvaluation:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == "t1"
+        assert fixture.table_id == await _table(db_session, event_id, "t1")
         assert fixture.scheduled_start == start
         assert fixture.pinned_at == silent_pin_time  # the promise, untouched
         assert fixture.call_notified_count == 1  # …finally delivered
@@ -408,7 +439,7 @@ class TestApplyCallEvaluation:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == "t1"
+        assert fixture.table_id == await _table(db_session, event_id, "t1")
         assert fixture.scheduled_start == off_grid
         assert fixture.pinned_at == BASE
         assert fixture.call_notified_count == 1
@@ -494,7 +525,7 @@ class TestPinTick:
 
         db_session.expire_all()
         fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == "t1"
+        assert fixture.table_id == await _table(db_session, event_id, "t1")
         assert fixture.scheduled_start == start  # the placement is untouched…
         assert fixture.pinned_at == silent_pin_time  # …and so is the pin
         assert fixture.call_notified_count == 1
@@ -669,7 +700,7 @@ class TestResourceFreedomGate:
             db_session, tournament_id, held, status=MatchStatus.in_progress
         )
         # The successor: same table, imminent, untold → due, but t1 is held.
-        due.table_id = "t1"
+        due.table_id = await _table(db_session, event_id, "t1")
         due.scheduled_start = BASE + timedelta(minutes=5)
         due_id = due.id
         await db_session.commit()
@@ -700,7 +731,7 @@ class TestResourceFreedomGate:
             db_session, tables=("t1", "t2")
         )
         fixture = await _the_fixture(db_session, event_id)
-        fixture.table_id = "t1"
+        fixture.table_id = await _table(db_session, event_id, "t1")
         fixture.scheduled_start = BASE + timedelta(minutes=5)  # imminent, untold
         fixture_id = fixture.id
         await db_session.commit()
@@ -755,7 +786,7 @@ class TestResourceFreedomGate:
             db_session, tournament_id, held, status=MatchStatus.in_progress
         )
         # The free fixture: t2, imminent, untold, players free.
-        free.table_id = "t2"
+        free.table_id = await _table(db_session, event_id, "t2")
         free.scheduled_start = BASE + timedelta(minutes=5)
         free_id = free.id
         free_users = await _users_for_entries(
@@ -795,9 +826,9 @@ class TestResourceFreedomGate:
         later = next(
             f for f in fixtures if len({f.entry_a_id, f.entry_b_id} & shared) == 1
         )
-        earlier.table_id = "t1"
+        earlier.table_id = await _table(db_session, event_id, "t1")
         earlier.scheduled_start = BASE  # the earlier predicted start
-        later.table_id = "t2"
+        later.table_id = await _table(db_session, event_id, "t2")
         later.scheduled_start = BASE + timedelta(minutes=2)
         earlier_id, later_id = earlier.id, later.id
         await db_session.commit()
@@ -849,7 +880,7 @@ class TestResourceFreedomGate:
         for offset, (fixture, table) in enumerate(
             zip(chosen, ("t1", "t2", "t3"), strict=True)
         ):
-            fixture.table_id = table
+            fixture.table_id = await _table(db_session, event_id, table)
             fixture.scheduled_start = BASE + timedelta(minutes=offset)
             chosen_ids.append(fixture.id)
         expected_users = await _users_for_entries(
@@ -1057,9 +1088,16 @@ class TestIdleTournamentWedgeIsGone:
         await _link_match(db_session, tournament_id, r2, status=MatchStatus.pending)
         # Round 1 is due immediately (09:00); round 2 is predicted 20 min out,
         # beyond the 10-min call-ahead window — not yet due at 09:00.
-        r1a.table_id, r1a.scheduled_start = "t1", BASE
-        r1b.table_id, r1b.scheduled_start = "t2", BASE
-        r2.table_id, r2.scheduled_start = "t3", BASE + timedelta(minutes=20)
+        r1a.table_id, r1a.scheduled_start = (
+            await _table(db_session, event_id, "t1"),
+            BASE,
+        )
+        r1b.table_id, r1b.scheduled_start = (
+            await _table(db_session, event_id, "t2"),
+            BASE,
+        )
+        r2.table_id = await _table(db_session, event_id, "t3")
+        r2.scheduled_start = BASE + timedelta(minutes=20)
         r1a_id, r1b_id, r2_id = r1a.id, r1b.id, r2.id
         r1a_winner = r1a.entry_a_id
         assert r1a_winner is not None
@@ -1408,8 +1446,9 @@ async def _pin_directly(
 ) -> None:
     """Stage an already-called (or pre-live silently pinned) fixture directly
     on the row: the two real pin paths are exercised by the classes above;
-    repair tests need exact pre-states."""
-    fixture.table_id = table_id
+    repair tests need exact pre-states. ``table_id`` is a positional alias
+    (``"t1"``), resolved by :func:`_table`."""
+    fixture.table_id = await _table(db, fixture.event_id, table_id)
     fixture.scheduled_start = start
     fixture.pinned_at = pinned_at
     fixture.call_notified_count = notified
@@ -1460,13 +1499,18 @@ async def _remove_table(
 ) -> None:
     """Simulate the director's settings writes that break a placement's table,
     directly on the models: drop it from the tournament's catalogue and/or
-    from every pool's ``table_ids``."""
+    from every pool's ``table_ids``. ``table_id`` is a positional alias
+    (``"t1"``), resolved by :func:`_table`."""
+    table_id = await _table(db, event_id, table_id)
     if from_catalogue:
         tournament = (
             await db.execute(select(Tournament).where(Tournament.id == tournament_id))
         ).scalar_one()
-        tournament.table_catalogue = [
-            table for table in tournament.table_catalogue if table["id"] != table_id
+        # A table is a ROW now (ADR 20260801), so "the director removed it" is a
+        # DELETE — expressed by dropping it out of the collection, which
+        # ``delete-orphan`` on ``Tournament.tables`` turns into one.
+        tournament.tables = [
+            table for table in tournament.tables if str(table.id) != table_id
         ]
     if from_pools:
         event = (
@@ -1569,6 +1613,13 @@ class TestBrokenPinRepair:
             start=control_start,
             pinned_at=original_pin_time,
         )
+        # Captured BEFORE the removal: dropping a table shifts every later
+        # position, so the aliases would name different rows afterwards.
+        survivors = {
+            await _table(db_session, event_id, "t2"),
+            await _table(db_session, event_id, "t3"),
+        }
+        control_table = await _table(db_session, event_id, "t2")
         await _remove_table(db_session, tournament_id, event_id, "t1")
         now = BASE - timedelta(minutes=60)
         _freeze_clocks(monkeypatch, now)
@@ -1577,14 +1628,14 @@ class TestBrokenPinRepair:
 
         await db_session.refresh(target)
         await db_session.refresh(control)
-        assert target.table_id in {"t2", "t3"}  # re-placed on a survivor
+        assert target.table_id in survivors  # re-placed on a survivor
         assert target.scheduled_start is not None
         assert target.scheduled_start >= BASE
         assert target.pinned_at == now  # the promise is renewed, not demoted
         assert target.call_notified_count == 2
 
         # The untouched pin: byte-identical, no re-notification.
-        assert control.table_id == "t2"
+        assert control.table_id == control_table
         assert control.scheduled_start == control_start
         assert control.pinned_at == original_pin_time
         assert control.call_notified_count == 1
@@ -1595,7 +1646,16 @@ class TestBrokenPinRepair:
         rows = await _call_notifications(db_session)
         assert len(rows) == 2  # target's pair and nothing else
         assert {row.user_id for row in rows} == target_users
-        new_label = target.table_id.upper()
+        # The label is the catalogue row's, not the id's — ``_make_tournament``
+        # labels its tables ``T1``/``T2``/``T3`` from the ``tables`` argument, and the
+        # copy renders that label rather than the (now UUID) id.
+        new_label = (
+            await db_session.execute(
+                select(VenueTable.label).where(
+                    VenueTable.id == uuid.UUID(target.table_id)
+                )
+            )
+        ).scalar_one()
         for row in rows:
             assert row.title == f"Your match moved to {new_label}"
             assert new_label in row.body
@@ -1654,7 +1714,8 @@ class TestBrokenPinRepair:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         await db_session.refresh(fixture)
-        assert fixture.table_id == "t1"  # the off-pool pin, honored
+        assert fixture.table_id == await _table(db_session, event_id, "t1")
+        # ^ the off-pool pin, honored
         assert fixture.scheduled_start == start
         assert fixture.pinned_at == pin_time  # not refreshed: nothing repaired
         assert fixture.call_notified_count == 1  # told once, never re-told
@@ -1705,7 +1766,8 @@ class TestBrokenPinRepair:
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         await db_session.refresh(fixture)
-        assert fixture.table_id == "t2"  # the off-pool pin, honored…
+        assert fixture.table_id == await _table(db_session, event_id, "t2")
+        # ^ the off-pool pin, honored…
         assert fixture.scheduled_start == start
         assert fixture.pinned_at == silent_pin_time  # …and not re-pinned
         assert fixture.call_notified_count == 1  # …but finally delivered
@@ -1749,13 +1811,14 @@ class TestBrokenPinRepair:
             start=BASE + timedelta(minutes=5),
             pinned_at=BASE - timedelta(minutes=5),
         )
+        survivor = await _table(db_session, event_id, "t2")  # before the removal
         await _remove_table(db_session, tournament_id, event_id, "t1", from_pools=False)
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         await db_session.refresh(fixture)
-        assert fixture.table_id == "t2"
+        assert fixture.table_id == survivor
         assert fixture.scheduled_start == BASE  # 09:00 on the survivor
         entrants = await _entrant_user_ids(db_session, event_id)
         usernames = await _usernames(db_session, entrants)
@@ -1844,13 +1907,14 @@ class TestBrokenPinRepair:
         await _place_fixture(
             db_session, event_id, table_id="t2", start=BASE + timedelta(minutes=60)
         )
+        survivor = await _table(db_session, event_id, "t1")  # before the removal
         await _remove_table(db_session, tournament_id, event_id, "t2")
         _freeze_clocks(monkeypatch, BASE - timedelta(minutes=60))
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == "t1"
+        assert fixture.table_id == survivor
         assert fixture.scheduled_start == BASE
         assert fixture.pinned_at is None
         assert fixture.call_notified_count == 0
@@ -1879,13 +1943,14 @@ class TestBrokenPinRepair:
             pinned_at=BASE - timedelta(minutes=15),
             notified=0,  # a silent pre-live pin was never announced
         )
+        survivor = await _table(db_session, event_id, "t2")  # before the removal
         await _remove_table(db_session, tournament_id, event_id, "t1")
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
 
         await db_session.refresh(fixture)
-        assert fixture.table_id == "t2"
+        assert fixture.table_id == survivor
         assert fixture.scheduled_start == BASE
         assert fixture.pinned_at == BASE  # repaired and renewed…
         assert fixture.call_notified_count == 0  # …but nobody was told
@@ -2228,6 +2293,7 @@ class TestManualPlacementPin:
         )
         target = fixtures[0]
         target_id = target.id
+        the_table = await _table(db_session, event_id, "t1")
         # Late on the shared table, after the other two pack in: a called
         # match's start is a floor, not a constant (ADR "a called match holds
         # its table and slides later"), so an uncontended pin is the one the
@@ -2237,7 +2303,7 @@ class TestManualPlacementPin:
             db_session,
             tournament,
             target,
-            table_id="t1",
+            table_id=the_table,
             scheduled_start=pin_start,
             event_timezone="America/Chicago",
         )
@@ -2258,7 +2324,7 @@ class TestManualPlacementPin:
             .all()
         )
         pinned_row = next(row for row in rows if row.id == target_id)
-        assert pinned_row.table_id == "t1"
+        assert pinned_row.table_id == the_table
         assert pinned_row.scheduled_start == pin_start
         assert pinned_row.pinned_at == BASE  # the director's pin, untouched
         assert pinned_row.call_notified_count == 0
@@ -2268,7 +2334,7 @@ class TestManualPlacementPin:
         duration = timedelta(minutes=scheduling.match_minutes(3))
         intervals: list[tuple[datetime, datetime]] = []
         for row in rows:
-            assert row.table_id == "t1"
+            assert row.table_id == the_table
             assert row.scheduled_start is not None
             intervals.append((row.scheduled_start, row.scheduled_start + duration))
         intervals.sort()

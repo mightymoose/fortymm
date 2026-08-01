@@ -56,7 +56,6 @@ async def _make_tournament(db: AsyncSession, owner: User, name: str) -> uuid.UUI
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[],
         league_id=league.id,
         created_by_user_id=owner.id,
     )
