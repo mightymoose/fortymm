@@ -174,8 +174,18 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
   }
 }
 
+/** Map an API pool to the prototype's `Pool`. `position` is carried across as the server
+ * assigned it — it is the *read* shape's field and appears on no write body (see
+ * `eventPoolsToApi`). The order of `e.pools` is NOT relied on here: whoever lays pools out
+ * sorts by `position` itself (`poolsInOrder`, `./helpers`). */
 function apiToPool(p: ApiPool): Pool {
-  return { id: p.id, name: p.name, slot: p.slot, tableIds: p.table_ids }
+  return {
+    id: p.id,
+    name: p.name,
+    slot: p.slot,
+    tableIds: p.table_ids,
+    position: p.position,
+  }
 }
 
 /** The server returns `distance_miles` on each tournament — a non-negative haversine
@@ -309,6 +319,21 @@ export function tournamentToUpdateBody(
   }
 }
 
+/**
+ * The pools as a write body takes them (`PoolWrite`) — **without `position`**.
+ *
+ * Same category of field as `entered` one function down: server-managed, and echoing the
+ * client's copy back is at best noise and at worst a lie. It is stronger here, though.
+ * `entered` is merely *ignored* by the write schema; `PoolWrite` is `extra="forbid"` and
+ * declares no `position` at all, so sending it is a **422 naming the field** — the whole
+ * save refused, for a key the director never typed.
+ *
+ * **The order of this array IS the ordering.** The server assigns each pool the position
+ * of its index in this very list, so reordering pools is done by sending them in the
+ * order you want, and nothing else. That is why the editor's form value is seeded in
+ * position order (`eventToFormValues`, `../event-form`): the array a save serializes has
+ * to be the array the director was looking at, or the pools shuffle on the round trip.
+ */
 function eventPoolsToApi(ev: TournamentEvent) {
   return ev.pools.map((p) => ({
     id: p.id,
@@ -348,8 +373,9 @@ function drawSettingsToApi(ev: TournamentEvent) {
     : { draw_type: ev.drawType }
 }
 
-/** The event fields shared by the create and update bodies — everything except
- * the server-managed `entered` count. */
+/** The event fields shared by the create and update bodies — everything except the
+ * server-managed values: the `entered` count, and each pool's `position`
+ * (`eventPoolsToApi` above). */
 function eventToApiFields(ev: TournamentEvent) {
   return {
     name: ev.name,

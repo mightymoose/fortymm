@@ -54,7 +54,13 @@ type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type TournamentTable = components['schemas']['TournamentTable']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
+/** The **read** pool — it carries `position`. Its write twin below deliberately does
+ * not; see `positionPools`. */
 type Pool = components['schemas']['Pool']
+/** A pool as a create/update body carries it: no `position`, because the server assigns
+ * it from the pool's index in the list. `extra="forbid"`, so a `position` key on the way
+ * in is a 422 that names the field. */
+type PoolWrite = components['schemas']['PoolWrite']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 
 /** What the store actually holds for an event: everything the wire shape has
@@ -167,12 +173,14 @@ const U1200_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-14', start: '09:00', end: '10:30' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
   {
     id: 'p-u1200-b',
     name: 'Pool B',
     slot: { date: '2026-06-14', start: '10:30', end: '12:00' },
     table_ids: ['t3', 't4'],
+    position: 1,
   },
 ]
 
@@ -185,12 +193,14 @@ const SLAM_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-08-22', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
   {
     id: 'p-slam-b',
     name: 'Pool B',
     slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
+    position: 1,
   },
 ]
 
@@ -252,12 +262,14 @@ const CUP_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-06', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
   {
     id: 'p-cup-b',
     name: 'Pool B',
     slot: { date: '2026-06-06', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
+    position: 1,
   },
 ]
 
@@ -269,12 +281,14 @@ const SHIELD_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-07', start: '09:00', end: '10:30' },
     table_ids: ['t5', 't6'],
+    position: 0,
   },
   {
     id: 'p-shield-b',
     name: 'Pool B',
     slot: { date: '2026-06-07', start: '10:30', end: '12:00' },
     table_ids: ['t7', 't8'],
+    position: 1,
   },
 ]
 
@@ -538,12 +552,14 @@ function seed(): StoredTournament[] {
               name: 'Pool A',
               slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
               table_ids: ['t1', 't2', 't3', 't4'],
+              position: 0,
             },
             {
               id: 'p-os-2',
               name: 'Pool B',
               slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
               table_ids: ['t1', 't2', 't3', 't4', 't5', 't6'],
+              position: 1,
             },
           ],
           // NO DRAW CUT (ADR-0786) — the state every event starts in, and the state
@@ -844,18 +860,21 @@ function seed(): StoredTournament[] {
               name: 'Group A',
               slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
               table_ids: ['t1', 't2', 't3'],
+              position: 0,
             },
             {
               id: 'p-cc-2',
               name: 'Group B',
               slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
               table_ids: ['t4', 't5', 't6'],
+              position: 1,
             },
             {
               id: 'p-cc-3',
               name: 'Knockout',
               slot: { date: '2026-07-01', start: '19:15', end: '21:00' },
               table_ids: ['t1', 't2'],
+              position: 2,
             },
           ],
           // Un-drawn, and it stays that way through the UI: the dev user does not own
@@ -1827,6 +1846,25 @@ export function deleteTournament(id: string): DeleteResult {
   return { ok: true }
 }
 
+/**
+ * Stamp each pool with the **position of its index in the list the client sent** — the
+ * server's rule (`_write_pools`, `api/app/…/tournament.py`), reproduced here because a
+ * mock that is more permissive than the server it stands in for is a trap.
+ *
+ * The write schema (`PoolWrite`) has no `position`: it is `extra="forbid"`, so sending
+ * one is a 422 naming the field, and **the order of the array is the only thing that
+ * says which pool comes first**. The read schema (`Pool`) has it, so this is the seam
+ * where the order the client expressed becomes the number the client reads back.
+ *
+ * Defaulting to `0`, or casting the write shape through, would make the mock disagree
+ * with the API about a rule the app depends on — the pools editor seeds its cards from
+ * `position` and the draw renders in it, so every pool would come back tied for first and
+ * `npm run dev` would order them by nothing at all.
+ */
+function positionPools(pools: PoolWrite[]): Pool[] {
+  return pools.map((pool, index) => ({ ...pool, position: index }))
+}
+
 let eventCounter = 0
 
 /** Create an event on a tournament. Creator-only (403 on a non-owned row). */
@@ -1864,7 +1902,10 @@ export function createEvent(
     slot: body.slot,
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],
-    pools: body.pools ?? [],
+    // The write body carries no positions, so the store assigns them here — from the
+    // index, exactly as the server does (`positionPools`). The order the editor sent its
+    // pools in IS the order, and this is where that becomes a number.
+    pools: positionPools(body.pools ?? []),
     // A brand-new event has NO DRAW (ADR-0786). Cutting one is an explicit act against
     // a field that does not exist yet — there is nobody entered to draw.
     fixtures: [],
@@ -1935,7 +1976,11 @@ export function updateEvent(
     slot: patch.slot ?? event.slot,
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,
-    pools: patch.pools ?? event.pools,
+    // RE-POSITIONED on every pools patch, from the array index (`positionPools`) — the
+    // server re-derives them the same way, which is what makes "send them in the order
+    // you want" the whole reordering API. An absent `pools` is not touching them at all,
+    // and the stored positions stand.
+    pools: patch.pools ? positionPools(patch.pools) : event.pools,
     // The DRAW survives an edit (ADR-0786): a PATCH is not a re-cut. `fixtures` is not
     // in the write body at all, and answering `[]` here would tell the director their
     // draw had just been thrown away by a rename.

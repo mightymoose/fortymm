@@ -370,6 +370,41 @@ export function predicateSentence(p: Predicate): string {
   return `${schema.label} ${op} ${valueText(p)}`
 }
 
+/**
+ * An event's pools in **position order** — the one answer to "which pool comes first?",
+ * shared by everything that lays pools out (the editor's form value, `eventToFormValues`;
+ * the draw, `drawState`).
+ *
+ * It exists because the two plausible alternatives are both wrong:
+ *
+ * - **By id** is the bug this field was added to kill. Ids are minted client-side
+ *   (`genId('p')`), so a ten-pool event holds `p-1-…` … `p-10-…`, and sorted as strings
+ *   `p-10-` lands between `p-1-` and `p-2-`: the draw rendered 1, 10, 2, 3 …
+ * - **Whatever order the array is in** is not an answer at all, only a coincidence. The
+ *   server does send its pools in position order, but a client that merely *inherited*
+ *   that order would state no rule, so nothing would fail when the order stopped holding.
+ *
+ * Stable (`sort` is stable in every engine we target), so pools that somehow shared a
+ * position keep their relative order rather than shuffling between renders. Copies rather
+ * than sorting in place: the input is usually form state or a query's cached payload, and
+ * neither is ours to reorder.
+ */
+export function poolsInOrder<T extends { position: number }>(
+  pools: readonly T[],
+): T[] {
+  return [...pools].sort((a, b) => a.position - b.position)
+}
+
+/** The position a pool appended to `pools` takes: **one past the highest**, never the
+ * count. The two differ the moment a pool is removed from the middle — nine pools
+ * numbered 0…4, 6…9 would hand a tenth the position `9`, a duplicate, and the two would
+ * then order by nothing. (The server renumbers from the array index on the next write,
+ * so this only has to hold until the save; "only until the save" is still long enough for
+ * a director to add a pool and watch it jump.) */
+export function nextPoolPosition(pools: readonly { position: number }[]): number {
+  return pools.reduce((max, p) => Math.max(max, p.position + 1), 0)
+}
+
 export interface PoolConflict {
   table: string
   poolA: string
