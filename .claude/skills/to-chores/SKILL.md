@@ -16,6 +16,12 @@ A **chore** is the atomic unit of work: one agent, one tree, one sitting. A
 end-to-end and is demoable on its own. Slices are the unit of "done"; chores are
 the unit of hand-off.
 
+They are also the unit of **shipping**: `/do-chores` makes **one commit per chore**
+and **one PR per slice**, each slice on a branch stacked on the one before it. So a
+slice is not only a demo boundary, it is a *review* boundary — size it like
+something a human will be asked to read and approve in one sitting. See
+[work-order-format.md](./work-order-format.md) §The stack.
+
 ## Prerequisite
 
 There must be an **agreed plan** — in the conversation, or at a path passed as an
@@ -57,6 +63,22 @@ Break the plan into thin vertical slices, each demoable/verifiable on its own.
 Give each a one-line **demoable outcome** ("Player sees their rating on the
 profile page"). A slice usually spans multiple trees — that's expected; the chores
 inside it split the work per agent.
+
+Each slice becomes **one stacked PR**, so it must also clear a review bar:
+
+- **Independently reviewable** — a reader who sees only this diff can tell what it
+  does and why. A slice that only makes sense alongside the next one is one slice,
+  not two.
+- **Independently mergeable** — `main` is not broken by merging this slice and
+  stopping there. A schema change whose only caller lands two slices later fails
+  this; pull the caller in, or make the change additive.
+- **Readable in one sitting.** If a slice would open a PR nobody can review
+  properly, split it — but *vertically*, into two demoable outcomes, never
+  horizontally into "the api half" and "the web half". A horizontal split produces
+  exactly the un-demoable, un-mergeable PR this bar exists to prevent.
+
+Order the slices so the stack is a straight line: slice N+1 may depend on slice N,
+never the reverse. A cyclic dependency between slices means the cut is wrong.
 
 ### 5. Shard each slice into chores
 
@@ -124,12 +146,24 @@ testing notes. Ask:
 - Granularity right? (too coarse / too fine)
 - Dependencies and `[main]` seams correct?
 - Any chore that fails the four-part gate?
+- **Is each slice a PR you'd want to review?** Name the stack out loud — how many
+  PRs, in what order, each stacked on the last — and confirm the depth is one the
+  user actually wants. A stack deeper than ~5 is usually a sign the slices are too
+  thin; one slice for a multi-layer change is usually a sign they're too fat.
 - Do the testing notes cover what you'd actually want a QA pass to try — and is
   anything listed as *not observable in the UI* that you think should be?
 
 Iterate until the user approves. Then write the work order to
 **`.claude/work-order.md`** (gitignored; override with a path argument if given),
-using the template in [work-order-format.md](./work-order-format.md). Then
+using the template in [work-order-format.md](./work-order-format.md).
+
+Fill the `Stack base:` and `Branch prefix:` headers from the branch you are
+actually on, and give every slice its `Branch:` line (the name it *will* have) with
+`PR: —`. No branch is cut and no PR is opened here — `/do-chores` does that as it
+reaches each slice. Writing the intended names now is what makes the stack
+reviewable before it exists.
+
+Then
 **mirror it into the native task list** — a parent task per slice, a child task per
 chore, all `pending` — per [native-tasks.md](./native-tasks.md), so the breakdown
 shows up in the UI as a task tree rather than only as checkboxes in a file. Finish
@@ -138,7 +172,9 @@ by telling the user the work order is ready and to run `/do-chores`.
 ## Completion criterion
 
 The work order is written, every chore passes the four-part gate (including a
-falsifiable `Proves` line), every cross-layer seam has a `[main]` chore, every
+falsifiable `Proves` line), every slice is independently reviewable and mergeable
+and carries a `Branch:` line with `PR: —`, the `Stack base:` and `Branch prefix:`
+headers are filled, every cross-layer seam has a `[main]` chore, every
 `depends-on` references a real chore ID, the `## Testing notes` section is present,
 the native task list mirrors the work order (a parent task per slice, a child task
 per chore), and the user has approved the breakdown.

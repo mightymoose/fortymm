@@ -1,14 +1,21 @@
 ---
-description: Ship the current branch end-to-end — run /simplify, all test suites, commit, push, open a PR, /code-review, /security-review and /qa-review it, then merge if everything passes (raising any issues to the user first).
+description: Ship the current branch end-to-end — run /simplify, all test suites, commit, push, open a PR, /code-review, /security-review and /qa-review it, then merge if everything passes (raising any issues to the user first). Walks a stacked-PR work order bottom-up, one PR at a time.
 ---
 
-End-to-end "ship it" workflow for the current branch. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
+End-to-end "ship it" workflow. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
+
+## Two modes
+
+**Single branch** — no work order, or a work order with one slice. Run Steps 1–9 once for the current branch. This is the original behaviour and the rest of this document is written for it.
+
+**Stacked** — `.claude/work-order.md` exists with more than one slice, each carrying a `Branch:` and `PR:` line (see `.claude/skills/to-chores/work-order-format.md` §The stack). Then this command walks the stack **bottom-up, one PR at a time**, running Steps 1–8 for each slice before moving to the next. Read [§Walking a stack](#walking-a-stack) first; it overrides the preflight and Steps 3, 4 and 8.
 
 ## Preflight
 
 1. Confirm you're in a git repository and on a feature branch (not `main`). If on `main`, stop and tell the user.
-2. Run `git status` and `git diff --stat origin/main...HEAD` so you (and the user) can see what's about to ship.
-3. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement. (Edits produced by Step 1's `simplify` are pre-authorized to commit, since the user invoked this command expecting that.)
+2. **Detect the mode.** If `.claude/work-order.md` exists, read its slices. More than one slice with a `Branch:` line ⇒ stacked mode; check out the **lowest slice whose PR is not yet merged** and work from there. Otherwise single-branch mode on the current branch.
+3. Run `git status` and `git diff --stat <base>...HEAD` — where `<base>` is `origin/main` in single-branch mode, and the slice's **base branch** in stacked mode. Using `origin/main` for a stacked slice shows every slice beneath it and makes the diff unreviewable.
+4. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement. (Edits produced by Step 1's `simplify` are pre-authorized to commit, since the user invoked this command expecting that.)
 
 ## Step 1 — Simplify
 
@@ -50,6 +57,12 @@ Only after every suite is green:
 ## Step 4 — Open a PR
 
 Create a pull request for the branch with `gh pr create`. Write a title and body that summarize the change and its testing (you already know the diff and which suites passed). Target `main` unless the user said otherwise. Capture the PR URL/number from the output — you need it for Step 5. If a PR for this branch already exists, reuse it (`gh pr view`) rather than creating a duplicate.
+
+**In stacked mode the PR already exists** — `/do-chores` opened it as a draft, and its number is on the slice's `PR:` line. Do not create a second one. Instead:
+
+1. `--base` must still be the slice's parent branch. Verify it (`gh pr view <n> --json baseRefName`) and fix it with `gh pr edit <n> --base <parent>` if it drifted.
+2. Mark it ready for review now that the gates below are about to run: `gh pr ready <n>`.
+3. Add a line to the body naming what it stacks on (`Stacked on #<parent-PR>`) so a reviewer arriving cold knows not to read it against `main`.
 
 ## Step 5 — Code review
 
@@ -142,6 +155,41 @@ Use `--squash` unless the user asked for a different merge strategy. If the merg
 
 Note: run from a worktree, `--delete-branch` prints `fatal: 'main' already used by worktree` **after the remote merge has already succeeded**. That is not a failed merge — verify with `gh pr view <n> --json state,mergedAt` before reacting, and clean up the branch by hand rather than retrying the merge.
 
+**In stacked mode, capture the merged branch's tip *before* merging, then rebase the slice above it.** See [§Walking a stack](#walking-a-stack) — skipping the rebase leaves the next PR replaying commits the squash already absorbed, and it conflicts against itself.
+
+## Walking a stack
+
+Only in stacked mode. The stack is a straight line — `main ← s1 ← s2 ← s3` — and it merges **bottom-up, one PR at a time**. Never merge out of order; a middle PR merged first drags its parent's unreviewed commits into `main` with it.
+
+For each slice, lowest first:
+
+1. **Check it out** and run Steps 1–7 against it, diffing against **its own base branch**, not `origin/main`.
+2. **Scale the gates to the slice's diff, not the stack's.** Step 2 already conditions each suite on which trees changed; apply that per slice. A slice touching only `web-client/**` does not owe an iOS build; a generated-types-only slice has no user-observable surface, so Step 7's QA pass has nothing to drive — say so and skip it rather than running a hollow pass. What you must **not** scale away is the root `e2e/` suite whenever the slice touches the trees Step 2 lists: a mid-stack slice is exactly where an integration break hides.
+3. **Merge it** (Step 8) — but capture the tip first:
+
+   ```bash
+   OLD_BASE=$(git rev-parse <this-slice-branch>)   # BEFORE the merge deletes it
+   gh pr merge <n> --squash --delete-branch
+   ```
+
+4. **Rebase the slice above onto `main`**, dropping the commits the squash absorbed:
+
+   ```bash
+   git fetch origin main
+   git checkout <next-slice-branch>
+   git rebase --onto origin/main "$OLD_BASE" <next-slice-branch>
+   git push --force-with-lease origin <next-slice-branch>
+   ```
+
+   `--force-with-lease`, never `--force`. If the rebase conflicts, stop and raise it — a conflict here usually means the slices were not as independent as the work order claimed, which is the user's call, not yours to resolve silently.
+
+5. **Confirm the retarget.** GitHub re-points an open PR at `main` when its base branch is merged and deleted, but it is best-effort. Check `gh pr view <next-n> --json baseRefName` and fix it with `gh pr edit` if it still names the deleted branch.
+6. **Update the work order** — the merged slice's `PR:` line gets its merged state — then move to the next slice.
+
+**Stop the walk at the first slice that fails any gate.** The slices above it stay open and unmerged; report which merged, which is blocked and why, and leave the rest alone. Do not skip a blocked slice to merge the one above it — that is what "the stack is a straight line" forbids.
+
+If a gate failure requires a fix, the fix belongs in **the slice that owns the code**, not in a later one. Commit it there, re-run that slice's gates, and continue — then rebase everything above it, because you have just rewritten a branch the rest of the stack sits on.
+
 ## Step 9 — Collect the garbage
 
 Only after the merge is confirmed. `--delete-branch` removes the *branch*; nothing has ever removed the *worktree*. Left alone this accumulates fast — it reached 311 worktrees and 82 GB, 77% of them on already-merged branches, and that sprawl is what causes `/epic` to resume into a stale checkout, ADR numbers to be computed against old trees, and QA stacks to OOM a host with no headroom.
@@ -158,3 +206,5 @@ You are standing in the worktree that was just merged, so the script will skip i
 ## Reporting
 
 End with a single-line summary listing: simplify outcome, each suite's result, commit + push status, the PR URL, code-review outcome, security-review outcome, QA-review verdict, and merge status. Keep it terse — the user can read the diff.
+
+In stacked mode, give one such line **per slice**, bottom-up, plus a final line naming how many PRs merged and which (if any) are still open and why.
