@@ -19,6 +19,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,9 +61,12 @@ def _address() -> Address:
     )
 
 
-def _event_payload(**overrides: Any) -> TournamentEventCreate:
-    """A valid create-event body (same shape as ``test_tournaments._event_payload``),
-    parsed through the same ``TournamentEventCreate`` schema the HTTP route uses."""
+def _event_body(**overrides: Any) -> dict[str, Any]:
+    """A valid create-event body as **JSON**, before any parse.
+
+    Split out of :func:`_event_payload` because a refusal test needs the body the client
+    would send, not the model — a payload the schema rejects is one ``_event_payload``
+    cannot return."""
     body: dict[str, Any] = {
         "name": "Open Singles",
         "format": "singles",
@@ -83,7 +87,13 @@ def _event_payload(**overrides: Any) -> TournamentEventCreate:
         ],
     }
     body.update(overrides)
-    return TournamentEventCreate.model_validate(body)
+    return body
+
+
+def _event_payload(**overrides: Any) -> TournamentEventCreate:
+    """A valid create-event body (same shape as ``test_tournaments._event_payload``),
+    parsed through the same ``TournamentEventCreate`` schema the HTTP route uses."""
+    return TournamentEventCreate.model_validate(_event_body(**overrides))
 
 
 async def _make_tournament(
@@ -212,14 +222,20 @@ async def test_create_on_a_missing_tournament_raises_not_found(
 
 # ----- pool positions ------------------------------------------------------
 #
-# A pool's ``position`` is the one field on it the client does not author: the write
-# boundary stamps it from the pool's index in the list that was sent, on BOTH verbs
-# (ADR 20260801, "Pools carry an explicit ``position``"). These tests are what says the
-# stamp is the *order sent* and nothing else — every pool below is named and id'd so
-# that alphabetical order (by either) is a DIFFERENT answer from the order sent, which
-# is what makes them able to fail. Asserting "each pool has a position" would pass
-# against an implementation that assigned all zeros, sorted by name, or wrote back
-# whatever the client asked for.
+# A pool's ``position`` is the one field on it the client cannot author: it is not on
+# the write shape at all (``PoolWrite``), and the server stamps it from the pool's index
+# in the list that was sent — on BOTH verbs (ADR 20260801, "Pools carry an explicit
+# ``position``"). So there are two claims here, and they need each other:
+#
+#   * a payload that CARRIES a position is refused, naming the unknown field, rather
+#     than having it silently overwritten. "Server-assigned" is then a property of the
+#     schema, which a client can read, instead of a sentence in a docstring, which it
+#     cannot; and
+#   * a payload that does not is stored in the *order sent*, and nothing else. Every
+#     pool below is named and id'd so that alphabetical order (by either) is a DIFFERENT
+#     answer from the order sent, which is what makes these able to fail — asserting
+#     "each pool has a position" would pass against an implementation that assigned all
+#     zeros or sorted by name.
 
 
 def _pool(pool_id: str, name: str, **extra: Any) -> dict[str, Any]:
@@ -287,35 +303,64 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
     assert len(set(positions)) == len(positions)
 
 
-async def test_create_overwrites_a_client_supplied_pool_position(
-    db_session: AsyncSession,
-    default_league: League,
-) -> None:
-    """``position`` is server-assigned: three pools that all claim position ``7`` are
-    stored as 0, 1, 2.
+_POOLS_CLAIMING_A_POSITION = [
+    _pool("p-c", "Pool C", position=7),
+    _pool("p-a", "Pool A", position=7),
+    _pool("p-b", "Pool B", position=7),
+]
+"""Three pools that each claim position ``7`` — the payload a client writes when it
+mistakes a server-assigned field for one of its own."""
 
-    The event editor PATCHes the whole event form back, pools included, so a client
-    *will* send this field once it can read it — and the values it sends must decide
-    nothing. There is no pools table yet and so no ``UNIQUE (event_id, position)``
-    underneath to catch three sevens; the boundary is the whole enforcement.
-    """
-    owner = await make_user(db_session, "events-create-pool-position-override")
-    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
 
-    event, _ = await create_event(
-        db_session,
-        tournament_id=tournament.id,
-        actor=owner,
-        payload=_event_payload(
-            pools=[
-                _pool("p-c", "Pool C", position=7),
-                _pool("p-a", "Pool A", position=7),
-                _pool("p-b", "Pool B", position=7),
-            ]
+@pytest.mark.parametrize(
+    ("schema", "body"),
+    [
+        pytest.param(
+            TournamentEventCreate,
+            _event_body(pools=_POOLS_CLAIMING_A_POSITION),
+            id="create",
         ),
-    )
+        pytest.param(
+            TournamentEventUpdate,
+            {"pools": _POOLS_CLAIMING_A_POSITION},
+            id="patch",
+        ),
+    ],
+)
+def test_a_write_payload_carrying_a_pool_position_is_refused(
+    schema: type[BaseModel], body: dict[str, Any]
+) -> None:
+    """A ``position`` on a pool a client **sends** is an unknown field, on both verbs —
+    refused by name, not accepted and quietly overwritten.
 
-    assert _named_positions(event) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
+    ``position`` is not on ``PoolWrite``, and both write schemas are
+    ``extra="forbid"``, so this is the boundary saying "server-assigned" in the one
+    register a client can actually read: the field is unsendable, so a client cannot
+    believe it decided the order. The alternative — take it and ignore it — is the
+    ``entered`` mistake in a different key: a value the caller watched itself send and
+    the server watched itself discard, discoverable only in prose.
+
+    Both verbs, because "the patch path is the hole" is this repo's recurring bug: the
+    event editor PATCHes the whole form back, so the patch is the verb that would
+    actually carry an echoed position. They share one alias (``EventPools``) over one
+    pool shape, which is what makes that impossible to get wrong on only one of them.
+
+    The **loc** is asserted, not just the refusal: a 422 that named ``pools`` and
+    nothing more would leave a client hunting through its own payload for a field it
+    was never told about.
+    """
+    with pytest.raises(ValidationError) as refusal:
+        schema.model_validate(body)
+
+    errors = refusal.value.errors()
+    # Every pool that claimed one is named — not merely the first — so the director's
+    # client can strip the field everywhere it put it, in one round trip.
+    assert [error["loc"] for error in errors] == [
+        ("pools", 0, "position"),
+        ("pools", 1, "position"),
+        ("pools", 2, "position"),
+    ]
+    assert {error["type"] for error in errors} == {"extra_forbidden"}
 
 
 async def test_update_repositions_pools_by_the_order_they_were_patched(

@@ -42,6 +42,7 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventUpdate,
     named_list,
+    stored_pools,
 )
 from app.tournament_draws import event_has_draw, event_pools
 from app.tournament_edit import _load_owned_tournament_for_update
@@ -97,11 +98,12 @@ async def create_event(
       (``created_by_user_id == actor.id``), not RBAC-gated.
 
     Then it writes the event exactly as the HTTP handler did inline — the nested
-    value-objects (``slot``, ``match_settings``, ``predicates``, ``pools``) persist as
-    plain JSONB via ``model_dump``. Commits and refreshes before returning. Never
-    raises ``HTTPException`` — the caller adapts each domain exception to its
-    transport and shapes the read (a just-created event has no entrants, draw or
-    results, so those are all empty without a query).
+    value-objects (``slot``, ``match_settings``, ``predicates``) persist as plain JSONB
+    via ``model_dump``, and ``pools`` through :func:`stored_pools`, which is the same
+    dump plus the server-assigned ``position`` the write shape has no field for. Commits
+    and refreshes before returning. Never raises ``HTTPException`` — the caller adapts
+    each domain exception to its transport and shapes the read (a just-created event has
+    no entrants, draw or results, so those are all empty without a query).
 
     The tournament's ``league_id`` — already in hand from the owner-load — is returned
     beside the event so the adapter can shape the caller's ``entry_state`` (the ladder
@@ -132,7 +134,12 @@ async def create_event(
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],
-        pools=[p.model_dump() for p in payload.pools],
+        # The one nested value-object that is not a straight ``model_dump``: what the
+        # client sent is the WRITE shape, which carries no ``position``, and the column
+        # holds the stored shape, which does. ``stored_pools`` is that conversion, and
+        # the only place a position is assigned — from each pool's index in the list
+        # this payload sent (ADR 20260801, "Pools carry an explicit ``position``").
+        pools=stored_pools(payload.pools),
     )
     db.add(event)
     await db.commit()
@@ -496,8 +503,9 @@ async def update_event(
 
     Then the partial apply (``model_dump(exclude_unset=True)`` serializes the nested
     value-objects to plain dicts/lists, so one ``setattr`` loop covers the JSONB and
-    scalar columns alike), with three side effects — the first new, the other two
-    preserved exactly from the router:
+    scalar columns alike — with ``pools`` recomposed through :func:`stored_pools` first,
+    since the write shape carries no ``position`` and the column does), with three side
+    effects — the first new, the other two preserved exactly from the router:
 
     * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
       qualifier count) is applied to the event's ``draw_settings`` row, the only place
@@ -549,6 +557,18 @@ async def update_event(
     # them leaves the loop below touching mapped columns only.
     changes.pop("draw_type", None)
     changes.pop("qualifiers_per_pool", None)
+    if updates.pools is not None:
+        # Recomposed rather than dumped, and on this verb as much as on create: the
+        # dump above is of the WRITE shape, which has no ``position``, so leaving it
+        # alone would store a pool set with no order at all — an event born positioned
+        # and then patched flat, which is the "the patch path is the hole" bug this
+        # repo keeps rediscovering. ``stored_pools`` stamps the order the patch sent,
+        # which is also how a director re-orders pools: send them re-ordered.
+        #
+        # ``is not None`` is exactly "the key was sent": an explicit ``null`` is already
+        # a 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot be
+        # mistaking a clear for an absence.
+        changes["pools"] = stored_pools(updates.pools)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
     # one the settings table's ``CHECK`` accepts (ADR 20260727).

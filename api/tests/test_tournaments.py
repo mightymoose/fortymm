@@ -4795,14 +4795,18 @@ POOL_B: dict[str, Any] = {
 
 def _positioned(*pools: dict[str, Any]) -> list[dict[str, Any]]:
     """The pools as the server **stores and returns** them: the payload's own dicts,
-    each carrying the ``position`` the write boundary stamped on it from its index in
-    the list that was sent (ADR 20260801, "Pools carry an explicit ``position``").
+    each carrying the ``position`` the server stamped on it from its index in the list
+    that was sent (ADR 20260801, "Pools carry an explicit ``position``").
 
-    A pool goes in without a position and comes back with one, so an expectation written
-    as the request payload verbatim is off by exactly this field. Deriving it here, from
-    the same order the payload states, keeps these assertions about *what was sent* —
-    write ``_positioned(POOL_B, POOL_A)`` and it says pool B is first, which is the
-    claim — rather than hard-coding a number into each of the literals below."""
+    A pool goes in *without* a position — it cannot be sent one; the write shape has no
+    such field — and comes back *with* one, so an expectation written as the request
+    payload verbatim is off by exactly this field. Deriving it here, from the same order
+    the payload states, keeps these assertions about *what was sent* — write
+    ``_positioned(POOL_B, POOL_A)`` and it says pool B is first, which is the claim —
+    rather than hard-coding a number into each of the literals below.
+
+    Which also makes it the ``pools`` payload a client must **not** send: the two
+    refusal tests below post exactly this, and get a 422 naming ``position``."""
     return [{**pool, "position": index} for index, pool in enumerate(pools)]
 
 
@@ -5899,6 +5903,69 @@ async def test_an_events_pools_are_read_back_in_the_order_they_were_posted(
     # And no two of one event's pools share a position.
     positions = [pool["position"] for pool in event["pools"]]
     assert sorted(positions) == list(range(len(positions)))
+
+
+async def test_posting_an_event_whose_pools_carry_a_position_is_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The other half of the round trip above, over the wire: a ``pools`` payload
+    carrying the field the server assigns is a **422 naming it**, and creates no event.
+
+    A read field and a write field are different fields here, and this is the request
+    that tells them apart. The read above hands the client a ``position``; sending one
+    back is refused rather than ignored, so a client that mistakes "what I read" for
+    "what I may write" is told exactly which key to drop — at the boundary, in the same
+    request — instead of being handed a 201 for a number that decided nothing.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_rr_payload(*_positioned(POOL_C, POOL_A, POOL_B)),
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_locs(response) == [
+        ["body", "pools", 0, "position"],
+        ["body", "pools", 1, "position"],
+        ["body", "pools", 2, "position"],
+    ]
+    # Refused, not half-written: the tournament has no events at all.
+    assert await _events_of(client, created["id"]) == []
+
+
+async def test_patching_pools_that_carry_a_position_is_refused_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The patch path is the one that would actually carry an echoed ``position`` — the
+    event editor PATCHes the whole form back, pools included — so it is refused there
+    too, and the stored pools are untouched.
+
+    Written as a **re-send of what the GET handed back** (``_positioned``), because that
+    is the exact round trip a client makes: read the event, edit a pool's name, PATCH it
+    all back. The stored assertion is what makes this more than a schema test — a guard
+    that refused *after* writing would still 422, and would still have moved the pools.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": _positioned(POOL_B, POOL_A)},
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_locs(response) == [
+        ["body", "pools", 0, "position"],
+        ["body", "pools", 1, "position"],
+    ]
+    # The order the event was created with, unmoved: nothing about this request was
+    # applied, not even the re-ordering the payload also asked for.
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
 
 
 async def test_a_draw_of_one_fixture_still_freezes_the_pool_set(
