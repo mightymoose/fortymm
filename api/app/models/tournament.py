@@ -316,8 +316,8 @@ class TournamentEvent(Base):
     #
     # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
     # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
-    # single-elim today, and the knockout stage of a pools-then-knockout draw type
-    # once #787 adds one), and it belongs after the pools that feed it.
+    # single-elim, or this is the KO stage of an rr-then-ko event), and it belongs
+    # after the pools that feed it.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",

@@ -4817,8 +4817,7 @@ export interface components {
          *       state without a per-slot round-trip; it is the match's *current* status, read
          *       live, not a copy frozen at go-live.
          *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-         *       un-pooled (single-elim), or this is the knockout stage of a future
-         *       pools-then-knockout draw type. When
+         *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
          *       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
          *       JSONB, not a foreign key, because pools are value-objects with no table.
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
