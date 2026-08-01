@@ -1,6 +1,6 @@
 ---
 name: epic
-description: Drive a change end-to-end through the fortymm arc — /grill-with-docs → /to-chores → /do-chores → /land-the-plane — as a GATED conductor. It sequences the four phases and carries the plan→work-order→PR artifact chain, stopping for your decision at every phase boundary; the merge itself is /land-the-plane's own gated step, and once it lands the arc moves the work order's tickets to Done. Use to run a whole feature/bugfix through the arc from one entry point; use the individual skills when you only want one phase.
+description: Drive a change end-to-end through the fortymm arc — /grill-with-docs → /to-chores → /do-chores → /land-the-plane — as a GATED conductor. It sequences the four phases and carries the plan→work-order→stacked-PR artifact chain, stopping for your decision at every phase boundary; the work ships as one commit per chore and one stacked PR per slice, merged bottom-up by /land-the-plane's own gated step, and once the whole stack lands the arc moves the work order's tickets to Done. Use to run a whole feature/bugfix through the arc from one entry point; use the individual skills when you only want one phase.
 argument-hint: "[the goal to drive — an issue ref, a plan/PRD path, or a one-line description]"
 ---
 
@@ -75,18 +75,24 @@ the plan a chore depends on; if a decision isn't captured, that's a loop back to
 `/grill-with-docs`, not an invention. **Right-size the ceremony:** a genuinely
 single-tree change is one slice / one or two chores, not a manufactured epic.
 
-### 3. `/do-chores` — drive the work order to green
+### 3. `/do-chores` — drive the work order to green, as a stack
 
 Dispatches each chore to its domain-expert subagent in dependency order, then
 **dispatches a fresh `verifier` agent** for every chore (an implementer's "all
 green" is a claim, not evidence, and neither the implementer nor the driver
 grades it) — the verifier re-runs `Verify`, adversarially checks `Proves`, and
-runs the `Demo`. On PASS it ticks the checkbox, and commits **per slice**.
+runs the `Demo`. On PASS it ticks the checkbox and **commits the chore**; when a
+slice completes it pushes the slice's branch and opens a **stacked draft PR**.
 Serialises across every `[main]` seam; parallelises independent trees.
 
+**One commit per chore, one PR per slice**, each slice branched off the one below
+it. The stack's state — branches and PR numbers — lives in the work order, which is
+what makes the arc resumable across sessions.
+
 **Gate:** on a chore failure, `/do-chores` marks it `⚠ BLOCKED` and stops that
-slice — surface the blocker to the user and stop; don't retry-thrash. Only when
-every slice is committed do you offer to land.
+slice — surface the blocker to the user and stop; don't retry-thrash. A blocked
+slice also blocks every slice stacked above it, so say which those are. Only when
+every slice has a draft PR do you offer to land.
 
 ### 4. `/land-the-plane` — review and ship
 
@@ -94,6 +100,11 @@ Runs `/simplify`, all applicable test suites, commits + pushes, opens the PR, th
 `/code-review`, `/security-review`, and the QA pass **that matches what changed**
 (browser for `web-client/**`, Simulator for `ios/**`, skip when neither was
 touched). Its review depth should track the change's risk, not a fixed ceremony.
+
+**With a multi-slice work order it walks the stack bottom-up**, running those gates
+per PR against that slice's own diff and merging each before starting the next. So
+this phase produces N merges, not one, and it stops at the first slice that fails a
+gate — leaving the slices above it open.
 
 **Feed the QA pass the work order's `## Testing notes`.** Pass them to `/qa-review`
 as **must-cover scenarios** — the QA agent covers them *in addition to* its own
@@ -122,13 +133,17 @@ suite and a working product are different claims.
 
 ### 6. Move the tickets to Done
 
-Move the work order's tickets to **Done** only once the PR is **actually merged**,
-not merely green. Confirm the merge independently — don't trust a step summary —
-with `gh pr view <number> --json state,mergedAt`. If `/land-the-plane` stopped at a
-gate instead of reaching Step 8 (a surfaced issue awaiting the user, or the user
-chose not to merge yet), the arc isn't done: leave the tickets **In Progress**,
-report the open gate, and stop — resume this step next time `/epic` is re-entered
-and the PR has since merged.
+Move the work order's tickets to **Done** only once **every** PR in the stack is
+**actually merged**, not merely green. Confirm each merge independently — don't
+trust a step summary — with `gh pr view <number> --json state,mergedAt` for every
+`PR:` line in the work order. A partially-merged stack is not a finished arc: the
+tickets stay **In Progress**.
+
+If `/land-the-plane` stopped at a gate instead of merging the whole stack (a
+surfaced issue awaiting the user, a blocked slice, or the user chose not to merge
+yet), the arc isn't done: leave the tickets **In Progress**, report which slices
+merged and which are still open with why, and stop — resume this step next time
+`/epic` is re-entered and the rest of the stack has since merged.
 
 Once the merge is confirmed **and** every testing note is confirmed (no unmet
 acceptance criterion, no `⚠ BLOCKED` chore), read the work order's `Tickets:`
@@ -141,21 +156,24 @@ scripts/project-status.sh "Done" <issue-number> [<issue-number> ...]
 A board hiccup (issue not on the board, missing `project` scope) is a note, never a
 blocker — as in `/do-chores`.
 
-`/epic` ends here — report the merged PR, the testing-notes ledger, the tickets
-moved to Done, and hand off.
+`/epic` ends here — report the merged PRs (the whole stack, bottom-up), the
+testing-notes ledger, the tickets moved to Done, and hand off.
 
 ## Invariants (hold these across every phase)
 
 - **Don't merge directly.** `/epic` never runs `gh pr merge` itself — merging is
   `/land-the-plane`'s own Step 8, reached only once every one of its gates
-  (tests, code review, security review, QA) is clean. If a gate finds something,
-  the merge waits for the user's decision, same as any other phase gate.
+  (tests, code review, security review, QA) is clean, and repeated once per slice
+  when the work order is a stack. If a gate finds something, the merge waits for
+  the user's decision, same as any other phase gate.
 - **Never skip a gate**, even for a "small" change — right-size the *work*, not the
   checkpoints.
 - **Carry the artifact chain**: the agreed plan (+ ADRs) → `.claude/work-order.md`
-  (chores + `Proves` + `## Testing notes`) → the branch/PR → the testing-notes
-  ledger. Each phase consumes the previous phase's artifact; don't re-establish
-  context the artifact already holds.
+  (chores + `Proves` + `## Testing notes` + the stack's branches and PR numbers) →
+  the stacked PRs → the testing-notes ledger. Each phase consumes the previous
+  phase's artifact; don't re-establish context the artifact already holds.
+- **The stack merges bottom-up, in order.** Never merge a slice whose parent is
+  still open, and never skip a blocked slice to reach the one above it.
 - **A failure stops its phase**, surfaced to the user — not a silent workaround.
 - **Verify, don't trust.** Every claim of green — a subagent's, a prior phase's,
   an issue's "still open" status — gets independently reproduced before it's built
@@ -165,6 +183,12 @@ moved to Done, and hand off.
 
 The state lives in durable artifacts, so `/epic` is resumable: a written ADR /
 agreed plan means grilling is done; a `.claude/work-order.md` with ticked boxes
-means `/do-chores` can resume from the checkboxes; an open PR means you're in
-`/land-the-plane`. On re-entry, read those artifacts to find the current phase and
-continue from its gate rather than restarting the arc.
+means `/do-chores` can resume from the checkboxes; **any slice carrying a `PR:`
+number** means you're in `/land-the-plane`, at the lowest slice whose PR is not yet
+merged. On re-entry, read those artifacts to find the current phase and continue
+from its gate rather than restarting the arc.
+
+Reconcile the work order against the repo before trusting it — `git branch`, `gh pr
+list`, and `gh pr view <n> --json state,mergedAt` for each recorded PR. A session
+that died mid-walk may have merged a PR without writing it down, and re-merging or
+re-opening is worse than re-reading. **The repo wins; correct the file.**

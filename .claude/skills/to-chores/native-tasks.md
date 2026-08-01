@@ -38,9 +38,10 @@ picture rather than starting fresh:
 | Ticked `- [x]` (verified) | completed |
 | `⚠ BLOCKED: …` | pending, with `⚠ BLOCKED` kept in the task text |
 
-A slice's parent task is `completed` only when **every** chore under it is ticked —
-the same bar `/do-chores` uses to close and commit a slice. A slice with any
-pending or blocked chore stays `in_progress` (or pending, if untouched).
+A slice's parent task is `completed` only when **every** chore under it is ticked
+and committed — the same bar `/do-chores` uses to close a slice and open its
+stacked draft PR. A slice with any pending or blocked chore stays `in_progress`
+(or pending, if untouched), and gets no PR.
 
 When `/do-chores` fans a batch of ready chores across different trees, each
 dispatched chore's task goes `in_progress` together and flips to `completed` only
