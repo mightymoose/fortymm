@@ -550,17 +550,30 @@ One match's spot in the **schedule**: a **table** and a **predicted start time**
 lives on the **fixture** (not the match), so it can be set before the match even
 exists and survives **materialization**. The time is a real moment but a **prediction,
 not a promise** — a match beginning earlier or later than its placement is normal, not
-an error. It is stored as a **naive local timestamp** in the venue's wall-clock frame —
-the *same* frame as a pool's **Slot** window (also naive), so "is this placement inside
-its window" is a plain comparison; matching Slot's frame is why it is not `timestamptz`
-(that would need a venue timezone this domain does not model, and a Slot migration to
-match). Its constraints (table belongs to the pool, time inside the window, no table or
-player double-booked) are **not invariants** and never hard-block: a pool's tables and
-window even stay editable under a standing draw, stranding placements a later edit
-outranges. They are judged as **flags derived on read**, never silently rewritten.
+an error. It is stored as a **timezone-aware instant**, composed from the event's
+wall-clock **Slot** components anchored by the event's own timezone, so "is this
+placement inside its window" is answered in the event's frame. Its constraints (table
+belongs to the pool, time inside the window, no table or player double-booked) are
+**not invariants** and never hard-block: a pool's tables and window even stay editable
+under a standing draw, stranding placements a later edit outranges. They are judged as
+**flags derived on read**, never silently rewritten. The one exception is the **table
+itself**: a placement always names a real **table**, because a reference that resolves
+to nothing is a dangling pointer rather than a state a director chose.
 _Avoid_: schedule slot, booking, appointment, start time (it is a *predicted* start),
 finish (a **Finish** is an *entrant*'s finishing position in a bracket's **results** —
 an outcome, not a schedule cell).
+
+**Table**:
+One physical playing surface at the **venue** — what a match is actually played on,
+identified by a label and the court it stands on. Tables belong to the **tournament**,
+not to any one **event**, and the tournament's whole set of them is its **catalogue**.
+A **pool** *reserves* a subset of the catalogue for its window; a **placement** *names*
+one. The venue changes under a running tournament — a table breaks, a table frees up —
+so a table can be removed from the catalogue mid-event: pools that reserved it simply
+stop reserving it, while a **placement** standing on it blocks the removal until the
+director unplaces it.
+_Avoid_: court (a table *stands on* a court; several tables may share one), board,
+station, "table" for the database sense (say **catalogue** for the tournament's set).
 
 **Pinned / free** (scheduler-era):
 Once the **scheduler** exists, a **placement** is **free** — the solver may move it —
