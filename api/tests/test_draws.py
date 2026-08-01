@@ -672,14 +672,83 @@ class TestReadyFixtures:
         pool_id: PoolId | None,
         round: int,
         position: int,
+        pool_position: int | None = None,
     ) -> FixtureState:
         return FixtureState(
             fixture_id=FixtureId(uuid.UUID(int=n)),
             pool_id=pool_id,
             round=round,
             position=position,
+            pool_position=pool_position,
             entry_a_id=_entry_id(1),
             entry_b_id=_entry_id(2),
+        )
+
+    def test_the_plan_runs_the_pools_in_the_events_order_not_the_ids(self) -> None:
+        """Ten pools, and the plan runs 1..10 — not the ids' 1, 10, 2, 3…
+
+        Pool ids are client-minted strings (``p-1-…``, ``p-2-…``, ``p-10-…``) and
+        lexicographically ``p-10-`` falls between ``p-1-`` and ``p-2-``, so the id sort
+        this used to do materialized a ten-pool event's matches with pool 10's wedged
+        between pool 1's and pool 2's. The order the plan runs in is the director's
+        (``pool_position``, ADR 20260801) — the same order the read path renders and the
+        same one the snake dealt against.
+
+        The ids are handed in *deliberately mismatched* to the positions: pool 1 is
+        ``p-10-…`` and pool 10 is ``p-1-…``. So the two rules do not merely differ,
+        they are opposites — an implementation that fell back to the id could not
+        accidentally agree with this assertion on any prefix of it.
+        """
+        pools = [(f"p-{10 - index}-x", index) for index in range(10)]
+        states = [
+            self._state(
+                index + 1,
+                pool_id=PoolId(pool_id),
+                round=1,
+                position=1,
+                pool_position=position,
+            )
+            for index, (pool_id, position) in enumerate(pools)
+        ]
+
+        ready = ready_fixtures(list(reversed(states)))
+
+        assert ready == tuple(state.fixture_id for state in states)
+
+    def test_a_pool_of_unknown_position_sorts_behind_the_placed_ones_by_id(
+        self,
+    ) -> None:
+        """A fixture whose pool order was not resolved — a caller that passed no pool
+        positions, or a pool stored before ``position`` existed — still has a *defined*
+        place: after every pool that has a position, ordered among its own kind by id.
+
+        That is the pre-position order preserved exactly where the position cannot
+        speak, rather than an unresolved fixture jumping the queue. It matters because
+        ``0`` is a real position (the *first* pool), so "unknown" must not collapse
+        onto it: the
+        placed pool below sits at 0, holds the id that sorts *last*, and still comes
+        first.
+
+        The un-pooled fixture is here to pin the other end. Its position is ``None``
+        too — it is in no pool, so there is nothing to place — which is exactly why
+        "pooled?" has to stay the *outermost* question: decided on position alone the
+        KO fixture would tie with the unplaced pools and win the id tie-break outright
+        (no id sorts before ``""``), landing in front of the pools that feed it.
+        """
+        placed = self._state(
+            1, pool_id=PoolId("z"), round=1, position=1, pool_position=0
+        )
+        unplaced_b = self._state(2, pool_id=PoolId("b"), round=1, position=1)
+        unplaced_a = self._state(3, pool_id=PoolId("a"), round=1, position=1)
+        ko = self._state(4, pool_id=None, round=1, position=1)
+
+        ready = ready_fixtures([ko, unplaced_b, unplaced_a, placed])
+
+        assert ready == (
+            placed.fixture_id,
+            unplaced_a.fixture_id,
+            unplaced_b.fixture_id,
+            ko.fixture_id,
         )
 
     def test_pooled_fixtures_are_ready_before_un_pooled_ones(self) -> None:

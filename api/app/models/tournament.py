@@ -305,7 +305,7 @@ class TournamentEvent(Base):
     # draw is cut; a re-cut replaces the set wholesale, which is what
     # ``delete-orphan`` buys.
     #
-    # Ordered pool → round → position — the SAME total order the read path's
+    # Ordered pool → round → position — the same total order the read path's
     # ``fixtures_by_event`` loader applies, and the one the fixtures' own
     # ``UNIQUE (event_id, pool_id, round, position)`` makes a total order at all. The
     # ``pool_id`` used to be missing from this list, which left the relationship
@@ -318,6 +318,16 @@ class TournamentEvent(Base):
     # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
     # single-elim, or this is the KO stage of an rr-then-ko event), and it belongs
     # after the pools that feed it.
+    #
+    # It orders the pools by ``pool_id``, where ``fixtures_by_event`` orders them by the
+    # pool's ``position`` in the event's own pool order (ADR 20260801) — a relationship
+    # ``order_by`` is an expression over *this* table, and the position lives in the
+    # event's ``pools`` JSONB, so saying it here would take a correlated subquery in a
+    # string. The two agree wherever the ids sort as the director ordered them and part
+    # company where they do not (``p-10-`` sorts between ``p-1-`` and ``p-2-``). Nothing
+    # in the app reads this relationship's order today — every draw a client sees comes
+    # through the loader — and when pools become rows the ``position`` is joinable and
+    # this becomes sayable.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
