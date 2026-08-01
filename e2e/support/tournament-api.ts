@@ -39,6 +39,29 @@ export interface SlotSpec {
   readonly end: string
 }
 
+/** Tomorrow, `YYYY-MM-DD`, UTC — the date the default pool window sits on.
+ *
+ * **Computed, never a literal.** This used to be the string `'2026-08-01'`, which
+ * was comfortably far-future when it was written and then arrived: from 17:00 UTC
+ * that day every seeded window was in the *past*, and from the next day it was
+ * permanently so. The schedule preview solves fixtures into their pool's window,
+ * and a window behind `now` admits no placement — so the solve is honestly
+ * infeasible and the verdict reads `Doesn't fit · peak 0 tables`. The solver was
+ * right; the fixture had expired.
+ *
+ * It is a poor bug to inherit: the message points at *tables*, the failure is
+ * total rather than flaky, and it reds every branch at once, so it reads like
+ * whatever change happens to be in flight. Tomorrow keeps the window genuinely
+ * ahead of any run, at any hour, forever.
+ *
+ * UTC because the compose stack's clock is UTC and `seedTournament` anchors its
+ * events to `timezone: 'UTC'` — the date and the frame have to agree, or the
+ * window drifts by a day either side of midnight. */
+function tomorrowUtc(): string {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  return new Date(Date.now() + DAY_MS).toISOString().slice(0, 10)
+}
+
 /** One table of the tournament's catalogue (`TournamentTable` on the wire). */
 export interface TableSpec {
   readonly id: string
@@ -200,7 +223,11 @@ export async function seedTournament(
   name: string,
   options: SeedTournamentOptions = {},
 ): Promise<SeededTournament> {
-  const slot = options.slot ?? { date: '2026-08-01', start: '09:00', end: '17:00' }
+  const slot = options.slot ?? {
+    date: tomorrowUtc(),
+    start: '09:00',
+    end: '17:00',
+  }
   const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
   // Resolve the catalogue HERE and pass it down, rather than letting
   // `createTournament` default it again: the pool below references these tables
