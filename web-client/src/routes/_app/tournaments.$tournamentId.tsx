@@ -112,6 +112,13 @@ function TournamentDetailRoute() {
         })
       }}
       onDeleteEvent={(id) => deleteEvent.mutate(id)}
+      // One in-flight write at a time, the way `EnterEventControl` does it: the editor
+      // disables its submit control while this is true. It covers a window
+      // React-Hook-Form's `isSubmitting` does not — `isPending` stays true through
+      // `onSuccess`, which awaits the tournament refetch — and that gap is how five
+      // rapid clicks on Create event made five identical events (#1231 QA). Both
+      // mutations, one flag: only one of them can be the open editor's.
+      savingEvent={createEvent.isPending || updateEvent.isPending}
       onBack={back}
     />
   )

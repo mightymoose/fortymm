@@ -42,6 +42,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.schemas.tournament import MAX_QUALIFIERS_PER_POOL
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     grant_permissions,
@@ -338,6 +339,112 @@ async def test_a_qualifier_count_below_one_is_422(
 
     assert response.status_code == 422, response.text
     assert "qualifiers_per_pool" in response.text
+
+
+# The other end of the same static bound. ``INT32_OVERFLOW`` is the number that made
+# this a defect rather than a nicety: it is one past what the ``Integer`` column holds,
+# so before the ceiling it reached the driver and came back a **500** — and the client's
+# generic error copy then told the organizer "nothing you did caused it", which was
+# false. ``MAX_QUALIFIERS_PER_POOL + 1`` is the quieter half: storable, so it answered
+# ``201 Created`` and left an event whose draw could never be cut.
+INT32_OVERFLOW = 2_147_483_648
+
+
+@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_POOL + 1, INT32_OVERFLOW])
+async def test_a_qualifier_count_above_the_ceiling_is_422(
+    authed_client: tuple[AsyncClient, User], count: int, db_session: AsyncSession
+) -> None:
+    """**422, and specifically not 500.** The status is the whole assertion: an
+    unbounded K let a form value walk past the boundary into the column.
+
+    The ceiling is not the domain rule — K can never exceed the smallest pool's size in
+    a real event, and the cut already refuses that by name (``DegenerateDraw``). This is
+    the boundary refusing counts that are nonsense on their face, and it belongs here
+    because the alternative was a crash the organizer was told they had not caused.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+
+    response = await _create_event(client, tournament_id, qualifiers_per_pool=count)
+
+    assert response.status_code == 422, response.text
+    assert "qualifiers_per_pool" in response.text
+    # Refused at the boundary means refused before persistence.
+    events = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.tournament_id == uuid.UUID(tournament_id)
+            )
+        )
+    ).scalars()
+    assert list(events) == []
+
+
+async def test_a_qualifier_count_at_the_ceiling_is_accepted(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The bound is **inclusive**, and it is pinned so the refusal above cannot be
+    satisfied by an off-by-one that also refuses the last legal number.
+
+    A K of 1000 is absurd for a real pool and the cut will say so when the field is
+    known. That is deliberately not this layer's call: a configuration legal when it was
+    written must not depend on who has entered yet."""
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+
+    created = await _create_event(
+        client, tournament_id, qualifiers_per_pool=MAX_QUALIFIERS_PER_POOL
+    )
+
+    assert created.status_code == 201, created.text
+    event = await _settings_of(db_session, created.json()["id"])
+    assert event.draw_settings.qualifiers_per_pool == MAX_QUALIFIERS_PER_POOL
+
+
+@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_POOL + 1, INT32_OVERFLOW])
+async def test_patching_a_qualifier_count_above_the_ceiling_is_422(
+    authed_client: tuple[AsyncClient, User], count: int, db_session: AsyncSession
+) -> None:
+    """The patch schema shares the create schema's alias, so both verbs hold the same
+    ceiling. Asserted rather than assumed: a value create refuses but PATCH accepts
+    defeats create's boundary entirely — the event is born small and then edited into
+    the 500."""
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event_id = (await _create_event(client, tournament_id)).json()["id"]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": count},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "qualifiers_per_pool" in response.text
+    event = await _settings_of(db_session, event_id)
+    assert event.draw_settings.qualifiers_per_pool == 2, "a refusal wrote nothing"
+
+
+async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The inclusive half of the bound on the patch verb, for the same reason as on
+    create: a ceiling that also refused the last legal number would satisfy every
+    refusal test above."""
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event_id = (await _create_event(client, tournament_id)).json()["id"]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={
+            "draw_type": RR_THEN_KO,
+            "qualifiers_per_pool": MAX_QUALIFIERS_PER_POOL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    event = await _settings_of(db_session, event_id)
+    assert event.draw_settings.qualifiers_per_pool == MAX_QUALIFIERS_PER_POOL
 
 
 async def test_patching_a_qualifier_count_without_its_draw_type_is_422(

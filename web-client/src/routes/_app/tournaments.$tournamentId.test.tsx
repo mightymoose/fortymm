@@ -181,3 +181,27 @@ describe('tournament detail route — a missing tournament is a not-found, not a
     ).not.toBeInTheDocument()
   })
 })
+
+// #1231 QA note: rapid clicks on the event editor's Create button created
+// duplicate events in production. The fix (`EventEditor`'s `saving` prop, wired
+// here as `savingEvent={createEvent.isPending || updateEvent.isPending}`) is
+// covered by a PROP-CONTRACT test at `EventEditor` — see "the pending-mutation
+// gate (#1231 QA)" in `event-editor.test.tsx`.
+//
+// A literal click-race reproduction was attempted here first and deliberately
+// dropped: instrumenting the real commits showed the gap between React Hook
+// Form's `isSubmitting` clearing and the mutation's own `isPending` clearing is
+// real (confirmed on the committed DOM — the button was briefly present AND
+// enabled while `open` was already `false`), but nothing in jsdom yields
+// between those two commits — there is no paint/frame boundary the way a real
+// browser has — so no `userEvent`/`fireEvent`/`waitFor`-driven double click
+// could land inside it. Four independent reproduction shapes (simultaneous
+// `userEvent.click`s, synchronous `fireEvent.click`s, a `waitFor`-timed second
+// click on the re-enable edge, and a `MutationObserver`-driven catch) all
+// produced exactly one POST under BOTH the fixed and the deliberately-broken
+// (`savingEvent={false}`) wiring — i.e. a test built that way could not tell
+// the two apart, so it would not have caught a regression. Reproducing the
+// real animation-held window would need a Radix `Presence`/CSS-animation
+// stand-in, which risks asserting a state the code path doesn't actually
+// reach — see `.claude/rules/verify-the-artifact-under-test.md` on a red built
+// from a fabricated setup proving nothing.

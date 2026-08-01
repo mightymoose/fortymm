@@ -45,6 +45,11 @@ export interface TournamentDetailPageProps {
   /** Persist an edited event — same contract as `onCreateEvent`. */
   onUpdateEvent: (event: TournamentEvent) => Promise<void>
   onDeleteEvent: (eventId: string) => void
+  /** Whether the create/update event mutation is still in flight — passed straight to
+   * the `EventEditor`, which disables its one submit control on it. Owned by the route,
+   * because the route owns the mutations; this page only carries it across. See
+   * `EventEditor`'s `saving` prop for why `isSubmitting` alone was not enough (#1231). */
+  savingEvent?: boolean
   onBack: () => void
 }
 
@@ -79,6 +84,7 @@ export const TournamentDetailPage = ({
   onCreateEvent,
   onUpdateEvent,
   onDeleteEvent,
+  savingEvent = false,
   onBack,
 }: TournamentDetailPageProps) => {
   const [tab, setTab] = useState('events')
@@ -300,6 +306,7 @@ export const TournamentDetailPage = ({
         tables={tournamentTables}
         drawTypes={drawTypes}
         canEdit={canEdit}
+        saving={savingEvent}
         onSave={saveEvent}
         onDelete={(id) => {
           const ev = tournament.events.find((e) => e.id === id) ?? null

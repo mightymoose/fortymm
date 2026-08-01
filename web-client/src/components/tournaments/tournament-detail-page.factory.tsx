@@ -14,6 +14,7 @@ export function buildTournamentDetailPageProps(
     onCreateEvent: async () => {},
     onUpdateEvent: async () => {},
     onDeleteEvent: () => {},
+    savingEvent: false,
     onBack: () => {},
     ...overrides,
   }

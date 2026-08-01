@@ -1088,4 +1088,40 @@ describe('EventEditor', () => {
       )
     })
   })
+
+  /**
+   * The `saving` prop contract (#1231 QA): five rapid clicks on Create event made
+   * five identical events, because the button's guard was React Hook Form's
+   * `isSubmitting` alone — true only while the `onSave` promise is unsettled — and
+   * `isSubmitting` clears before the underlying mutation actually settles (see
+   * `saving`'s doc comment on `EventEditorProps`). The route now threads
+   * `savingEvent={createEvent.isPending || updateEvent.isPending}` down as `saving`,
+   * so the button disables on the union of both.
+   *
+   * This is deliberately a PROP-CONTRACT test, not a reproduction of the click race
+   * itself: the race is a real, confirmed gap between `isSubmitting` going false and
+   * the mutation's own `isPending` going false (instrumented and observed directly
+   * on the committed DOM during this fix), but nothing yields between those two
+   * commits in jsdom — there's no paint/frame boundary the way a real browser has —
+   * so no `userEvent`/`fireEvent`/`waitFor`-driven double-click can land inside it
+   * deterministically here. What CAN be pinned, and is the thing actually shipped,
+   * is that `saving` independently gates the button — proven by driving it directly
+   * rather than fishing for a race.
+   */
+  describe('the pending-mutation gate (#1231 QA)', () => {
+    it('stays disabled while `saving` is true, even though nothing is mid-submit', () => {
+      // No click happened — `isSubmitting` is false. Only `saving` (the route's
+      // `createEvent.isPending || updateEvent.isPending`) is holding the gate, which
+      // is exactly the window `isSubmitting` alone missed.
+      eventEditorPage.render({ event: buildEvent({ name: 'Open Singles' }), saving: true })
+
+      expect(eventEditorPage.getSaveButton()).toBeDisabled()
+    })
+
+    it('is enabled once `saving` clears — the gate is not a stuck one', () => {
+      eventEditorPage.render({ event: buildEvent({ name: 'Open Singles' }), saving: false })
+
+      expect(eventEditorPage.getSaveButton()).toBeEnabled()
+    })
+  })
 })

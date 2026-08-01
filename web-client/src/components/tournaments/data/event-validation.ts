@@ -20,9 +20,9 @@
 //   |               | `le=512`, `default=None`              | cap; when present, 1 … 512  |
 //   | `entry_fee`   | `EventEntryFee`: `ge=0`, `le=999…99`, | required; 0 … 999,999.99,   |
 //   |               | whole cents                           | in whole cents              |
-//   | `qualifiers   | `QualifiersPerPool`: `ge=1`, required  | required and ≥ 1 **for      |
-//   |  _per_pool`   | on the `rr-then-ko` union arm, refused | `rr-then-ko` only** — the   |
-//   |               | outright on the other two              | pair, not the field         |
+//   | `qualifiers   | `QualifiersPerPool`: `ge=1`, `le=1000`,| required and 1 … 1,000 **for|
+//   |  _per_pool`   | required on the `rr-then-ko` union arm, | `rr-then-ko` only** — the   |
+//   |               | refused outright on the other two       | pair, not the field         |
 //   | `predicates`  | (permissive — see below)              | `predicate-validation.ts`   |
 //
 // ⚠️ **BLANK IS NOT ZERO — AND THE TWO NUMBER FIELDS DISAGREE ABOUT WHICH IS WHICH**
@@ -235,16 +235,31 @@ export const entryFeeSchema = z
 
 /** The floor on **K** — the server's `QualifiersPerPool = Annotated[int, Field(ge=1)]`,
  * stated once there and mirrored once here. Zero advances nobody into the knockout
- * stage, and a negative count is not a count.
- *
- * ⚠️ There is deliberately **no ceiling**, because the server's two upper bounds move
- * with the entrant count (`P × K >= 2` and `K <= ⌊N/P⌋`) and are refused at the *cut*,
- * not at the write — a configuration that was legal when it was written must not become
- * unwritable when a player withdraws. Mirroring them in the form would refuse saves
- * nothing on the server would ever refuse, and would do it while the director is still
- * filling the event in. The cut's own refusal already says which number to change, in
- * the server's words (`drawRefusalNotice`, `data/draw`). */
+ * stage, and a negative count is not a count. */
 export const QUALIFIERS_PER_POOL_MIN = 1
+
+/** The ceiling on **K** — the server's `QualifiersPerPool = Annotated[int, Field(le=1000)]`,
+ * the same number, stated in both layers on purpose.
+ *
+ * ⚠️ **This is the player limit's bug, one field over** (#1231 QA). `qualifiers_per_pool`
+ * is an `Integer` column, so `2147483648` satisfied every rule either layer stated, hit
+ * Postgres, and came back a **500** — reported to the director as "Something went wrong on
+ * our end. Nothing you did caused it", which was false: they typed a number into a box.
+ * `999999999` was worse, because it *worked*: it saved an event whose knockout stage could
+ * never be cut.
+ *
+ * 1,000 is a bound with a reason, the way 512 is for the player limit: a pool of more than
+ * a thousand finishers is not a pool, and the column's own 2,147,483,647 is not a *limit*,
+ * it is the absence of one.
+ *
+ * It is **not** the same kind of bound as the server's two entrant-dependent ones
+ * (`P × K >= 2` and `K <= ⌊N/P⌋`). Those move with the entrant count and are refused at the
+ * *cut*, not at the write — a configuration that was legal when it was written must not
+ * become unwritable when a player withdraws — so they are deliberately NOT mirrored here.
+ * The cut's own refusal says which number to change, in the server's words
+ * (`drawRefusalNotice`, `data/draw`). This one is fixed, known at write time, and refused
+ * by the API at the request boundary, so the form states it too. */
+export const QUALIFIERS_PER_POOL_MAX = 1000
 
 /**
  * **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's knockout
@@ -272,6 +287,12 @@ export const qualifiersPerPoolSchema = z
   .int({ error: 'Qualifiers per pool must be a whole number.' })
   .min(QUALIFIERS_PER_POOL_MIN, {
     error: `At least ${QUALIFIERS_PER_POOL_MIN} player must advance from each pool.`,
+  })
+  // The floor's sentence, turned over — one bound, two directions, one voice. Stated as
+  // a number the director can act on ("at most 1,000"), not as "invalid": the value they
+  // typed is the only thing they can change.
+  .max(QUALIFIERS_PER_POOL_MAX, {
+    error: `At most ${QUALIFIERS_PER_POOL_MAX.toLocaleString('en-US')} players can advance from each pool.`,
   })
 
 /** The editor's four tabs, of which three can hold something invalid (Match settings

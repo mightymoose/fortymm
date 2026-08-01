@@ -986,6 +986,10 @@ export const DRAW_SETTINGS_REFUSALS = {
   countTooSmall:
     'qualifiers_per_pool must be a whole number of 1 or more: a knockout stage ' +
     'nobody qualifies for is not a stage.',
+  /** `K ≤ 1000`, the same ceiling the server enforces. */
+  countTooLarge:
+    'qualifiers_per_pool must be 1,000 or fewer: no pool advances more players ' +
+    'than that into the knockout stage.',
   /** The two count-less arms declare no such field, so the key is refused outright —
    * never silently dropped on the way to a column whose `CHECK` says `NULL`. */
   countForbidden: (drawType: string) =>
@@ -1043,6 +1047,9 @@ function validateEventBody(
         body.qualifiers_per_pool < 1
       ) {
         return detail(DRAW_SETTINGS_REFUSALS.countTooSmall, 422)
+      }
+      if (body.qualifiers_per_pool > 1000) {
+        return detail(DRAW_SETTINGS_REFUSALS.countTooLarge, 422)
       }
     } else if (
       body.qualifiers_per_pool !== undefined &&

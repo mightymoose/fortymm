@@ -248,6 +248,20 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
       )
     })
 
+    it('is refused with a count over 1000 — the same ceiling the server enforces', async () => {
+      // A mock more permissive than the server here is exactly how a client ships a
+      // body the API 422s: the server's `qualifiers_per_pool` field is `le=1000`.
+      const rule = DRAW_SETTINGS_REFUSALS.countTooLarge
+      expectRefusal(
+        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: 1001 }),
+        rule,
+      )
+      expectRefusal(
+        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: 1001 }),
+        rule,
+      )
+    })
+
     // ✅ ACCEPT. Without this, a mirror mutated to refuse everything passes every case
     // above — and the boundary would reject the very events it exists to admit.
     it('ACCEPTS a count of 1 or more, and stores it', async () => {

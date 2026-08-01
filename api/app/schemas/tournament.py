@@ -120,15 +120,32 @@ EventEntryFee = Annotated[
 
 # ----- the draw configuration, as a union tagged by the draw type -----------
 
-QualifiersPerPool = Annotated[int, Field(ge=1)]
+MAX_QUALIFIERS_PER_POOL = 1000
+"""The ceiling on **K** — the same 1000 the web client's event form enforces.
+
+It is not the domain rule. K can never exceed the smallest pool's size in a real event,
+and the cut already refuses that with a message naming both numbers
+(``DegenerateDraw``). This is the *boundary* refusing counts that are nonsense on their
+face and would otherwise reach the column: 1000 is far above any pool a table-tennis
+event will ever have, and far below the ``Integer`` column's 2,147,483,647.
+
+The number that matters is the one past the column, not the one past 1000. A K of
+2,147,483,648 was a **500** — the driver refused it, deep behind the boundary, and the
+client's generic error copy then told the organizer that nothing they did caused it,
+which was false. A K of 999,999,999 was worse in the quieter way: ``201 Created``, and
+an event whose draw can never be cut. Both are a 422 now, under the field, where the
+organizer can see which number they meant."""
+
+QualifiersPerPool = Annotated[int, Field(ge=1, le=MAX_QUALIFIERS_PER_POOL)]
 """**K** — how many of each pool's finishers advance into an ``rr-then-ko`` draw's
 knockout stage.
 
-``K >= 1`` is the **static** half of the ADR's legal configuration space ("rr-then-ko
-cuts both stages upfront and seeds qualifiers rematch-free"): zero advances nobody, and
-a negative count is not a count, whatever the field looks like. It is stated once, here,
-and shared by the create schema, the patch schema and the union arm below, so the three
-cannot drift.
+``1 <= K <= MAX_QUALIFIERS_PER_POOL`` is the **static** half of the ADR's legal
+configuration space ("rr-then-ko cuts both stages upfront and seeds qualifiers
+rematch-free"): zero advances nobody, a negative count is not a count, and a count in
+the billions is not a qualifier count at all, whatever the field looks like. It is
+stated once, here, and shared by the create schema, the patch schema and the union arm
+below, so the three cannot drift.
 
 The two bounds that **move with the entrant count** — ``P × K >= 2`` and
 ``K <= ⌊N/P⌋`` — are deliberately *not* here. They are refused at the cut as
@@ -1570,8 +1587,9 @@ class TournamentEventCreate(BaseModel):
     # ``draw_type`` on the wire and a *union* in the interior: the pair is parsed into
     # ``DrawSettingsWrite`` by the validator below, so a qualifier count on a
     # round-robin or single-elim event is a 422 here and never a value quietly dropped
-    # (ADR 20260727). ``QualifiersPerPool`` is the same ``K >= 1`` alias the union arm
-    # carries, restated on the field so the bound reaches the generated clients too.
+    # (ADR 20260727). ``QualifiersPerPool`` is the same ``1 <= K <= 1000`` alias the
+    # union arm carries, restated on the field so both bounds reach the generated
+    # clients too.
     qualifiers_per_pool: QualifiersPerPool | None = None
     # ``None`` (or omitted) is the uncapped event — the "no cap" sentinel of ADR-0935,
     # not a cap of zero. When a cap IS supplied it is an ``EventMaxPlayers``: ``gt=0``

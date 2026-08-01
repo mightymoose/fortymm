@@ -63,6 +63,31 @@ describe('eventSchema', () => {
       expect(rejectedFields(twoStage(4))).toEqual([])
     })
 
+    /**
+     * ⚠️ **`le=1000` on the server, and the resolver has to know it too** (#1231 QA).
+     * `2147483648` overflows the `Integer` column and came back a 500; `999999999` was
+     * accepted and made an event nobody could draw. Both are refused HERE now, so
+     * neither is ever sent — and the message names the number, since the number is the
+     * only thing the director can change.
+     */
+    it.each([1001, 999_999_999, 2_147_483_648])('refuses %s', (tooMany) => {
+      expect(rejectedFields(twoStage(tooMany))).toEqual(['qualifiersPerPool'])
+    })
+
+    it('speaks the schema’s own sentence about the ceiling', () => {
+      const result = eventSchema.safeParse(twoStage(1001))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].message).toBe(
+        'At most 1,000 players can advance from each pool.',
+      )
+    })
+
+    // The server's bound is INCLUSIVE, so the boundary itself must save — a form that
+    // refused 1,000 would refuse a save the API accepts.
+    it('accepts the ceiling itself', () => {
+      expect(rejectedFields(twoStage(1000))).toEqual([])
+    })
+
     // ⚠️ The inverse, and the one a field-level rule would get wrong: a round-robin
     // event carries `null` and must SAVE. A schema that demanded a count regardless
     // would dead-end every single-stage event, with a red nobody could see or fix.

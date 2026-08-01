@@ -4,6 +4,7 @@ import type { EditFreeze } from '../../data/draw'
 import {
   ENTRY_FEE_MAX,
   PLAYERS_MAX,
+  QUALIFIERS_PER_POOL_MAX,
   QUALIFIERS_PER_POOL_MIN,
 } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
@@ -239,6 +240,12 @@ export const BasicsSection = ({
                 id={id}
                 type="number"
                 min={QUALIFIERS_PER_POOL_MIN}
+                // Advisory, exactly like the two `max` attributes below — it steers the
+                // spinner and stops nothing that is typed or pasted. The bound that BINDS
+                // is `qualifiersPerPoolSchema`'s. Both are stated so the browser control
+                // and the resolver agree about the same number (#1231 QA: an unbounded box
+                // sent `2147483648`, which overflowed the `Integer` column and 500'd).
+                max={QUALIFIERS_PER_POOL_MAX}
                 aria-invalid={!!errors.qualifiersPerPool}
                 aria-describedby={hintId}
                 disabled={drawTypeFreeze.kind === 'frozen'}
