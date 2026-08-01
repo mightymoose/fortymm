@@ -3640,12 +3640,26 @@ export interface components {
          *     something — it is what the director clicks, what the conflict warnings quote, and
          *     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
          *     is three blank rows is not a thing anyone could act on.
+         *
+         *     Its ``position`` is the pool's place in the event's pool ORDER, and it is the one
+         *     field here the client does not author: the server stamps it from the index of the
+         *     list it was sent in (:data:`PoolPosition`). It defaults to ``0`` so that pools
+         *     stored before this field existed stay *readable* — a read boundary must not turn a
+         *     history it cannot change into a ``ValidationError`` (the same asymmetry
+         *     :data:`AddressComponent` is about) — and every pool written through
+         *     :data:`EventPools` carries a real one.
          */
         Pool: {
             /** Id */
             id: string;
             /** Name */
             name: string;
+            /**
+             * Position
+             * @description Where this pool sits in its event's pool order: 0-based, and **assigned by the server** from the pool's index in the `pools` list you sent. It is read-only — a non-negative `position` on a write payload is overwritten rather than honoured, so to reorder an event's pools, send them in the order you want. (A negative one is a 422: the bound is checked before the reordering, so it is refused rather than corrected.) Two pools of one event never share a position.
+             * @default 0
+             */
+            position: number;
             slot: components["schemas"]["Slot"];
             /** Table Ids */
             table_ids: string[];
