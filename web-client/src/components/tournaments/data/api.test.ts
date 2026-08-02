@@ -13,12 +13,14 @@ import {
   apiToEntryState,
   apiToEvent,
   apiToTournament,
+  catalogueToUpdateBody,
   draftToCreateBody,
   eventToCreateBody,
   eventToUpdateBody,
   tournamentToUpdateBody,
 } from './api'
 import { blankAddress } from './helpers'
+import { addTable, keepTables } from './table-catalogue'
 import type { Tournament, TournamentEvent } from './types'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -723,7 +725,10 @@ describe('tournamentToUpdateBody', () => {
     expect('status' in body).toBe(false)
   })
 
-  it('sends the catalogue verbatim (it IS the editable table set)', () => {
+  // A no-op diff, not a replace. Under the server's id-keyed diff (ADR 20260801) an
+  // uncited stored table is a REMOVAL, so a Details-tab save that dropped the ids —
+  // or the catalogue — would read as "remove every table you have".
+  it('cites every stored table’s id, so a field edit removes nothing', () => {
     const tournament: Tournament = {
       ...draft,
       id: 't-1',
@@ -736,6 +741,72 @@ describe('tournamentToUpdateBody', () => {
     const body = tournamentToUpdateBody(tournament, catalogue)
 
     expect(body.table_catalogue).toEqual(catalogue)
+  })
+})
+
+describe('catalogueToUpdateBody', () => {
+  const stored = [
+    { id: 't1', label: 'T1', court: 'A' },
+    { id: 't2', label: 'T2', court: 'B' },
+  ]
+
+  it('cites kept tables by id and sends an added one with NO id key', () => {
+    const body = catalogueToUpdateBody(
+      [...keepTables(stored), addTable('T3', 'C')],
+      { unplaceFixturesOnRemovedTables: false },
+    )
+
+    expect(body.table_catalogue).toEqual([
+      { id: 't1', label: 'T1', court: 'A' },
+      { id: 't2', label: 'T2', court: 'B' },
+      { label: 'T3', court: 'C' },
+    ])
+    // Not `id: null` — the key is absent, so a reader can see at a glance that this
+    // row cites nothing and is therefore an insert.
+    expect('id' in body.table_catalogue![2]).toBe(false)
+  })
+
+  // A removal IS an omission: the diff is keyed by id, so leaving a stored table out
+  // is the only way to ask for it to go.
+  it('removes a table by leaving it out', () => {
+    const body = catalogueToUpdateBody(keepTables([stored[1]]), {
+      unplaceFixturesOnRemovedTables: false,
+    })
+
+    expect(body.table_catalogue).toEqual([{ id: 't2', label: 'T2', court: 'B' }])
+  })
+
+  // A PATCH leaves an absent field unchanged. Re-sending the name/dates/address a
+  // table edit never touched would make every add a chance to clobber a rename
+  // another tab made in between.
+  it('sends the catalogue and NOTHING else', () => {
+    const body = catalogueToUpdateBody(keepTables(stored), {
+      unplaceFixturesOnRemovedTables: false,
+    })
+
+    expect(Object.keys(body)).toEqual(['table_catalogue'])
+  })
+
+  // The opt-in has one affirmative spelling and is *said on purpose* — by a director
+  // who has read the 409. A body that always carried the key would make that answer
+  // look like a default; omitted and `false` mean the same thing to the server.
+  it('omits the opt-in unless it is being given', () => {
+    const body = catalogueToUpdateBody(keepTables(stored), {
+      unplaceFixturesOnRemovedTables: false,
+    })
+
+    expect('unplace_fixtures_on_removed_tables' in body).toBe(false)
+  })
+
+  it('sends the opt-in as true when the organizer confirmed', () => {
+    const body = catalogueToUpdateBody(keepTables(stored), {
+      unplaceFixturesOnRemovedTables: true,
+    })
+
+    expect(body.unplace_fixtures_on_removed_tables).toBe(true)
+    // The rest of the body is byte-identical to the refused one — the confirm
+    // re-sends the same edit, it does not recompute it.
+    expect(body.table_catalogue).toEqual(stored)
   })
 })
 

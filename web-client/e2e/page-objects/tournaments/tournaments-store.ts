@@ -25,11 +25,15 @@ import {
   UNBREAKABLE_VENUE_NAME,
   type DrawPlan,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
+import { mockUuid } from '../../../src/mocks/mock-uuid'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
+type TournamentUpdate = components['schemas']['TournamentUpdate']
+type TournamentTable = components['schemas']['TournamentTable']
+type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
@@ -773,6 +777,14 @@ export interface TournamentsStoreOptions {
    * mocks use, so a contract change reds this file. Defaults to `null` — no solve
    * ever requested, the state every tournament is born in. */
   latestSolve?: ScheduleSolveRead
+  /** Place an event's **first fixture** at the catalogue's first table before the page
+   * loads — the state that makes removing that table a **409** (ADR 20260801).
+   *
+   * Seeded rather than driven through the Schedule tab because the claim under test is
+   * the Tables tab's, not the scheduler's: a spec that had to place a match through the
+   * UI first would red for a scheduling regression and read as a tables bug. Only
+   * meaningful with `drawn` — a fixture has to exist to be placed. */
+  placed?: string
 }
 
 /** The options for a tournament that can actually be **started**: every event drawable,
@@ -859,6 +871,35 @@ function namedList(names: string[]): string {
   const quoted = names.map((name) => `“${name}”`)
   if (quoted.length === 1) return quoted[0]
   return `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`
+}
+
+/**
+ * The server's sentence for a catalogue edit that would remove a table matches are
+ * placed at (`_tables_in_use_detail`, `api/app/tournament_tables.py`) — **verbatim**,
+ * because the confirm dialog renders it verbatim.
+ *
+ * Written out here rather than imported from the app: a stub that read its refusal out
+ * of the client's own copy could never disagree with it, so a spec built on one would
+ * prove the app consistent with itself instead of consistent with the server. It names
+ * the tables by LABEL, never by id, and it names both ways out — send the same edit
+ * again with the opt-in, or move the matches off the table first.
+ */
+export function tablesInUseDetail(labels: string[], placements: number): string {
+  const one = labels.length === 1
+  const has = one ? 'has' : 'have'
+  const it = one ? 'it' : 'them'
+  const theTable = one ? 'the table' : 'them'
+  const matches = placements === 1 ? 'match' : 'matches'
+  return (
+    `${namedList(labels)} ${has} ${placements} ${matches} placed at ${it}, so ` +
+    `removing ${it} from the catalogue would leave those matches with no table — ` +
+    'indistinguishable from matches nobody ever placed. To remove ' +
+    `${it} anyway, send the same edit again with ` +
+    '“unplace_fixtures_on_removed_tables”: true, and those matches lose their ' +
+    'table, their time and their call and go back to the schedule to be placed ' +
+    `again. To keep them where they are, leave ${theTable} in the catalogue and ` +
+    `move the matches off ${it} first.`
+  )
 }
 
 /** The server's sentence for a tournament with nothing to run. */
@@ -1040,6 +1081,7 @@ interface RecordedRequest {
 export class TournamentsStore {
   private detail: TournamentDetailRead
   private entryCounter = 0
+  private tableCounter = 0
   private gate: Promise<void> | null = null
   private refusingWrites = false
   private refusingTournamentCreate = false
@@ -1059,6 +1101,14 @@ export class TournamentsStore {
    * send `address: null` (CONTEXT.md, "Venue"), and the only way to see that six
    * empty strings did not go instead is to read the serialized body. */
   readonly createBodies: TournamentCreate[] = []
+  /** Every `PATCH /v1/tournaments/{id}` body, in order — what the Tables tab actually
+   * PUT ON THE WIRE.
+   *
+   * It exists for the id: a new table must be sent with **no `id` at all** (the server
+   * mints them, ADR 20260801), and a component test can only see the callback's
+   * argument. Only the serialized body can show that a client-minted id did not go —
+   * and only here, with MSW off, does the real `openapi-fetch` do the serializing. */
+  readonly patchBodies: TournamentUpdate[] = []
 
   constructor(private readonly options: TournamentsStoreOptions = {}) {
     this.detail = seed(options)
@@ -1107,6 +1157,28 @@ export class TournamentsStore {
           ? CUP_RESULTS
           : CUP_RESULTS_MID_FLIGHT
       this.mutateEvent(event.id, (e) => ({ ...e, results }))
+    }
+    // A fixture standing on a table — what makes removing that table a 409 rather
+    // than the quiet removal a merely pool-reserved table gets.
+    if (options.placed) {
+      const event = this.eventNamed(options.placed)
+      const fixture = event.fixtures[0]
+      if (!fixture) {
+        throw new Error(`cannot place a fixture for ${options.placed}: no draw`)
+      }
+      const table = this.detail.table_catalogue[0]
+      this.mutateEvent(event.id, (e) => ({
+        ...e,
+        fixtures: e.fixtures.map((f) =>
+          f.id === fixture.id
+            ? {
+                ...f,
+                table_id: table.id,
+                scheduled_start: simFixtureTime('2026-06-13T09:00:00'),
+              }
+            : f,
+        ),
+      }))
     }
     // The seeded solve ledger row, if any — a terminal strip state the spec starts on.
     if (options.latestSolve) {
@@ -1424,6 +1496,11 @@ export class TournamentsStore {
     // The list page's one write: `POST /v1/tournaments`, the "New tournament" dialog.
     if (method === 'POST' && path === '/v1/tournaments') {
       return this.createTournament(route, request.postDataJSON())
+    }
+
+    // The tournament-level PATCH — the Tables tab's write (ADR 20260801).
+    if (method === 'PATCH' && path === `/v1/tournaments/${TOURNAMENT_ID}`) {
+      return this.updateTournament(route, request.postDataJSON())
     }
 
     if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/transitions`) {
@@ -1798,6 +1875,121 @@ export class TournamentsStore {
     const fields = body as { name?: string }
     this.detail = { ...this.detail, name: fields.name ?? this.detail.name }
     return json(route, 201, this.readDetail())
+  }
+
+  /**
+   * `PATCH /v1/tournaments/{id}` — the tournament's own fields, and the one this
+   * suite exists for: the **table catalogue as an id-keyed diff** (ADR 20260801).
+   *
+   * The three cases are exhaustive and mean different things, so the stub implements
+   * all three rather than the one the happy path needs:
+   *
+   * - an entry **citing an id** keeps that table, with this payload's words and place;
+   * - an entry with **no id** is an insert, and the id is **minted here** — the client
+   *   has none to give, and one it invented would name no table of this tournament;
+   * - a stored table **no entry cites** is REMOVED.
+   *
+   * And the removal's refusal, judged **before anything is written**: a table matches
+   * are *placed at* cannot go without `unplace_fixtures_on_removed_tables: true`, and
+   * without it the answer is a 409 carrying the server's own sentence — verbatim,
+   * because the confirm dialog renders it verbatim. (A table only a *pool* reserves
+   * needs no opt-in: a reservation is not a placement.)
+   *
+   * The 422 arm matters as much as the 409: it is what makes a client-minted id a
+   * loud failure here, exactly as it is on the server. A stub that quietly minted an
+   * id for an entry citing an unknown one would let the very regression this chore
+   * fixed sail through green.
+   */
+  private async updateTournament(route: Route, body: unknown) {
+    this.patchBodies.push(body as TournamentUpdate)
+    if (this.faultingWrites) return serverFault(route)
+    if (!this.detail.can_edit) {
+      return json(route, 403, {
+        detail: 'Only the creator can edit this tournament.',
+      })
+    }
+
+    const patch = body as TournamentUpdate
+    const submitted = patch.table_catalogue
+    if (submitted === undefined || submitted === null) {
+      this.detail = { ...this.detail, name: patch.name ?? this.detail.name }
+      return json(route, 200, this.readDetail())
+    }
+
+    const stored = this.detail.table_catalogue
+    const byId = new Map(stored.map((t) => [t.id, t]))
+    for (const [index, entry] of submitted.entries()) {
+      if (entry.id != null && !byId.has(entry.id)) {
+        return json(route, 422, {
+          detail: [
+            {
+              type: 'value_error',
+              loc: ['body', 'table_catalogue', index, 'id'],
+              msg: "This tournament's venue catalogue has no table with that id.",
+              input: entry.id,
+            },
+          ],
+        })
+      }
+    }
+
+    const kept = new Set(
+      submitted.map((e) => e.id).filter((id): id is string => id != null),
+    )
+    const removed = stored.filter((t) => !kept.has(t.id))
+    const removedIds = new Set(removed.map((t) => t.id))
+    const placed = this.detail.events
+      .flatMap((e) => e.fixtures)
+      .filter((f) => f.table_id !== null && removedIds.has(f.table_id))
+
+    // The opt-in has ONE affirmative spelling; omitted, `false` and `null` are three
+    // ways of not saying it, and all three refuse.
+    if (placed.length > 0 && patch.unplace_fixtures_on_removed_tables !== true) {
+      const blocking = new Set(placed.map((f) => f.table_id))
+      const labels = removed.filter((t) => blocking.has(t.id)).map((t) => t.label)
+      return json(route, 409, {
+        detail: tablesInUseDetail(labels, placed.length),
+      })
+    }
+
+    const unplaced = new Set(placed.map((f) => f.id))
+    this.detail = {
+      ...this.detail,
+      name: patch.name ?? this.detail.name,
+      // The list's ORDER is the catalogue's order; a cited row keeps its id while
+      // taking this payload's words and place.
+      table_catalogue: submitted.map((entry) => this.upsertTable(entry)),
+      events: this.detail.events.map((event) => ({
+        ...event,
+        fixtures: event.fixtures.map((f) =>
+          unplaced.has(f.id)
+            ? { ...f, table_id: null, scheduled_start: null, pinned_at: null }
+            : f,
+        ),
+      })),
+    }
+    return json(route, 200, this.readDetail())
+  }
+
+  /** One catalogue entry after the diff: the cited row, re-worded — or a brand-new
+   * one whose **uuid the server mints** (`gen_random_uuid()`; `TournamentTable.id` is
+   * `format: uuid` on the wire, so the stub must not hand back a slug). */
+  private upsertTable(entry: TournamentTableUpsert): TournamentTable {
+    if (entry.id != null) {
+      return { id: entry.id, label: entry.label, court: entry.court }
+    }
+    this.tableCounter += 1
+    return {
+      id: mockUuid(`e2e-tournament-table-${this.tableCounter}`),
+      label: entry.label,
+      court: entry.court,
+    }
+  }
+
+  /** The catalogue as the SERVER now holds it — so a spec asserts what was stored
+   * (and which id it was stored under), not what the DOM happens to show. */
+  get tables(): TournamentTable[] {
+    return this.detail.table_catalogue
   }
 
   /**

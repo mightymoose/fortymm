@@ -687,6 +687,62 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).getByTestId('capacity-remaining')
   }
 
+  // ----- the Tables tab (the venue catalogue, ADR 20260801) -----------------
+
+  /** Open the Tables tab and wait for it to really be on screen — every "the
+   * catalogue shows X" assertion passes vacuously against a tab that has not
+   * rendered. */
+  async openTablesTab() {
+    await this.page.getByRole('tab', { name: /^Tables/ }).click()
+    await expect(this.page.getByTestId('tables-tab')).toBeVisible()
+  }
+
+  /** One table's card, by the label the director reads. */
+  tableCard(label: string): Locator {
+    return this.page.locator('[data-slot=card]').filter({ hasText: label })
+  }
+
+  /** One table's Remove button. Owner-only — a viewer is offered none. */
+  removeTableButton(label: string): Locator {
+    return this.page.getByRole('button', { name: `Remove ${label}` })
+  }
+
+  get tableLabelInput(): Locator {
+    return this.page.getByLabel('Table label')
+  }
+
+  get tableCourtInput(): Locator {
+    return this.page.getByLabel('Court')
+  }
+
+  get addTableButton(): Locator {
+    return this.page.getByRole('button', { name: 'Add table' })
+  }
+
+  /** The in-use refusal's confirm — the 409 asked back as a question. Its body is
+   * the SERVER's sentence, verbatim. */
+  get removeTableConfirm(): Locator {
+    return this.page.getByTestId('confirm-remove-table')
+  }
+
+  get removeTableConfirmDetail(): Locator {
+    return this.page.getByTestId('confirm-remove-table-detail')
+  }
+
+  get removeTableConfirmButton(): Locator {
+    return this.page.getByTestId('confirm-remove-table-confirm')
+  }
+
+  get removeTableCancelButton(): Locator {
+    return this.page.getByTestId('confirm-remove-table-cancel')
+  }
+
+  /** The tab's inline failure — everything that is NOT the in-use refusal, in the
+   * client's own words. */
+  get tablesError(): Locator {
+    return this.page.getByTestId('tables-error')
+  }
+
   // ----- the Schedule tab & its solve strip (ADR "the schedule is solved") ---
 
   /** Open the Schedule tab and wait for its strip to really be on screen — every
