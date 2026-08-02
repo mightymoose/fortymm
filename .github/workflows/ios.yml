@@ -157,6 +157,17 @@ jobs:
 
       - name: Run FortymmUITests
         working-directory: ios
+        env:
+          # A plain env var set for `xcodebuild test` only reaches the
+          # xcodebuild process itself -- the UI test's actual host process
+          # (FortymmUITests-Runner.app) runs inside the simulator as a
+          # separate process tree that does NOT inherit it. The
+          # `TEST_RUNNER_` prefix is Xcode's documented mechanism for
+          # forwarding a CI-supplied env var into that test-host process,
+          # with the prefix stripped -- so the test's own
+          # `ProcessInfo.processInfo.environment["FMM_API_BASE_URL"]` read
+          # (see DashboardEmptyStateTests.swift) sees it.
+          TEST_RUNNER_FMM_API_BASE_URL: ${{ env.FMM_API_BASE_URL }}
         run: |
           xcodebuild test \
             -project Fortymm.xcodeproj \
