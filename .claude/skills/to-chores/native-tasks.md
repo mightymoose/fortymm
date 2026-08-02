@@ -34,8 +34,8 @@ picture rather than starting fresh:
 | Work-order state | Native task status |
 | --- | --- |
 | Unticked `- [ ]`, no marker | pending |
-| Chore currently dispatched / being verified | in_progress |
-| Ticked `- [x]` (verified) | completed |
+| Chore currently dispatched | in_progress |
+| Ticked `- [x]` | completed |
 | `⚠ BLOCKED: …` | pending, with `⚠ BLOCKED` kept in the task text |
 
 A slice's parent task is `completed` only when **every** chore under it is ticked
@@ -44,6 +44,6 @@ stacked draft PR. A slice with any pending or blocked chore stays `in_progress`
 (or pending, if untouched), and gets no PR.
 
 When `/do-chores` fans a batch of ready chores across different trees, each
-dispatched chore's task goes `in_progress` together and flips to `completed` only
-after its `verifier` passes — never tick a task on the implementer's claim alone,
-exactly as the checkbox is never ticked on it.
+dispatched chore's task goes `in_progress` together and flips to `completed` once
+the implementing agent reports the chore done, exactly as the checkbox is ticked
+on that report.
