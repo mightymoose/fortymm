@@ -26,6 +26,30 @@ const scoped = (container: Container) => ({
   getAddButton() {
     return container.getByRole('button', { name: 'Add table' })
   },
+  /** The in-use refusal's confirm — the 409 asked back as a question (ADR 20260801).
+   * Queried off `screen`, never the tab's container: an `AlertDialog` is PORTALED to
+   * the body, so a container-scoped query finds nothing whether it opened or not. */
+  queryConfirmDialog() {
+    return screen.queryByTestId('confirm-remove-table')
+  },
+  /** The confirm's body — the SERVER's sentence, verbatim. The assertion the whole
+   * dialog exists for: it names the tables and the match count, which the client
+   * cannot reconstruct. */
+  getConfirmDetail() {
+    return screen.getByTestId('confirm-remove-table-detail')
+  },
+  getConfirmRemoveButton() {
+    return screen.getByTestId('confirm-remove-table-confirm')
+  },
+  getConfirmCancelButton() {
+    return screen.getByTestId('confirm-remove-table-cancel')
+  },
+  /** The inline failure banner — every failure that is NOT the in-use refusal, in
+   * the client's own words (`saveFailureMessage`). Absent when the last write
+   * landed. */
+  queryError() {
+    return container.queryByTestId('tables-error')
+  },
   /** The add-table submit button — absent for a non-creator (`canEdit: false`),
    * along with the rest of the add-table form. */
   queryAddButton() {

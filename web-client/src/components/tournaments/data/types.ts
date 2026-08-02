@@ -510,12 +510,41 @@ export interface TournamentEvent {
 }
 
 /** A physical table in the venue catalogue, referenced by id from a
- * tournament's `tableIds` and a pool's `tableIds`. */
+ * tournament's `tableIds` and a pool's `tableIds`.
+ *
+ * The `id` is the SERVER's — a uuid it minted for the `tournament_tables` row
+ * (ADR 20260801). A client never authors one: this shape is what comes *back*, and
+ * the shape that goes *out* is `TournamentTableEntry` below. */
 export interface TournamentTable {
   id: string
   label: string
   court: string
 }
+
+/**
+ * One entry of an **edited** table catalogue — what the Tables tab emits and
+ * `catalogueToUpdateBody` (`./api`) puts on the wire as a `TournamentTableUpsert`.
+ *
+ * A catalogue write is an **id-keyed diff**, not a replace (ADR 20260801), and the
+ * two things an entry can mean are opposite:
+ *
+ * - **`kept`** — "this is the table you already have, with these words." It carries
+ *   a whole `TournamentTable`, so it cannot be constructed without a row the server
+ *   actually sent back.
+ * - **`added`** — "mint me one." It has no `id` **field at all**, so a client-minted
+ *   id is not a value this type can hold — which is the point: `TournamentTableWrite`
+ *   is `extra="forbid"`, so an `id` on a new entry is a 422, and an entry citing an
+ *   id the tournament does not have is a 422 on that row.
+ *
+ * (And a stored table **no entry names** is a *removal* — which is why this is a
+ * tagged union rather than the obvious `id?: string`. With one optional field, a
+ * draft row that had somehow acquired an id and a saved row that had lost one are
+ * both representable, and each is a silent data-loss bug: the first mints a
+ * duplicate table, the second deletes the row it meant to rename.)
+ */
+export type TournamentTableEntry =
+  | { kind: 'kept'; table: TournamentTable }
+  | { kind: 'added'; label: string; court: string }
 
 export interface Tournament {
   id: string

@@ -19,6 +19,7 @@ import type {
   Tournament,
   TournamentEvent,
   TournamentTable,
+  TournamentTableEntry,
 } from './data/types'
 import { PageHeading } from './page-heading'
 import { StatusBadge } from './status-badge'
@@ -35,8 +36,14 @@ export interface TournamentDetailPageProps {
   /** This tournament's table catalogue (for the Tables tab and pool editor). */
   allTables: TournamentTable[]
   onUpdate: (tournament: Tournament) => void
-  /** Persist an edited table catalogue (add/remove from the Tables tab). */
-  onChangeCatalogue: (catalogue: TournamentTable[]) => void
+  /** Persist an edited table catalogue (add/remove from the Tables tab) as the
+   * server's id-keyed diff (ADR 20260801). **The returned promise is load-bearing**:
+   * `TablesTab` awaits it and turns the 409 on removing an in-use table into a
+   * confirm, so a rejection must reach it rather than being swallowed by a toast. */
+  onChangeCatalogue: (
+    entries: TournamentTableEntry[],
+    options: { unplaceFixturesOnRemovedTables: boolean },
+  ) => Promise<void>
   /** Persist a new event. **The returned promise is load-bearing**: the `EventEditor`
    * awaits it, closes itself only when it RESOLVES, and stays open over a rejection —
    * so a refused create is reported instead of quietly binning everything the
