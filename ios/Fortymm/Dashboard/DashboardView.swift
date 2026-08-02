@@ -211,26 +211,42 @@ struct DashboardView: View {
                 Spacer()
             }
 
-            if let rating = data.rating {
-                DashboardRatingCard(rating: rating)
-            } else {
-                FMCard {
-                    VStack(alignment: .leading, spacing: FMSpace.s3) {
-                        DashOverline(text: "Current rating")
-                        Text("Not in a rated league yet.")
-                            .font(FMFont.ui(FMFont.sm))
-                            .foregroundStyle(FMColor.fg3)
-                    }
-                }
+            switch data.rating.state {
+            case .rated:
+                DashboardRatingCard(rating: data.rating)
+            case .unrated:
+                emptyRatingCard("Unrated — finish a rated match to start your rating")
+            case .awaitingImport:
+                emptyRatingCard("Ratings haven't been imported for this league yet")
+            case .notRatedLeague, .unknown:
+                // `.unknown` (a state added after this build shipped) falls back
+                // to the same copy as `.notRatedLeague`, mirroring the web
+                // client's default-to-`NOT_RATED_LEAGUE` behaviour.
+                emptyRatingCard("Not in a rated league yet.")
             }
 
             DashboardRecentResultsCard(rows: data.recentResults)
         }
     }
 
-    private func yourGameSubtitle(_ rating: DashboardRating?) -> String {
-        guard let rating else { return "Last 30 days" }
-        return "\(rating.strategyLabel) · last 30 days"
+    private func yourGameSubtitle(_ rating: DashboardRating) -> String {
+        guard let label = rating.strategyLabel else { return "Last 30 days" }
+        return "\(label) · last 30 days"
+    }
+
+    /// The non-`.rated` empty state for the "Current rating" card — same
+    /// `FMCard`/`DashOverline` shell as the `.rated` card, with per-state copy
+    /// (mirrors the web's `EmptyCard` + `EMPTY_RATING_COPY`,
+    /// `web-client/src/components/dashboard/your-game-row.tsx`).
+    private func emptyRatingCard(_ body: String) -> some View {
+        FMCard {
+            VStack(alignment: .leading, spacing: FMSpace.s3) {
+                DashOverline(text: "Current rating")
+                Text(body)
+                    .font(FMFont.ui(FMFont.sm))
+                    .foregroundStyle(FMColor.fg3)
+            }
+        }
     }
 
     private var loadingCard: some View {

@@ -19,7 +19,10 @@ struct DashboardResponse: Decodable {
     /// never a row.
     let waitingCount: Int
     let recentResults: [DashboardRecentResult]
-    let rating: DashboardRating?
+    /// ALWAYS emitted for a signed-in user (see `DashboardRating`'s doc comment) —
+    /// no longer `| None` server-side, per ADR 20260725. Its `state` says which of
+    /// four stories the card tells; only `.rated` carries the rating payload.
+    let rating: DashboardRating
     let completedMatchCount: Int
     /// Every LIVE tournament the caller holds an active entry in, newest first —
     /// the panel that sits at the very top of the dashboard while they're playing
@@ -110,26 +113,65 @@ struct RatingChange: Decodable {
     let delta: Double?
 }
 
-/// The "Current rating" card payload. Emitted only for automatic-strategy
-/// leagues with a rated user — `nil` otherwise (manual league / unrated).
+/// WHICH rating story the card tells — mirrors the API's `DashboardRatingState`
+/// (`api/app/schemas/dashboard.py`, ADR 20260725). A `nil`/absent `rating` used to
+/// collapse three distinct non-rated facts into one signal; the state names the
+/// situation so the client can say the true thing per arm instead of one
+/// one-string-fits-all fallback. `unknown` is the forward-compat landing pad for a
+/// state added after this build shipped — treated the same as `.notRatedLeague`
+/// by call sites, mirroring the web's fallback.
+enum DashboardRatingState: String, LenientRawDecodable {
+    /// Has a rating: the value + delta, plus the rank-or-percentile line below.
+    case rated = "RATED"
+    /// In an automatic-strategy league but hasn't finished a rated match yet.
+    case unrated = "UNRATED"
+    /// Manual-strategy league whose external ratings haven't been imported yet.
+    case awaitingImport = "AWAITING_IMPORT"
+    /// Not a member of any rated league at all.
+    case notRatedLeague = "NOT_RATED_LEAGUE"
+    case unknown
+}
+
+/// The "Current rating" card payload — ALWAYS emitted for a signed-in user (the
+/// parent `DashboardResponse.rating` is no longer optional). `state` says which
+/// of four stories the card tells; only the `.rated` arm carries the payload
+/// below (`current` / `delta` / `peak` / the rank-or-percentile line /
+/// `sparkData` / `streak` / `stats`) — every other arm sends `null` for them, so
+/// they're optional here even though `DashboardRatingCard` only ever renders for
+/// `.rated` (see `DashboardView.yourGame`).
 struct DashboardRating: Decodable {
-    let leagueId: UUID
-    let leagueName: String
-    let strategyKey: String
-    let current: Double
+    let state: DashboardRatingState
+    /// The league context. Present for `.rated` / `.unrated` / `.awaitingImport`;
+    /// `nil` for `.notRatedLeague` (there is no league to name).
+    let leagueId: UUID?
+    let leagueName: String?
+    let strategyKey: String?
+    /// The headline rating — `nil` on every non-`.rated` arm.
+    let current: Double?
     /// What the player's last rated match did to them — the "+12 last match"
     /// chip. `nil` means THERE IS NO MOVE TO REPORT and the card must render
     /// nothing (no chip, no arrow, no tone) rather than a zero: either that
     /// match ESTABLISHED this rating instead of moving it, or no rated match
     /// lies behind the current value at all (a `manual` override / `import`).
+    /// Also `nil` on every non-`.rated` arm.
     ///
     /// Optional for the same wire reason as `RatingChange.delta` — the API sends
     /// `float | None` (`Generated/Types.swift`) with the key always present — and
     /// it is a SECOND, independent decode blocker: `recentResults` is decoded
     /// first, so its failure masked this one entirely.
     let delta: Double?
-    let peak: Double
+    /// `nil` on every non-`.rated` arm — a peak is a rating they held, and they
+    /// hold none.
+    let peak: Double?
+    /// "Top N%" — only once the rated population clears the server's threshold.
+    /// Below that the card shows `rank`/`population` instead; `nil` on every
+    /// non-`.rated` arm too.
     let percentile: Int?
+    /// The player's 1-based position among the league's rated members, and how
+    /// many rated members there are — the fallback "#N of M" line when
+    /// `percentile` is suppressed. `nil` on every non-`.rated` arm.
+    let rank: Int?
+    let population: Int?
     let sparkData: [Double]
     let streak: DashboardStreak?
     let stats: [DashboardRatingStat]
@@ -147,8 +189,11 @@ struct DashboardRatingStat: Decodable {
 
 extension DashboardRating {
     /// Human label for the rating strategy, mirroring `ratingStrategyLabel`
-    /// in `web-client/src/components/dashboard/dashboard-page.tsx`.
-    var strategyLabel: String {
+    /// in `web-client/src/components/dashboard/your-game-row.tsx`. `nil` when
+    /// `strategyKey` is `nil` (any non-`.rated`/`.unrated`/`.awaitingImport`
+    /// arm), so the subtitle can fall back to a bare window instead of a label.
+    var strategyLabel: String? {
+        guard let strategyKey else { return nil }
         switch strategyKey {
         case "glicko2": return "Glicko-2"
         case "manual": return "Manual"
