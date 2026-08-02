@@ -1,0 +1,173 @@
+name: publish-images
+
+# Builds the two images UAT actually runs -- `api/Dockerfile.dev` and
+# `web-client/Dockerfile.uat` -- and pushes them to GHCR, so a deploy pulls a
+# published artifact instead of one built on the operator's laptop. See
+# docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
+#
+# Trigger: push to `main` only. Deliberately NOT on `pull_request` -- an image
+# built from a PR head is not deployable (`redeploy-uat.sh` refuses any ref but
+# `main`), so a PR build would burn ~25 minutes of emulated-arm64 runner to
+# produce something nothing can consume. The accepted cost is that a broken
+# build is discovered after merge rather than before it.
+#
+# Also deliberately NOT path-filtered, but for a different reason than
+# `api.yml`'s (which is about required status checks). Here it is because
+# `redeploy-uat.sh` looks the image up by the deploying commit's short SHA:
+# every commit on `main` must therefore have images published under its own
+# SHA, including commits that touch only docs. A path filter would leave holes
+# on `main` that are simply undeployable.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One publish at a time per ref. Two overlapping runs would race the moving
+# `:main` tag and could leave it pointing at the older of the two commits.
+# Never cancel in progress: every commit on `main` needs its own images.
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+# `packages: write` is what pushes to GHCR; the built-in GITHUB_TOKEN covers
+# it, so the push side needs no secret of its own.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/mightymoose/fortymm-api
+  WEB_IMAGE: ghcr.io/mightymoose/fortymm-web-client
+  # UAT's k3d cluster runs on the operator's (arm64) machine, not on a runner,
+  # so amd64 alone would not run there; a later Hetzner box is amd64. One
+  # manifest list per tag serves both. The arm64 leg is QEMU-emulated here and
+  # dominates the run time -- that cost is accepted deliberately.
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  tag:
+    name: Resolve the image tag
+    runs-on: ubuntu-latest
+    outputs:
+      short-sha: ${{ steps.sha.outputs.short-sha }}
+    steps:
+      - name: Refuse to publish from a non-main ref
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::publish-images only publishes main (got ${GITHUB_REF}); a non-main run would move the :main tag onto an unreviewed commit."
+            exit 1
+          fi
+
+      # A FIXED 12-character truncation of the full SHA -- deliberately NOT
+      # `git rev-parse --short`. That command picks its length from the
+      # repository's object count (`core.abbrev=auto`), so the same commit
+      # abbreviates to 7 in a shallow CI clone, 8 in a full clone of this repo
+      # today, and 9 once it grows -- and an operator who has set `core.abbrev`
+      # gets something else again. The deploy script looks the image up by this
+      # exact string, so a length that drifts between the two clones is a
+      # tag-not-found on a commit that was published perfectly well.
+      #
+      # Truncating $GITHUB_SHA is immune to all of that: no git config, no
+      # object count, no checkout. It is why this job clones nothing.
+      # `scripts/redeploy-uat.sh` MUST use the same 12-char truncation.
+      - name: Compute the image tag
+        id: sha
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::12}"
+          echo "short-sha=${short}" >> "$GITHUB_OUTPUT"
+          echo "Publishing \`${GITHUB_SHA}\` as \`:${short}\` (and moving \`:main\`)." >> "$GITHUB_STEP_SUMMARY"
+
+  api:
+    name: fortymm-api
+    needs: tag
+    runs-on: ubuntu-latest
+    # The emulated arm64 leg is slow; ~25 min is normal, so allow headroom
+    # without letting a wedged build hold a runner all day.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: api
+          file: api/Dockerfile.dev
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ needs.tag.outputs.short-sha }}
+            ${{ env.API_IMAGE }}:main
+          # Distinct scope per image. A shared scope makes the two builds
+          # overwrite each other's cache manifest, so each run starts cold --
+          # which is exactly what we cannot afford with an emulated arm64 leg.
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          # No provenance attestation: it adds an `unknown/unknown` entry to the
+          # manifest list, and the deploy pins that list by digest. Keep the
+          # index to exactly the two platform manifests it claims to hold.
+          provenance: false
+
+  web-client:
+    name: fortymm-web-client
+    needs: tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: web-client
+          file: web-client/Dockerfile.uat
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ needs.tag.outputs.short-sha }}
+            ${{ env.WEB_IMAGE }}:main
+          # `VITE_*` values are baked into the bundle at build time, so they are
+          # fixed here rather than by the operator's `.env`.
+          #
+          # The Faro collector is a same-origin path, not a secret, and is
+          # passed unconditionally: where nginx has no `/faro/` block (the QA
+          # shape) the beacons simply 404, which is harmless.
+          #
+          # The Maps key is a *browser* key -- readable in the shipped bundle
+          # either way. If the repository secret is unset it expands to empty,
+          # which matches the Dockerfile's own default: the build still
+          # succeeds and the map degrades to its text fallback. Nothing here
+          # fails on a missing key.
+          build-args: |
+            VITE_FARO_COLLECTOR_URL=/faro/collect
+            VITE_GOOGLE_MAPS_API_KEY=${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          cache-from: type=gha,scope=web-client
+          cache-to: type=gha,mode=max,scope=web-client
+          provenance: false
