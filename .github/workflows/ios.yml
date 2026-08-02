@@ -161,6 +161,6 @@ jobs:
           xcodebuild test \
             -project Fortymm.xcodeproj \
             -scheme Fortymm \
-            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
             -only-testing:FortymmUITests \
             CODE_SIGNING_ALLOWED=NO
