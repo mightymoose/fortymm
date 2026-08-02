@@ -71,7 +71,10 @@ test.describe('Tournament — round-robin lifecycle', () => {
     // The inert scaffolding, over the API, as the director (so it comes back
     // `can_edit: true` and the browser sees the owner controls).
     const name = `RR ${faker.string.alphanumeric(8)}`
-    const { tournamentId, eventId, poolId } = await seedTournament(director, name)
+    const { tournamentId, eventId, poolId, tables } = await seedTournament(
+      director,
+      name,
+    )
 
     // The second entrant — a wholly separate guest, searchable as an opponent.
     const opponent = await mintGuest(baseURL!)
@@ -119,7 +122,7 @@ test.describe('Tournament — round-robin lifecycle', () => {
     // `pending → in_progress` and makes it scorable (#1073). We need the fixture
     // id, not just the match id, to address its placement.
     const fixture = await firstFixture(director, tournamentId, eventId)
-    await callFixture(director, tournamentId, fixture.id)
+    await callFixture(director, tournamentId, fixture.id, tables[0].id)
     await detail.reload(tournamentId)
     // Now the fixture reads live, and its deep-link is still there to follow.
     await expect(detail.fixtureMatchStatus(eventId)).toHaveText('In progress')

@@ -24,9 +24,12 @@ import { findUserId, mintGuest, type Guest } from './match-api'
 const API = '/api/v1'
 const CSRF_HEADER = 'x-csrf-token'
 
-/** The id of the one table seeded into the tournament's catalogue, referenced by
- * the event's single pool. A round-robin pool wants at least one table. */
-const TABLE_ID = 't1'
+/** The **label** of the one table seeded into the tournament's catalogue, reserved by
+ * the event's single pool. A round-robin pool wants at least one table.
+ *
+ * A label, not an id, because the id is no longer the seed's to choose (see
+ * `TableSpec`). */
+const TABLE_LABEL = 'Table 1'
 /** The id of the event's single pool — a round-robin needs ≥1 pool, and two
  * entrants in one pool is exactly one fixture: the minimal playable draw. */
 const POOL_ID = 'pool-a'
@@ -62,8 +65,34 @@ function tomorrowUtc(): string {
   return new Date(Date.now() + DAY_MS).toISOString().slice(0, 10)
 }
 
-/** One table of the tournament's catalogue (`TournamentTable` on the wire). */
+/** One table of the tournament's catalogue, as a client **sends** it
+ * (`TournamentTableWrite` on the wire): what it is called and where it stands, and
+ * deliberately **no id**.
+ *
+ * A table is a row now, and its id is minted by the database (ADR 20260801, "a
+ * placement names a real table, and only that is an invariant"). The write shape has no
+ * `id` field at all and is `extra="forbid"`, so a seed that supplies its own `t1` is a
+ * **422 naming the field**, not a stack that agrees to call the table `t1` — which is
+ * exactly how this helper broke when the catalogue became a real table.
+ *
+ * So nothing here names a table by id. A pool cites the tables it reserves by
+ * **label** (`PoolSpec.tableLabels`), and anything that needs the real id reads it back
+ * off the create response (`StoredTable`, returned by `createTournament` and
+ * `seedTournament`). The label is also the vocabulary the server's own in-use refusal
+ * speaks, so a spec asserting on that sentence and a spec seeding the catalogue name
+ * the same table the same way. */
 export interface TableSpec {
+  readonly label: string
+  readonly court: string
+}
+
+/** One table as the API **reads it back** (`TournamentTable` on the wire): what was
+ * sent, plus the uuid the server minted for it.
+ *
+ * The only place a spec can learn a table id — and the id everything downstream is
+ * keyed by: a fixture's `table_id`, the schedule board's table sections, a pool's
+ * `table_ids`. */
+export interface StoredTable {
   readonly id: string
   readonly label: string
   readonly court: string
@@ -79,14 +108,21 @@ export interface TableSpec {
  * order — and the thing `tournament-pool-order.spec.ts` seeds deliberately at odds with
  * the ids' lexicographic order.
  *
- * `tableIds` is optional because the single-pool default reserves the whole catalogue; a
- * multi-pool seed usually wants a table each, so ten pools raise no double-booking
- * warning over one shared table. */
+ * `tableLabels` is optional because the single-pool default reserves the whole catalogue;
+ * a multi-pool seed usually wants a table each, so ten pools raise no double-booking
+ * warning over one shared table.
+ *
+ * Tables are cited by **label**, not by id: the ids are minted by the server (see
+ * `TableSpec`), so at the moment a caller writes down its pools there is no id to name.
+ * `seedTournament` resolves each label against the catalogue it just created, and throws
+ * on one that names no seeded table rather than sending a reservation the solver would
+ * quietly intersect away to nothing. */
 export interface PoolSpec {
   readonly id: string
   readonly name: string
-  /** The catalogue tables this pool reserves. Omitted = **every** seeded table. */
-  readonly tableIds?: ReadonlyArray<string>
+  /** The catalogue tables this pool reserves, **by label**. Omitted = **every** seeded
+   * table. */
+  readonly tableLabels?: ReadonlyArray<string>
 }
 
 /** A venue's six free-text address components (`AddressInput` on the wire). The
@@ -168,9 +204,16 @@ export interface SeedTournamentOptions {
   readonly address?: AddressInput | null
 }
 
-/** A seeded tournament and the ids a spec needs to address it and its event. */
-export interface SeededTournament {
+/** A created tournament and the catalogue the server minted for it. */
+export interface CreatedTournament {
   readonly tournamentId: string
+  /** The seeded tables **as stored**, in the order they were sent — each now carrying
+   * the uuid the server minted. The only handle a caller has on a table id. */
+  readonly tables: ReadonlyArray<StoredTable>
+}
+
+/** A seeded tournament and the ids a spec needs to address it and its event. */
+export interface SeededTournament extends CreatedTournament {
   readonly eventId: string
   /** The event's **first** pool id — its only one under the default seed — so a spec
    * can scope its standings assertions. */
@@ -198,8 +241,8 @@ export async function createTournament(
   director: Guest,
   name: string,
   options: SeedTournamentOptions = {},
-): Promise<string> {
-  const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
+): Promise<CreatedTournament> {
+  const tables = options.tables ?? [{ label: TABLE_LABEL, court: 'A' }]
   // `??` would be wrong here: `null` is a MEANINGFUL value for this option ("no
   // venue"), and `null ?? default` would silently give it a venue. Only an
   // *omitted* option falls back to the default address.
@@ -225,14 +268,26 @@ export async function createTournament(
       // two routes distinct is deliberate: the browser's explicit `null` is
       // covered through the UI in `tournament-no-venue.spec.ts`.
       ...(address === null ? {} : { address }),
-      // A pool references these tables by id, so the catalogue must carry them.
-      table_catalogue: tables,
+      // A pool references these tables by id, so the catalogue must carry them —
+      // sent WITHOUT ids (see `TableSpec`), and read back below with the ones the
+      // server minted.
+      table_catalogue: tables.map((table) => ({
+        label: table.label,
+        court: table.court,
+      })),
     },
   })
   if (res.status() !== 201) {
     throw new Error(`create tournament failed: ${res.status()} ${await res.text()}`)
   }
-  return ((await res.json()) as { id: string }).id
+  // `TournamentRead` carries the stored catalogue, in the order it was sent — so the
+  // minted ids come back on the create itself and no second read is needed to learn
+  // them.
+  const created = (await res.json()) as {
+    id: string
+    table_catalogue: ReadonlyArray<StoredTable>
+  }
+  return { tournamentId: created.id, tables: created.table_catalogue }
 }
 
 /**
@@ -261,15 +316,18 @@ export async function seedTournament(
     start: '09:00',
     end: '17:00',
   }
-  const tables = options.tables ?? [{ id: TABLE_ID, label: 'Table 1', court: 'A' }]
+  const tables = options.tables ?? [{ label: TABLE_LABEL, court: 'A' }]
   const pools = options.pools ?? [{ id: POOL_ID, name: 'Pool A' }]
   // Resolve the catalogue HERE and pass it down, rather than letting
-  // `createTournament` default it again: the pool below references these tables
-  // by id, so the two must be the same list by construction.
-  const tournamentId = await createTournament(director, name, {
-    ...options,
-    tables,
-  })
+  // `createTournament` default it again: the pools below reserve tables out of the
+  // catalogue it creates, so the two must be the same list by construction. What comes
+  // back (`storedTables`) is that same list carrying the ids the server minted — the
+  // only form in which a pool can name a table on the wire.
+  const { tournamentId, tables: storedTables } = await createTournament(
+    director,
+    name,
+    { ...options, tables },
+  )
 
   const eventRes = await director.ctx.post(
     `${API}/tournaments/${tournamentId}/events`,
@@ -303,7 +361,11 @@ export async function seedTournament(
           id: pool.id,
           name: pool.name,
           slot,
-          table_ids: [...(pool.tableIds ?? tables.map((table) => table.id))],
+          // Labels resolved to the ids the server just minted — a pool's `table_ids`
+          // are catalogue ids on the wire, and a stale one is silently intersected
+          // away by the solver ("a stale ref is a table the pool cannot use"), so a
+          // typo would surface as an inexplicably infeasible day rather than an error.
+          table_ids: tableIdsFor(storedTables, pool.tableLabels),
         })),
       },
     },
@@ -317,10 +379,35 @@ export async function seedTournament(
 
   return {
     tournamentId,
+    tables: storedTables,
     eventId,
     poolId: pools[0].id,
     poolIds: pools.map((pool) => pool.id),
   }
+}
+
+/** Resolve a pool's reserved-table **labels** to the catalogue ids the wire wants;
+ * omitted labels reserve the whole catalogue (the single-pool default).
+ *
+ * Throws on a label the catalogue does not hold. That is not defensiveness for its own
+ * sake: an unresolvable label sent as-is would be a table the pool "reserves" and the
+ * solver cannot see, so the seed would look fine and the day would come back
+ * infeasible three screens away. */
+function tableIdsFor(
+  tables: ReadonlyArray<StoredTable>,
+  labels: ReadonlyArray<string> | undefined,
+): string[] {
+  if (labels === undefined) return tables.map((table) => table.id)
+  return labels.map((label) => {
+    const table = tables.find((candidate) => candidate.label === label)
+    if (!table) {
+      const known = tables.map((t) => t.label).join(', ') || '(none)'
+      throw new Error(
+        `pool reserves "${label}", which the seeded catalogue does not hold — has: ${known}`,
+      )
+    }
+    return table.id
+  })
 }
 
 /**
@@ -668,19 +755,25 @@ function naiveNow(): string {
  * `scheduled_start` defaults to NOW as a naive wall-clock; the placement is *soft*
  * (an out-of-window time is a flag on read, not a rejection), so a near-now time
  * against a far-future pool window still calls the match.
+ *
+ * `tableId` is a **required argument with no default**, and that is the shape of the
+ * ADR rather than a style choice: `tournament_fixtures.table_id` is a real foreign key
+ * now, so a placement names a table of this tournament's catalogue or it is a 422. This
+ * helper has no id it could invent — take one off the seed's `tables`.
  */
 export async function callFixture(
   director: Guest,
   tournamentId: string,
   fixtureId: string,
-  options: { readonly tableId?: string; readonly scheduledStart?: string } = {},
+  tableId: string,
+  options: { readonly scheduledStart?: string } = {},
 ): Promise<void> {
   const res = await director.ctx.patch(
     `${API}/tournaments/${tournamentId}/fixtures/${fixtureId}/placement`,
     {
       headers: { [CSRF_HEADER]: director.csrf },
       data: {
-        table_id: options.tableId ?? TABLE_ID,
+        table_id: tableId,
         scheduled_start: options.scheduledStart ?? naiveNow(),
       },
     },
@@ -688,6 +781,27 @@ export async function callFixture(
   if (res.status() !== 200) {
     throw new Error(`call fixture failed: ${res.status()} ${await res.text()}`)
   }
+}
+
+/**
+ * Read a tournament's table catalogue back **as stored** (`GET /v1/tournaments/{id}`),
+ * in the catalogue's own order.
+ *
+ * The seam a removal is judged at: `createTournament` says what the catalogue was at
+ * birth, and this says what it is now — which is how "the refusal wrote nothing" and
+ * "the confirm removed exactly that one table" become facts read off the server rather
+ * than inferred from a card that left the screen.
+ */
+export async function getTableCatalogue(
+  viewer: Guest,
+  tournamentId: string,
+): Promise<ReadonlyArray<StoredTable>> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  return ((await res.json()) as { table_catalogue: ReadonlyArray<StoredTable> })
+    .table_catalogue
 }
 
 /**

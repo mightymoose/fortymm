@@ -2,6 +2,7 @@ import { Locator, Page } from '@playwright/test'
 
 import { EventEditorPage } from './tournament-detail-page/event-editor.page'
 import { ScheduleTabPage } from './tournament-detail-page/schedule-tab.page'
+import { TablesTabPage } from './tournament-detail-page/tables-tab.page'
 
 /**
  * The tournament detail page (`/tournaments/$tournamentId`) — scoped to the
@@ -41,6 +42,17 @@ export class TournamentDetailPage {
   async openSchedule(): Promise<ScheduleTabPage> {
     await this.page.getByRole('tab', { name: 'Schedule' }).click()
     return new ScheduleTabPage(this.page)
+  }
+
+  /** Switch to the **Tables** tab (the venue catalogue) and return its page object.
+   *
+   * Matched by a `^Tables` regex, not by an exact name: the trigger carries a count
+   * badge, so its accessible name is "Tables 2", and the number is the very thing a
+   * removal changes — an exact-name locator would stop resolving the tab the moment the
+   * spec succeeded at what it came to do. */
+  async openTables(): Promise<TablesTabPage> {
+    await this.page.getByRole('tab', { name: /^Tables/ }).click()
+    return new TablesTabPage(this.page)
   }
 
   // ----- the hero (header) --------------------------------------------------
