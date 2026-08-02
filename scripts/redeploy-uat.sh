@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Rebuild and (re)deploy the fortymm-uat stack on a local k3d Kubernetes
-# cluster via Helm, then smoke-check https://uat.fortymm.com. Run from
-# anywhere — the script cd's to the repo root.
+# (Re)deploy the fortymm-uat stack on a local k3d Kubernetes cluster via Helm,
+# then smoke-check https://uat.fortymm.com. Run from anywhere — the script cd's
+# to the repo root.
+#
+# This script BUILDS NOTHING. The api and web-client images come from GHCR,
+# published per commit on `main` by .github/workflows/publish-images.yml, and
+# are deployed pinned by manifest digest. A merge is therefore not deployable
+# until that workflow finishes (~20-30 min, dominated by the emulated arm64
+# leg). See docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
 #
 # Run from `main` or the legacy `uat-deploy` worktree. The UAT-only config
 # (this script, deploy/uat/ Helm chart, Dockerfiles) lives on main, so
@@ -13,7 +19,7 @@
 # which fans out to the api / web-client Services. So no Caddyfile change is
 # needed when moving from docker-compose to k8s.
 #
-# Requirements: docker, kubectl, helm, k3d (brew install helm k3d).
+# Requirements: docker, curl, kubectl, helm, k3d (brew install helm k3d).
 
 set -euo pipefail
 
@@ -26,10 +32,26 @@ RELEASE="fortymm-uat"
 CHART="deploy/uat"
 HOST_PORT=8084
 NODE_PORT=30084
-API_REPO="fortymm/api"
-WEB_REPO="fortymm/web"
 APNS_KEY="secrets/AuthKey_68VYRLMWWR.p8"
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
+
+# The two GHCR packages publish-images.yml pushes. These three files must name
+# the same packages: the workflow's API_IMAGE/WEB_IMAGE env, deploy/uat/values.yaml's
+# images.{api,web}.repository, and here. (A mismatch is loud, not silent: the
+# digest resolved from one package does not exist in another, so the pull fails.)
+GHCR_OWNER="mightymoose"
+API_PACKAGE="fortymm-api"
+WEB_PACKAGE="fortymm-web-client"
+PUBLISH_RUNS_URL="https://github.com/${GHCR_OWNER}/fortymm/actions/workflows/publish-images.yml"
+
+# How long to wait for the deploying commit's images to appear in GHCR before
+# giving up. The publish is multi-arch and its arm64 leg is QEMU-emulated on an
+# amd64 runner, so ~20-30 min is normal and the jobs themselves allow 90; 40
+# minutes covers a normal run plus queue time without hanging a terminal all
+# day. Deploying straight after a merge is the case this exists for. Override
+# with DIGEST_WAIT_TIMEOUT_S=0 to fail immediately instead of waiting.
+DIGEST_WAIT_TIMEOUT_S="${DIGEST_WAIT_TIMEOUT_S:-2400}"
+DIGEST_POLL_INTERVAL_S="${DIGEST_POLL_INTERVAL_S:-30}"
 
 # Observability stack (kube-prometheus-stack + loki-stack + tempo) in its own
 # namespace/release. Set DEPLOY_OBSERVABILITY=false to skip it.
@@ -41,7 +63,7 @@ DEPLOY_OBSERVABILITY="${DEPLOY_OBSERVABILITY:-true}"
 # Read a single value from .env, stripping one layer of surrounding quotes.
 read_env() { grep "^$1=" .env | head -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//"; }
 
-for bin in docker kubectl helm k3d; do
+for bin in docker curl kubectl helm k3d; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found on PATH." >&2; exit 1; }
 done
 
@@ -66,22 +88,23 @@ else
   echo "(advanced $branch: $before -> $after)"
 fi
 
-# Tag every build with a unique id (post-merge commit + build epoch) instead of
-# a static `:uat`. The tag is the image string in the pod template, so a unique
-# tag makes `helm upgrade` see a changed template and roll both deployments
-# atomically (honoring the zero-downtime RollingUpdate). With the old mutable
-# `:uat` tag the template never changed, so a redeploy re-imported new content
-# under the same tag but never rolled — and when only one web replica later
-# restarted on its own it drifted onto the new build while its sibling stayed on
-# the old one. The two content-hashed SPA bundles then sat behind the
-# round-robin routing nginx, so ~half of loads fetched index.html from one pod
-# but got its `assets/index-*.js` chunk routed to the other → 404 → blank page.
-# The epoch suffix forces a fresh roll even on a same-commit rebuild. (Old
-# unique tags accumulate in the k3d image store; prune with `k3d image` /
-# `docker image prune` if it grows.)
-IMAGE_TAG="$(git rev-parse --short HEAD)-$(date +%s)"
-API_IMAGE="${API_REPO}:${IMAGE_TAG}"
-WEB_IMAGE="${WEB_REPO}:${IMAGE_TAG}"
+# The tag CI published this commit's images under: a FIXED 12-character
+# truncation of the full SHA, computed AFTER the merge above so it names what is
+# actually about to be deployed.
+#
+# Deliberately NOT `git rev-parse --short`. That picks its length from the
+# repository's object count (`core.abbrev=auto`) and from any `core.abbrev` the
+# operator has set — 8 characters in this clone today, 9 once it grows, 7 in a
+# shallow clone. publish-images.yml tags with `${GITHUB_SHA::12}`, and the two
+# MUST agree exactly: a length that drifts turns a commit that published
+# perfectly well into a tag-not-found. Keep this line and that one in lockstep.
+#
+# There is no epoch suffix any more, and reintroducing one would be a mistake.
+# It existed because a LOCAL rebuild could produce different content under one
+# commit, so the pod template had to change to force a roll. Published images
+# are immutable and pinned below by digest, so a same-commit redeploy is a
+# correct no-op — byte-identical content has nothing to roll to.
+IMAGE_TAG="$(git rev-parse HEAD | cut -c1-12)"
 
 # --- cluster ----------------------------------------------------------------
 echo
@@ -106,31 +129,168 @@ KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 
 # --- images -----------------------------------------------------------------
-echo
-echo "==> Building images"
-docker build -t "$API_IMAGE" -f api/Dockerfile.dev api
-# Enable Grafana Faro in the UAT bundle: telemetry posts same-origin to
-# /faro/collect, which the routing nginx forwards to Alloy in `monitoring`.
-WEB_BUILD_ARGS=()
-if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
-  WEB_BUILD_ARGS+=(--build-arg "VITE_FARO_COLLECTOR_URL=/faro/collect")
-fi
-# Bake the browser Google Maps key into the UAT bundle when the operator has set
-# it in .env. OPTIONAL: unset/blank => no build arg, the bundle ships without a
-# Maps key and the map component falls back to a text render (keyless build stays
-# valid). This is the *browser* key; the server-side GOOGLE_GEOCODING_API_KEY is
-# synced into the fortymm-uat-env Secret below, not passed as a build arg.
-# `|| true`: read_env greps .env under `set -e -o pipefail`, so an absent
-# (optional) line would otherwise abort the deploy — swallow that miss.
-VITE_GOOGLE_MAPS_API_KEY="$(read_env VITE_GOOGLE_MAPS_API_KEY || true)"
-if [ -n "$VITE_GOOGLE_MAPS_API_KEY" ]; then
-  WEB_BUILD_ARGS+=(--build-arg "VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY")
-fi
-docker build -t "$WEB_IMAGE" "${WEB_BUILD_ARGS[@]+"${WEB_BUILD_ARGS[@]}"}" -f web-client/Dockerfile.uat web-client
+# Nothing is built here. Each package's `:<12-char sha>` tag is resolved to the
+# digest of its MANIFEST LIST (the multi-arch index, not one platform's
+# manifest) through the registry v2 API, anonymously — the packages are public,
+# which is also why the chart carries no imagePullSecrets. The pods then name
+# `repository@sha256:…`, so "every replica runs the same bytes" is structural
+# rather than conventional; see the "UAT redeploy lands stale code" incident in
+# deploy/CLAUDE.md for what it costs when it isn't.
+#
+# That one anonymous read doubles as the public-visibility preflight, at no
+# extra request: GHCR publishes a package PRIVATE on its first push even from a
+# public repo, and an anonymous read of a private package is refused — so if the
+# resolve succeeds, the cluster can pull. Failing here with the click-path beats
+# an ErrImagePull discovered five minutes into `helm --wait`.
+
+# Mint an anonymous pull token for one package. GHCR wants a bearer token even
+# for public packages. A package that is private — or that no successful publish
+# has created yet — gets no token at all: the endpoint answers with an
+# {"errors":[{"code":"DENIED",…}]} body carrying no `token` field. That absence
+# is the visibility signal.
+#
+# Returns: 0 + token on stdout, 2 if ghcr.io was unreachable (curl already said
+# why on stderr, and that is NOT a visibility problem), 1 if access was denied.
+ghcr_pull_token() {
+  local pkg="$1" body token
+  body="$(curl -sS --max-time 20 \
+    "https://ghcr.io/token?scope=repository:${GHCR_OWNER}/${pkg}:pull")" || return 2
+  token="$(printf '%s' "$body" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
+# The one-time-per-package manual step, printed wherever the registry says no.
+ghcr_visibility_help() {
+  local pkg="$1"
+  echo "ERROR: anonymous pull DENIED for ghcr.io/${GHCR_OWNER}/${pkg}." >&2
+  echo "       Either no publish has created this package yet, or it is still private." >&2
+  echo "       GHCR publishes a package private on its first push even from a public repo," >&2
+  echo "       and visibility is not inherited from the repo. Flip it BY HAND, once per" >&2
+  echo "       package (never again after that):" >&2
+  echo "         github.com/${GHCR_OWNER}/fortymm -> Packages -> ${pkg} ->" >&2
+  echo "         Package settings -> Change visibility -> Public" >&2
+  echo "       The workflow cannot do this: GITHUB_TOKEN can push to a package but cannot" >&2
+  echo "       change its visibility. Runs: $PUBLISH_RUNS_URL" >&2
+}
+
+# HEAD one manifest and print its Docker-Content-Digest. HEAD is enough — the
+# digest is a response header — and skips pulling a body we would discard.
+#
+# The Accept header is load-bearing, and its failure mode is nastier than it
+# looks. It names the OCI image index and the Docker manifest-list media types,
+# so the registry answers for the multi-arch INDEX and returns the index's
+# digest. GHCR does not content-negotiate down to a platform manifest when those
+# types are missing — measured against a public multi-arch package, dropping
+# this header (or sending only the single-manifest type) returns a flat **404**.
+# That would read here as "not published yet" and send the operator into a
+# 40-minute wait for an image that has existed all along. Do not trim it.
+#
+# Returns: 0 + digest on stdout, 2 if the tag is not there (404), 3 if the
+# registry refused the read (401/403), 1 otherwise. The 401/403 case is
+# defensive: GHCR refuses a package we may not read at the TOKEN endpoint above,
+# and answers this endpoint 404 — not 403 — when the token is valid but scoped
+# to another package, so in practice a refusal never reaches here. It is kept so
+# an unauthenticated or differently-behaved registry read reports "denied"
+# rather than being mistaken for "not published yet" and waited on.
+ghcr_manifest_digest() {
+  local pkg="$1" tag="$2" token="$3" headers status digest
+  headers="$(mktemp)"
+  status="$(curl -sS --max-time 20 --head -o /dev/null -D "$headers" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+    "https://ghcr.io/v2/${GHCR_OWNER}/${pkg}/manifests/${tag}")" || { rm -f "$headers"; return 1; }
+  # Header names are case-insensitive and the line ends in CRLF; awk (not grep)
+  # so a no-match can't abort the pipeline under `set -o pipefail`.
+  digest="$(tr -d '\r' <"$headers" | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tail -1)"
+  rm -f "$headers"
+  case "$status" in
+    200)
+      # A 200 with no digest header would leave $digest empty, and an empty
+      # digest is the one bad value the chart tolerates (it falls back to the
+      # tag). Refuse to print it.
+      [ -n "$digest" ] || { echo "ERROR: ${pkg}:${tag} returned 200 with no Docker-Content-Digest header." >&2; return 1; }
+      printf '%s' "$digest"
+      ;;
+    404) return 2 ;;
+    401 | 403) return 3 ;;
+    *) echo "ERROR: unexpected HTTP $status resolving ghcr.io/${GHCR_OWNER}/${pkg}:${tag}." >&2; return 1 ;;
+  esac
+}
+
+# Resolve one package's tag to its manifest-list digest, waiting out a publish
+# that is still running. Prints ONLY the digest on stdout — every progress and
+# error line goes to stderr, because callers capture this in `$(…)`.
+resolve_published_digest() {
+  local pkg="$1" tag="$2" token digest rc started deadline now attempt=0
+  started="$(date +%s)"
+  deadline=$(( started + DIGEST_WAIT_TIMEOUT_S ))
+  while :; do
+    # Re-minted every attempt on purpose: these tokens are short-lived, and a
+    # wait measured in tens of minutes would otherwise start 401ing halfway
+    # through and read as a registry error.
+    rc=0
+    token="$(ghcr_pull_token "$pkg")" || rc=$?
+    case "$rc" in
+      0) ;;
+      2) echo "ERROR: could not reach ghcr.io for a pull token (see curl's message above)." >&2
+         return 1 ;;
+      *) ghcr_visibility_help "$pkg"; return 1 ;;
+    esac
+
+    rc=0
+    digest="$(ghcr_manifest_digest "$pkg" "$tag" "$token")" || rc=$?
+    case "$rc" in
+      0) printf '%s' "$digest"; return 0 ;;
+      2) ;;  # tag not there yet — fall through to the wait below
+      3) ghcr_visibility_help "$pkg"; return 1 ;;
+      *) return 1 ;;  # already explained itself; not worth retrying
+    esac
+
+    now="$(date +%s)"
+    if [ "$now" -ge "$deadline" ]; then
+      echo "ERROR: no image published for ghcr.io/${GHCR_OWNER}/${pkg}:${tag} after ${DIGEST_WAIT_TIMEOUT_S}s." >&2
+      echo "       Commit $(git rev-parse HEAD) has no images. Either publish-images is still" >&2
+      echo "       running or it failed for this commit, or HEAD is not a commit that exists on" >&2
+      echo "       origin/main (only pushed main commits are ever published)." >&2
+      echo "       Check $PUBLISH_RUNS_URL, then re-run this script." >&2
+      echo "       NOT deploying an older commit instead: silently running something other than" >&2
+      echo "       the commit you asked for is the failure mode this whole path exists to remove." >&2
+      return 1
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 1 ]; then
+      echo "    ghcr.io/${GHCR_OWNER}/${pkg}:${tag} not published yet — waiting up to ${DIGEST_WAIT_TIMEOUT_S}s." >&2
+      echo "    (multi-arch publish takes ~20-30 min: $PUBLISH_RUNS_URL)" >&2
+    elif [ $((attempt % 4)) -eq 0 ]; then
+      echo "    still waiting for ${pkg}:${tag} ($(( now - started ))s elapsed of ${DIGEST_WAIT_TIMEOUT_S}s)" >&2
+    fi
+    sleep "$DIGEST_POLL_INTERVAL_S"
+  done
+}
+
+# Belt and braces on top of the chart's own validation. The chart FAILS the
+# render on a malformed digest, but an EMPTY one is not malformed there — it is
+# the documented "render without a deploy" fallback, so it would quietly deploy
+# the moving `:main` tag instead of this commit. Check the shape here, where an
+# unset digest is unambiguously a bug in this script.
+assert_digest() {
+  local what="$1" value="$2"
+  [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "ERROR: resolved $what digest is not a sha256 manifest digest: '${value}'" >&2
+    exit 1
+  }
+}
 
 echo
-echo "==> Importing images into k3d"
-k3d image import "$API_IMAGE" "$WEB_IMAGE" -c "$CLUSTER"
+echo "==> Resolving published image digests for $IMAGE_TAG"
+API_DIGEST="$(resolve_published_digest "$API_PACKAGE" "$IMAGE_TAG")" || exit 1
+assert_digest "$API_PACKAGE" "$API_DIGEST"
+echo "    ${API_PACKAGE}: $API_DIGEST"
+WEB_DIGEST="$(resolve_published_digest "$WEB_PACKAGE" "$IMAGE_TAG")" || exit 1
+assert_digest "$WEB_PACKAGE" "$WEB_DIGEST"
+echo "    ${WEB_PACKAGE}: $WEB_DIGEST"
 
 # --- secrets ----------------------------------------------------------------
 # Created from the gitignored source-of-truth files, never committed and never
@@ -179,10 +339,15 @@ kubectl create secret generic fortymm-uat-apns \
 # --- deploy -----------------------------------------------------------------
 echo
 echo "==> helm upgrade --install $RELEASE"
+# Pin by digest, not tag. Both replicas of each deployment then name the same
+# content-addressed reference, so they cannot end up on different bytes even if
+# one reschedules later or the `:main` tag moves under us. If this is the same
+# commit that is already deployed the pod templates are unchanged and helm
+# rolls nothing — correct, not a missed deploy.
 helm upgrade --install "$RELEASE" "$CHART" \
   --namespace "$NAMESPACE" \
-  --set images.api.tag="$IMAGE_TAG" \
-  --set images.web.tag="$IMAGE_TAG" \
+  --set images.api.digest="$API_DIGEST" \
+  --set images.web.digest="$WEB_DIGEST" \
   --wait --timeout 5m
 
 # The migrate Job is a post-* Helm hook; --wait above already blocks on it.
@@ -257,3 +422,6 @@ echo "==> Health"
 curl -fsS "$UAT_URL/api/v1/health"
 echo
 echo "Redeployed: $UAT_URL"
+echo "  commit $(git rev-parse HEAD) (published as :$IMAGE_TAG)"
+echo "  ${API_PACKAGE}@${API_DIGEST}"
+echo "  ${WEB_PACKAGE}@${WEB_DIGEST}"
