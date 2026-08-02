@@ -245,6 +245,7 @@ struct DashboardView: View {
                 Text(body)
                     .font(FMFont.ui(FMFont.sm))
                     .foregroundStyle(FMColor.fg3)
+                    .accessibilityIdentifier("dashboard.rating.empty")
             }
         }
     }

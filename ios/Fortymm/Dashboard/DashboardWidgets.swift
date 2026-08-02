@@ -256,6 +256,7 @@ struct DashboardRecentResultsCard: View {
                     .foregroundStyle(FMColor.fg3)
                     .padding(FMSpace.s4)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("dashboard.recentResults.empty")
             } else {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
                     if i > 0 { Rectangle().fill(FMColor.ink700).frame(height: 1) }
