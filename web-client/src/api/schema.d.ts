@@ -1061,7 +1061,36 @@ export interface paths {
         delete: operations["delete_tournament_v1_tournaments__tournament_id__delete"];
         options?: never;
         head?: never;
-        /** Update Tournament */
+        /**
+         * Update Tournament
+         * @description Edit a tournament you own. Absent fields are left alone; a supplied field
+         *     replaces the current value. Owner-only.
+         *
+         *     **`table_catalogue` is an id-keyed diff, sent in full and in order.** Each entry
+         *     either carries the `id` of a table this tournament already has — keeping that table,
+         *     with the `label`, `court` and position this payload gives it — or omits the `id` to
+         *     add a new table, whose id the server mints. **A table no entry names is removed.**
+         *     Send back the catalogue you read, edited: the ids came from the read, and naming an
+         *     id this tournament does not have is a `422` on that entry.
+         *
+         *     **Removing a table that matches are placed at is a `409` naming the table**, and
+         *     nothing is written. To go through with it, repeat the request with
+         *     `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
+         *     are unplaced — table, predicted start and call all cleared — which is a thing worth
+         *     saying on purpose rather than a silent side effect of editing the venue. Removing a
+         *     table that only a *pool* reserves needs no confirmation and produces no refusal; the
+         *     pool simply reserves one fewer.
+         *
+         *     **`address` has three cases and the value alone cannot tell them apart.** Omit it to
+         *     leave the venue and its coordinates untouched; send a real address to move the venue
+         *     (re-geocoded only when its text actually changed, a `409` when it cannot be
+         *     resolved); send `null` — or an object whose six components are all blank — to remove
+         *     the venue entirely.
+         *
+         *     `league_id` may only be changed while the tournament is a `draft`; once it is
+         *     published the ladder is settled (`409`). `status` is not editable here — the
+         *     lifecycle moves only across `POST /v1/tournaments/{id}/transitions`.
+         */
         patch: operations["update_tournament_v1_tournaments__tournament_id__patch"];
         trace?: never;
     };
@@ -1359,8 +1388,8 @@ export interface paths {
          * @description Set (or clear) a fixture's **placement** — its table and its predicted start
          *     (ADR-0790) — and answer with the updated fixture.
          *
-         *     The body is the placement in full: `table_id` (a string ref into the tournament's
-         *     `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+         *     The body is the placement in full: `table_id` (the id of one of the tournament's
+         *     `table_catalogue` tables) and `scheduled_start` (a **naive** wall-clock time, in the
          *     venue's local frame — an offset-aware value is a `422`). `null` on either clears
          *     that half; `(null, null)` unassigns the fixture.
          *
@@ -1384,15 +1413,21 @@ export interface paths {
          *     Every successful write also queues a re-solve (`settings_changed`): the director
          *     just changed the solver's inputs, so the board re-plans around the new pin set.
          *
-         *     **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-         *     pinned, and the placement's constraints — the table belongs to the fixture's pool,
-         *     the time falls inside the pool's window, nothing is double-booked — are flags
-         *     derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
-         *     names no table in the catalogue, is **stored, not rejected**; the queued re-solve
-         *     is what judges the consequences.
+         *     **The table must exist.** A `table_id` that names no table in this tournament's
+         *     `table_catalogue` is a `422` naming the field — the one thing about a placement that
+         *     is an invariant rather than a flag. A placement whose table does not exist is not a
+         *     state you chose; it is a dangling reference nothing can render.
          *
-         *     **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
-         *     history, so its placement can no longer be changed — a `409`. A fixture with no
+         *     **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+         *     pinned, and the placement's other constraints — the table belongs to the fixture's
+         *     pool, the time falls inside the pool's window, nothing is double-booked — are flags
+         *     derived on read, **not** invariants. So an out-of-window time, or a table outside
+         *     the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+         *     the consequences.
+         *
+         *     **The one hard rule about the fixture:** a fixture whose linked match is `completed`
+         *     or `voided` is history, so its placement can no longer be changed — a `409`. A
+         *     fixture with no
          *     match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
          *     match is born `pending` at go-live and only becomes `in_progress` when called, so
          *     neither is the freeze trigger).
@@ -4581,7 +4616,7 @@ export interface components {
             end_date?: string | null;
             address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
-            table_catalogue?: components["schemas"]["TournamentTable"][];
+            table_catalogue?: components["schemas"]["TournamentTableWrite"][];
             /** League Id */
             league_id?: string | null;
         };
@@ -4839,17 +4874,29 @@ export interface components {
          *     The body is the placement in full — both fields are stated together. ``null`` on
          *     either clears that half, and ``(null, null)`` unassigns the fixture entirely.
          *
-         *     **Soft, deliberately.** ``scheduled_start`` is a *prediction*, not a commitment,
-         *     and the placement's constraints — the table belongs to the fixture's pool, the time
-         *     falls inside the pool's window, nothing is double-booked — are **flags derived on
-         *     read, not invariants** (ADR-0790). So this write does **not** reject an
-         *     out-of-window time, nor a ``table_id`` that names no table in the tournament's
-         *     ``table_catalogue`` (a later pool/catalogue edit can dangle the ref; that is a
-         *     flag-on-read concern). They save. Conflict detection is a future scheduler slice.
+         *     **Soft, deliberately — with one exception.** ``scheduled_start`` is a *prediction*,
+         *     not a commitment, and three of the placement's four constraints — the table belongs
+         *     to the fixture's pool, the time falls inside the pool's window, nothing is
+         *     double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
+         *     write does **not** reject an out-of-window time or an off-pool table. They save.
+         *     Conflict detection is the scheduler's business, not this boundary's.
          *
-         *     ``table_id`` is a **string ref** into the tournament's ``table_catalogue`` (names a
-         *     ``TournamentTable.id``) — the same pattern as a fixture's ``pool_id``, not a
-         *     foreign key — and per the soft rule above an unknown id is stored, not refused.
+         *     The exception is the fourth claim: **the table has to exist**. ``table_id`` names a
+         *     ``TournamentTable.id`` in the tournament's ``table_catalogue``, and since the
+         *     catalogue became real rows a fixture's ``table_id`` is a real **foreign key** into
+         *     them, so an id that names no table is a **422 naming this field** rather than
+         *     something stored and hoped about (ADR 20260801, "a placement names a real table, and
+         *     only that is an invariant" — which supersedes exactly one clause of ADR-0790 and
+         *     leaves the rest standing). The three flags are statements about a *relationship*
+         *     between things that each legitimately move, so they must stay soft; "this id
+         *     resolves to a table" is not one of those, and a placement whose table does not exist
+         *     is a dangling pointer nothing downstream can render.
+         *
+         *     The field carries the id's canonical **text** rather than a typed UUID, which is
+         *     also what a pool's ``table_ids`` carry — one representation for a table id, moved in
+         *     one piece rather than a field at a time. A value that is not a well-formed id is
+         *     therefore refused by the same 422 as an unknown one: there is one question here
+         *     ("does this name a table of this tournament?") and it gets one answer.
          *
          *     The one thing the *route* refuses is moving a fixture whose linked match is
          *     ``completed`` or ``voided``: its placement is history (409). A fixture with no match
@@ -4899,8 +4946,9 @@ export interface components {
          *       JSONB, not a foreign key, because pools are value-objects with no table.
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
          *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
-         *       tournament's ``table_catalogue`` — a string ref into JSONB, not a foreign key,
-         *       the same pattern as ``pool_id``.
+         *       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
+         *       foreign key, so this is never a dangling ref (ADR 20260801). Carried as the id's
+         *       text, the same form a pool's ``table_ids`` carry.
          *     * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
          *       **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
          *       label + tz abbrev for display, plus the raw UTC instant for geometry — composed
@@ -5009,18 +5057,102 @@ export interface components {
         TournamentStatus: "draft" | "published" | "live" | "archived";
         /**
          * TournamentTable
-         * @description A physical table in the venue catalogue, referenced by id from pools.
+         * @description A table in the venue catalogue as it is **read back**: everything a client wrote,
+         *     plus the ``id`` the server minted for it.
          *
-         *     Its ``id`` is a ``ValueObjectId`` for the same reason a pool's is: a pool holds a
-         *     list of these strings (``table_ids``) and nothing else connects the two, so an id
-         *     that is the empty string is a table nothing can name — and a ``table_ids`` entry of
-         *     ``""`` would "resolve" against it. It is the same string-ref pattern with the same
-         *     hole, and closing it in one place and not the other would leave the boundary
-         *     half-drawn.
+         *     Deriving it from :class:`TournamentTableWrite` keeps the two shapes one shape plus
+         *     a field, exactly as :class:`Pool` derives from :class:`PoolWrite`: a column added to
+         *     the write side is readable without a second edit, and the two can never disagree
+         *     about what a table *is*.
+         *
+         *     ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a pool's
+         *     ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture side) what a
+         *     foreign key will hold.
          */
         TournamentTable: {
-            /** Id */
+            /** Label */
+            label: string;
+            /** Court */
+            court: string;
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
+        };
+        /**
+         * TournamentTableUpsert
+         * @description One entry of a catalogue a client **edits** (``PATCH /v1/tournaments/{id}``):
+         *     everything :class:`TournamentTableWrite` carries, plus an **optional** ``id`` naming
+         *     a table the tournament already has.
+         *
+         *     The optional id is what makes the catalogue write a **diff** rather than a
+         *     positional overwrite, and it exists because the ADR's removal semantics need one.
+         *     The two cases are exhaustive and mean different things:
+         *
+         *     * ``id`` **present** — "this is the table you already have, with these words". The
+         *       row keeps its id (and therefore every pool ``table_ids`` entry and every fixture
+         *       ``table_id`` that names it) and takes the new ``label``/``court``, and its place
+         *       in the list is its new place in the catalogue's order.
+         *     * ``id`` **omitted** (or ``null``) — "add a table". The server mints its id, exactly
+         *       as on create.
+         *     * a stored table **no entry names** — "remove it". Which is the whole reason this
+         *       field had to arrive: a removal can be *refused*
+         *       (:class:`~app.tournament_errors.TableInUseError`), and a verb that cannot tell
+         *       "the table you renamed" from "a different table at the same index" cannot tell a
+         *       rename from a removal either.
+         *
+         *     That last point is why the by-position stopgap this replaces could not stand.
+         *     Matching the i-th sent against the i-th stored made **reordering swap labels between
+         *     ids**: send the same two tables in the other order and each row kept its id and took
+         *     its neighbour's words, so a fixture placed at "Table 1" started rendering as
+         *     "Table 2". Nothing refused it and nothing could see it — an id is not a position,
+         *     and only the client knows which of its rows is which.
+         *
+         *     An id that names no table of *this* tournament is a 422 on the field, not a silently
+         *     minted new table: a client that names a table it cannot see has a bug, and quietly
+         *     handing it a different id than it asked for would hide it (parse-at-boundaries).
+         *
+         *     It is deliberately **not** on :class:`TournamentTableWrite`, the create shape: a
+         *     tournament being born has no tables to name, so an ``id`` there is still a 422 for
+         *     an unknown field. Nothing about who mints an id has changed — the server still does
+         *     (ADR 20260801); what changed is that a client may now *cite* one it was given.
+         */
+        TournamentTableUpsert: {
+            /** Label */
+            label: string;
+            /** Court */
+            court: string;
+            /** Id */
+            id?: string | null;
+        };
+        /**
+         * TournamentTableWrite
+         * @description A physical table in the venue catalogue, as a client **sends** it: what the
+         *     table is called and where it stands. Nothing else — in particular, not an ``id``.
+         *
+         *     A table is a row now (ADR 20260801, "a placement names a real table"), and its id
+         *     is minted by the database (``gen_random_uuid()``). So the id is simply not a field
+         *     of this model, and ``extra="forbid"`` turns an attempt to send one into a 422 that
+         *     names it — the treatment :class:`PoolWrite` gives ``position`` and the event
+         *     schemas give ``entered``. A server-managed value is kept **off** the write shape
+         *     rather than accepted and then ignored: a client cannot tell from the schema that the
+         *     id it sent decided nothing, and a boundary that silently discards half of a payload
+         *     has to be documented to be understood.
+         *
+         *     That is a real change of who owns a table's identity, and it is the point of the
+         *     ADR. While the catalogue was JSONB, the id was a client-supplied string with nothing
+         *     to key on, which is the only reason a placement naming no table could be *stored*
+         *     rather than refused. The **order** of the list is what a client does control: it is
+         *     the catalogue's order, and the server assigns each table its place from it.
+         *
+         *     This is the shape a **create** takes, and there it is the whole story: a tournament
+         *     being born has no tables, so there is nothing an ``id`` could name. A *patch* is a
+         *     diff over tables that already exist, so its entries derive from this one and add an
+         *     optional ``id`` naming the table they keep (:class:`TournamentTableUpsert`) — which
+         *     is citing an id, not authoring one, and does not disturb who mints them.
+         */
+        TournamentTableWrite: {
             /** Label */
             label: string;
             /** Court */
@@ -5041,12 +5173,18 @@ export interface components {
         /**
          * TournamentUpdate
          * @description Partial update. A field that is *absent* is left unchanged; an explicit
-         *     value replaces the current one. The columns backing ``name`` and
-         *     ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+         *     value replaces the current one. ``name`` maps to a NOT NULL column and
+         *     ``table_catalogue`` to a whole child table, so for those an explicit ``null`` is
          *     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
          *     are different. ``description``/``start_date``/``end_date`` are nullable
-         *     columns and may be cleared. ``table_catalogue`` replaces wholesale when
-         *     present.
+         *     columns and may be cleared.
+         *
+         *     ``table_catalogue``, when present, is the catalogue **in full and in order**, and it
+         *     is applied as an **id-keyed diff** (ADR 20260801): an entry that cites an ``id``
+         *     keeps that table (with the words and the place this payload gives it), an entry with
+         *     no ``id`` adds one, and a stored table no entry cites is **removed**. Citing the id
+         *     is what makes a reorder move *tables* rather than swap labels between ids, and it is
+         *     what lets a removal be refused — see ``unplace_fixtures_on_removed_tables``.
          *
          *     ``address`` is nullable too, as of #1206: **omitted means unchanged; ``null`` — or
          *     an all-blank object, which :data:`SubmittedAddress` normalizes to ``null`` — means
@@ -5060,6 +5198,14 @@ export interface components {
          *     ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). A guard on that route
          *     that left a ``status`` field on this one would have guarded nothing, so
          *     sending ``status`` here is a 422 via ``extra="forbid"``.
+         *
+         *     ``unplace_fixtures_on_removed_tables`` is the **removal opt-in**, not a field of the
+         *     tournament: it decides what happens when this payload's ``table_catalogue`` drops a
+         *     table that matches are placed at. **Omitted** — or ``false``, or ``null`` — the
+         *     whole edit is refused with a ``409`` naming the table, and nothing is written. Set
+         *     ``true``, the removal goes through and those matches are unplaced — table, predicted
+         *     start and pin all cleared — which is why it is said on purpose (ADR 20260801). A
+         *     table that only a *pool* reserves needs no opt-in: the pool reserves one fewer.
          *
          *     ``league_id`` is updatable, but **only while the tournament is ``draft``**
          *     (ADR-0783): once it is published, registration is open and eligibility is live,
@@ -5079,9 +5225,11 @@ export interface components {
             end_date?: string | null;
             address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
-            table_catalogue?: components["schemas"]["TournamentTable"][] | null;
+            table_catalogue?: components["schemas"]["TournamentTableUpsert"][] | null;
             /** League Id */
             league_id?: string | null;
+            /** Unplace Fixtures On Removed Tables */
+            unplace_fixtures_on_removed_tables?: boolean | null;
         };
         /**
          * UnreadCountResponse
