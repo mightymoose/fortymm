@@ -21,8 +21,20 @@ suites rather than invent new ones:
   no MSW equivalent.
 
 The first spec is deliberately narrow: launch → guest session mints →
-Dashboard renders its first-match empty state. It needs no seeded data and
+Dashboard renders its empty state for a fresh guest. It needs no seeded data and
 proves the pipeline (test target, screen objects, backend wiring, CI) end to
 end before more flows are added. Full magic-link login automation is out of
 scope for this decision — there's no email-capture (Mailpit-equivalent) wired
 into the dev backend yet.
+
+**Correction (same day, during `/do-chores`):** the first spec was originally
+written against web's single "Log your first match." hero
+(`web-client/src/components/dashboard/first-match/`), assumed without checking
+the iOS view code. iOS has no such hero — `DashboardView.swift` always renders
+the normal "Your game" section. A fresh guest instead sees two independent,
+already-existing empty states once loaded: the rating card reads "Unrated —
+finish a rated match to start your rating" (`DashboardView.swift:218`) and the
+recent-results card reads "No completed matches yet."
+(`DashboardWidgets.swift:254`). The first spec targets these two instead —
+still zero seeded data, still deterministic, still proves the same pipeline.
+Building a web-parity first-match hero on iOS is out of scope for this arc.
