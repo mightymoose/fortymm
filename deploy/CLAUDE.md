@@ -114,8 +114,8 @@ unprompted.**
   # psql into the postgres pod, then:  DROP SCHEMA public CASCADE; CREATE SCHEMA public;
   helm upgrade ...            # re-runs the migrate Job against the empty schema
   ```
-  **[destructive/shared]** — `DROP SCHEMA` wipes all UAT data. **Always flag for
-  the user; never run unprompted.**
+  **[destructive/shared]** — `DROP SCHEMA` wipes all UAT data; confirm with the
+  user before running it.
 
 ### Compose nginx 502 with stale upstream IPs
 
