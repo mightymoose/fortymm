@@ -15,7 +15,7 @@ Working rules:
 - **Self-verify** every change with the quick compile check
   (`xcodebuild build … CODE_SIGNING_ALLOWED=NO`, per `ios/CLAUDE.md`). For pure-Swift
   logic, verify with a standalone `swiftc` harness in a temp dir.
-- **There is NO test target.** Never add an XCTest file into `Fortymm/` — it feeds the app
+- **There is no test target yet.** Keep XCTest files out of `Fortymm/` — it feeds the app
   target and breaks the build. Standing up a test target is a separate infra decision, out
   of scope.
 - Mind the documented gotchas: stale-dylib incremental builds, TAB-indented
@@ -24,6 +24,7 @@ Working rules:
 - If your change touches API-facing code, `Generated/Types.swift` may need regeneration
   (`mise run regen-ios-api-types`) — that needs a running API and spans layers, so
   **flag it to the main session** rather than attempting it yourself.
-- You **implement but do not ship**: do NOT open PRs or push. The main session ships.
+- You **implement but do not ship**: hand your finished, verified change back to the main
+  session, which owns opening PRs and pushing.
 - When done, return a concise summary: what changed, how you verified it, and any
   cross-layer regen or follow-up the main session needs to handle.
