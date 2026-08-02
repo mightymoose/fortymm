@@ -229,6 +229,62 @@ class PoolSetFrozenError(Exception):
         self.added = added
 
 
+class TableNotInCatalogueError(Exception):
+    """Raised by the edit verb when an entry of a submitted ``table_catalogue`` cites an
+    ``id`` that names no table of **this** tournament's catalogue (ADR 20260801).
+
+    The sibling of :class:`PlacementTableNotFoundError`, one verb over, and refused for
+    the same reason: the id does not resolve, so the field is wrong and will go on being
+    wrong until the client sends a different one. Silently minting a fresh table for it
+    would hand the client back a different id than it asked for, and quietly *remove*
+    whatever table it meant to keep — the two failures a diff must never confuse.
+
+    Carries the ``index`` of the offending entry as well as the id, because a catalogue
+    is a list and a refusal a client cannot attribute to a row is a refusal it cannot
+    render: the HTTP adapter names ``loc: ["body", "table_catalogue", index, "id"]``,
+    the same shape the schema's own 422s on this field have. Never an
+    ``HTTPException``."""
+
+    def __init__(self, index: int, table_id: str) -> None:
+        super().__init__("This tournament's venue catalogue has no table with that id.")
+        self.index = index
+        self.table_id = table_id
+
+
+class TableInUseError(Exception):
+    """Raised by the edit verb when a submitted ``table_catalogue`` would **remove a
+    table that matches are placed at**, without the unplace-and-remove opt-in
+    (ADR 20260801, "a placement names a real table, and only that is an invariant").
+
+    This is the loud half of the ADR's deliberate split. A **pool** that merely reserves
+    a removed table is not consulted at all — it quietly reserves one fewer, because a
+    table breaking or freeing up is ordinary venue traffic. A **placement** gets the
+    refusal, because silently clearing one destroys information on an *unrelated* write:
+    the fixture would stop being "placed at a table that vanished" and become
+    indistinguishable from "nobody ever placed this", as an invisible side effect of
+    renaming the venue. The database refuses by default (``ON DELETE RESTRICT``); the
+    director says yes on purpose.
+
+    It is a 409, not a 403 or a 422 (the same reasoning as :class:`PoolSetFrozenError`,
+    whose house style its sentence follows): the caller is the owner and the payload is
+    well-formed — it is the *state of the world* that forbids the edit, and the
+    identical request succeeds the moment the matches are moved off the table, or the
+    moment the caller sends the opt-in.
+
+    Carries the domain-authored sentence the adapters rebuild verbatim with
+    ``str(exc)``, plus the structured ``tables`` (the at-fault tables' **labels**, never
+    their ids — an id tells a director looking at a page of named tables nothing to act
+    on) and ``placements`` (how many matches would be unplaced) for any adapter that
+    wants to reshape rather than echo. **Nothing is written when it is raised**: it is
+    judged before the diff touches a row, so a refused edit leaves the tournament
+    exactly as it was. Never an ``HTTPException``."""
+
+    def __init__(self, message: str, *, tables: list[str], placements: int) -> None:
+        super().__init__(message)
+        self.tables = tables
+        self.placements = placements
+
+
 class DrawTypeFrozenError(Exception):
     """Raised by the update-event verb when a ``draw_type`` payload would change the
     draw type of an event that **has a draw** (ADR-0786). A draw type is the strategy

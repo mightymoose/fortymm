@@ -468,13 +468,24 @@ async def test_a_completion_during_a_running_solve_sets_the_rerun_flag(
 # cut draw to place.
 
 
-def _catalogue(*labels: str) -> list[dict[str, str]]:
-    """A table-catalogue payload in the shape ``_make_tournament`` stores.
+def _catalogue(*labels: str, keeping: Sequence[str] = ()) -> list[dict[str, str]]:
+    """A table-catalogue PATCH payload: one entry per label, the first
+    ``len(keeping)`` of them citing the table ids in ``keeping``.
 
-    Labels only: a table's id is minted by the server (ADR 20260801), so the write
-    shape has no ``id`` and the catalogue is applied **by position** — the i-th entry
-    here is the i-th table the tournament already holds."""
-    return [{"label": label, "court": "Main"} for label in labels]
+    The catalogue is an id-keyed diff (ADR 20260801), so which entries carry an id is
+    the whole content of the payload: a cited table is KEPT (re-worded at most, which is
+    not a solver-input change), and an entry with no id ADDS a table (which is). Passing
+    no ``keeping`` therefore says "remove every table this tournament has and add these
+    instead" — occasionally what a test means, never what "re-send the catalogue you
+    already had" means."""
+    return [
+        (
+            {"label": label, "court": "Main", "id": keeping[index]}
+            if index < len(keeping)
+            else {"label": label, "court": "Main"}
+        )
+        for index, label in enumerate(labels)
+    ]
 
 
 async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
@@ -537,10 +548,11 @@ async def test_a_table_catalogue_edit_on_a_drawn_tournament_requests_a_settings_
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"cat-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
+    kept = await _catalogue_ids(db_session, tournament_id)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("T1", "T2", "T3")},
+        json={"table_catalogue": _catalogue("T1", "T2", "T3", keeping=kept)},
     )
 
     assert response.status_code == 200, response.text
@@ -558,13 +570,14 @@ async def test_a_rename_only_tournament_patch_requests_no_settings_solve(
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"rn-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
+    kept = await _catalogue_ids(db_session, tournament_id)
 
     renamed = await client.patch(
         f"/v1/tournaments/{tournament_id}", json={"name": "Renamed Open"}
     )
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("T1", "T2")},
+        json={"table_catalogue": _catalogue("T1", "T2", keeping=kept)},
     )
 
     assert renamed.status_code == 200, renamed.text
@@ -580,10 +593,11 @@ async def test_a_table_catalogue_edit_with_no_drawn_event_requests_no_settings_s
     the ledger free of no-op rows while the venue is still being configured."""
     client, owner = authed_client
     tournament_id, _event = await _make_tournament(db_session, owner)
+    kept = await _catalogue_ids(db_session, tournament_id)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
-        json={"table_catalogue": _catalogue("T1", "T2", "T3")},
+        json={"table_catalogue": _catalogue("T1", "T2", "T3", keeping=kept)},
     )
 
     assert response.status_code == 200, response.text

@@ -54,8 +54,21 @@ class VenueTable(Base):
         # Two tables of one tournament never share a place in its order — the same
         # guarantee ``Pool.position`` makes by construction, said here as a constraint
         # because these are rows and a constraint is available.
+        #
+        # DEFERRABLE INITIALLY DEFERRED, because the catalogue's write is an id-keyed
+        # diff and a diff **re-orders**: dragging table B above table A moves B onto a
+        # position A has not vacated yet, and SQLAlchemy has no way to emit two UPDATEs
+        # as one. Checked immediately, that transient collision would refuse a
+        # transaction whose END state is perfectly unique — i.e. the constraint would
+        # forbid reordering, which is one of the two things the diff exists to allow.
+        # Deferring is not a weakening: uniqueness is a claim about the catalogue, and
+        # a catalogue only exists between commits.
         UniqueConstraint(
-            "tournament_id", "position", name="uq_tournament_tables_tournament_position"
+            "tournament_id",
+            "position",
+            name="uq_tournament_tables_tournament_position",
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
 

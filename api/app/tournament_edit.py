@@ -40,6 +40,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_geocoding import geocode_address
+from app.tournament_realtime import stage_event_entrant_hints
 from app.tournament_tables import apply_table_catalogue
 
 
@@ -205,14 +206,28 @@ async def edit_tournament(
     value, so both branches key on ``"address" in updates.model_fields_set``, never on
     ``updates.address is not None``.
 
-    A submitted ``table_catalogue`` is applied **by position**
+    A submitted ``table_catalogue`` is applied as an **id-keyed diff**
     (:func:`~app.tournament_tables.apply_table_catalogue`) rather than assigned: the
-    catalogue is child rows now (ADR 20260801), and a table's id is the server's, so the
-    i-th table sent updates the i-th table stored, a longer list adds and a shorter one
-    removes from the end. That is what stops the catalogue the web client re-sends on
-    every PATCH from re-minting every id — which would dangle every pool's ``table_ids``
-    and unplace every fixture as a side effect of a rename. (Refusing to remove a table
-    a fixture is placed at is the ADR's next step; today the removal goes through.)
+    catalogue is child rows now (ADR 20260801), so an entry citing an ``id`` keeps that
+    row (with this payload's words and place), an entry with no ``id`` adds one, and a
+    stored table no entry cites is removed. Keying on the id is what keeps the catalogue
+    the web client re-sends on every PATCH from re-minting anybody's id — and what makes
+    a **reorder move tables** instead of swapping labels between ids, which the
+    by-position stopgap it replaces did silently.
+
+    That gives the verb two more refusals, both judged **before anything is written**:
+
+    * **422** — an entry citing an id this tournament's catalogue does not hold raises
+      :class:`~app.tournament_errors.TableNotInCatalogueError`, naming the entry.
+    * **409** — a removal that a fixture's **placement** stands in the way of raises
+      :class:`~app.tournament_errors.TableInUseError`, naming the table by label, unless
+      the payload carries ``unplace_fixtures_on_removed_tables``. With the opt-in the
+      removal goes through and those fixtures are unplaced (table, start and pin all
+      cleared) and their events' entrants are hinted. A table only a **pool** reserves
+      needs no opt-in and produces no refusal: the pool quietly reserves one fewer. The
+      asymmetry is the ADR's point — clearing a placement destroys information on an
+      unrelated write, so the database refuses by default and the director says yes on
+      purpose.
 
     Then it applies the remaining fields (``model_dump(exclude_unset=True)``
     already serialized the nested value-objects to plain dicts/lists, so one
@@ -308,23 +323,45 @@ async def edit_tournament(
         else:
             del fields["address"]
 
-    # The catalogue is child ROWS now (ADR 20260801), so it comes out of the generic
-    # ``setattr`` loop: there is no ``table_catalogue`` column to assign. It is applied
-    # by position (:func:`apply_table_catalogue`), which is what keeps a table's
-    # server-minted id — and therefore every ref that names it — alive across the
-    # catalogue the web client re-sends on every PATCH. The schema rejects an explicit
-    # ``null``, so the key being present means a real list.
+    # Neither of these is a column on ``tournaments``, so both come out of the generic
+    # ``setattr`` loop before it runs. The catalogue is child ROWS (ADR 20260801) — a
+    # diff, not an assignment — and the opt-in is a *confirmation about this request*,
+    # not a value the tournament ends up holding, so there is nothing on the row for
+    # either of them to be set on.
+    fields.pop("unplace_fixtures_on_removed_tables", None)
     catalogue_changed = False
+    unplaced_event_ids: tuple[uuid.UUID, ...] = ()
     submitted_catalogue = updates.table_catalogue
     if submitted_catalogue is not None:
         fields.pop("table_catalogue", None)
-        catalogue_changed = apply_table_catalogue(tournament, submitted_catalogue)
+        # The id-keyed diff, and its two refusals — an entry citing an id this
+        # catalogue does not hold, and a removal a placement stands in the way of. Both
+        # raise before a single row is touched, and the commit is at the bottom of this
+        # function, so a refused catalogue leaves the tournament exactly as it was —
+        # including the ``league_id`` this verb may have set two branches above.
+        applied = await apply_table_catalogue(
+            db,
+            tournament,
+            submitted_catalogue,
+            unplace_fixtures=updates.unplace_fixtures_on_removed_tables,
+        )
+        catalogue_changed = applied.changed
+        unplaced_event_ids = applied.unplaced_event_ids
 
     for key, value in fields.items():
         setattr(tournament, key, value)
 
     if catalogue_changed and await tournament_has_drawn_event(db, tournament_id):
         await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
+
+    # The opt-in just took a table and a time off somebody's dashboard panel, and — this
+    # being a *venue* edit rather than a placement one — nothing else tells them: an
+    # unplacing fans out no call and sends no correction, exactly as clearing a
+    # placement through ``place_fixture`` does not. Staged on this transaction, so a
+    # rollback hints nobody. An ordinary catalogue edit unplaces nothing and this is
+    # skipped.
+    if unplaced_event_ids:
+        await stage_event_entrant_hints(db, list(unplaced_event_ids))
 
     await db.commit()
     await db.refresh(tournament)

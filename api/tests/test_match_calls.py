@@ -1491,74 +1491,37 @@ async def _match_status(db: AsyncSession, match_id: uuid.UUID) -> MatchStatus:
     return match.status
 
 
-async def _remove_table(
+async def _drop_table_from_pools(
     db: AsyncSession,
-    tournament_id: uuid.UUID,
     event_id: uuid.UUID,
     table_id: str,
-    *,
-    from_catalogue: bool = True,
-    from_pools: bool = True,
 ) -> None:
-    """Put a placement's table beyond the tournament's venue catalogue and/or every
-    pool's ``table_ids`` — the pre-state each broken-pin repair below reacts to.
-    ``table_id`` is a positional alias (``"t1"``), resolved by :func:`_table`.
+    """Take a table out of every pool's ``table_ids``, leaving it in the tournament's
+    venue catalogue — the pre-state the "pool membership is a preference, not physics"
+    tests below react to. ``table_id`` is a positional alias (``"t1"``), resolved by
+    :func:`_table`.
 
-    The **pools** arm is a plain edit, and always was.
-
-    The **catalogue** arm can no longer be the DELETE it used to be. A fixture's
-    ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` since ADR 20260801, so
-    the database now refuses to remove a table a fixture is placed at — which is the
-    ADR's entire point: a placement is not destroyed as a side effect of editing the
-    venue; the director opts into unplacing it, through the named 409 and the
-    unplace-and-remove opt-in that chore 2c puts on the tournament PATCH.
-
-    What the repair branch under test actually keys on is narrower than "the row was
-    deleted": ``_load_solver_inputs`` compares ``fixture.table_id`` against **this
-    tournament's** catalogue ids, so the state it repairs is "the placement's table is
-    not in this tournament's catalogue". That is what this constructs, in the one way
-    the foreign key still allows — the row survives, re-parented onto a throwaway
-    tournament — so these tests keep asserting about the repair rather than about how
-    the venue got edited.
-
-    Worth naming plainly, because it is a live question for 2c: once removal is
-    unplace-and-remove, a fixture placed at a table that left the catalogue may not be
-    reachable through any supported write at all, and the ``broken_pin_moves`` arm of
-    ``_load_solver_inputs`` would then be defending a state nothing can produce.
-    Whether that arm keeps its reason to exist is 2c's call; it is not this chore's to
-    delete.
+    There used to be a ``from_catalogue`` arm here too, constructing "the placement's
+    table is not in this tournament's catalogue" by **re-parenting the table row onto a
+    throwaway tournament** — the one way ADR 20260801's ``ON DELETE RESTRICT`` foreign
+    key still allowed the state to be built. It is gone with the ``broken_pin_moves``
+    repair it fed (chore 2c). That repair defended a state no production path could
+    produce: the tournament PATCH's diff either refuses to remove a table matches are
+    placed at (the named 409) or unplaces them first, and nothing in ``app/`` ever moves
+    a ``VenueTable`` between tournaments. A helper whose whole job is to manufacture an
+    unreachable state is not a test fixture, it is a second implementation of a bug.
     """
     table_id = await _table(db, event_id, table_id)
-    if from_catalogue:
-        tournament = (
-            await db.execute(select(Tournament).where(Tournament.id == tournament_id))
-        ).scalar_one()
-        elsewhere = Tournament(
-            name="Storage Closet",
-            status=TournamentStatus.draft,
-            address=None,
-            league_id=tournament.league_id,
-            created_by_user_id=tournament.created_by_user_id,
-        )
-        db.add(elsewhere)
-        await db.flush()
-        removed = next(
-            table for table in tournament.tables if str(table.id) == table_id
-        )
-        removed.tournament_id = elsewhere.id
-    if from_pools:
-        event = (
-            await db.execute(
-                select(TournamentEvent).where(TournamentEvent.id == event_id)
-            )
-        ).scalar_one()
-        event.pools = [
-            {
-                **pool,
-                "table_ids": [t for t in pool["table_ids"] if t != table_id],
-            }
-            for pool in event.pools
-        ]
+    event = (
+        await db.execute(select(TournamentEvent).where(TournamentEvent.id == event_id))
+    ).scalar_one()
+    event.pools = [
+        {
+            **pool,
+            "table_ids": [t for t in pool["table_ids"] if t != table_id],
+        }
+        for pool in event.pools
+    ]
     await db.commit()
 
 
@@ -1591,128 +1554,16 @@ async def _usernames(
 
 class TestBrokenPinRepair:
     """Chore 3c: pins are inviolable against optimization, not against
-    physics. A pinned fixture whose table left the venue CATALOGUE is
-    re-placed by the next solve and STAYS a pin (renewed, moved-notified); a
-    pinned fixture whose entrant withdrew is voided (placement cleared, the
-    remaining entrant cancelled-notified). Pool membership is a preference,
-    not physics: an off-pool pin on a table still in the catalogue is the
-    director's legitimate hand and is honored byte-identical. Planned
-    fixtures re-plan silently; pre-live repairs are silent; untouched pins
-    stay byte-identical."""
+    physics. A pinned fixture whose entrant withdrew is voided (placement
+    cleared, the remaining entrant cancelled-notified). Pool membership is a
+    preference, not physics: an off-pool pin on a table still in the catalogue
+    is the director's legitimate hand and is honored byte-identical.
 
-    async def test_a_removed_catalogue_table_moved_correction_and_untouched_control_pin(
-        self,
-        db_session: AsyncSession,
-        solver_queue: Queue,
-        fake_notifications_queue: Queue,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The called match's table vanishes from the catalogue (and, as the
-        settings flow does, from the pool) → the next solve re-places the
-        fixture on a surviving table, still pinned with ``pinned_at``
-        refreshed, count 1→2, exactly one moved notification per entrant
-        carrying the NEW table label — while a healthy pinned control fixture
-        in the very same solve does not move a byte and re-notifies nobody."""
-        tournament_id, event_id = await _make_tournament(
-            db_session, entrants=4, tables=("t1", "t2", "t3")
-        )
-        fixtures = await _all_fixtures(db_session, event_id)
-        target = fixtures[0]
-        control = next(
-            f
-            for f in fixtures
-            if not (
-                {f.entry_a_id, f.entry_b_id} & {target.entry_a_id, target.entry_b_id}
-            )
-        )
-        original_pin_time = BASE - timedelta(minutes=15)
-        # The control sits late on t2, after every other fixture packs in, so
-        # it is uncontended and the solver leaves it byte-for-byte. A called
-        # match's start is a floor, not a constant (ADR "a called match holds
-        # its table and slides later") — an EARLY pin sharing a player with the
-        # rest of the round-robin gets legitimately bumped later, which is not
-        # the "untouched" case this control is here to demonstrate.
-        control_start = BASE + timedelta(minutes=300)
-        await _pin_directly(
-            db_session,
-            target,
-            table_id="t1",
-            start=BASE,
-            pinned_at=original_pin_time,
-        )
-        await _pin_directly(
-            db_session,
-            control,
-            table_id="t2",
-            start=control_start,
-            pinned_at=original_pin_time,
-        )
-        # Captured BEFORE the removal: dropping a table shifts every later
-        # position, so the aliases would name different rows afterwards.
-        survivors = {
-            await _table(db_session, event_id, "t2"),
-            await _table(db_session, event_id, "t3"),
-        }
-        control_table = await _table(db_session, event_id, "t2")
-        await _remove_table(db_session, tournament_id, event_id, "t1")
-        now = BASE - timedelta(minutes=60)
-        _freeze_clocks(monkeypatch, now)
-
-        await _request_and_run_solve(db_session, solver_queue, tournament_id)
-
-        await db_session.refresh(target)
-        await db_session.refresh(control)
-        assert target.table_id in survivors  # re-placed on a survivor
-        assert target.scheduled_start is not None
-        assert target.scheduled_start >= BASE
-        assert target.pinned_at == now  # the promise is renewed, not demoted
-        assert target.call_notified_count == 2
-
-        # The untouched pin: byte-identical, no re-notification.
-        assert control.table_id == control_table
-        assert control.scheduled_start == control_start
-        assert control.pinned_at == original_pin_time
-        assert control.call_notified_count == 1
-
-        target_users = await _users_for_entries(
-            db_session, [target.entry_a_id, target.entry_b_id]
-        )
-        rows = await _call_notifications(db_session)
-        assert len(rows) == 2  # target's pair and nothing else
-        assert {row.user_id for row in rows} == target_users
-        # The label is the catalogue row's, not the id's — ``_make_tournament``
-        # labels its tables ``T1``/``T2``/``T3`` from the ``tables`` argument, and the
-        # copy renders that label rather than the (now UUID) id.
-        new_label = (
-            await db_session.execute(
-                select(VenueTable.label).where(
-                    VenueTable.id == uuid.UUID(target.table_id)
-                )
-            )
-        ).scalar_one()
-        for row in rows:
-            assert row.title == f"Your match moved to {new_label}"
-            assert new_label in row.body
-            # The stored instant round-trips as UTC-aware; the copy renders it in
-            # the venue frame, so compare the venue-local wall-clock.
-            assert (
-                target.scheduled_start.astimezone(VENUE_TZ).strftime("%H:%M")
-                in row.body
-            )
-        jobs = _fanout_jobs(fake_notifications_queue)
-        assert {job.user_id for job in jobs} == target_users
-        assert all(job.collapse_id == f"match-call:{target.id}" for job in jobs)
-
-        ledger = (
-            await db_session.execute(
-                select(ScheduleSolve).where(
-                    ScheduleSolve.tournament_id == tournament_id
-                )
-            )
-        ).scalar_one()
-        assert ledger.status is ScheduleSolveStatus.succeeded
-        assert ledger.fixtures_placed == 5  # 4 plans + the repaired pin
-        assert ledger.fixtures_pinned == 1  # the control's verbatim echo
+    The catalogue-departure repair this class also covered is gone (chore 2c):
+    under ADR 20260801 a placement's table cannot leave the catalogue — the
+    tournament PATCH's diff refuses the removal or unplaces the fixtures first
+    — so the only way its tests could reach the state was to re-parent a table
+    row onto a throwaway tournament, which no production path performs."""
 
     async def test_a_table_dropped_from_the_pool_keeps_the_pin(
         self,
@@ -1740,9 +1591,7 @@ class TestBrokenPinRepair:
             start=start,
             pinned_at=pin_time,
         )
-        await _remove_table(
-            db_session, tournament_id, event_id, "t1", from_catalogue=False
-        )
+        await _drop_table_from_pools(db_session, event_id, "t1")
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
@@ -1792,9 +1641,7 @@ class TestBrokenPinRepair:
             pinned_at=silent_pin_time,
             notified=0,  # placed silently while planning; never announced
         )
-        await _remove_table(
-            db_session, tournament_id, event_id, "t2", from_catalogue=False
-        )
+        await _drop_table_from_pools(db_session, event_id, "t2")
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
@@ -1822,49 +1669,6 @@ class TestBrokenPinRepair:
         assert ledger.status is ScheduleSolveStatus.succeeded
         assert ledger.fixtures_placed == 0
         assert ledger.fixtures_pinned == 1  # echoed verbatim
-
-    async def test_the_moved_correction_copy_renders_the_new_table_label_and_time(
-        self,
-        db_session: AsyncSession,
-        solver_queue: Queue,
-        fake_notifications_queue: Queue,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The moved sentence names the NEW table and HH:MM — asserted whole,
-        per recipient, with the opponent's name. The table is removed from
-        the CATALOGUE only (the pool still names it): catalogue departure
-        alone is the physics that breaks a pin."""
-        tournament_id, event_id = await _make_tournament(
-            db_session, tables=("t1", "t2")
-        )
-        fixture = await _the_fixture(db_session, event_id)
-        await _pin_directly(
-            db_session,
-            fixture,
-            table_id="t1",
-            start=BASE + timedelta(minutes=5),
-            pinned_at=BASE - timedelta(minutes=5),
-        )
-        survivor = await _table(db_session, event_id, "t2")  # before the removal
-        await _remove_table(db_session, tournament_id, event_id, "t1", from_pools=False)
-        _freeze_clocks(monkeypatch, BASE)
-
-        await _request_and_run_solve(db_session, solver_queue, tournament_id)
-
-        await db_session.refresh(fixture)
-        assert fixture.table_id == survivor
-        assert fixture.scheduled_start == BASE  # 09:00 on the survivor
-        entrants = await _entrant_user_ids(db_session, event_id)
-        usernames = await _usernames(db_session, entrants)
-        rows = await _call_notifications(db_session)
-        assert len(rows) == 2
-        for row in rows:
-            (opponent_id,) = entrants - {row.user_id}
-            assert row.title == "Your match moved to T2"
-            assert row.body == (
-                "Your Called Open · Open Singles · Pool A match against "
-                f"{usernames[opponent_id]} now starts around 09:00 on T2."
-            )
 
     async def test_a_withdrawal_sends_cancelled_to_the_remaining_entrant_only(
         self,
@@ -1924,72 +1728,6 @@ class TestBrokenPinRepair:
         assert ledger.status is ScheduleSolveStatus.succeeded
         assert ledger.fixtures_placed == 0
         assert ledger.fixtures_pinned == 0
-
-    async def test_a_planned_fixture_on_a_removed_table_gets_no_moved_or_cancelled(
-        self,
-        db_session: AsyncSession,
-        solver_queue: Queue,
-        fake_notifications_queue: Queue,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Repairs are for promises. A merely *planned* (unpinned) fixture on
-        a removed table is silently re-placed — it was never promised, so
-        nobody is told anything."""
-        tournament_id, event_id = await _make_tournament(
-            db_session, tables=("t1", "t2")
-        )
-        await _place_fixture(
-            db_session, event_id, table_id="t2", start=BASE + timedelta(minutes=60)
-        )
-        survivor = await _table(db_session, event_id, "t1")  # before the removal
-        await _remove_table(db_session, tournament_id, event_id, "t2")
-        _freeze_clocks(monkeypatch, BASE - timedelta(minutes=60))
-
-        await _request_and_run_solve(db_session, solver_queue, tournament_id)
-
-        fixture = await _the_fixture(db_session, event_id)
-        assert fixture.table_id == survivor
-        assert fixture.scheduled_start == BASE
-        assert fixture.pinned_at is None
-        assert fixture.call_notified_count == 0
-        assert await _call_notifications(db_session) == []
-        assert fake_notifications_queue.jobs == []
-
-    async def test_a_pre_live_broken_pin_is_repaired_but_no_moved_correction_is_sent(
-        self,
-        db_session: AsyncSession,
-        solver_queue: Queue,
-        fake_notifications_queue: Queue,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Pre-live pins are silent (free rearranging while planning — ADR),
-        so their repairs are too: the placement is rewritten and the pin
-        renewed, but the count stays untouched and nobody is notified."""
-        tournament_id, event_id = await _make_tournament(
-            db_session, status=TournamentStatus.published, tables=("t1", "t2")
-        )
-        fixture = await _the_fixture(db_session, event_id)
-        await _pin_directly(
-            db_session,
-            fixture,
-            table_id="t1",
-            start=BASE + timedelta(minutes=5),
-            pinned_at=BASE - timedelta(minutes=15),
-            notified=0,  # a silent pre-live pin was never announced
-        )
-        survivor = await _table(db_session, event_id, "t2")  # before the removal
-        await _remove_table(db_session, tournament_id, event_id, "t1")
-        _freeze_clocks(monkeypatch, BASE)
-
-        await _request_and_run_solve(db_session, solver_queue, tournament_id)
-
-        await db_session.refresh(fixture)
-        assert fixture.table_id == survivor
-        assert fixture.scheduled_start == BASE
-        assert fixture.pinned_at == BASE  # repaired and renewed…
-        assert fixture.call_notified_count == 0  # …but nobody was told
-        assert await _call_notifications(db_session) == []
-        assert fake_notifications_queue.jobs == []
 
 
 class TestCallFlipsMatchLive:
