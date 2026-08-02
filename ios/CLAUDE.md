@@ -7,8 +7,8 @@ invariants still apply.
 ## Repo layout
 
 Native SwiftUI app. The `Fortymm.xcodeproj` is managed directly by Xcode — no
-xcodegen / Tuist / SPM-only setup. One app target (`Fortymm`), **no test target**
-(see Gotchas).
+xcodegen / Tuist / SPM-only setup. Two targets: the app (`Fortymm`) and a
+`FortymmUITests` XCUITest UI-testing target (see Gotchas).
 
 Sources live in `Fortymm/`, one folder per page-level feature (`Dashboard/`,
 `Matches/`, `Login/`, `Profile/`, `MatchFlow/`), each holding its views, its
@@ -115,13 +115,49 @@ the boundary, carry typed values inward.** On iOS the parser is **`Codable`**.
 
 ## Gotchas (hard-won — read before you touch these areas)
 
-- **This app has one target and no XCTest target yet.** To verify pure-Swift logic,
-  compile a standalone harness in a temp dir: `swiftc rules.swift main.swift` (copy the
-  source files you need, add a `main.swift` that exercises them), run it, then delete it.
-  Keep that harness outside `Fortymm/` — Xcode 16's synchronized groups auto-add any
-  `.swift` file placed there to the *app* target, and a file that links XCTest breaks the
-  app build. Shipping committed tests requires standing up a test target first — a
-  separate infra decision, not something to sneak in mid-task.
+- **There IS now a `FortymmUITests` XCUITest UI-testing target** (added to automate the
+  Dashboard empty-state flow end to end — see
+  `docs/adr/20260802-ios-e2e-tests-live-in-a-new-xcuitest-ui-test-target.md`). It's wired
+  via a `PBXFileSystemSynchronizedRootGroup` at `ios/FortymmUITests/`, so new `.swift`
+  files dropped there auto-attach to that target — same Xcode-16 sync-group mechanism as
+  the app target, just scoped to a different target: dropping a file in `Fortymm/` still
+  only ever reaches the app target, dropping one in `FortymmUITests/` only ever reaches
+  the test target. Run it with:
+  ```bash
+  xcodebuild test -project Fortymm.xcodeproj -scheme Fortymm \
+    -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:FortymmUITests
+  ```
+  (omit `-only-testing` to run everything; or from Xcode, select the
+  `FortymmUITests`-inclusive `Fortymm` scheme and Product > Test). To point a run at a
+  backend, set `FMM_API_BASE_URL` — same mechanism as a normal run
+  (`Fortymm/Networking/APIClient.swift:24`), but for UI tests it must be explicitly
+  forwarded from the test process's own environment onto
+  `XCUIApplication().launchEnvironment[...]` before `.launch()`, since XCUITest launches
+  the app as a separate process and the test's own env isn't automatically visible to it
+  — see `FortymmUITests/DashboardEmptyStateTests.swift`'s `setUpWithError` for the
+  pattern. Locally/in cloud sessions, point it at `docker-compose.dev.yml` as usual; CI
+  (`ios.yml`, `macos-latest`) instead boots the backend as native processes (Postgres via
+  Homebrew + `uvicorn`, no Docker) because GitHub-hosted macOS runners can't run Docker
+  containers — see
+  `docs/adr/20260802-ios-e2e-ci-runs-the-backend-as-native-processes-not-docker.md`; don't
+  try to add `docker compose` to `ios.yml`.
+
+  **Screen-object + accessibilityIdentifier convention:** one Swift type per screen
+  wrapping `XCUIElement` queries/actions (e.g. `FortymmUITests/ScreenObjects/DashboardScreen.swift`),
+  mirroring the Playwright `page-objects/` pattern in root `e2e/`. Query elements by an
+  explicit `.accessibilityIdentifier(...)` added to the view, not by visible text/label,
+  wherever practical — text/label matching (e.g. matching a `Text`'s literal string) is a
+  documented fallback only for elements that don't yet have an identifier. Add identifiers
+  to a screen's views incrementally, as that screen gains XCUITest coverage — don't
+  blanket-tag a whole screen up front.
+
+  This is still not a general-purpose unit-test target — for pure-Swift, non-UI logic, a
+  standalone `swiftc` harness in a temp dir remains the fastest check and needs no
+  simulator: `swiftc rules.swift main.swift` (copy the source files you need, add a
+  `main.swift` that exercises them), run it, delete it. Keep UI/XCUITest specs in
+  `FortymmUITests/` instead — a file dropped into `Fortymm/` auto-attaches to the app
+  target via the same Xcode 16 sync groups, which can't link XCTest and breaks the app
+  build.
 
 - **Xcode 16 synchronized file groups: new `.swift` files under `Fortymm/` are
   auto-included — no `project.pbxproj` edit needed.** Just create the file. **Non-source**
