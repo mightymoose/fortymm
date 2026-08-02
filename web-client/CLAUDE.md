@@ -1,10 +1,14 @@
 # web-client
 
+Guidance for Claude Code when working in `web-client/` (the Vite/React SPA).
+This file is the source of truth for web-client conventions; the root
+`CLAUDE.md` cross-cutting invariants still apply.
+
 ## Architecture
 
-**Routing is file-based and generated.** `src/routes/*.tsx` files are compiled
-into `routeTree.gen.ts` by the `@tanstack/router-plugin/vite` plugin. Don't
-edit `routeTree.gen.ts` by hand.
+**Routing is file-based and generated.** Edit the source `src/routes/*.tsx`
+files — the `@tanstack/router-plugin/vite` plugin compiles them into
+`routeTree.gen.ts` automatically, so a hand edit there gets overwritten.
 
 **MSW only intercepts in `import.meta.env.DEV`.** See `src/main.tsx` (and the
 `VITE_ENABLE_MSW=false` escape hatch for hitting a real API). The vitest setup

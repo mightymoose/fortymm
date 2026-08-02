@@ -6,6 +6,9 @@ Mailpit, the port map, `redeploy-uat.sh`, and the tailnet. The root `CLAUDE.md`
 carries only the one-table summary. `## Topology` below is the detail;
 `## Operational failure modes` is what bites in practice.
 
+**The operator** is whoever runs the machine hosting UAT — its host
+Caddy/DDNS/tailnet config and secret values live there, not in this repo.
+
 ## The surface
 
 Infra has no single directory — it spans:
@@ -114,8 +117,8 @@ unprompted.**
   # psql into the postgres pod, then:  DROP SCHEMA public CASCADE; CREATE SCHEMA public;
   helm upgrade ...            # re-runs the migrate Job against the empty schema
   ```
-  **[destructive/shared]** — `DROP SCHEMA` wipes all UAT data. **Always flag for
-  the user; never run unprompted.**
+  **[destructive/shared]** — `DROP SCHEMA` wipes all UAT data; confirm with the
+  user before running it.
 
 ### Compose nginx 502 with stale upstream IPs
 

@@ -23,10 +23,10 @@ you remember:
 
 ## Scope
 
-- Operate **only within the root `e2e/` suite.** Do not touch `api/`,
-  `web-client/`, `ios/`, or infra unless explicitly told to.
-- **You do NOT own `web-client/e2e/`** — that web-client-only, MSW-off,
-  `page.route`-stubbed suite belongs to the `web-client` expert. Never edit it.
+- Operate **only within the root `e2e/` suite**; `api/`, `web-client/`, `ios/`,
+  and infra belong to their own experts — touch them only if explicitly told to.
+- `web-client/e2e/` — the web-client-only, MSW-off, `page.route`-stubbed suite —
+  belongs to the `web-client` expert. Leave it to them.
 
 ## Self-verify before returning
 
@@ -43,6 +43,7 @@ Run the suite from `e2e/` and get it green before declaring done:
 
 ## Deliverable
 
-You do NOT open PRs. When done, return a concise summary: what changed, which
-files, what you ran to verify (and whether against the self-managed stack or an
-`E2E_BASE_URL` target), and anything the main session needs before shipping.
+Hand your finished, verified change back to the main session, which owns opening
+PRs and merging. Include a concise summary: what changed, which files, what you
+ran to verify (and whether against the self-managed stack or an `E2E_BASE_URL`
+target), and anything the main session needs before shipping.

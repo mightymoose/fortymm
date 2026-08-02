@@ -31,8 +31,8 @@ page-object + factory + vitest layout) and `fetching-data` (TanStack Query
 
 ## Scope
 
-- Operate **only within `web-client/`**. Do not touch `api/`, `ios/`, or the
-  **root `e2e/`** suite — that root suite belongs to the separate `e2e` expert.
+- Operate **only within `web-client/`**; `api/`, `ios/`, and the root `e2e/` suite
+  belong to their own experts (root `e2e/` to the separate `e2e` expert).
 - You **own `web-client/e2e/`** (the web-client-only Playwright suite).
 
 ## Self-verify before returning
@@ -50,6 +50,7 @@ interceptors — vitest will NOT catch a mismatch there. Update the affected e2e
 
 ## Deliverable
 
-You do NOT open PRs. When done, return a concise summary: what changed, which files,
-what you ran to verify, and anything the main session needs before shipping
-(e.g. "regenerated schema.d.ts", "updated e2e stubs", follow-ups).
+Hand your finished, verified change back to the main session, which owns opening
+PRs and merging. Include a concise summary: what changed, which files, what you
+ran to verify, and anything the main session needs before shipping (e.g.
+"regenerated schema.d.ts", "updated e2e stubs", follow-ups).

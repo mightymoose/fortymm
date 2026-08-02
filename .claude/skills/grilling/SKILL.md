@@ -8,3 +8,11 @@ Interview me relentlessly about every aspect of this plan until we reach a share
 Ask the questions one at a time using the AskUserQuestion tool, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering. Put your recommended answer first and label it "(Recommended)"; include the other real options you're weighing as the remaining choices. The user can always free-type something else via "Other", so don't force a fit — if a question is genuinely open-ended (no small set of discrete options), ask it as plain text instead of forcing it into the tool.
 
 If a question can be answered by exploring the codebase, explore the codebase instead.
+
+<example>
+Question: "Which library should we use for date formatting?"
+Options:
+1. "date-fns (Recommended)" — tree-shakeable, matches the immutable style already used in this codebase
+2. "Luxon" — better timezone handling, but heavier and unused elsewhere in the repo
+3. "Day.js" — smallest bundle, but the moment-compatible API encourages mutation
+</example>

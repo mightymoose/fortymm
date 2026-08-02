@@ -126,6 +126,7 @@ Specs live in `tests/*.spec.ts`; page objects in `page-objects/`
   `docker compose … restart nginx` unwedges an existing stack; starting from no
   stack at all avoids it, which is why the normal `down -v` teardown means you
   never see this.
-- **Don't edit these gates away.** The two `waitForReady` probes in `global-setup`
-  exist for specific documented races (nginx 502 window, `solver` worker
-  subscription). Deleting them makes the suite flake on cold starts.
+- **Keep both `waitForReady` probes in `global-setup`.** They exist for specific
+  documented races (nginx 502 window, `solver` worker subscription) — extend
+  them if readiness requirements change, since removing them makes the suite
+  flake on cold starts.

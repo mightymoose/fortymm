@@ -83,10 +83,12 @@ Repeat until every chore is ticked or every remaining chore is blocked:
      (`api`, `web-client`, `ios`, `infra`, `e2e`). Give the agent the chore's
      "what to build", scope, and **Read-first** pointers. The agents **implement
      but do not ship** — they return a summary, they don't commit or open PRs.
-   - **Parallelize** ready chores that touch **different trees** (dispatch them in
-     one batch). **Serialize across every `[main]` seam** — never start a chore
-     whose `depends-on` includes an unfinished `[main]` chore (this is what keeps
-     the OpenAPI regen ahead of the web/iOS chores that consume the new types).
+   - **Parallelize** ready chores that touch **different trees** — dispatch at
+     most one chore per tree at a time, so a batch never exceeds the number of
+     experts actually in play. **Serialize across every `[main]` seam** — never
+     start a chore whose `depends-on` includes an unfinished `[main]` chore
+     (this is what keeps the OpenAPI regen ahead of the web/iOS chores that
+     consume the new types).
 3. **Tick and commit** — once the implementing agent reports the chore done, tick
    the box, mark the chore's task `completed`, and **commit the chore** — one
    commit, message naming the chore by ID and what it built (`1a [api]: add

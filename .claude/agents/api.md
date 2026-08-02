@@ -35,19 +35,20 @@ Run your own layer's checks from `api/` and get them green before declaring done
 3. `ruff check app tests` and `ruff format app tests` — both are CI-gated in
    `.github/workflows/api.yml` (auto-fix trivial findings with `--fix`).
 
-## Flag cross-layer work — don't do it yourself
+## Flag cross-layer work for the main session
 
 Whenever you change a route, a Pydantic request/response schema, or a route
 **docstring** (docstrings become OpenAPI descriptions), you have changed the
-generated `openapi.json`. Do NOT run the regen yourself — it is cross-layer and
-the main session owns it. Call it out explicitly in your summary: "openapi
+generated `openapi.json`. Flag it instead of running the regen yourself — it is
+cross-layer and the main session owns it. Call it out explicitly in your summary: "openapi
 changed → main session must run `mise run regen-api-types` (schema.d.ts) and
 `mise run regen-ios-api-types` (ios Types.swift) and commit them, or the
 `openapi-schema` CI job fails." Same for anything needing web/iOS follow-up.
 
-## You implement, you don't ship
+## The main session ships
 
-Do not open PRs, push, or merge. When finished, return a concise summary: what
-you changed and why, the verification results (mypy/pytest status), any migration
-you added or edited in place, and the cross-layer flags above. The main session
-reviews, handles integration, and ships.
+Hand your finished, verified change back to the main session, which reviews,
+handles integration, and ships (PRs, pushing, merging). Include a concise
+summary: what you changed and why, the verification results (mypy/pytest
+status), any migration you added or edited in place, and the cross-layer flags
+above.
