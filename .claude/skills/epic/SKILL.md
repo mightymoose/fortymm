@@ -64,10 +64,8 @@ decisions and confirm before continuing.
 
 Breaks the plan into `.claude/work-order.md`: tracer-bullet slices of small,
 agent-tagged chores, with `[main]` steps at every cross-layer seam (OpenAPI
-regen especially). Each chore carries a `Verify` command **and** a `Proves` line
-naming the observable claim that command establishes. The work order ends with a
-`## Testing notes` section — the black-box, user-observable acceptance scenarios
-for the whole arc. Decompose-only.
+regen especially). The work order ends with a `## Testing notes` section — the
+black-box, user-observable acceptance scenarios for the whole arc. Decompose-only.
 
 **Gate:** `/to-chores` already quizzes the user on granularity and requires
 approval before it writes the file. Relay that approval step — do not fabricate
@@ -77,12 +75,9 @@ single-tree change is one slice / one or two chores, not a manufactured epic.
 
 ### 3. `/do-chores` — drive the work order to green, as a stack
 
-Dispatches each chore to its domain-expert subagent in dependency order, then
-**dispatches a fresh `verifier` agent** for every chore (an implementer's "all
-green" is a claim, not evidence, and neither the implementer nor the driver
-grades it) — the verifier re-runs `Verify`, adversarially checks `Proves`, and
-runs the `Demo`. On PASS it ticks the checkbox and **commits the chore**; when a
-slice completes it pushes the slice's branch and opens a **stacked draft PR**.
+Dispatches each chore to its domain-expert subagent in dependency order. On a
+reported done it ticks the checkbox and **commits the chore**; when a slice
+completes it pushes the slice's branch and opens a **stacked draft PR**.
 Serialises across every `[main]` seam; parallelises independent trees.
 
 **One commit per chore, one PR per slice**, each slice branched off the one below
@@ -169,8 +164,8 @@ testing-notes ledger, the tickets moved to Done, and hand off.
 - **Never skip a gate**, even for a "small" change — right-size the *work*, not the
   checkpoints.
 - **Carry the artifact chain**: the agreed plan (+ ADRs) → `.claude/work-order.md`
-  (chores + `Proves` + `## Testing notes` + the stack's branches and PR numbers) →
-  the stacked PRs → the testing-notes ledger. Each phase consumes the previous
+  (chores + `## Testing notes` + the stack's branches and PR numbers) → the
+  stacked PRs → the testing-notes ledger. Each phase consumes the previous
   phase's artifact; don't re-establish context the artifact already holds.
 - **The stack merges bottom-up, in order.** Never merge a slice whose parent is
   still open, and never skip a blocked slice to reach the one above it.

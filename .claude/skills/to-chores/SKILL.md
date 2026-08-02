@@ -89,25 +89,14 @@ any `api` chore that changes a route/schema/docstring, which must complete befor
 the `web-client`/`ios` chores that consume the new types. Wire `depends-on` by
 chore ID.
 
-Every chore must pass the **four-part gate** — split it until all four hold:
+Every chore must pass the **three-part gate** — split it until all three hold:
 
 1. **One agent, one tree** — needs two agents ⇒ split.
 2. **One surface, no "and"** — the "what to build" line names a single
    behavior/surface without conjoining two.
-3. **Independently verifiable** — has a concrete `Verify` command that goes green
-   when the chore is done, a `Proves` line naming the observable claim that green
-   command establishes, **and** a `Demo` showing how to watch it work. If you cannot
-   write a falsifiable `Proves` sentence, the chore isn't a chore yet — it has no
-   definition of done. "The tests pass" is not a claim; "a late-joining cascade
-   user's replayed rating matches a from-scratch replay" is. A chore with no `Demo`
-   is usually a fragment: fold it into the chore that makes it observable.
-4. **Fits one context window** — if the agent would have to read a large slice of
+3. **Fits one context window** — if the agent would have to read a large slice of
    the codebase to do it, it's too big; split it, or point it at an ADR that
    already carries the decision.
-
-Prefer a `Verify` that *fails before the chore and passes after*. A command that was
-already green tells you nothing — say so in `Proves` when the chore adds the very
-test that makes it meaningful.
 
 Describe each chore as **behavior + surface, never hard file paths** (they go
 stale; the agent is a domain expert and auto-loads its unit `CLAUDE.md`). Inline a
@@ -121,10 +110,10 @@ edge cases, regression risks, and *not observable in the UI*. Written in the dom
 language (see `CONTEXT.md`) — never file paths or function names, because the QA agent
 never reads the source.
 
-These are the acceptance criteria for the arc, not a restatement of the chores. A chore's
-`Proves` line is checked by a command; a testing note is checked by a human or by Quinn
-driving a browser. `/qa-review` receives them as **must-cover scenarios** *in addition to*
-its own adversarial exploration, and `/epic` checks them off at the very end.
+These are the acceptance criteria for the arc, not a restatement of the chores. A testing
+note is checked by a human or by Quinn driving a browser. `/qa-review` receives them as
+**must-cover scenarios** *in addition to* its own adversarial exploration, and `/epic`
+checks them off at the very end.
 
 If the plan's whole surface is invisible from the UI (an internal refactor, a background
 job), say so explicitly under *not observable in the UI* rather than inventing UI
@@ -171,8 +160,8 @@ by telling the user the work order is ready and to run `/do-chores`.
 
 ## Completion criterion
 
-The work order is written, every chore passes the four-part gate (including a
-falsifiable `Proves` line), every slice is independently reviewable and mergeable
+The work order is written, every chore passes the three-part gate, every slice
+is independently reviewable and mergeable
 and carries a `Branch:` line with `PR: —`, the `Stack base:` and `Branch prefix:`
 headers are filled, every cross-layer seam has a `[main]` chore, every
 `depends-on` references a real chore ID, the `## Testing notes` section is present,
