@@ -6991,6 +6991,65 @@ async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_un
     assert fixture.pinned_at is None
 
 
+@pytest.mark.parametrize(
+    ("spelling", "opt_in"),
+    [
+        ("omitted", {}),
+        ("false", {"unplace_fixtures_on_removed_tables": False}),
+        ("null", {"unplace_fixtures_on_removed_tables": None}),
+    ],
+)
+async def test_only_an_explicit_true_opts_in_to_unplacing(
+    spelling: str,
+    opt_in: dict[str, Any],
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The opt-in has **one** affirmative spelling and three ways of not saying it —
+    omitted, ``false`` and ``null`` — and all three are refused identically.
+
+    The field is ``bool | None`` on the wire rather than ``bool = False`` for a reason
+    that pytest cannot see: a non-null default is emitted as ``"default": false`` into
+    the JSON schema, and ``openapi-typescript`` promotes any property carrying one to
+    **required** — which made an opt-in for one destructive action mandatory on every
+    unrelated PATCH, down to ``{"name": "…"}``. Omitting a key on a partial update means
+    "unchanged", and it has to stay sayable.
+
+    What that costs is a third wire value, and this test is what keeps it from becoming
+    a third *state*: ``None`` and ``False`` are one answer — nobody opted in — collapsed
+    at ``TournamentUpdate.unplacing_is_confirmed`` before the verb ever sees them. The
+    parametrization is over spellings of the same request, so a future coercion that got
+    ``null`` wrong (or a client that sends it explicitly) cannot quietly start unplacing
+    somebody's schedule."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix=f"opt{spelling[:2]}"
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+            **opt_in,
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert "“Table 1”" in response.json()["detail"], response.text
+    # Nothing written: the table stands and the placement it was protecting stands.
+    reread = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == [table_1, table_2]
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+
+
 async def test_removing_a_catalogue_table_only_a_pool_reserves_succeeds_silently(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

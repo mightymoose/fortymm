@@ -1741,11 +1741,11 @@ class TournamentUpdate(BaseModel):
 
     ``unplace_fixtures_on_removed_tables`` is the **removal opt-in**, not a field of the
     tournament: it decides what happens when this payload's ``table_catalogue`` drops a
-    table that matches are placed at. Left ``false`` (the default) the whole edit is
-    refused with a ``409`` naming the table, and nothing is written. Set ``true``, the
-    removal goes through and those matches are unplaced — table, predicted start and
-    pin all cleared — which is why it has to be said on purpose (ADR 20260801). A table
-    that only a *pool* reserves needs no opt-in: the pool simply reserves one fewer.
+    table that matches are placed at. **Omitted** — or ``false``, or ``null`` — the
+    whole edit is refused with a ``409`` naming the table, and nothing is written. Set
+    ``true``, the removal goes through and those matches are unplaced — table, predicted
+    start and pin all cleared — which is why it is said on purpose (ADR 20260801). A
+    table that only a *pool* reserves needs no opt-in: the pool reserves one fewer.
 
     ``league_id`` is updatable, but **only while the tournament is ``draft``**
     (ADR-0783): once it is published, registration is open and eligibility is live,
@@ -1783,7 +1783,42 @@ class TournamentUpdate(BaseModel):
     # It rides on the body rather than on a query string so the MCP ``edit_tournament``
     # tool — which takes this very model and has no query string — offers the director's
     # agent the same way out the HTTP caller has, out of one schema that cannot drift.
-    unplace_fixtures_on_removed_tables: bool = False
+    #
+    # ``bool | None``, defaulting to ``None`` rather than ``bool = False``, because on a
+    # PATCH an omitted key must stay omittable — and **the discriminator generated
+    # clients use is the default's nullness, not the field's optionality**. A non-null
+    # default (``False``) is emitted into the JSON schema as ``"default": false``, and
+    # ``openapi-typescript`` promotes any property carrying one to **required**: a PATCH
+    # that renames a tournament — ``{"name": "…"}``, or even ``{}`` — stopped
+    # type-checking, because an opt-in for one destructive action had become mandatory
+    # on every unrelated write. That is wrong for a partial update, where omitting a key
+    # means "unchanged" and this key means "and I am not removing anything". A ``None``
+    # default emits no ``default`` at all and generates as ``field?: boolean | null``,
+    # which is the same trap ``position`` sprang on the pool write shape.
+    #
+    # The three-valued *wire* type does NOT reach the interior: ``None`` and ``False``
+    # are the same answer (nobody opted in) and :attr:`unplacing_is_confirmed` collapses
+    # them into the one ``bool`` the verb takes, so nothing downstream can ask this
+    # question and get three answers (api/CLAUDE.md, "no tri-state booleans").
+    unplace_fixtures_on_removed_tables: bool | None = None
+
+    @property
+    def unplacing_is_confirmed(self) -> bool:
+        """Did this payload opt in to removing a table matches are placed at?
+
+        The **one** reading of :attr:`unplace_fixtures_on_removed_tables`, and the
+        reason that field's three wire values are only ever two states inside: an opt-in
+        is something a caller *says*, so anything that is not ``true`` — ``false``,
+        ``null``, or an absent key — is a caller who did not say it, and the removal is
+        refused (:class:`~app.tournament_errors.TableInUseError`).
+
+        A read-side ``property`` rather than a validator that coerces the field, for the
+        reason :meth:`RoundRobinDrawSettingsWrite.qualifiers_per_pool` is one: the
+        field's declared type is what shapes the wire (and here, what keeps the key
+        omittable), while this is what the interior holds. Callers take this and never
+        the field, so ``unplace_fixtures`` stays a total ``bool``.
+        """
+        return self.unplace_fixtures_on_removed_tables is True
 
     @field_validator("name", "table_catalogue", "league_id", mode="before")
     @classmethod
