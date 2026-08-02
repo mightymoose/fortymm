@@ -1064,8 +1064,9 @@ class TournamentFixtureRead(BaseModel):
       JSONB, not a foreign key, because pools are value-objects with no table.
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
-      tournament's ``table_catalogue`` — carried as a string ref, still not a foreign
-      key, though the table it names is a real row now (ADR 20260801).
+      tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
+      foreign key, so this is never a dangling ref (ADR 20260801). Carried as the id's
+      text, the same form a pool's ``table_ids`` carry.
     * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
       **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
       label + tz abbrev for display, plus the raw UTC instant for geometry — composed
@@ -1109,7 +1110,8 @@ class TournamentFixtureRead(BaseModel):
     # Read from the match row on every load (never snapshotted), so it tracks the match
     # as it is played rather than freezing at go-live. See ``match_id`` above.
     match_status: MatchStatus | None
-    # A placement. ``table_id`` string-refs the tournament's table_catalogue; both it
+    # A placement. ``table_id`` is a table of the tournament's catalogue, by id and by
+    # foreign key (never dangling, ADR 20260801); both it
     # and ``scheduled_start`` ``null`` = unassigned. ``scheduled_start`` is the
     # predicted start as a ``FixtureTimeRead`` (venue-local label + tz abbrev + raw
     # UTC instant), composed server-side in the event's timezone.
@@ -1972,19 +1974,29 @@ class TournamentFixturePlacementUpdate(BaseModel):
     The body is the placement in full — both fields are stated together. ``null`` on
     either clears that half, and ``(null, null)`` unassigns the fixture entirely.
 
-    **Soft, deliberately.** ``scheduled_start`` is a *prediction*, not a commitment,
-    and the placement's constraints — the table belongs to the fixture's pool, the time
-    falls inside the pool's window, nothing is double-booked — are **flags derived on
-    read, not invariants** (ADR-0790). So this write does **not** reject an
-    out-of-window time, nor a ``table_id`` that names no table in the tournament's
-    ``table_catalogue`` (a later pool/catalogue edit can dangle the ref; that is a
-    flag-on-read concern). They save. Conflict detection is a future scheduler slice.
+    **Soft, deliberately — with one exception.** ``scheduled_start`` is a *prediction*,
+    not a commitment, and three of the placement's four constraints — the table belongs
+    to the fixture's pool, the time falls inside the pool's window, nothing is
+    double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
+    write does **not** reject an out-of-window time or an off-pool table. They save.
+    Conflict detection is the scheduler's business, not this boundary's.
 
-    ``table_id`` is a **string ref** into the tournament's ``table_catalogue`` (names a
-    ``TournamentTable.id``) — not yet a foreign key, and per the soft rule above an
-    unknown id is stored, not refused. That last clause is on its way out: ADR 20260801
-    makes "the table exists" an invariant now that a table is a real row, so a bogus
-    ``table_id`` becomes a 422 once the key is in place.
+    The exception is the fourth claim: **the table has to exist**. ``table_id`` names a
+    ``TournamentTable.id`` in the tournament's ``table_catalogue``, and since the
+    catalogue became real rows a fixture's ``table_id`` is a real **foreign key** into
+    them, so an id that names no table is a **422 naming this field** rather than
+    something stored and hoped about (ADR 20260801, "a placement names a real table, and
+    only that is an invariant" — which supersedes exactly one clause of ADR-0790 and
+    leaves the rest standing). The three flags are statements about a *relationship*
+    between things that each legitimately move, so they must stay soft; "this id
+    resolves to a table" is not one of those, and a placement whose table does not exist
+    is a dangling pointer nothing downstream can render.
+
+    The field carries the id's canonical **text** rather than a typed UUID, which is
+    also what a pool's ``table_ids`` carry — one representation for a table id, moved in
+    one piece rather than a field at a time. A value that is not a well-formed id is
+    therefore refused by the same 422 as an unknown one: there is one question here
+    ("does this name a table of this tournament?") and it gets one answer.
 
     The one thing the *route* refuses is moving a fixture whose linked match is
     ``completed`` or ``voided``: its placement is history (409). A fixture with no match

@@ -3,6 +3,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,6 +76,7 @@ from app.tournament_errors import (
     NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlacementTableNotFoundError,
     PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
@@ -1181,16 +1183,19 @@ async def uncut_event_draw(
 
 # ----- fixture placement (ADR-0790) -----------------------------------------
 #
-# A placement is two nullable columns on a fixture — ``table_id`` (a string ref into
-# the tournament's ``table_catalogue``) and ``scheduled_start`` (a naive, predicted
-# wall-clock time). A human PATCHes them here; the schedule solver writes the same two
+# A placement is two nullable columns on a fixture — ``table_id`` (a foreign key into
+# ``tournament_tables``) and ``scheduled_start`` (a predicted wall-clock time, anchored
+# to an instant). A human PATCHes them here; the schedule solver writes the same two
 # fields. The placement RIDES the tournament-detail BFF on read (2a put the fields
 # on ``TournamentFixtureRead``), so there is deliberately no ``GET …/placement``.
 #
-# The write is **soft**: the placement's constraints (table-in-pool, time-in-window, no
-# double-booking) are flags derived on read, NOT invariants (ADR-0790), so this route
-# stores an out-of-window time and an unknown ``table_id`` without complaint. Its one
-# hard rule is the freeze below.
+# The write is **soft** where ADR-0790 made it soft: the table belongs to the fixture's
+# pool, the time falls inside the pool's window, nothing is double-booked — all three
+# are flags derived on read, NOT invariants, so this route stores an out-of-window time
+# and an off-pool table without complaint. What it does NOT store is a ``table_id`` that
+# names no table: "the placement names a real table" became an invariant when the
+# catalogue became rows (ADR 20260801), so that is a 422 naming the field. Plus the
+# freeze below.
 #
 # But a manual placement is a **pin** (ADR "the schedule is solved; the call is
 # pinned"): the director's hand is a human commitment every later solve schedules
@@ -1199,9 +1204,45 @@ async def uncut_event_draw(
 # transition (``app.match_calls.apply_manual_placement``), the re-solve enqueue and the
 # read-back — now lives on the transport-neutral ``place_fixture`` verb
 # (``app.tournament_placement``), so the HTTP route below and the MCP ``place_fixture``
-# tool run the same transition. The verb raises :class:`FixtureNotFoundError` (404) and
-# :class:`FixturePlacementFrozenError` (409, carrying the freeze sentence), which the
-# adapter maps to the exact responses this route used to produce inline.
+# tool run the same transition. The verb raises :class:`FixtureNotFoundError` (404),
+# :class:`FixturePlacementFrozenError` (409, carrying the freeze sentence) and
+# :class:`PlacementTableNotFoundError` (422, carrying the id that named no table), which
+# the adapter maps to the responses this route produces.
+
+
+def _placement_table_not_found(
+    exc: PlacementTableNotFoundError,
+) -> RequestValidationError:
+    """The 422 for a placement whose ``table_id`` names no table in the tournament's
+    catalogue (ADR 20260801) — as a **validation error on the field**, not a hand-rolled
+    body.
+
+    A ``RequestValidationError`` rather than an ``HTTPException``, because that is
+    precisely what this is: the body's ``table_id`` did not validate. The only reason
+    the schema could not judge it is that the answer lives in the database, and a client
+    should not have to tell "your table_id is malformed" (a schema 422) apart from "your
+    table_id names nothing" (this one) by parsing two different envelopes. Raising the
+    same exception the schema raises puts it through the app's own handler
+    (``app.main.validation_error_handler``), so the body is byte-shape-identical to
+    every other 422 the route can produce — ``{"detail": [{"loc": ["body",
+    "table_id"], …}]}``, already the documented ``HTTPValidationError`` of this
+    operation — and no new response schema reaches the generated clients.
+
+    Contrast ``_no_drawn_events_refusal`` and the geocoding refusal, which are about the
+    *state of the tournament* rather than a field of the body and so carry a coded
+    ``detail`` object of their own. This one names a field, so it is shaped like a field
+    refusal.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "table_id"),
+                "msg": str(exc),
+                "input": exc.table_id,
+            }
+        ]
+    )
 
 
 @router.patch(
@@ -1218,8 +1259,8 @@ async def place_fixture(
     """Set (or clear) a fixture's **placement** — its table and its predicted start
     (ADR-0790) — and answer with the updated fixture.
 
-    The body is the placement in full: `table_id` (a string ref into the tournament's
-    `table_catalogue`) and `scheduled_start` (a **naive** wall-clock time, in the
+    The body is the placement in full: `table_id` (the id of one of the tournament's
+    `table_catalogue` tables) and `scheduled_start` (a **naive** wall-clock time, in the
     venue's local frame — an offset-aware value is a `422`). `null` on either clears
     that half; `(null, null)` unassigns the fixture.
 
@@ -1243,15 +1284,21 @@ async def place_fixture(
     Every successful write also queues a re-solve (`settings_changed`): the director
     just changed the solver's inputs, so the board re-plans around the new pin set.
 
-    **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-    pinned, and the placement's constraints — the table belongs to the fixture's pool,
-    the time falls inside the pool's window, nothing is double-booked — are flags
-    derived on read, **not** invariants. So an out-of-window time, or a `table_id` that
-    names no table in the catalogue, is **stored, not rejected**; the queued re-solve
-    is what judges the consequences.
+    **The table must exist.** A `table_id` that names no table in this tournament's
+    `table_catalogue` is a `422` naming the field — the one thing about a placement that
+    is an invariant rather than a flag. A placement whose table does not exist is not a
+    state you chose; it is a dangling reference nothing can render.
 
-    **The one hard rule:** a fixture whose linked match is `completed` or `voided` is
-    history, so its placement can no longer be changed — a `409`. A fixture with no
+    **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
+    pinned, and the placement's other constraints — the table belongs to the fixture's
+    pool, the time falls inside the pool's window, nothing is double-booked — are flags
+    derived on read, **not** invariants. So an out-of-window time, or a table outside
+    the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+    the consequences.
+
+    **The one hard rule about the fixture:** a fixture whose linked match is `completed`
+    or `voided` is history, so its placement can no longer be changed — a `409`. A
+    fixture with no
     match yet, or a `pending`/`in_progress` one, is freely (re)placeable (a round-robin
     match is born `pending` at go-live and only becomes `in_progress` when called, so
     neither is the freeze trigger).
@@ -1270,6 +1317,7 @@ async def place_fixture(
     #   NotTournamentOwnerError      -> 403 "You can only modify tournaments …"
     #   FixtureNotFoundError         -> 404 "Fixture not found."
     #   FixturePlacementFrozenError  -> 409 "This fixture's match is already {status}…"
+    #   PlacementTableNotFoundError  -> 422 on ``body.table_id`` (ADR 20260801)
     try:
         return await place_fixture_core(
             db,
@@ -1292,6 +1340,9 @@ async def place_fixture(
         # placement — the exact 409 sentence the handler used to compose inline,
         # rebuilt verbatim with ``str``.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlacementTableNotFoundError as exc:
+        # Verb-specific: the placement named no table of this tournament (ADR 20260801).
+        raise _placement_table_not_found(exc) from exc
 
 
 # ----- the schedule solver (ADR "the schedule is solved; the call is pinned") -----

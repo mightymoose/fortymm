@@ -488,6 +488,8 @@ async def test_placing_a_fixture_hints_the_events_entrants(
     await cut_draw(db_session, field.event)
     await db_session.commit()
     (fixture,) = await _fixtures_of(db_session, field.event.id)
+    # The catalogue's real id: a placement names a real table now (ADR 20260801).
+    (the_table, *_) = await table_ids_of(db_session, field.tournament.id)
 
     async with watch_hints(realtime_broker, *field.everyone) as watch:
         read = await place_fixture(
@@ -496,12 +498,12 @@ async def test_placing_a_fixture_hints_the_events_entrants(
             fixture_id=fixture.id,
             actor=field.director,
             placement=TournamentFixturePlacementUpdate(
-                table_id="t1", scheduled_start=START
+                table_id=the_table, scheduled_start=START
             ),
         )
         hints = await watch.collect()
 
-    assert read.table_id == "t1"
+    assert read.table_id == the_table
     field.assert_only_entrants_hinted(hints)
 
 
@@ -522,13 +524,14 @@ async def test_unpinning_a_fixture_still_hints_the_events_entrants(
     await db_session.commit()
     (fixture,) = await _fixtures_of(db_session, field.event.id)
     fixture_id = fixture.id
+    (the_table, *_) = await table_ids_of(db_session, field.tournament.id)
     await place_fixture(
         db_session,
         tournament_id=field.tournament.id,
         fixture_id=fixture_id,
         actor=field.director,
         placement=TournamentFixturePlacementUpdate(
-            table_id="t1", scheduled_start=START
+            table_id=the_table, scheduled_start=START
         ),
     )
 

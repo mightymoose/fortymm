@@ -26,7 +26,7 @@ and its 500.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.geocoding import Geocoder
@@ -36,6 +36,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentFixture,
     TournamentStatus,
     User,
 )
@@ -215,9 +216,34 @@ async def delete_tournament(
     pending tournament delete ahead of it anyway. It is spelled out so the ordering
     survives a session with autoflush disabled — and, measured, removing it alone
     leaves the suite green, so nothing here would catch its loss.
+
+    It also **unplaces every fixture first**, and that one IS the mechanism. A
+    fixture's ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` (ADR 20260801),
+    ``Tournament.tables`` is loaded, so SQLAlchemy issues the child ``DELETE`` of
+    ``tournament_tables`` **itself** — as its own statement, ahead of the
+    ``tournaments`` row whose cascade takes the fixtures. RESTRICT is checked
+    immediately and cannot be deferred, so at that moment the fixtures are still
+    there, still pointing at the tables, and the whole delete dies on a foreign-key
+    violation. Dropping the references first is not a policy decision sneaking in:
+    RESTRICT exists so a placement is not destroyed as a side effect of editing the
+    **venue**, and this is not a venue edit — the fixture is being deleted too, one
+    statement later, along with everything else the director asked to be rid of. The
+    refusal that ADR belongs to is the tournament PATCH's, over a table removed out
+    from under a fixture that survives it.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
+    await db.execute(
+        update(TournamentFixture)
+        .where(
+            TournamentFixture.event_id.in_(
+                select(TournamentEvent.id).where(
+                    TournamentEvent.tournament_id == tournament.id
+                )
+            )
+        )
+        .values(table_id=None)
+    )
     await db.delete(tournament)
     await db.flush()
     await reap_draw_settings(db, settings_ids)

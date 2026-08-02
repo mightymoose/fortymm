@@ -740,7 +740,10 @@ class TestResourceFreedomGate:
         # A second event of the SAME tournament, with an in_progress match on a
         # different table (t2) whose entrant is the same human.
         await _hold_user_in_second_event(
-            db_session, tournament_id, held_user=shared_user, table_id="t2"
+            db_session,
+            tournament_id,
+            held_user=shared_user,
+            table_id=await _table(db_session, event_id, "t2"),
         )
         _freeze_clocks(monkeypatch, BASE)
 
@@ -1497,21 +1500,52 @@ async def _remove_table(
     from_catalogue: bool = True,
     from_pools: bool = True,
 ) -> None:
-    """Simulate the director's settings writes that break a placement's table,
-    directly on the models: drop it from the tournament's catalogue and/or
-    from every pool's ``table_ids``. ``table_id`` is a positional alias
-    (``"t1"``), resolved by :func:`_table`."""
+    """Put a placement's table beyond the tournament's venue catalogue and/or every
+    pool's ``table_ids`` — the pre-state each broken-pin repair below reacts to.
+    ``table_id`` is a positional alias (``"t1"``), resolved by :func:`_table`.
+
+    The **pools** arm is a plain edit, and always was.
+
+    The **catalogue** arm can no longer be the DELETE it used to be. A fixture's
+    ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` since ADR 20260801, so
+    the database now refuses to remove a table a fixture is placed at — which is the
+    ADR's entire point: a placement is not destroyed as a side effect of editing the
+    venue; the director opts into unplacing it, through the named 409 and the
+    unplace-and-remove opt-in that chore 2c puts on the tournament PATCH.
+
+    What the repair branch under test actually keys on is narrower than "the row was
+    deleted": ``_load_solver_inputs`` compares ``fixture.table_id`` against **this
+    tournament's** catalogue ids, so the state it repairs is "the placement's table is
+    not in this tournament's catalogue". That is what this constructs, in the one way
+    the foreign key still allows — the row survives, re-parented onto a throwaway
+    tournament — so these tests keep asserting about the repair rather than about how
+    the venue got edited.
+
+    Worth naming plainly, because it is a live question for 2c: once removal is
+    unplace-and-remove, a fixture placed at a table that left the catalogue may not be
+    reachable through any supported write at all, and the ``broken_pin_moves`` arm of
+    ``_load_solver_inputs`` would then be defending a state nothing can produce.
+    Whether that arm keeps its reason to exist is 2c's call; it is not this chore's to
+    delete.
+    """
     table_id = await _table(db, event_id, table_id)
     if from_catalogue:
         tournament = (
             await db.execute(select(Tournament).where(Tournament.id == tournament_id))
         ).scalar_one()
-        # A table is a ROW now (ADR 20260801), so "the director removed it" is a
-        # DELETE — expressed by dropping it out of the collection, which
-        # ``delete-orphan`` on ``Tournament.tables`` turns into one.
-        tournament.tables = [
-            table for table in tournament.tables if str(table.id) != table_id
-        ]
+        elsewhere = Tournament(
+            name="Storage Closet",
+            status=TournamentStatus.draft,
+            address=None,
+            league_id=tournament.league_id,
+            created_by_user_id=tournament.created_by_user_id,
+        )
+        db.add(elsewhere)
+        await db.flush()
+        removed = next(
+            table for table in tournament.tables if str(table.id) == table_id
+        )
+        removed.tournament_id = elsewhere.id
     if from_pools:
         event = (
             await db.execute(
@@ -2037,7 +2071,7 @@ class TestCallFlipsMatchLive:
             db_session,
             tournament,
             fixture,
-            table_id="t1",
+            table_id=await _table(db_session, event_id, "t1"),
             scheduled_start=BASE + timedelta(minutes=5),
             event_timezone="America/Chicago",
         )
@@ -2109,7 +2143,7 @@ class TestCallFlipsMatchLive:
             db_session,
             tournament,
             fixture,
-            table_id="t1",
+            table_id=await _table(db_session, event_id, "t1"),
             scheduled_start=BASE + timedelta(minutes=20),  # a move
             event_timezone="America/Chicago",
         )

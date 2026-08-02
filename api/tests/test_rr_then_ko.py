@@ -192,12 +192,16 @@ async def _call(
     flips to ``in_progress`` and becomes scorable (#1073)."""
     tournament = await db.get(Tournament, uuid.UUID(tournament_id))
     assert tournament is not None
+    # The catalogue's first row, by the id the server minted: ``table_id`` is a foreign
+    # key since ADR 20260801, so the ``"t1"`` alias is no longer a table. Every fixture
+    # onto the one table — a double-booking is a flag on read, never a refusal.
+    table_id = str(tournament.tables[0].id)
     for fixture in fixtures:
         await match_calls.apply_manual_placement(
             db,
             tournament,
             fixture,
-            table_id="t1",
+            table_id=table_id,
             scheduled_start=datetime(2026, 6, 1, 10, 0),
             event_timezone="America/Chicago",
         )

@@ -79,10 +79,17 @@ class Staged:
     later: tuple[User, User]
     #: The called fixture's two entry rows, in the same order as ``called``.
     called_entry_ids: tuple[uuid.UUID, uuid.UUID]
+    #: The venue catalogue's ids, in its order — server-minted UUIDs (ADR 20260801),
+    #: which a fixture's ``table_id`` foreign-keys, so a test cannot spell one.
+    table_ids: tuple[str, ...]
 
     @property
     def watched(self) -> tuple[uuid.UUID, ...]:
         return tuple(user.id for user in (*self.called, *self.later))
+
+    def table(self, alias: str) -> str:
+        """The id of the ``"t1"``-style positional alias this module talks in."""
+        return self.table_ids[int(alias.removeprefix("t")) - 1]
 
 
 async def _stage(
@@ -113,6 +120,7 @@ async def _stage(
     )
     db.add(tournament)
     await db.flush()
+    table_ids = tuple(str(table.id) for table in tournament.tables)
 
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -163,7 +171,7 @@ async def _stage(
         position=2,
         entry_a_id=entry_c.id,
         entry_b_id=entry_d.id,
-        table_id="t2",
+        table_id=table_ids[1],
         scheduled_start=LATER,
     )
     db.add_all([called_fixture, later_fixture])
@@ -176,6 +184,7 @@ async def _stage(
         called=(called_a, called_b),
         later=(later_a, later_b),
         called_entry_ids=(entry_a.id, entry_b.id),
+        table_ids=table_ids,
     )
 
 
@@ -231,7 +240,12 @@ async def test_a_player_called_to_a_table_is_hinted_and_one_playing_later_is_not
     signed-in user."""
     staged = await _stage(db_session)
     bystander = await _bystander(db_session)
-    await _place(db_session, staged, table_id="t1", start=BASE + timedelta(minutes=5))
+    await _place(
+        db_session,
+        staged,
+        table_id=staged.table("t1"),
+        start=BASE + timedelta(minutes=5),
+    )
     _freeze(monkeypatch, BASE)
 
     async with watch_hints(realtime_broker, *staged.watched, bystander.id) as watch:
@@ -264,7 +278,7 @@ async def test_a_call_that_fires_for_nobody_hints_nobody(
     from something other than the call's recipient list."""
     staged = await _stage(db_session)
     bystander = await _bystander(db_session)
-    await _place(db_session, staged, table_id="t1", start=LATER)
+    await _place(db_session, staged, table_id=staged.table("t1"), start=LATER)
     _freeze(monkeypatch, BASE)
 
     async with watch_hints(realtime_broker, *staged.watched, bystander.id) as watch:
@@ -294,7 +308,7 @@ async def test_moving_a_called_player_to_another_table_hints_that_pair_only(
     await _place(
         db_session,
         staged,
-        table_id="t1",
+        table_id=staged.table("t1"),
         start=BASE + timedelta(minutes=5),
         pinned_at=BASE - timedelta(minutes=5),
         notified=1,  # already told → a re-place is a *moved* correction
@@ -306,7 +320,7 @@ async def test_moving_a_called_player_to_another_table_hints_that_pair_only(
             db_session,
             await _tournament(db_session, staged),
             await _called_fixture(db_session, staged),
-            table_id="t2",
+            table_id=staged.table("t2"),
             scheduled_start=BASE + timedelta(minutes=20),
             event_timezone=VENUE_TZ_NAME,
         )
@@ -337,7 +351,7 @@ async def test_cancelling_a_call_hints_the_pair_who_were_told_to_go_there(
     await _place(
         db_session,
         staged,
-        table_id="t1",
+        table_id=staged.table("t1"),
         start=BASE + timedelta(minutes=5),
         pinned_at=BASE - timedelta(minutes=5),
         notified=1,
@@ -387,7 +401,7 @@ async def test_a_withdrawal_cancellation_hints_only_the_player_left_standing(
     await _place(
         db_session,
         staged,
-        table_id="t1",
+        table_id=staged.table("t1"),
         start=BASE + timedelta(minutes=5),
         pinned_at=BASE - timedelta(minutes=5),
         notified=1,
@@ -440,7 +454,7 @@ async def test_a_silent_pre_live_placement_hints_nobody(
             db_session,
             await _tournament(db_session, staged),
             await _called_fixture(db_session, staged),
-            table_id="t1",
+            table_id=staged.table("t1"),
             scheduled_start=BASE + timedelta(minutes=5),
             event_timezone=VENUE_TZ_NAME,
         )

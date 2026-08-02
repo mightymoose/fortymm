@@ -398,6 +398,35 @@ class FixturePlacementFrozenError(Exception):
         self.match_status = match_status
 
 
+class PlacementTableNotFoundError(Exception):
+    """Raised by the place-fixture verb when the placement's ``table_id`` names no
+    table in the tournament's venue catalogue — the ONE thing about a placement that is
+    an **invariant** rather than a flag (ADR 20260801, "a placement names a real table,
+    and only that is an invariant").
+
+    It is deliberately *not* a sibling of :class:`FixturePlacementFrozenError`'s 409.
+    The freeze is about the state of the resource; this is about the **content of the
+    body**: the id sent does not resolve, so the field is wrong, and it will go on being
+    wrong until the client sends a different one. The HTTP adapter therefore names the
+    field the way every other refused field on this route is named — a 422 whose
+    ``detail`` carries ``loc: ["body", "table_id"]``, the same shape the schema's own
+    422s have, so a client needs no second parser for it.
+
+    Everything else about a placement stays soft (ADR-0790, undisturbed): an
+    out-of-window start, a table outside the fixture's pool, and a double-booking all
+    still SAVE and surface as flags derived on read. Only "does this reference resolve
+    at all" is hard, because a placement whose table does not exist is not a state the
+    director chose — it is a dangling pointer nothing downstream can render.
+
+    Carries the offending ``table_id`` verbatim (the string as sent, which need not even
+    be a well-formed UUID) so the adapter can echo it back as the ``input`` of the
+    validation error. Never an ``HTTPException``."""
+
+    def __init__(self, table_id: str) -> None:
+        super().__init__("This tournament's venue catalogue has no table with that id.")
+        self.table_id = table_id
+
+
 class NoDrawnEventsError(Exception):
     """Raised by the request-schedule-solve verb when no event of the addressed
     tournament has a **cut draw** — nothing the solver can place, so a run would

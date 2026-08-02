@@ -164,6 +164,7 @@ from app.tournament_errors import (
     NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlacementTableNotFoundError,
     PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
@@ -1872,9 +1873,9 @@ async def place_fixture(
     so the MCP and HTTP surfaces can never drift. You address the fixture by its
     ``tournament_id`` + ``fixture_id`` (the fixture must belong to that tournament).
 
-    ``placement`` is the placement in full: ``table_id`` (a string ref into the
-    tournament's ``table_catalogue``) and ``scheduled_start`` (a **naive** wall-clock
-    time in the venue's local frame). ``null`` on either clears that half;
+    ``placement`` is the placement in full: ``table_id`` (the id of one of the
+    tournament's ``table_catalogue`` tables) and ``scheduled_start`` (a **naive**
+    wall-clock time in the venue's local frame). ``null`` on either clears that half;
     ``(null, null)`` unassigns the fixture entirely.
 
     **A manual placement is a PIN.** A full placement (both halves set, both entrants
@@ -1887,16 +1888,21 @@ async def place_fixture(
     UNPINS (and, if the players had been called, cancels the call). Every successful
     write also queues a re-solve.
 
+    **The table must EXIST** (ADR 20260801): a ``table_id`` naming no table in this
+    tournament's ``table_catalogue`` is refused, not stored — a placement whose table
+    does not exist is a dangling reference, not a state the director chose.
+
     **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
-    prediction, and the constraints (table-in-pool, time-in-window, no double-booking)
-    are flags derived on read, NOT invariants — so an out-of-window time, or a
-    ``table_id`` that names no table in the catalogue, is STORED, not rejected. The one
-    hard rule: a fixture whose linked match is ``completed`` or ``voided`` is history,
-    so its placement can no longer be changed. Owner-gated: only the tournament's
-    creator may place its fixtures.
+    prediction, and the other constraints (table-in-pool, time-in-window, no
+    double-booking) are flags derived on read, NOT invariants — so an out-of-window
+    time, or a table outside the fixture's pool, is STORED, not rejected. The one hard
+    rule about the fixture itself: one whose linked match is ``completed`` or ``voided``
+    is history, so its placement can no longer be changed. Owner-gated: only the
+    tournament's creator may place its fixtures.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
-    tournament's owner, when no fixture with that id belongs to the tournament, or when
+    tournament's owner, when no fixture with that id belongs to the tournament, when the
+    placement's ``table_id`` names no table in the tournament's catalogue, or when
     the fixture's match is already completed/voided (its placement is frozen)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1921,6 +1927,11 @@ async def place_fixture(
             # Carries the exact, domain-authored 409 sentence — the played-out fixture's
             # freeze — surfaced as the ``ToolError`` prose verbatim.
             raise ToolError(str(exc)) from exc
+        except PlacementTableNotFoundError as exc:
+            # The HTTP route's 422 on ``body.table_id`` (ADR 20260801): a placement must
+            # name a real table. Named with the offending id, because an MCP caller
+            # composed it rather than clicked it.
+            raise ToolError(f"{exc} (table_id: {exc.table_id})") from exc
 
 
 @mcp.tool
