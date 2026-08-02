@@ -235,6 +235,28 @@ interior should never traffic in `Any` or untyped `dict`.
   with real fields and `KeyError` is impossible. New code must not introduce
   another `dict[str, Any]` that crosses more than one function.
 
+- **An optional field on a *write* schema takes `X | None = None`, never a
+  non-null default.** The two look equally optional in Python and generate
+  opposite contracts. `openapi-typescript` promotes any property carrying a
+  **non-null** default to **required** in the generated TypeScript, so
+  `position: int = 0` and `unplace_fixtures_on_removed_tables: bool = False`
+  both arrive in the client as fields every caller must send — while
+  `description: str | None = None` generates the `field?:` you wanted. On a
+  PATCH body, where omitting a key means "unchanged", that is simply wrong: it
+  compels a rename to send a whole table catalogue, or an unrelated edit to
+  restate a destructive opt-in.
+
+  It is not caught by anything local. `mypy` is happy, `pytest` is happy, and
+  the damage only appears after `mise run regen-api-types` when the web client
+  stops compiling — which is a chore or two later, in someone else's diff.
+  #1226 hit it twice in two slices before it was named.
+
+  If a field is genuinely server-assigned, the stronger move is to keep it off
+  the write schema altogether — a read model that extends the write model
+  (`class Pool(PoolWrite)`) makes "the client cannot send this" a fact of the
+  schema rather than a promise in a docstring, and `extra="forbid"` turns an
+  attempt into a 422 naming the field.
+
 - **Don't use `assert x is not None` as control flow after a DB load.** A
   loader typed `-> Match | None` forces the caller to handle the `None`; an
   `assert` is stripped under `python -O` and is not a guarantee. If a path
