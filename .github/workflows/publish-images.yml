@@ -13,10 +13,11 @@ name: publish-images
 #
 # Also deliberately NOT path-filtered, but for a different reason than
 # `api.yml`'s (which is about required status checks). Here it is because
-# `redeploy-uat.sh` looks the image up by the deploying commit's short SHA:
-# every commit on `main` must therefore have images published under its own
-# SHA, including commits that touch only docs. A path filter would leave holes
-# on `main` that are simply undeployable.
+# `redeploy-uat.sh` is being changed to look images up by the deploying commit's
+# SHA: every commit on `main` must therefore have images published under its own
+# SHA, including commits that touch only docs, or a path filter would leave holes
+# on `main` that are simply undeployable. That script still builds locally as of
+# this commit -- the consuming half lands separately.
 
 on:
   push:
