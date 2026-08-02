@@ -6,6 +6,9 @@ Mailpit, the port map, `redeploy-uat.sh`, and the tailnet. The root `CLAUDE.md`
 carries only the one-table summary. `## Topology` below is the detail;
 `## Operational failure modes` is what bites in practice.
 
+**The operator** is whoever runs the machine hosting UAT — its host
+Caddy/DDNS/tailnet config and secret values live there, not in this repo.
+
 ## The surface
 
 Infra has no single directory — it spans:
