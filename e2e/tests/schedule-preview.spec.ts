@@ -18,8 +18,8 @@ const EXPECTED_MATCHES = 6
 /** A two-table venue so the round-robin's rounds run in parallel and the day
  * fits comfortably. */
 const TABLES = [
-  { id: 't1', label: 'Table 1', court: 'A' },
-  { id: 't2', label: 'Table 2', court: 'A' },
+  { label: 'Table 1', court: 'A' },
+  { label: 'Table 2', court: 'A' },
 ]
 
 /**
