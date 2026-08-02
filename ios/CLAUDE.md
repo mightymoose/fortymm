@@ -150,10 +150,11 @@ the boundary, carry typed values inward.** On iOS the parser is **`Codable`**.
   `UIViewRepresentable`-wrapped `UITextField`; otherwise normalize the binding and accept
   the transient display until focus-out.
 
-- **Session bootstrap intent (aspirational):** the session should load **once** at startup
-  into a shared object injected via the environment (as `RootView` + `SessionStore` already
-  do), and screens should read it — not re-fetch `GET /v1/session` per screen. Follow this
-  when adding surfaces that need the current user.
+- **Session loads once, at startup.** `RootView` loads the session into
+  `SessionStore` (a shared object injected via the environment) once at launch;
+  screens read it via `@EnvironmentObject` rather than re-fetching
+  `GET /v1/session` themselves. Keep new surfaces that need the current user on
+  this pattern — read from `SessionStore`, don't add another per-screen fetch.
 
 ## Cross-layer regen
 
