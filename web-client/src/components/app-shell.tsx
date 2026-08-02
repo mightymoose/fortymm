@@ -10,6 +10,7 @@ import {
   Megaphone,
   Shield,
   SlidersHorizontal,
+  Smartphone,
   TriangleAlert,
   Trophy,
   Users,
@@ -47,6 +48,9 @@ type NavSection = {
   label?: string
   items: NavItem[]
 }
+
+/** The app's public TestFlight beta — anyone with the link can join, no invite needed. */
+const TESTFLIGHT_URL = 'https://testflight.apple.com/join/5pGVbku3'
 
 const NAV_SECTIONS: NavSection[] = [
   {
@@ -407,6 +411,20 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ))}
         </nav>
+
+        <div className="app-shell__sidebar-footer">
+          <a
+            href={TESTFLIGHT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="app-shell__nav-link"
+          >
+            <span className="app-shell__nav-icon">
+              <Smartphone size={18} strokeWidth={2} />
+            </span>
+            Get the iOS App
+          </a>
+        </div>
       </aside>
 
       <div className="app-shell__main">

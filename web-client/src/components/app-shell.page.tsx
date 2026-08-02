@@ -165,6 +165,15 @@ const scoped = (container: Container) => {
         .queryAllByRole('button')
         .map((el) => el.getAttribute('aria-label') ?? labelOf(el))
     },
+
+    /**
+     * The TestFlight link pinned to the bottom of the sidebar, below the nav
+     * list. Not a router `<Link>` — a plain external `<a>` — so it needs no
+     * stub route in `NAV_LINK_PATHS`.
+     */
+    getTestFlightLink() {
+      return within(sidebar()).getByRole('link', { name: 'Get the iOS App' })
+    },
   }
 }
 
