@@ -1,5 +1,9 @@
 # web-client
 
+Guidance for Claude Code when working in `web-client/` (the Vite/React SPA).
+This file is the source of truth for web-client conventions; the root
+`CLAUDE.md` cross-cutting invariants still apply.
+
 ## Architecture
 
 **Routing is file-based and generated.** Edit the source `src/routes/*.tsx`
