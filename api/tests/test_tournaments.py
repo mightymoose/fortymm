@@ -6599,9 +6599,14 @@ async def test_a_pools_patch_that_empties_a_pool_id_or_name_is_refused(
 #
 # A table used to be a JSONB value-object whose ``id`` was a client-supplied string —
 # which is exactly why a placement naming no table could be stored rather than refused:
-# there was no key to point at. It is a ``tournament_tables`` row now (ADR 20260801),
-# its id is minted by ``gen_random_uuid()``, and the write shape has no ``id`` field at
-# all, so a client that tries to author one is told so rather than quietly ignored.
+# there was no key to point at. It is a ``tournament_tables`` row now (ADR 20260801) and
+# its id is minted by ``gen_random_uuid()``.
+#
+# Minting and CITING are different things, and the diff needs the second. A **create**
+# has no tables to cite, so its write shape has no ``id`` field at all and sending one
+# is a 422. A **patch** is a diff, so each entry may carry the id of a table it is
+# keeping — but only one this tournament actually has: an id is something a client was
+# *given*, never something it authors.
 
 
 async def test_a_created_table_carries_a_server_minted_uuid_the_client_never_chose(
@@ -6666,12 +6671,19 @@ async def test_creating_a_tournament_that_sends_a_table_id_is_refused(
     assert ["body", "table_catalogue", 0, "id"] in _error_locs(response), response.text
 
 
-async def test_patching_a_table_catalogue_that_sends_a_table_id_is_refused(
+async def test_patching_a_table_catalogue_that_authors_a_table_id_is_refused(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """The catalogue's patch verb, for the reason every catalogue rule is stated on both
-    verbs: a tournament that could not be created holding a client-authored id and could
-    be edited into one is a tournament that holds a client-authored id."""
+    """A patch entry's ``id`` is one the server **gave** the client, so a string of the
+    client's own devising — ``"t9"``, the id shape the JSONB catalogue used to accept —
+    is a 422 on that entry rather than a table born holding it.
+
+    The patch verb states the rule for the same reason the create verb does: a
+    tournament that could not be *created* holding a client-authored id and could be
+    *edited* into one is a tournament that holds one. What the patch adds is the
+    second half — an id that is a well-formed UUID but names no table of this
+    tournament is refused too (see the citing-an-unknown-id test below), so "the id is
+    the server's" survives both the shape and the lookup."""
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     minted = [table["id"] for table in created["table_catalogue"]]
@@ -6688,18 +6700,18 @@ async def test_patching_a_table_catalogue_that_sends_a_table_id_is_refused(
     assert [table["id"] for table in reread["table_catalogue"]] == minted
 
 
-async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_kept(
+async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_cited(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """The catalogue is applied BY POSITION, so a PATCH that re-sends it — which the web
-    client does on every tournament edit — does not re-mint anybody's id.
+    """The catalogue is an ID-KEYED DIFF: an entry citing an ``id`` keeps that table
+    (re-worded), an entry with no ``id`` adds one, and nobody's id is re-minted.
 
     This is what makes a placement survive an unrelated edit. Rebuild the catalogue on
     each PATCH and every fixture's ``table_id`` and every pool's ``table_ids`` would
     dangle as an invisible side effect of renaming the venue."""
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
-    minted = [table["id"] for table in created["table_catalogue"]]
+    first, second = [table["id"] for table in created["table_catalogue"]]
 
     # Re-send the catalogue with the second table re-worded, and a third appended.
     patched = (
@@ -6707,8 +6719,8 @@ async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_kept(
             f"/v1/tournaments/{created['id']}",
             json={
                 "table_catalogue": [
-                    {"label": "Table 1", "court": "A"},
-                    {"label": "Centre Table", "court": "B"},
+                    {"id": first, "label": "Table 1", "court": "A"},
+                    {"id": second, "label": "Centre Table", "court": "B"},
                     {"label": "Table 3", "court": "C"},
                 ]
             },
@@ -6716,13 +6728,311 @@ async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_kept(
     ).json()
 
     catalogue = patched["table_catalogue"]
-    assert [table["id"] for table in catalogue[:2]] == minted
+    assert [table["id"] for table in catalogue[:2]] == [first, second]
     assert [(t["label"], t["court"]) for t in catalogue] == [
         ("Table 1", "A"),
         ("Centre Table", "B"),
         ("Table 3", "C"),
     ]
-    assert catalogue[2]["id"] not in minted
+    assert catalogue[2]["id"] not in {first, second}
+
+
+async def test_reordering_a_catalogue_moves_the_tables_not_their_labels(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """Send the same two tables in the other order and the **ids move with their
+    words** — the regression this chore's diff exists to make unreachable.
+
+    The by-position stopgap it replaces matched the i-th sent against the i-th stored,
+    so this exact request left each row holding its own id and its neighbour's label
+    (measured end-to-end on 2a: ``[{"Table 2", id_1}, {"Table 1", id_2}]``). Nothing
+    refused it, nothing logged it, and the bill landed somewhere else entirely: a
+    fixture placed at ``id_1`` — untouched, still pointing where the director put it —
+    started rendering as "Table 2". A silently-wrong catalogue is worse than a dangling
+    one, because the page still looks right.
+
+    Asserted as the id→label PAIRING rather than as the order alone, because order
+    alone cannot tell the two implementations apart: both answer "Table 2" first."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    first, second = [table["id"] for table in created["table_catalogue"]]
+    assert [t["label"] for t in created["table_catalogue"]] == ["Table 1", "Table 2"]
+
+    patched = (
+        await client.patch(
+            f"/v1/tournaments/{created['id']}",
+            json={
+                "table_catalogue": [
+                    {"id": second, "label": "Table 2", "court": "A"},
+                    {"id": first, "label": "Table 1", "court": "A"},
+                ]
+            },
+        )
+    ).json()
+
+    swapped = [(t["id"], t["label"]) for t in patched["table_catalogue"]]
+    assert swapped == [(second, "Table 2"), (first, "Table 1")]
+    # And on the page a client actually loads, not only in the PATCH echo.
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [(t["id"], t["label"]) for t in reread["table_catalogue"]] == swapped
+
+
+async def test_a_catalogue_entry_citing_an_unknown_table_id_is_422_on_that_entry(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """An ``id`` this tournament's catalogue does not hold is refused **on the entry
+    that carried it**, never quietly minted as a new table.
+
+    Minting one would be the worst available answer: the client would be handed back a
+    different id than it asked for, AND the table it meant to keep — cited by nothing
+    else — would be removed, taking its placements through the 409 or (with the opt-in)
+    through an unplacing nobody asked for. Two failures out of one typo."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    minted = [table["id"] for table in created["table_catalogue"]]
+    stranger = str(uuid.uuid4())
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={
+            "table_catalogue": [
+                {"id": minted[0], "label": "Table 1", "court": "A"},
+                {"id": stranger, "label": "Table 2", "court": "A"},
+            ]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue", 1, "id"] in _error_locs(response), response.text
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == minted
+
+
+async def test_two_catalogue_entries_citing_one_table_id_are_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """One row cannot be in two places at once, or be called two things.
+
+    The diff would have to pick a winner — and whichever it picked, the *other* table
+    the director looked like they were keeping is cited by nothing and therefore
+    removed. Refused at the boundary, like the duplicate pool id, and for the same
+    reason: a payload that is nonsense in every state the tournament could be in."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    minted = [table["id"] for table in created["table_catalogue"]]
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={
+            "table_catalogue": [
+                {"id": minted[0], "label": "Table 1", "court": "A"},
+                {"id": minted[0], "label": "Table 2", "court": "A"},
+            ]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue"] in _error_locs(response), response.text
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == minted
+
+
+# ----- removing a table: the 409, and the opt-in that gets past it ------------
+#
+# The ADR's split, and it is deliberately asymmetric. A **pool** that merely reserves a
+# removed table is not consulted — a table breaking or freeing up is ordinary venue
+# traffic, and the pool simply reserves one fewer. A **placement** refuses, because
+# silently clearing one destroys information on an unrelated write: the fixture stops
+# being "placed at a table that vanished" and becomes indistinguishable from "nobody
+# ever placed this". The database refuses by default; the director says yes on purpose.
+
+
+async def _tables_of(client: AsyncClient, tournament_id: str) -> list[dict[str, Any]]:
+    body = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    tables: list[dict[str, Any]] = body["table_catalogue"]
+    return tables
+
+
+async def _tournament_with_a_placed_fixture(
+    client: AsyncClient, db_session: AsyncSession, *, prefix: str
+) -> tuple[str, str, TournamentFixture, str, str]:
+    """A drawn round-robin whose pool reserves **both** of the tournament's real tables,
+    with its first fixture placed on the first of them.
+
+    The pool reserving the real ids is the whole point of the third case below: an event
+    payload's ``table_ids`` are written before the tournament's tables have ids a test
+    can know, so the default fixtures reserve the string ``"t1"`` — which names no table
+    and would make "a table only a pool reserves" untestable. Here the event is created
+    *after* the tournament, off its minted ids."""
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = created["id"]
+    table_1, table_2 = [table["id"] for table in created["table_catalogue"]]
+    event = (
+        await client.post(
+            f"/v1/tournaments/{tournament_id}/events",
+            json=_rr_payload({**POOL_A, "table_ids": [table_1, table_2]}),
+        )
+    ).json()
+    await _seed_field(db_session, event["id"], 3, prefix=prefix)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+    return tournament_id, event["id"], fixture, table_1, table_2
+
+
+async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming_it(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Omit a table a match is placed at and the whole edit is refused, with a
+    sentence that names the table **by label** and names the way out — and **nothing
+    is written**.
+
+    That last clause is the load-bearing one, and it is why this PATCH also renames the
+    tournament. A guard that refused *after* writing would satisfy every assertion about
+    the 409 and still have moved the venue underneath the director; the ``name`` is the
+    tripwire that catches it, because it is the one field on this payload the verb would
+    otherwise have ``setattr``'d before the catalogue branch ran."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr1")
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "name": "Renamed While Removing",
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    # Named by LABEL, never by id: an id tells a director looking at a page of named
+    # tables nothing to act on.
+    assert "“Table 1”" in detail, detail
+    assert table_1 not in detail, detail
+    assert "1 match" in detail, detail
+    # …and the way out, so the refusal is actionable rather than merely correct.
+    assert "unplace_fixtures_on_removed_tables" in detail, detail
+
+    # Nothing was written. Not the catalogue…
+    reread = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == [table_1, table_2]
+    # …not the name that rode along on the same refused request…
+    assert reread["name"] == "Bay Area Open 2026"
+    # …and not the placement the refusal was protecting.
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+    assert fixture.scheduled_start is not None
+    assert fixture.pinned_at is not None
+
+
+async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The identical request, plus ``unplace_fixtures_on_removed_tables``, goes through:
+    the table is gone and the matches that were on it are unplaced.
+
+    All three placement columns go, not just ``table_id``. A predicted start with no
+    table is a bar on a schedule with nowhere to be, and a ``pinned_at`` is a *promise
+    about a table* — leaving it would tell every later solve the fixture is nailed to a
+    table that no longer exists. Unplaced means unplaced, which is exactly why it takes
+    a confirmation to ask for."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr2")
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "name": "Renamed While Removing",
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+            "unplace_fixtures_on_removed_tables": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [table["id"] for table in response.json()["table_catalogue"]] == [table_2]
+    assert response.json()["name"] == "Renamed While Removing"
+    # The row itself is gone, not merely absent from the projection.
+    remaining = (
+        (
+            await db_session.execute(
+                select(VenueTable.id).where(
+                    VenueTable.tournament_id == uuid.UUID(tournament_id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [str(row) for row in remaining] == [table_2]
+
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id is None
+    assert fixture.scheduled_start is None
+    assert fixture.pinned_at is None
+
+
+async def test_removing_a_catalogue_table_only_a_pool_reserves_succeeds_silently(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A table a pool merely **reserves**, with no match placed at it, is removed with
+    no refusal and no opt-in — the quiet half of the ADR's split.
+
+    A pool's ``table_ids`` are a reservation, not a placement: "a table breaks, a table
+    frees up" is ordinary venue traffic and is exactly why a pool's tables stay editable
+    mid-event. The pool simply reserves one fewer, which today is derived on read (the
+    solver intersects ``table_ids`` with the catalogue, ``_load_solver_inputs``) — the
+    stored JSONB still lists the dead id, and cleaning that up is Slice 3's
+    ``tournament_event_pool_tables`` CASCADE, not this verb's. Asserted, so that when
+    the join table lands the change is a decision rather than a surprise."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr3")
+    # The pool reserves BOTH tables; only ``table_1`` has a match on it.
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={"table_catalogue": [{"id": table_1, "label": "Table 1", "court": "A"}]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [table["id"] for table in await _tables_of(client, tournament_id)] == [
+        table_1
+    ]
+    # The placement on the surviving table is untouched — this removal unplaced nobody.
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+    assert fixture.scheduled_start is not None
+
+    (event,) = await _events_of(client, tournament_id)
+    (pool,) = event["pools"]
+    assert pool["table_ids"] == [table_1, table_2]  # Slice 3's to prune
 
 
 # ----- the draw-type freeze (409) -------------------------------------------

@@ -168,6 +168,8 @@ from app.tournament_errors import (
     PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
+    TableInUseError,
+    TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
@@ -1046,10 +1048,22 @@ async def edit_tournament(
     placeholder address to fill the field.
 
     ``table_catalogue``, when present, is the venue catalogue IN FULL and IN ORDER, and
-    each entry is a ``label`` and a ``court`` only — a table's id is minted by the
-    server, so sending one is rejected. It is applied BY POSITION: the i-th table sent
-    updates the i-th table stored, a longer list adds tables and a shorter one removes
-    from the end. Send the catalogue you read back, edited, rather than a fresh list.
+    it is applied as an ID-KEYED DIFF. So SEND BACK THE CATALOGUE YOU READ, EDITED — a
+    fresh list is not an edit of the old one, it is a request to remove every table the
+    tournament has and add new ones. Each entry either carries the ``id`` of a table
+    this tournament already has (keeping that table, with the ``label``, ``court``
+    and place this list gives it) or omits the ``id`` to ADD a table, whose id the
+    server mints. A stored table no entry names is REMOVED. An ``id`` this tournament
+    does not have is rejected — it is never taken as a request for a new table.
+
+    REMOVING A TABLE THAT MATCHES ARE PLACED AT IS REFUSED, and nothing is written. The
+    refusal names the table and how many matches are on it. To go through with it, send
+    the SAME edit again with ``unplace_fixtures_on_removed_tables`` set to true: the
+    table goes and those matches are unplaced — table, predicted start and call all
+    cleared. Do not set it pre-emptively "just in case"; it exists so that losing a
+    director's schedule is something they said yes to. Removing a table that only a POOL
+    reserves is not refused and needs no opt-in — the pool simply reserves one fewer.
+
     ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
     published the ladder is settled. ``status`` is not editable here (it moves only
     across the guarded lifecycle transitions). Returns the updated
@@ -1058,7 +1072,9 @@ async def edit_tournament(
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may edit it), when you try to change
     the league of a tournament that has left ``draft``, when ``league_id`` names
-    no league, or when a changed venue ``address`` cannot be geocoded (the
+    no league, when a ``table_catalogue`` entry names a table id this tournament does
+    not have, when it would remove a table matches are placed at without the opt-in, or
+    when a changed venue ``address`` cannot be geocoded (the
     ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side, and
     an address that has them cannot be stored without them). Removing the venue
     geocodes nothing and so can never raise that one.
@@ -1090,6 +1106,17 @@ async def edit_tournament(
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
             raise ToolError("No league found with that id.") from exc
+        except TableInUseError as exc:
+            # The catalogue's named 409, as prose: the sentence already names the tables
+            # and the way out (``unplace_fixtures_on_removed_tables``), which is exactly
+            # what an agent needs to decide whether to ask its director and retry.
+            raise ToolError(str(exc)) from exc
+        except TableNotInCatalogueError as exc:
+            # The HTTP surface answers this on the field; an agent reads prose, so the
+            # offending id rides in the sentence rather than in a ``loc``.
+            raise ToolError(
+                f"{exc} (table_catalogue entry {exc.index} names “{exc.table_id}”)."
+            ) from exc
         except AddressNotGeocodableError as exc:
             raise _map_address_not_geocodable_tool_error(exc) from exc
         # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,

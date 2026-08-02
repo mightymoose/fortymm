@@ -316,8 +316,19 @@ def upgrade() -> None:
             nullable=False,
         ),
         # Two tables of one tournament never share a place in its order.
+        #
+        # DEFERRABLE INITIALLY DEFERRED: the catalogue is written as an id-keyed diff
+        # (ADR 20260801), and a diff re-orders — dragging one table above another moves
+        # it onto a position the other has not vacated yet. An immediately-checked
+        # constraint refuses that intermediate state and so forbids reordering outright,
+        # though the transaction's END state is perfectly unique. Deferred here in
+        # place per the pre-deploy convention, not as a chained ALTER.
         sa.UniqueConstraint(
-            "tournament_id", "position", name="uq_tournament_tables_tournament_position"
+            "tournament_id",
+            "position",
+            name="uq_tournament_tables_tournament_position",
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
     # Postgres indexes the REFERENCED key of a foreign key, never the referencing

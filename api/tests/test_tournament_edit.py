@@ -40,7 +40,7 @@ from app.models import (
 from app.models.tournament import DrawType, EventFormat
 from app.schemas.tournament import (
     AddressInput,
-    TournamentTableWrite,
+    TournamentTableUpsert,
     TournamentUpdate,
 )
 from app.tournament_edit import edit_tournament
@@ -698,6 +698,7 @@ async def test_adding_a_table_on_a_drawn_tournament_requests_a_solve(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
     await _draw_an_event(db_session, tournament)
+    kept_first, kept_second = await _catalogue_ids(db_session, tournament_id)
 
     assert await _queued_solves(db_session, tournament_id) == []
 
@@ -711,9 +712,10 @@ async def test_adding_a_table_on_a_drawn_tournament_requests_a_solve(
         actor=owner,
         updates=TournamentUpdate(
             table_catalogue=[
-                TournamentTableWrite(label="Table 1", court="A"),
-                TournamentTableWrite(label="Table 2", court="A"),
-                TournamentTableWrite(label="Table 3", court="B"),
+                # The two it already has, cited by id, plus one it does not.
+                TournamentTableUpsert(id=kept_first, label="Table 1", court="A"),
+                TournamentTableUpsert(id=kept_second, label="Table 2", court="A"),
+                TournamentTableUpsert(label="Table 3", court="B"),
             ]
         ),
         geocoder=_GEOCODER,
@@ -733,10 +735,9 @@ async def test_re_wording_a_table_on_a_drawn_tournament_requests_no_solve(
     ``TableId``s). Re-wording a table leaves that set untouched — the same rows, the
     same ids — so a drawn tournament is not re-solved for a piece of signage.
 
-    This is what positional application buys. Rebuild the catalogue on every PATCH and
-    a re-word would mint two fresh ids, which genuinely IS an input change — so the
-    board would be re-solved, and every placement pointing at the old ids would have
-    dangled first."""
+    This is what citing the id buys. Rebuild the catalogue on every PATCH and a re-word
+    would mint two fresh ids, which genuinely IS an input change — so the board would be
+    re-solved, and every placement pointing at the old ids would have dangled first."""
     owner = await make_user(db_session, "owner-reword")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
@@ -750,8 +751,12 @@ async def test_re_wording_a_table_on_a_drawn_tournament_requests_no_solve(
         actor=owner,
         updates=TournamentUpdate(
             table_catalogue=[
-                TournamentTableWrite(label="Centre Table", court="A"),
-                TournamentTableWrite(label="Table 2", court="A"),
+                TournamentTableUpsert(
+                    id=table_ids_before[0], label="Centre Table", court="A"
+                ),
+                TournamentTableUpsert(
+                    id=table_ids_before[1], label="Table 2", court="A"
+                ),
             ]
         ),
         geocoder=_GEOCODER,
@@ -782,7 +787,7 @@ async def test_table_catalogue_change_without_a_draw_requests_no_solve(
         actor=owner,
         updates=TournamentUpdate(
             table_catalogue=[
-                TournamentTableWrite(label="Table 9", court="C"),
+                TournamentTableUpsert(label="Table 9", court="C"),
             ]
         ),
         geocoder=_GEOCODER,
@@ -812,7 +817,9 @@ async def test_a_shorter_catalogue_removes_the_tables_off_the_end(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
-            table_catalogue=[TournamentTableWrite(label="Table 1", court="A")]
+            table_catalogue=[
+                TournamentTableUpsert(id=first_id, label="Table 1", court="A")
+            ]
         ),
         geocoder=_GEOCODER,
     )

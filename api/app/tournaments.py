@@ -80,6 +80,8 @@ from app.tournament_errors import (
     PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
+    TableInUseError,
+    TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
@@ -458,6 +460,36 @@ async def get_tournament(
     )
 
 
+def _table_not_in_catalogue(exc: TableNotInCatalogueError) -> RequestValidationError:
+    """The 422 for a catalogue entry citing a table ``id`` this tournament does not have
+    (ADR 20260801) — as a **validation error on that entry's field**, not a hand-rolled
+    body.
+
+    The sibling of :func:`_placement_table_not_found`, and the same argument: the body's
+    ``id`` did not validate, the only reason the schema could not judge it is that the
+    answer lives in the database, and a client should not need a second parser to tell
+    "your id is malformed" (a schema 422) from "your id names nothing" (this one).
+    Raising the exception the schema raises puts it through the app's own handler, so
+    the body is byte-shape-identical to every other 422 this route can produce and no
+    new response schema reaches the generated clients.
+
+    The ``loc`` carries the entry's **index** — ``["body", "table_catalogue", i, "id"]``
+    — because a catalogue is a list and a client renders a validation error under the
+    input that caused it. A refusal that named the array alone would leave the director
+    hunting the row across a page of tables.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "table_catalogue", exc.index, "id"),
+                "msg": str(exc),
+                "input": exc.table_id,
+            }
+        ]
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}",
     response_model=TournamentRead,
@@ -470,6 +502,34 @@ async def update_tournament(
     current_user: User = Depends(get_current_user),
     geocoder: Geocoder = Depends(get_geocoder),
 ) -> TournamentRead:
+    """Edit a tournament you own. Absent fields are left alone; a supplied field
+    replaces the current value. Owner-only.
+
+    **`table_catalogue` is an id-keyed diff, sent in full and in order.** Each entry
+    either carries the `id` of a table this tournament already has — keeping that table,
+    with the `label`, `court` and position this payload gives it — or omits the `id` to
+    add a new table, whose id the server mints. **A table no entry names is removed.**
+    Send back the catalogue you read, edited: the ids came from the read, and naming an
+    id this tournament does not have is a `422` on that entry.
+
+    **Removing a table that matches are placed at is a `409` naming the table**, and
+    nothing is written. To go through with it, repeat the request with
+    `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
+    are unplaced — table, predicted start and call all cleared — which is a thing worth
+    saying on purpose rather than a silent side effect of editing the venue. Removing a
+    table that only a *pool* reserves needs no confirmation and produces no refusal; the
+    pool simply reserves one fewer.
+
+    **`address` has three cases and the value alone cannot tell them apart.** Omit it to
+    leave the venue and its coordinates untouched; send a real address to move the venue
+    (re-geocoded only when its text actually changed, a `409` when it cannot be
+    resolved); send `null` — or an object whose six components are all blank — to remove
+    the venue entirely.
+
+    `league_id` may only be changed while the tournament is a `draft`; once it is
+    published the ladder is settled (`409`). `status` is not editable here — the
+    lifecycle moves only across `POST /v1/tournaments/{id}/transitions`.
+    """
     # Thin adapter over the transport-neutral ``edit_tournament`` verb: it owns the
     # load-lock, the owner gate, the league state-rule, the STRICT league lookup, the
     # before-lock geocode of a changed address, the partial apply and the
@@ -482,6 +542,8 @@ async def update_tournament(
     #   LeagueNotEditableError     -> 409 "This tournament is {status}; its league …"
     #   LeagueNotFoundError        -> 404 "League not found."
     #   AddressNotGeocodableError  -> 409 coded ``address_not_geocodable`` refusal
+    #   TableInUseError            -> 409 "…has 2 matches placed at it…" (ADR 20260801)
+    #   TableNotInCatalogueError   -> 422 on ``body.table_catalogue[i].id``
     try:
         tournament = await edit_tournament(
             db,
@@ -490,6 +552,18 @@ async def update_tournament(
             updates=payload,
             geocoder=geocoder,
         )
+    except TableInUseError as exc:
+        # The catalogue's named refusal: removing a table matches are placed at, with no
+        # opt-in. Bare prose, like the pool-set freeze and the league state rule on this
+        # same route — it carries the exact domain-authored sentence, rebuilt verbatim
+        # with ``str``. Nothing was written (the verb raises before the diff touches a
+        # row and long before the commit), so the same request with the opt-in is safe
+        # to send straight back.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TableNotInCatalogueError as exc:
+        # A catalogue entry cited an id this tournament does not have: a field refusal,
+        # shaped like every other 422 on this route (see ``_table_not_in_catalogue``).
+        raise _table_not_in_catalogue(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         # Shared arms: the 404 (absent), the 403 (not the owner), and the 409
         # (league not editable) all map identically across the owner-only writes.
