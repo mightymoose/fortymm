@@ -32,3 +32,146 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+  # Runs FortymmUITests against a REAL backend -- no mocks, same philosophy as
+  # the root e2e/ Playwright suite. GitHub-hosted macos-latest runners cannot
+  # run Docker (no nested virtualization), so unlike every other e2e suite in
+  # this repo this job cannot boot docker-compose.dev.yml -- it stands the API
+  # up as native processes instead: Postgres via Homebrew, then `uvicorn`
+  # directly against it. See
+  # docs/adr/20260802-ios-e2e-ci-runs-the-backend-as-native-processes-not-docker.md.
+  ui-tests:
+    runs-on: macos-latest
+    env:
+      # Mirrors docker-compose.dev.yml's postgres service (POSTGRES_USER,
+      # POSTGRES_PASSWORD, POSTGRES_DB=postgres/postgres/fortymm) exactly, just
+      # on localhost instead of a compose network hostname -- this is also
+      # api/app/db.py's own DEFAULT_DATABASE_URL, so it needs no override
+      # there, but it's spelled out for the alembic/uvicorn steps below.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/fortymm
+      # Ask for the deterministic, network-free FakeGeocoder BY NAME (same
+      # reasoning as scripts/ensure-api-up.sh and openapi-schema.yml): the
+      # default geocoder is `google`, and Settings() raises at construction
+      # -- which the FastAPI lifespan hits at boot -- if it's `google` with no
+      # GOOGLE_GEOCODING_API_KEY. This job never geocodes anything.
+      GEOCODER: fake
+      # uvicorn here serves plain HTTP (no TLS, no reverse proxy) and the
+      # simulator app talks to it directly, so the session cookie must not
+      # carry the Secure flag -- otherwise URLSession drops it and every
+      # request after GET /v1/session looks signed-out. Matches
+      # docker-compose.dev.yml's api service.
+      SESSION_COOKIE_SECURE: "false"
+      # Read by both this job's own steps (the health-check poll) and by
+      # FortymmUITests' setUpWithError, which forwards it onto the launched
+      # app's launchEnvironment (see FortymmUITests/DashboardEmptyStateTests.swift).
+      # Points straight at uvicorn -- no nginx in front of it in this job, so
+      # the app's un-prefixed `/v1/...` paths resolve directly.
+      FMM_API_BASE_URL: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: api/pyproject.toml
+
+      - name: Install and start Postgres (Homebrew)
+        run: |
+          set -euo pipefail
+          brew install postgresql@16
+
+          # postgresql@16 is keg-only -- its binaries aren't linked onto the
+          # default PATH. Export for the rest of *this* step, and also hand
+          # later steps in this job the same PATH entry via GITHUB_PATH.
+          PG_PREFIX="$(brew --prefix postgresql@16)"
+          export PATH="$PG_PREFIX/bin:$PATH"
+          echo "$PG_PREFIX/bin" >> "$GITHUB_PATH"
+
+          # Defensive: most recent postgresql@ formulae initdb automatically
+          # as part of `brew install`, but fall back to doing it ourselves if
+          # the data directory came up empty.
+          PGDATA="$PG_PREFIX/var/postgresql@16"
+          if [ ! -s "$PGDATA/PG_VERSION" ]; then
+            initdb --locale=C -E UTF-8 "$PGDATA"
+          fi
+
+          brew services start postgresql@16
+
+          echo "Waiting for Postgres to accept connections..."
+          for _ in $(seq 1 30); do
+            if pg_isready -q; then break; fi
+            sleep 1
+          done
+          pg_isready
+
+          # Homebrew's postgresql@16 bootstraps its one superuser as the
+          # invoking OS user (the runner account), not "postgres" -- create
+          # the postgres/postgres role + fortymm db that DATABASE_URL above
+          # expects, so the api/worker code needs no macOS-specific carve-out.
+          psql -d postgres -tc "SELECT 1 FROM pg_roles WHERE rolname = 'postgres'" | grep -q 1 \
+            || psql -d postgres -c "CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres';"
+          psql -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'fortymm'" | grep -q 1 \
+            || psql -d postgres -c "CREATE DATABASE fortymm OWNER postgres;"
+
+      - name: Install API dependencies
+        working-directory: api
+        run: pip install -e '.[dev]'
+
+      - name: Run Alembic migrations + RBAC/league seed
+        working-directory: api
+        run: |
+          set -euo pipefail
+          alembic upgrade head
+          # Same boot-time seeds docker-compose.dev.yml's api command chains
+          # after `alembic upgrade head` -- GET /v1/session 500s without the
+          # default "User" RBAC role (app/roles.py:grant_default_role raises
+          # if it's missing), so this isn't optional even though the
+          # Dashboard empty-state spec itself never touches a league.
+          python scripts/seed_rbac.py
+          python scripts/seed_leagues.py
+
+      - name: Start the API (uvicorn, native process -- no Docker)
+        working-directory: api
+        run: |
+          set -euo pipefail
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > /tmp/fortymm-api.log 2>&1 &
+          echo "Started uvicorn (pid $!)"
+
+      - name: Wait for the API to answer GET /v1/health
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -fs -o /dev/null "$FMM_API_BASE_URL/v1/health"; then
+              echo "API answered /v1/health at $FMM_API_BASE_URL"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API never answered GET /v1/health -- last log lines:"
+          tail -n 100 /tmp/fortymm-api.log || true
+          exit 1
+
+      - run: xcodebuild -version
+
+      - name: Run FortymmUITests
+        working-directory: ios
+        env:
+          # A plain env var set for `xcodebuild test` only reaches the
+          # xcodebuild process itself -- the UI test's actual host process
+          # (FortymmUITests-Runner.app) runs inside the simulator as a
+          # separate process tree that does NOT inherit it. The
+          # `TEST_RUNNER_` prefix is Xcode's documented mechanism for
+          # forwarding a CI-supplied env var into that test-host process,
+          # with the prefix stripped -- so the test's own
+          # `ProcessInfo.processInfo.environment["FMM_API_BASE_URL"]` read
+          # (see DashboardEmptyStateTests.swift) sees it.
+          TEST_RUNNER_FMM_API_BASE_URL: ${{ env.FMM_API_BASE_URL }}
+        run: |
+          xcodebuild test \
+            -project Fortymm.xcodeproj \
+            -scheme Fortymm \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -only-testing:FortymmUITests \
+            CODE_SIGNING_ALLOWED=NO
