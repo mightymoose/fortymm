@@ -233,9 +233,14 @@ if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
 
   echo
   echo "==> helm upgrade --install $OBS_RELEASE"
+  # --atomic so a timeout self-heals. Without it, `--wait` timing out leaves the
+  # release in `pending-upgrade` forever, and because nothing clears that state,
+  # EVERY later upgrade aborts with "another operation is in progress" until
+  # someone manually runs `helm rollback`. --atomic rolls back on failure and
+  # leaves the release `deployed`, so the next redeploy can still proceed.
   helm upgrade --install "$OBS_RELEASE" "$OBS_CHART" \
     --namespace "$OBS_NAMESPACE" \
-    --wait --timeout 10m
+    --wait --timeout 10m --atomic
 
   echo
   echo "==> Observability pods"

@@ -120,6 +120,60 @@ unprompted.**
   **[destructive/shared]** — `DROP SCHEMA` wipes all UAT data; confirm with the
   user before running it.
 
+### Observability deploy hangs — release stuck in `pending-upgrade` behind a Terminating `loki-0`
+
+- **Symptom:** `mise run redeploy-uat` hangs on the monitoring chart. `helm list
+  -n monitoring` shows `pending-upgrade` with **no helm process running**, so it
+  never resolves; every later upgrade then fails with *"another operation
+  (install/upgrade/rollback) is in progress"*. `kubectl get pods -n monitoring`
+  shows `loki-0` in `Terminating` — often for over an hour. Each retry strands
+  another revision.
+- **Cause:** two things compounding. The k3d node flaps `NotReady` (Docker
+  Desktop strain / host sleep) and the node controller evicts `loki-0`
+  (`DisruptionTarget: True`). Loki is typically already sick — 503 on its
+  readiness probe, many restarts — and **doesn't exit on SIGTERM**. The loki
+  subchart ships `terminationGracePeriodSeconds: 4800` (**80 minutes**), which
+  the kubelet honours in full before SIGKILL. A StatefulSet can't recreate
+  ordinal 0 until the old pod is gone, so `helm upgrade --wait` blocks on it.
+  We now pin this to 60s in `deploy/observability/values.yaml` — but the guard
+  only helps once a *successful* upgrade has applied it.
+- **Reading the clock:** `metadata.deletionTimestamp` is the moment the grace
+  period **expires**, not when deletion was requested. Subtract the grace period
+  to get the eviction time:
+  ```bash
+  kubectl get pod loki-0 -n monitoring \
+    -o jsonpath='{.metadata.deletionTimestamp} {.metadata.deletionGracePeriodSeconds}'
+  ```
+- **Waiting does NOT fix it.** When the grace period expires the kubelet SIGKILLs
+  the pod and the StatefulSet recreates it, so the *pods* go healthy on their
+  own — but the release stays `pending-upgrade` forever, because no helm process
+  is alive to finish or fail it. The rollback below is mandatory; the
+  force-delete only buys back the remaining grace-period minutes.
+- **Fix (clear the stranded release, then the pod):** Loki here has **no PVC**
+  and its storage renders as `emptyDir: {}`, so force-deleting loses nothing that
+  wasn't already ephemeral:
+  ```bash
+  # Required — nothing else clears `pending-upgrade`:
+  helm --kube-context k3d-fortymm-uat rollback observability <last-deployed-rev> -n monitoring
+  # Optional — skips the wait for SIGKILL:
+  kubectl --context k3d-fortymm-uat delete pod loki-0 -n monitoring --grace-period=0 --force
+  helm --kube-context k3d-fortymm-uat list -n monitoring   # expect: deployed
+  ```
+  Use `helm history observability -n monitoring` to find the last `deployed`
+  revision. `helm rollback` is the way out of `pending-upgrade`; a plain
+  `helm upgrade` will just refuse. **[destructive/shared]** — flag for the user;
+  do not run unprompted.
+- **Mind the kube context.** The default context is usually `docker-desktop`,
+  **not** the k3d cluster, and both tools fail *quietly* against the wrong one:
+  `helm list -n monitoring` returns an empty table and
+  `helm rollback ...` says `Error: release: not found` — neither of which reads
+  like "you're pointed at the wrong cluster". Pass
+  `--kube-context k3d-fortymm-uat` / `--context k3d-fortymm-uat` as above, or
+  `export KUBECONFIG="$(k3d kubeconfig write fortymm-uat)"` once per shell.
+- **Sidestep it:** `DEPLOY_OBSERVABILITY=false mise run redeploy-uat` deploys the
+  app without touching the monitoring chart, so a wedged Loki doesn't block
+  shipping UAT.
+
 ### Compose nginx 502 with stale upstream IPs
 
 - **Symptom:** After recreating `api`/`web-client` in a compose stack, nginx
