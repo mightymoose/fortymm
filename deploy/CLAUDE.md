@@ -78,9 +78,9 @@ docker pull "ghcr.io/mightymoose/fortymm-api:$(git rev-parse HEAD | cut -c1-12)"
 UAT's k3d cluster runs on the operator's own machine rather than on an amd64
 runner, and that machine's architecture is not something this repo pins or can
 check — an amd64-only image would either fail to run there or run under
-emulation, depending on whose machine it is. A later Hetzner box is amd64. One manifest list per tag serves both. The arm64 leg is QEMU-emulated
-on the amd64 runner and dominates the run — **~25 min is normal** (the jobs allow
-90). Provenance attestations are off, so each index holds exactly the two
+emulation, depending on whose machine it is. A later Hetzner box is amd64, so
+one manifest list per tag serves both. The arm64 leg is QEMU-emulated on the
+amd64 runner and dominates the run — **~25 min is normal** (the jobs allow 90). Provenance attestations are off, so each index holds exactly the two
 platform manifests it claims and nothing pinning it by digest sees an
 `unknown/unknown` entry.
 

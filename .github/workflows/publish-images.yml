@@ -41,8 +41,10 @@ env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/mightymoose/fortymm-api
   WEB_IMAGE: ghcr.io/mightymoose/fortymm-web-client
-  # UAT's k3d cluster runs on the operator's (arm64) machine, not on a runner,
-  # so amd64 alone would not run there; a later Hetzner box is amd64. One
+  # UAT's k3d cluster runs on the operator's own machine, not on a runner, and
+  # this repo neither pins nor can check that machine's architecture -- an
+  # amd64-only image would either fail to run there or run under emulation,
+  # depending on whose machine it is. A later Hetzner box is amd64, so one
   # manifest list per tag serves both. The arm64 leg is QEMU-emulated here and
   # dominates the run time -- that cost is accepted deliberately.
   PLATFORMS: linux/amd64,linux/arm64
