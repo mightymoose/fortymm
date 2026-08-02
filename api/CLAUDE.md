@@ -114,11 +114,13 @@ and re-run alembic against a fresh database to test.
 **Route/schema/docstring changes regenerate `openapi.json`.** A FastAPI route
 **docstring** becomes the OpenAPI description, so even a docstring edit drifts the
 generated clients. After changing any route, Pydantic request/response schema, or
-docstring, the generated types must be regenerated: `mise run regen-api-types`
+docstring, the generated types need regenerating: `mise run regen-api-types`
 (`web-client/src/api/schema.d.ts`) and `mise run regen-ios-api-types`
 (`ios/Fortymm/Generated/Types.swift`), committed in the same change — the
 `openapi-schema` CI job fails on drift. (See the root `CLAUDE.md` for the full
-invariant.)
+invariant.) This regen is the main session's job, not the `api` domain-expert
+subagent's — if you're that subagent, flag it in your summary instead of
+running it yourself (see `.claude/agents/api.md`).
 
 ## Testing gotchas
 
