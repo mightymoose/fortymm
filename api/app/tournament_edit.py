@@ -343,7 +343,9 @@ async def edit_tournament(
             db,
             tournament,
             submitted_catalogue,
-            unplace_fixtures=updates.unplace_fixtures_on_removed_tables,
+            # The opt-in's one reading (``true``, and nothing else), so what crosses
+            # this seam is a ``bool`` rather than the field's omittable ``bool | None``.
+            unplace_fixtures=updates.unplacing_is_confirmed,
         )
         catalogue_changed = applied.changed
         unplaced_event_ids = applied.unplaced_event_ids
