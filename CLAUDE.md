@@ -82,7 +82,7 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 | QA | up: `scripts/qa-up.sh [id]` · **down: `scripts/qa-down.sh [id]`** | :8085 | captured in **Mailpit** :8087 — never sends real mail |
 | UAT | `mise run redeploy-uat` — Helm + **k3d**, *not* compose, chart at `deploy/uat/` | :8084, `uat.fortymm.com`, and `https://fortymm-uat.<tailnet>.ts.net` | **real Postmark** — lands in real inboxes |
 
-**Always reap a QA stack once its branch merges** (`land-the-plane` Step 8). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
+**Always reap a QA stack once its branch merges** (`land-the-plane` Step 5). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
 
 ## Cloud sessions
 
@@ -125,6 +125,6 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **Verify the artifact under test is the one you changed** — see `.claude/rules/verify-the-artifact-under-test.md`.
 
-**Collect the garbage you create** — `land-the-plane` Step 9 runs `scripts/reap-worktrees.sh` (see its header for why).
+**Collect the garbage you create** — `land-the-plane` Step 6 runs `scripts/reap-worktrees.sh` (see its header for why).
 
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).
