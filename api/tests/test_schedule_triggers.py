@@ -196,7 +196,9 @@ async def _call_fixture(
         db,
         tournament,
         fixture,
-        table_id="t1",
+        # The catalogue's first row, by its server-minted id: ``table_id`` is a
+        # foreign key now (ADR 20260801).
+        table_id=str(tournament.tables[0].id),
         scheduled_start=datetime(2030, 1, 1, 10, 0),
         event_timezone="America/Chicago",
     )
@@ -734,8 +736,9 @@ async def test_a_recut_clears_prior_pins_and_requests_a_settings_solve(
     await _enter_and_cut(db_session, event, entrants)
     old_fixtures = await _fixtures_of(db_session, event.id)
     assert len(old_fixtures) == 3
+    (the_table, *_) = await _catalogue_ids(db_session, tournament_id)
     for fixture in old_fixtures:
-        fixture.table_id = "t1"
+        fixture.table_id = the_table
         fixture.scheduled_start = datetime(2030, 1, 1, 9, 30)
         fixture.pinned_at = datetime(2030, 1, 1, 9, 20)
     await db_session.commit()

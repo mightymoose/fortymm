@@ -497,6 +497,73 @@ async def test_the_venue_tables_fk_cascades_in_the_database(
     assert await _catalogue_ids(db_session, tournament_id) == []
 
 
+async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A tournament with a fixture PLACED at one of its own tables still deletes — the
+    tables, the fixtures and the tournament all go.
+
+    Without the unplace the delete verb does first, this is a **500**: a fixture's
+    ``table_id`` is ``ON DELETE RESTRICT`` (ADR 20260801) and the ORM deletes the
+    catalogue rows in their own statement, ahead of the ``tournaments`` row whose
+    cascade takes the fixtures — so the immediate, undeferrable RESTRICT check fires
+    while the placements are still pointing at the tables. The refusal that ADR asks
+    for is about removing a table out from under a fixture that SURVIVES; here nothing
+    survives, and the director asked for exactly that.
+    """
+    owner = await make_user(db_session, "lifecycle-delete-placed")
+    tournament = Tournament(
+        name="Placed Cup",
+        address=_stored_address(),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+        tables=venue_tables(("Table 1", "A")),
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await db_session.refresh(tournament)
+    tournament_id = tournament.id
+    event = TournamentEvent(
+        tournament_id=tournament_id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": False, "length_games": 3},
+        pools=[],
+    )
+    db_session.add(event)
+    await db_session.commit()
+    db_session.add(
+        TournamentFixture(
+            event_id=event.id,
+            round=1,
+            position=1,
+            table_id=str(tournament.tables[0].id),
+        )
+    )
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    await delete_tournament(db_session, tournament_id=tournament_id, actor=owner)
+
+    db_session.expire_all()
+    assert await _catalogue_ids(db_session, tournament_id) == []
+    assert (
+        await db_session.execute(select(func.count()).select_from(TournamentFixture))
+    ).scalar_one() == 0
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one_or_none() is None
+
+
 async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[uuid.UUID]:
     return list(
         (

@@ -773,11 +773,12 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     shifts into the new zone."""
     client, _ = authed_client
     tournament_id, event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     # Place it at 18:00 local; the default event zone is America/Chicago.
     place = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T18:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T18:00:00"},
     )
     assert place.status_code == 200, place.text
     before = await _fixture_in_detail(client, tournament_id, str(fixture.id))
@@ -5806,8 +5807,10 @@ async def test_place_fixture_blocks_on_a_concurrent_uncut_then_404s_the_gone_fix
             actor = (
                 await session.execute(select(User).where(User.id == owner_id))
             ).scalar_one()
+            # The placement's CONTENT is beside the point here — this test is about the
+            # lock — so it is the empty one, which no table has to exist for.
             payload = TournamentFixturePlacementUpdate(
-                table_id="t1", scheduled_start=None
+                table_id=None, scheduled_start=None
             )
             try:
                 await place_fixture(
@@ -7411,6 +7414,11 @@ async def _call_fixtures(
     follows a call, so the tests go through one rather than forcing the status."""
     tournament = await db.get(Tournament, uuid.UUID(tournament_id))
     assert tournament is not None
+    # Real catalogue rows, cycled: ``table_id`` is a foreign key now (ADR 20260801), so
+    # the ``f"t{i + 1}"`` this used to send is no longer a table a fixture can sit at.
+    # Cycling past the end of a two-table catalogue double-books, which is fine and
+    # deliberate — a double-booking is a flag derived on read, never a refusal.
+    tables = [str(table.id) for table in tournament.tables]
     # The director enters ``scheduled_start`` as venue wall-clock; the write path
     # anchors it to the event timezone into the ``timestamptz`` column (ADR
     # "tournament times are timezone-aware instants").
@@ -7419,7 +7427,7 @@ async def _call_fixtures(
             db,
             tournament,
             fixture,
-            table_id=f"t{i + 1}",
+            table_id=tables[i % len(tables)],
             scheduled_start=datetime(2026, 6, 1, 10, 0),
             event_timezone="America/Chicago",
         )
@@ -8241,20 +8249,21 @@ async def test_owner_sets_a_fixture_placement_and_the_detail_reflects_it(
     rides the detail BFF, so this is where a client sees it)."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["id"] == str(fixture.id)
-    assert body["table_id"] == "t1"
+    assert body["table_id"] == table_1
     assert _is_venue_instant(body["scheduled_start"], "2026-06-13T10:00:00")
 
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    assert placed["table_id"] == "t1"
+    assert placed["table_id"] == table_1
     assert _is_venue_instant(placed["scheduled_start"], "2026-06-13T10:00:00")
 
 
@@ -8275,10 +8284,11 @@ async def test_a_pinned_fixture_time_carries_a_venue_local_label_and_a_utc_insta
     """
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T18:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T18:00:00"},
     )
     assert response.status_code == 200, response.text
 
@@ -8311,9 +8321,10 @@ async def test_owner_clears_a_fixture_placement_back_to_null(
     both halves; the detail shows an unplaced fixture again."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8337,13 +8348,14 @@ async def test_a_non_owner_cannot_place_a_fixture(
     fixture is left unplaced."""
     owner_client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(owner_client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(owner_client, tournament_id)
 
     async with make_client() as stranger:
         user = await start_session(stranger, db_session)
         await _grant_tournament_perms(db_session, user)
         response = await stranger.patch(
             _placement_url(tournament_id, str(fixture.id)),
-            json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+            json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
         )
         assert response.status_code == 403
 
@@ -8352,35 +8364,101 @@ async def test_a_non_owner_cannot_place_a_fixture(
     assert placed["scheduled_start"] is None
 
 
+async def test_an_out_of_window_or_off_pool_placement_still_saves(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The placement is still **soft** everywhere ADR-0790 made it soft:
+    ``scheduled_start`` is a prediction, and three of its four constraints (table-in-
+    pool, time-in-window, no double-booking) are flags on read, not invariants — so the
+    write does not reject them. Pool A reserves the first table for 09:00–12:30; the
+    SECOND table (in the catalogue, off the pool) at 23:00 **saves** rather than 4xx.
+    Conflict detection is the scheduler's job, not this boundary's.
+
+    This test used to carry a second parameter — a ``table_id`` naming nothing in the
+    catalogue at all — asserting that *that* saved too. It no longer does: ADR 20260801
+    supersedes exactly that clause of ADR-0790 and makes it the 422 in the test below.
+    The two are kept adjacent on purpose, because the whole content of the decision is
+    where the line falls between them."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    _table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_2, "scheduled_start": "2026-06-13T23:00:00"},
+    )
+
+    assert 200 <= response.status_code < 300, response.text
+    body = response.json()
+    assert body["table_id"] == table_2
+    assert _is_venue_instant(body["scheduled_start"], "2026-06-13T23:00:00")
+
+
 @pytest.mark.parametrize(
     "table_id",
     [
-        pytest.param("t2", id="off-pool"),  # in the catalogue, but not in Pool A
-        pytest.param("ghost-table", id="not-in-catalogue"),  # names no table at all
+        # A well-formed id that names no row, and a string that is not an id at all —
+        # the ``"t1"`` a client of the old JSONB catalogue would still be sending.
+        pytest.param(str(uuid.uuid4()), id="unknown-id"),
+        pytest.param("ghost-table", id="not-even-an-id"),
     ],
 )
-async def test_an_out_of_window_or_off_pool_placement_still_saves(
+async def test_a_placement_naming_no_table_is_a_422_on_the_field(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     table_id: str,
 ) -> None:
-    """The placement is **soft** (ADR-0790): ``scheduled_start`` is a prediction, and
-    the constraints (table-in-pool, time-in-window, no double-booking) are flags on
-    read, not invariants — so the write does not reject them. Pool A reserves ``t1`` for
-    09:00–12:30; a table off the pool (or naming nothing in the catalogue at all) and a
-    23:00 start both **save** rather than 4xx. Conflict detection is a later slice."""
+    """A ``table_id`` that names no table of this tournament is refused with a **422
+    naming the field** — where it was previously stored and answered 200 (ADR 20260801,
+    superseding ADR-0790's fourth clause now that a table is a real row to point at).
+
+    The refusal is attributed to ``body.table_id``, not to the request at large: this is
+    the same ``loc`` a schema 422 on this field would carry, so a client renders it
+    under the input that caused it and needs no second parser for the database-answered
+    half of the same question.
+
+    And it writes nothing — the fixture is left unplaced, not half-placed."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": table_id, "scheduled_start": "2026-06-13T23:00:00"},
+        json={"table_id": table_id, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
-    assert 200 <= response.status_code < 300, response.text
-    body = response.json()
-    assert body["table_id"] == table_id
-    assert _is_venue_instant(body["scheduled_start"], "2026-06-13T23:00:00")
+    assert response.status_code == 422, response.text
+    assert ["body", "table_id"] in _error_locs(response), response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] is None
+    assert placed["scheduled_start"] is None
+
+
+async def test_another_tournaments_table_cannot_be_placed_at(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A real table id — belonging to a **different** tournament — is refused the same
+    way, which the foreign key alone cannot do (it only knows the row exists somewhere).
+
+    From this tournament's page that id renders as nothing, so it is the same dangling
+    pointer the ADR makes unrepresentable, and it earns the same 422 on the same field.
+    """
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    other_id, _other_event, _other_fixture = await _drawn_fixture(
+        client, db_session, prefix="ot", name="Other Open"
+    )
+    (foreign_table, *_) = await _catalogue_table_ids(client, other_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": foreign_table, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_id"] in _error_locs(response), response.text
 
 
 @pytest.mark.parametrize("frozen_status", [MatchStatus.completed, MatchStatus.voided])
@@ -8399,9 +8477,10 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     both the 409 and that the historical placement survives the refusal."""
     client, owner = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     match = await _make_match(db_session, owner, default_league)
@@ -8410,7 +8489,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     await db_session.commit()
 
     response = await client.patch(
-        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T14:00:00"}
+        url, json={"table_id": table_2, "scheduled_start": "2026-06-13T14:00:00"}
     )
 
     assert response.status_code == 409, response.text
@@ -8418,7 +8497,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     # The move changed nothing: the placement recorded before the match went to history
     # is the placement the fixture still carries.
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    assert placed["table_id"] == "t1"
+    assert placed["table_id"] == table_1
     assert _is_venue_instant(placed["scheduled_start"], "2026-06-13T10:00:00")
 
 
@@ -8432,6 +8511,7 @@ async def test_an_in_progress_fixture_is_freely_placeable(
     live-match fixture still (re)places."""
     client, owner = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     match = await _make_match(db_session, owner, default_league)
     match.status = MatchStatus.in_progress
     fixture.match_id = match.id
@@ -8439,11 +8519,11 @@ async def test_an_in_progress_fixture_is_freely_placeable(
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["table_id"] == "t1"
+    assert response.json()["table_id"] == table_1
 
 
 async def test_an_offset_aware_start_is_a_422(
@@ -8456,10 +8536,11 @@ async def test_an_offset_aware_start_is_a_422(
     500-ing in the driver — the same discipline the fee/player-limit bounds keep."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00Z"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00Z"},
     )
 
     assert response.status_code == 422, response.text
@@ -8724,10 +8805,11 @@ async def test_a_pre_live_placement_is_a_silent_pin(
     first drag — but nobody is paged and the count stays 0."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
@@ -8751,13 +8833,14 @@ async def test_clearing_a_called_placement_cancels_the_call(
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     entrants = await _entrant_user_ids_of(db_session, fixture)
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
     await client.patch(
-        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
+        url, json={"table_id": table_2, "scheduled_start": "2026-06-13T10:30:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8786,9 +8869,10 @@ async def test_clearing_a_pre_live_placement_is_silent(
     nobody hears about a promise that was never made."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8811,9 +8895,10 @@ async def test_clearing_a_never_notified_placement_is_silent_even_live(
     nothing (a cancellation corrects a promise; this fixture never carried one)."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
     await _go_live_directly(db_session, tournament_id)
 
@@ -8840,17 +8925,18 @@ async def test_a_tbd_side_fixture_placement_saves_without_pinning(
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     fixture.entry_b_id = None  # a TBD side — representable by design (ADR-0786)
     await db_session.commit()
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     await _clear_solve_ledger(db_session)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["table_id"] == "t1"
+    assert body["table_id"] == table_1
     assert _is_venue_instant(body["scheduled_start"], "2026-06-13T10:00:00")
     assert body["pinned_at"] is None
     assert body["call_notified_count"] == 0

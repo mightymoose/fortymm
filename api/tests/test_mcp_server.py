@@ -92,6 +92,7 @@ from tests._helpers import (
     grant_permissions,
     make_user,
     start_session,
+    table_ids_of,
     venue_tables,
     with_table_aliases,
 )
@@ -1810,8 +1811,9 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     # a US-Central dev box, 09:00Z in a UTC CI runner). 9:00 AM America/Chicago
     # (CDT on this August date) = 14:00Z, which the BFF renders back as "9:00 AM CDT".
     scheduled_start = datetime(2026, 8, 1, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
+    (the_table, *_) = await table_ids_of(db_session, uuid.UUID(tournament_id))
     fixture = await _seed_placed_fixture(
-        db_session, event_id, table_id="t1", scheduled_start=scheduled_start
+        db_session, event_id, table_id=the_table, scheduled_start=scheduled_start
     )
     # A finished solve on the ledger, so the projection carries a verdict.
     db_session.add(
@@ -1842,7 +1844,7 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     assert len(group["fixtures"]) == 1
     placed = group["fixtures"][0]
     assert placed["id"] == str(fixture.id)
-    assert placed["table_id"] == "t1"
+    assert placed["table_id"] == the_table
     # ``scheduled_start`` is now a venue-local ``FixtureTimeRead`` (ADR "tournament
     # times are timezone-aware instants"): the 09:00 seed is anchored in the event's
     # America/Chicago zone (= 14:00Z), rendered with its local label + tz abbrev.
@@ -4074,6 +4076,8 @@ async def test_place_fixture_owner_round_trip(
         db_session, owner, default_league
     )
     tournament_id, fixture_id = tournament.id, fixture.id
+    # A placement names a real table (ADR 20260801), and its id is the server's.
+    table_id = str(tournament.tables[0].id)
 
     async with _mcp_client(raw) as client, client:
         result = await client.call_tool_mcp(
@@ -4082,7 +4086,7 @@ async def test_place_fixture_owner_round_trip(
                 "tournament_id": str(tournament_id),
                 "fixture_id": str(fixture_id),
                 "placement": {
-                    "table_id": "t1",
+                    "table_id": table_id,
                     "scheduled_start": "2026-06-13T10:00:00",
                 },
             },
@@ -4090,7 +4094,7 @@ async def test_place_fixture_owner_round_trip(
     assert result.isError is False
     assert result.structuredContent is not None
     assert result.structuredContent["id"] == str(fixture_id)
-    assert result.structuredContent["table_id"] == "t1"
+    assert result.structuredContent["table_id"] == table_id
     assert result.structuredContent["scheduled_start"] is not None
 
     db_session.expire_all()
@@ -4099,7 +4103,7 @@ async def test_place_fixture_owner_round_trip(
             select(TournamentFixture).where(TournamentFixture.id == fixture_id)
         )
     ).scalar_one()
-    assert row.table_id == "t1"
+    assert row.table_id == table_id
     assert row.scheduled_start is not None
     assert row.pinned_at is not None
 
@@ -4117,6 +4121,7 @@ async def test_place_fixture_non_owner_raises_tool_error(
         db_session, owner, default_league
     )
     tournament_id, fixture_id = tournament.id, fixture.id
+    table_id = str(tournament.tables[0].id)
 
     async with _mcp_client(stranger_token) as client, client:
         with pytest.raises(ToolError, match="tournaments you created"):
@@ -4126,7 +4131,7 @@ async def test_place_fixture_non_owner_raises_tool_error(
                     "tournament_id": str(tournament_id),
                     "fixture_id": str(fixture_id),
                     "placement": {
-                        "table_id": "t1",
+                        "table_id": table_id,
                         "scheduled_start": "2026-06-13T10:00:00",
                     },
                 },
@@ -4154,6 +4159,7 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
         db_session, owner, default_league
     )
     tournament_id, fixture_id = tournament.id, fixture.id
+    table_id = str(tournament.tables[1].id)
     match = Match(
         match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
         league_id=default_league.id,
@@ -4173,7 +4179,7 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
                     "tournament_id": str(tournament_id),
                     "fixture_id": str(fixture_id),
                     "placement": {
-                        "table_id": "t2",
+                        "table_id": table_id,
                         "scheduled_start": "2026-06-13T14:00:00",
                     },
                 },
