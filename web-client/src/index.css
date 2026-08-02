@@ -978,6 +978,12 @@ body.dark.fortymm-theme {
   background: var(--ball-500);
 }
 
+.app-shell__sidebar-footer {
+  flex-shrink: 0;
+  padding: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .rbac-row {
   transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

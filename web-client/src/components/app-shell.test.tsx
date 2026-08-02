@@ -256,6 +256,25 @@ describe('AppShell sidebar', () => {
  *   later adds an `onEscapeKeyDown` preventDefault or a global key handler that
  *   swallows it. It is deliberately non-discriminating today.
  */
+/**
+ * The TestFlight link pinned to the bottom of the sidebar, below the nav
+ * list — a plain external link, not a route the router owns.
+ */
+describe('AppShell sidebar footer', () => {
+  it('links to the public TestFlight beta, opening in a new tab', async () => {
+    appShellPage.render('/dashboard')
+    await appShellPage.findNavLink('Dashboard')
+
+    const link = appShellPage.getTestFlightLink()
+    expect(link).toHaveAttribute(
+      'href',
+      'https://testflight.apple.com/join/5pGVbku3',
+    )
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+})
+
 describe('AppShell alpha notice', () => {
   it('offers a labelled close control that dismisses it (#891)', async () => {
     appShellPage.render('/dashboard')
