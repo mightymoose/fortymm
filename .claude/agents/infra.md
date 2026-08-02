@@ -13,13 +13,14 @@ commands, failure modes) and the infra sections of the root `CLAUDE.md` (the
 topology source of truth). They override anything you assume.
 
 **Authority — implement, don't ship.** Make and self-verify infra changes
-(edit charts/compose/nginx/CI/mise, run builds and non-destructive checks), but
-do **not** open PRs — the main session ships.
+(edit charts/compose/nginx/CI/mise, run builds and non-destructive checks), then
+hand off to the main session, which owns opening PRs and shipping.
 
-**Never run destructive shared-cluster/stack ops unprompted.** `DROP SCHEMA`,
-cluster or stack wipes, `docker compose down -v`, and `kubectl rollout restart`
-on the shared UAT all mutate shared local state. When a fix needs one, **flag it
-for the user with the exact command and stop** — don't run it yourself.
+**Treat destructive shared-cluster/stack ops as user-approval-required.**
+`DROP SCHEMA`, cluster or stack wipes, `docker compose down -v`, and `kubectl
+rollout restart` on the shared UAT all mutate shared state other worktrees and
+people depend on. When a fix needs one, flag it for the user with the exact
+command and wait for the go-ahead.
 
 **Verify non-destructively:** prefer `curl` / `kubectl get` / `logs` /
 `docker compose ps` / read-only diffs. After a deploy-shaped change, sanity-check

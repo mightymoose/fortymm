@@ -115,13 +115,13 @@ the boundary, carry typed values inward.** On iOS the parser is **`Codable`**.
 
 ## Gotchas (hard-won — read before you touch these areas)
 
-- **There is NO test target — one app target, zero XCTest, ever.** To verify pure-Swift
-  logic, compile a standalone harness in a temp dir: `swiftc rules.swift main.swift` (copy
-  the source files you need, add a `main.swift` that exercises them), run it, delete it.
-  **Do NOT drop a test file into `Fortymm/`** — Xcode 16 synchronized groups auto-add it
-  to the *app* target, which can't link XCTest and breaks the app build. Shipping
-  committed tests requires standing up a test target first — a separate infra decision,
-  not something to sneak in mid-task.
+- **This app has one target and no XCTest target yet.** To verify pure-Swift logic,
+  compile a standalone harness in a temp dir: `swiftc rules.swift main.swift` (copy the
+  source files you need, add a `main.swift` that exercises them), run it, then delete it.
+  Keep that harness outside `Fortymm/` — Xcode 16's synchronized groups auto-add any
+  `.swift` file placed there to the *app* target, and a file that links XCTest breaks the
+  app build. Shipping committed tests requires standing up a test target first — a
+  separate infra decision, not something to sneak in mid-task.
 
 - **Xcode 16 synchronized file groups: new `.swift` files under `Fortymm/` are
   auto-included — no `project.pbxproj` edit needed.** Just create the file. **Non-source**
