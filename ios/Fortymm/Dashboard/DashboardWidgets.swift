@@ -93,6 +93,13 @@ private func plainRating(_ value: Double) -> String {
     String(Int(value.rounded()))
 }
 
+/// `"#N of M"` — the rank fallback for `percentileLine` below the server's
+/// percentile threshold. Mirrors the web's `formatRankOfPopulation`
+/// (`web-client/src/lib/rating.ts`).
+private func formatRankOfPopulation(rank: Int, population: Int) -> String {
+    "#\(rank) of \(population)"
+}
+
 private extension View {
     /// The inset "well" shared by the sparkline panel and the stat tiles: a
     /// darker fill with a hairline border.
@@ -107,9 +114,16 @@ private extension View {
 struct DashboardRatingCard: View {
     let rating: DashboardRating
 
+    // The `.rated` arm always carries these; the `?? 0` only satisfies the
+    // type, which is nullable across all four states (`DashboardView.yourGame`
+    // renders this card for `.rated` only — ADR 20260725). Mirrors the web
+    // `RatingCard`'s identical `?? 0` unwrap.
+    private var current: Double { rating.current ?? 0 }
+    private var peak: Double { rating.peak ?? 0 }
+
     // Peak tile, then up to two strategy-specific stats (the grid is 3-up).
     private var tiles: [(label: String, value: String)] {
-        [("Peak", plainRating(rating.peak))]
+        [("Peak", plainRating(peak))]
             + rating.stats.prefix(2).map { ($0.label, $0.value) }
     }
 
@@ -128,7 +142,7 @@ struct DashboardRatingCard: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: FMSpace.s3) {
-                    Text(verbatim: plainRating(rating.current))
+                    Text(verbatim: plainRating(current))
                         .font(FMFont.mono(56, weight: .bold))
                         .foregroundStyle(FMColor.fg1)
                     VStack(alignment: .leading, spacing: 5) {
@@ -160,15 +174,28 @@ struct DashboardRatingCard: View {
 
     @ViewBuilder
     private var percentileLine: some View {
+        // `.rated` always carries a league name; `?? ""` only satisfies the
+        // type, same reasoning as `current`/`peak` above.
+        let leagueName = rating.leagueName ?? ""
         if let percentile = rating.percentile {
             (Text("Top ").foregroundStyle(FMColor.fgMuted)
                 + Text("\(percentile)%")
                     .font(FMFont.mono(FMFont.xs))
                     .foregroundStyle(FMColor.fg3)
-                + Text(" in \(rating.leagueName)").foregroundStyle(FMColor.fgMuted))
+                + Text(" in \(leagueName)").foregroundStyle(FMColor.fgMuted))
+                .font(FMFont.ui(FMFont.xs))
+        } else if let rank = rating.rank, let population = rating.population {
+            // Below the percentile threshold the server suppresses percentile
+            // and sends rank instead: "#N of M" is honest at any position and
+            // league size, where "Top 100%" for the last-place player was a
+            // compliment-shaped lie (#959, ADR 20260725).
+            (Text(formatRankOfPopulation(rank: rank, population: population))
+                .font(FMFont.mono(FMFont.xs))
+                .foregroundStyle(FMColor.fg3)
+                + Text(" in \(leagueName)").foregroundStyle(FMColor.fgMuted))
                 .font(FMFont.ui(FMFont.xs))
         } else {
-            Text(rating.leagueName)
+            Text(leagueName)
                 .font(FMFont.ui(FMFont.xs))
                 .foregroundStyle(FMColor.fgMuted)
         }
@@ -180,7 +207,7 @@ struct DashboardRatingCard: View {
             HStack {
                 Text("30 days ago")
                 Spacer()
-                Text(verbatim: "Today · peak \(plainRating(rating.peak))")
+                Text(verbatim: "Today · peak \(plainRating(peak))")
             }
             .font(FMFont.mono(10))
             .tracking(0.8)
