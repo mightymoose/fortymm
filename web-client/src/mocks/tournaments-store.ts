@@ -52,7 +52,16 @@ type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
+/** A table as it is **read back**: what the client wrote, plus the id the server
+ * minted for it. `id` is required here — clients no longer author one (ADR 20260801). */
 type TournamentTable = components['schemas']['TournamentTable']
+/** A table as a **create** body carries it: `label` and `court`, and deliberately no
+ * `id` — a tournament being born has no tables an id could name. */
+type TournamentTableWrite = components['schemas']['TournamentTableWrite']
+/** A table as an **edit** body carries it: the write shape plus an *optional* `id`
+ * naming a table the tournament already has. Omitted means "add this one"; supplied
+ * means "this existing one". A stored table no entry names is removed. */
+type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 /** The **read** pool — it carries `position`. Its write twin below deliberately does
  * not; see `positionPools`. */
@@ -1453,6 +1462,167 @@ function submittedAddress(
   return geocodeAddress(input)
 }
 
+// ----- the venue catalogue: server-minted ids, and an id-keyed diff -------------
+//
+// A table is a ROW now (ADR 20260801, `api/app/tournament_tables.py`), and its id is
+// **the server's to mint** — `TournamentTableWrite` (create) has no `id` at all, and
+// `TournamentTableUpsert` (patch) has an optional one that *cites* a table rather than
+// authoring it. So this store mints too: a catalogue entry that arrives without an id
+// is a new table and gets one here, exactly as `gen_random_uuid()` gives it one there.
+//
+// And the patch is a **diff**, not an assignment: an entry citing an id keeps that
+// table (re-worded, re-positioned), an entry with no id adds one, and a stored table no
+// entry cites is REMOVED. Keying on the id is what makes a reorder move tables instead
+// of swapping labels between ids — the by-position read this replaces did the latter
+// silently. The removal is where the two refusals live; see `applyTableCatalogue`.
+
+let tableCounter = 0
+
+/** A brand-new catalogue row for an entry that carries no `id` — the mock's
+ * `gen_random_uuid()`.
+ *
+ * UUID-shaped (`mockUuid`) because the wire says so (`TournamentTable.id` is
+ * `format: uuid`), and counter-derived rather than label-derived because two tables may
+ * legitimately share a label across tournaments — and two rows sharing an id is the one
+ * thing an id-keyed diff cannot survive. The counter deliberately does NOT reset with
+ * the store: a fresh seed re-creates the seeded rows, and an id minted for a *previous*
+ * test's table must never be handed out again. */
+function mintTable(entry: TournamentTableWrite): TournamentTable {
+  tableCounter += 1
+  return {
+    id: mockUuid(`tournament-table-${tableCounter}`),
+    label: entry.label,
+    court: entry.court,
+  }
+}
+
+/** The server's sentence for a catalogue edit that would remove a table matches are
+ * placed at (`_tables_in_use_detail`, `api/app/tournament_tables.py`) — **verbatim**,
+ * because the client shows it verbatim.
+ *
+ * Names the tables by **label**, never by id (an id tells a director looking at a page
+ * of named tables nothing to act on), and names both ways out: send the same edit again
+ * with the opt-in and accept the unplacing, or move the matches off the table first. */
+function tablesInUseDetail(labels: string[], placements: number): string {
+  const one = labels.length === 1
+  const has = one ? 'has' : 'have'
+  const it = one ? 'it' : 'them'
+  const theTable = one ? 'the table' : 'them'
+  const matches = placements === 1 ? 'match' : 'matches'
+  return (
+    `${namedList(labels)} ${has} ${placements} ${matches} placed at ${it}, so ` +
+    `removing ${it} from the catalogue would leave those matches with no table — ` +
+    'indistinguishable from matches nobody ever placed. To remove ' +
+    `${it} anyway, send the same edit again with ` +
+    '“unplace_fixtures_on_removed_tables”: true, and those matches lose their ' +
+    'table, their time and their call and go back to the schedule to be placed ' +
+    `again. To keep them where they are, leave ${theTable} in the catalogue and ` +
+    `move the matches off ${it} first.`
+  )
+}
+
+/** The server's message for an entry citing an id this tournament's catalogue does not
+ * hold (`TableNotInCatalogueError`, `api/app/tournament_errors.py`) — a **422 on that
+ * entry's `id`**, never a silently minted table: quietly handing the client a different
+ * id than it asked for would *also* remove the table it meant to keep, which are the two
+ * failures a diff must never confuse. */
+const TABLE_NOT_IN_CATALOGUE =
+  "This tournament's venue catalogue has no table with that id."
+
+/** What the diff did — the new catalogue and the (possibly unplaced) events — or the
+ * refusal that stopped it before a single row moved. */
+type CatalogueResult =
+  | { ok: true; tables: TournamentTable[]; events: StoredEvent[] }
+  | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 422; index: number; tableId: string; detail: string }
+
+/** Apply a submitted catalogue to `stored` as an id-keyed diff
+ * (`apply_table_catalogue`, `api/app/tournament_tables.py`), judging both refusals
+ * **before** anything changes so a refused edit leaves the tournament byte-identical.
+ *
+ * The asymmetry between a pool and a placement is the ADR's whole point, and it is
+ * mirrored here rather than smoothed over. A table a **pool** merely reserves is removed
+ * with no ceremony — a pool's `table_ids` are a reservation, and the pool simply
+ * reserves one fewer (the stored ids still list the dead one; pruning them is a later
+ * slice, on the server too). A table a fixture is **placed at** is refused, because
+ * clearing a placement destroys information on an unrelated write: the fixture stops
+ * being "placed at a table that vanished" and becomes indistinguishable from "nobody
+ * ever placed this".
+ *
+ * With `unplace` the removal goes through and all THREE placement columns go together —
+ * `table_id`, `scheduled_start` and `pinned_at`. A start with no table is a bar on a
+ * schedule with nowhere to be, and a pin is a *promise about a table*: leaving either
+ * would tell every later solve the fixture is nailed to a table that no longer exists. */
+function applyTableCatalogue(
+  stored: StoredTournament,
+  submitted: TournamentTableUpsert[],
+  unplace: boolean,
+): CatalogueResult {
+  const byId = new Map(stored.table_catalogue.map((t) => [t.id, t]))
+  // Judged first, over the whole payload: a catalogue naming a table this tournament
+  // does not have is not a catalogue, and every subsequent question (what is kept, and
+  // therefore what is removed) would be answered against a list the client did not mean.
+  for (const [index, entry] of submitted.entries()) {
+    if (entry.id != null && !byId.has(entry.id)) {
+      return {
+        ok: false,
+        status: 422,
+        index,
+        tableId: entry.id,
+        detail: TABLE_NOT_IN_CATALOGUE,
+      }
+    }
+  }
+
+  const kept = new Set(
+    submitted.map((entry) => entry.id).filter((id): id is string => id != null),
+  )
+  const removedIds = new Set(
+    stored.table_catalogue.filter((t) => !kept.has(t.id)).map((t) => t.id),
+  )
+  const placed = stored.events
+    .flatMap((event) => event.fixtures)
+    .filter((f) => f.table_id !== null && removedIds.has(f.table_id))
+
+  if (placed.length > 0 && !unplace) {
+    const blocking = new Set(placed.map((f) => f.table_id))
+    const labels = stored.table_catalogue
+      .filter((t) => removedIds.has(t.id) && blocking.has(t.id))
+      .map((t) => t.label)
+    return {
+      ok: false,
+      status: 409,
+      detail: tablesInUseDetail(labels, placed.length),
+    }
+  }
+
+  const unplacedIds = new Set(placed.map((f) => f.id))
+  const events =
+    unplacedIds.size === 0
+      ? stored.events
+      : stored.events.map((event) => ({
+          ...event,
+          fixtures: event.fixtures.map((f) =>
+            unplacedIds.has(f.id)
+              ? { ...f, table_id: null, scheduled_start: null, pinned_at: null }
+              : f,
+          ),
+        }))
+
+  return {
+    ok: true,
+    // The list's ORDER is the catalogue's order — a cited row keeps its id (and every
+    // pool `table_ids` and fixture `table_id` that names it) while taking this
+    // payload's words and place; an entry with no id is an insert.
+    tables: submitted.map((entry) =>
+      entry.id == null
+        ? mintTable(entry)
+        : { id: entry.id, label: entry.label, court: entry.court },
+    ),
+    events,
+  }
+}
+
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
@@ -1472,7 +1642,9 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     // with NO VENUE (CONTEXT.md, "Venue"), which is a state the server allows at
     // every status and this store must be able to hold.
     address: submittedAddress(body.address),
-    table_catalogue: body.table_catalogue ?? [],
+    // Every table on a create body is a NEW table — `TournamentTableWrite` has no `id`
+    // at all — so the store mints one for each, in the order the payload sent them.
+    table_catalogue: (body.table_catalogue ?? []).map(mintTable),
     created_by_user_id: DEV_USER_ID,
     created_by_username: DEV_USERNAME,
     can_edit: true,
@@ -1485,9 +1657,19 @@ export function createTournament(body: TournamentCreate): TournamentRead {
   return readOf(created)
 }
 
+/** A tournament PATCH fails four ways, mirroring the API: 404 (no such tournament),
+ * 403 (not the creator), and — both from the table catalogue's id-keyed diff
+ * (ADR 20260801) — a **409** when the edit would remove a table matches are placed at
+ * without the opt-in, and a **422** naming the entry that cited an id this tournament's
+ * catalogue does not hold. The 422 carries the offending entry's `index` so the handler
+ * can build the `loc` (`["body", "table_catalogue", i, "id"]`) the real route sends:
+ * a catalogue is a list, and a refusal a client cannot attribute to a row is a refusal
+ * it cannot render. */
 export type StoreResult =
   | { ok: true; tournament: TournamentRead }
   | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 422; index: number; tableId: string; detail: string }
 
 /** An event write fails four ways: 404 (no such tournament/event), 403 (not the
  * creator), and — on a PATCH that would move the pools out from under a cut draw — a
@@ -1585,7 +1767,13 @@ function requireOwned(id: string): OwnedResult {
  * return 403; a missing id returns 404 — mirroring the real API's gating.
  *
  * `status` is untouched by design: `TournamentUpdate` has no such field
- * (ADR-0017), so an edit cannot move the lifecycle — only a transition can. */
+ * (ADR-0017), so an edit cannot move the lifecycle — only a transition can.
+ *
+ * A submitted `table_catalogue` is an **id-keyed diff**, with the two refusals
+ * `applyTableCatalogue` judges — and both are judged BEFORE anything is written, which
+ * is what makes them refusals rather than reports. The refused PATCH's *other* fields
+ * (the `name` that rode along on the same request) are not written either: the whole
+ * edit is atomic, exactly as it is on the server. */
 export function updateTournament(
   id: string,
   patch: TournamentUpdate,
@@ -1593,6 +1781,24 @@ export function updateTournament(
   const owned = requireOwned(id)
   if (!owned.ok) return owned
   const existing = owned.tournament
+  // The catalogue diff first, and nothing assigned until it answers: a refusal here
+  // must leave the tournament byte-identical, `name` included.
+  let catalogue = existing.table_catalogue
+  let events = existing.events
+  if (patch.table_catalogue !== undefined && patch.table_catalogue !== null) {
+    const applied = applyTableCatalogue(
+      existing,
+      patch.table_catalogue,
+      // The opt-in's ONE affirmative spelling. Omitted, `false` and `null` are three
+      // ways of not saying it and all three mean "not opted in" — the field is
+      // `bool | None` on the wire (a non-null default would make it *required* on
+      // every PATCH through `openapi-typescript`), so the collapse happens here.
+      patch.unplace_fixtures_on_removed_tables === true,
+    )
+    if (!applied.ok) return applied
+    catalogue = applied.tables
+    events = applied.events
+  }
   const next: StoredTournament = {
     ...existing,
     name: patch.name ?? existing.name,
@@ -1611,10 +1817,10 @@ export function updateTournament(
       patch.address === undefined
         ? existing.address
         : submittedAddress(patch.address),
-    table_catalogue:
-      patch.table_catalogue === undefined || patch.table_catalogue === null
-        ? existing.table_catalogue
-        : patch.table_catalogue,
+    // OMITTED (or `null`) means unchanged; anything else is the diff computed above —
+    // which may have unplaced fixtures, hence `events` moving in the same breath.
+    table_catalogue: catalogue,
+    events,
     updated_at: new Date().toISOString(),
   }
   replace(next)
