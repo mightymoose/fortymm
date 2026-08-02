@@ -1,16 +1,16 @@
 ---
-description: Ship the current branch end-to-end — commit, push, open a PR, wait for CI to go green, /qa-review it, then merge if everything passes (raising any issues to the user first). Walks a stacked-PR work order bottom-up, one PR at a time.
+description: Ship the current branch end-to-end — review the diff with /simplify, /code-review and /security-review, then commit, push, open a PR, wait for CI to go green, /qa-review it, and merge if everything passes (raising any issues to the user first). Walks a stacked-PR work order bottom-up, one PR at a time.
 ---
 
 End-to-end "ship it" workflow. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
 
-CI (`.github/workflows/`) already runs lint, typecheck, unit tests, e2e, the OpenAPI drift check, and the iOS build — this workflow does not duplicate any of that locally. It also does not run `/simplify`, `code-review`, or `security-review` — those are separate, opt-in skills; run them yourself first if you want that pass before shipping.
+CI (`.github/workflows/`) already runs lint, typecheck, unit tests, e2e, the OpenAPI drift check, and the iOS build — **this workflow does not duplicate any of that locally.** What it does do that CI cannot is *read the diff*: CI has no reviewer, so `/simplify`, `/code-review` and `/security-review` run here, and they run **before a PR exists**.
 
 ## Two modes
 
-**Single branch** — no work order, or a work order with one slice. Run Steps 1–6 once for the current branch. This is the original behaviour and the rest of this document is written for it.
+**Single branch** — no work order, or a work order with one slice. Run Steps 1–7 once for the current branch. This is the original behaviour and the rest of this document is written for it.
 
-**Stacked** — `.claude/work-order.md` exists with more than one slice, each carrying a `Branch:` and `PR:` line (see `.claude/skills/to-chores/work-order-format.md` §The stack). Then this command walks the stack **bottom-up, one PR at a time**, running Steps 1–5 for each slice before moving to the next. Read [§Walking a stack](#walking-a-stack) first; it overrides the preflight and Steps 1, 2 and 5.
+**Stacked** — `.claude/work-order.md` exists with more than one slice, each carrying a `Branch:` and `PR:` line (see `.claude/skills/to-chores/work-order-format.md` §The stack). Then this command walks the stack **bottom-up, one PR at a time**, running Steps 1–6 for each slice before moving to the next. Read [§Walking a stack](#walking-a-stack) first; it overrides the preflight and Steps 2, 3 and 6.
 
 ## Preflight
 
@@ -19,24 +19,44 @@ CI (`.github/workflows/`) already runs lint, typecheck, unit tests, e2e, the Ope
 3. Run `git status` and `git diff --stat <base>...HEAD` — where `<base>` is `origin/main` in single-branch mode, and the slice's **base branch** in stacked mode. Using `origin/main` for a stacked slice shows every slice beneath it and makes the diff unreviewable.
 4. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement.
 
-## Step 1 — Commit & push
+## Step 1 — Review the diff, before any PR exists
 
-1. Commit the branch's work. Run `git status`; if anything is uncommitted, stage and commit it with a clear message describing the change. Pre-existing changes unrelated to this branch that you flagged in Preflight stay out of the commit unless the user said to include them.
+CI gates whether the code *works*. Nothing in CI reads the diff for quality or for vulnerability — that is this step, and it runs **first**, so a PR is never opened over a diff nobody has read.
+
+Run all three over the branch's changes:
+
+```
+Skill(skill="simplify")           # reuse, simplification, altitude — applies fixes
+Skill(skill="code-review")        # correctness review of the working diff
+Skill(skill="security-review")    # vulnerability audit of the pending changes
+```
+
+- **`/simplify` produces edits.** They are pre-authorized — the user invoked this command expecting them — so let it apply them; they are committed by Step 2 along with everything else.
+- **`/code-review` and `/security-review` produce findings, not edits.** If either surfaces something, **stop and raise it to the user**: report each finding (what, where, why it matters) and ask how they want to proceed. Do **not** auto-fix without acknowledgement. If they choose to fix, that resets this step — re-run the reviews over the amended diff before continuing.
+- **If all three are clean:** continue to Step 2.
+
+**Scale the pass to the diff, not to ceremony.** A docs-only or generated-types-only change has nothing for `/security-review` to audit; say you skipped it and why, rather than running a hollow pass. A change touching auth, data boundaries, migrations or anything parsing untrusted input gets all three, always.
+
+**In stacked mode this runs per slice**, over that slice's own diff against its base branch — not the whole stack. `/do-chores` has already opened the slice's PR as a **draft**, which is precisely why the draft exists: it is not review-ready, and nobody is invited to it, until this step has passed. Do not mark it ready before then (Step 3).
+
+## Step 2 — Commit & push
+
+1. Commit the branch's work. Run `git status`; if anything is uncommitted, stage and commit it with a clear message describing the change. This includes any edits Step 1's `/simplify` applied. Pre-existing changes unrelated to this branch that you flagged in Preflight stay out of the commit unless the user said to include them.
 2. `git push -u origin HEAD` (the `-u` is a no-op if already tracking).
 3. If the push is rejected because the remote moved, **do not** force-push. Pull/rebase, then push.
 4. Never use `--no-verify`, `--force-with-lease`, or `--force` here unless the user explicitly asks for it.
 
-## Step 2 — Open a PR
+## Step 3 — Open a PR
 
-Create a pull request for the branch with `gh pr create`. Write a title and body that summarize the change. Target `main` unless the user said otherwise. Capture the PR URL/number from the output — you need it for Step 3. If a PR for this branch already exists, reuse it (`gh pr view`) rather than creating a duplicate.
+Create a pull request for the branch with `gh pr create`. Write a title and body that summarize the change. Target `main` unless the user said otherwise. Capture the PR URL/number from the output — you need it for Step 4. If a PR for this branch already exists, reuse it (`gh pr view`) rather than creating a duplicate.
 
 **In stacked mode the PR already exists** — `/do-chores` opened it as a draft, and its number is on the slice's `PR:` line. Do not create a second one. Instead:
 
 1. `--base` must still be the slice's parent branch. Verify it (`gh pr view <n> --json baseRefName`) and fix it with `gh pr edit <n> --base <parent>` if it drifted.
-2. Mark it ready for review now that the gates below are about to run: `gh pr ready <n>`.
+2. Mark it ready for review — Step 1's review pass has already run over this slice's diff, so the draft has served its purpose: `gh pr ready <n>`.
 3. Add a line to the body naming what it stacks on (`Stacked on #<parent-PR>`) so a reviewer arriving cold knows not to read it against `main`.
 
-## Step 3 — Wait for CI
+## Step 4 — Wait for CI
 
 Poll the PR's checks until every required check has finished:
 
@@ -48,16 +68,16 @@ gh pr checks <n> --watch
 
 - **If any check fails:** stop and report which check failed, with a link and a short excerpt of the failure (`gh run view <run-id> --log-failed` or `mcp__github__get_job_logs`). Ask the user how they want to proceed. Do **not** auto-fix without acknowledgement — once fixed, re-push and re-run this step before continuing.
 - **If a check is skipped because the branch didn't touch the trees it gates** (e.g. the iOS workflow on a web-client-only change), that's expected — CI's own path filters already scoped it, so treat "skipped" as passing, not blocking.
-- **If everything required is green:** continue to Step 4.
+- **If everything required is green:** continue to Step 5.
 
-## Step 4 — QA review
+## Step 5 — QA review
 
 Pick the QA pass that matches what the branch actually changed — the `qa-review`
 skill drives a **web browser**, so it can only exercise web-client changes. A
 branch that touched `ios/**` needs the **iOS Simulator**; a browser pass against
 the web app would test code the branch never touched.
 
-### 4a. Web changes (`web-client/**`) → browser QA
+### 5a. Web changes (`web-client/**`) → browser QA
 
 Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against the prod-like QA stack:
 
@@ -65,7 +85,7 @@ Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against 
 Skill(skill="qa-review")
 ```
 
-### 4b. iOS changes (`ios/**`) → Simulator QA
+### 5b. iOS changes (`ios/**`) → Simulator QA
 
 Drive the real built app in the iOS Simulator against the **real QA-stack API**
 (not MSW, not a unit test). The app reads `FMM_API_BASE_URL` at runtime and mints
@@ -113,10 +133,10 @@ needed to reach an authenticated dashboard. Steps:
 
 ### Both paths
 
-- **If bugs are found:** relay the report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement — fixing resets the workflow (re-push and re-run Step 3 before resuming).
-- **If it's clean:** continue to Step 5.
+- **If bugs are found:** relay the report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement — fixing resets the workflow (re-run Step 1's review pass, re-push, and re-run Step 4 before resuming).
+- **If it's clean:** continue to Step 6.
 
-## Step 5 — Merge
+## Step 6 — Merge
 
 Only reach this step if **every** prior step passed clean — green required checks, no QA bugs (or the user explicitly chose to proceed despite something). Merge the PR:
 
@@ -137,8 +157,8 @@ Only in stacked mode. The stack is a straight line — `main ← s1 ← s2 ← s
 For each slice, lowest first:
 
 1. **Check it out** and run Steps 1–4 against it, diffing against **its own base branch**, not `origin/main`.
-2. **Scale Step 4 to the slice's diff, not the stack's.** A slice touching only `web-client/**` does not owe an iOS Simulator pass; a generated-types-only slice has no user-observable surface, so Step 4's QA pass has nothing to drive — say so and skip it rather than running a hollow pass. CI itself already scales Step 3's checks to the slice's diff via its own path filters.
-3. **Merge it** (Step 5) — but capture the tip first:
+2. **Scale Step 5 to the slice's diff, not the stack's.** A slice touching only `web-client/**` does not owe an iOS Simulator pass; a generated-types-only slice has no user-observable surface, so Step 5's QA pass has nothing to drive — say so and skip it rather than running a hollow pass. CI itself already scales Step 4's checks to the slice's diff via its own path filters.
+3. **Merge it** (Step 6) — but capture the tip first:
 
    ```bash
    OLD_BASE=$(git rev-parse <this-slice-branch>)   # BEFORE the merge deletes it
@@ -163,7 +183,7 @@ For each slice, lowest first:
 
 If a gate failure requires a fix, the fix belongs in **the slice that owns the code**, not in a later one. Commit it there, re-run that slice's gates, and continue — then rebase everything above it, because you have just rewritten a branch the rest of the stack sits on.
 
-## Step 6 — Collect the garbage
+## Step 7 — Collect the garbage
 
 Only after the merge is confirmed. `--delete-branch` removes the *branch*; nothing has ever removed the *worktree*. Left alone this accumulates fast — it reached 311 worktrees and 82 GB, 77% of them on already-merged branches, and that sprawl is what causes `/epic` to resume into a stale checkout, ADR numbers to be computed against old trees, and QA stacks to OOM a host with no headroom.
 

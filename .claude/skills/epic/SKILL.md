@@ -21,7 +21,7 @@ false premise, right-sizes the decomposition, and decides what ships. This skill
 summarises what the phase produced, states the decision that's now the user's,
 and **waits for an explicit go-ahead** before starting the next phase. It never
 skips a gate and never retries a blocked phase in a loop; the one merge in the
-arc is `/land-the-plane`'s own gated Step 5, not a decision `/epic` makes itself.
+arc is `/land-the-plane`'s own gated Step 6, not a decision `/epic` makes itself.
 
 If you find yourself wanting to "just push through" a gate to save a round-trip:
 don't. The one time the gate cost a round-trip this arc was designed for, it
@@ -91,11 +91,12 @@ every slice has a draft PR do you offer to land.
 
 ### 4. `/land-the-plane` — review and ship
 
-Commits + pushes, opens the PR, waits for CI to go green (lint, typecheck, unit
-tests, e2e, OpenAPI drift, iOS build all live in CI now — this phase does not
-duplicate them locally, nor does it run `/simplify`, `/code-review`, or
-`/security-review`), then runs the QA pass **that matches what changed** (browser
-for `web-client/**`, Simulator for `ios/**`, skip when neither was touched).
+Reviews the diff **before any PR exists** — `/simplify`, `/code-review` and
+`/security-review`, because CI has no reviewer — then commits + pushes, opens the
+PR, and waits for CI to go green (lint, typecheck, unit tests, e2e, OpenAPI drift
+and the iOS build all live in CI now, so this phase does not duplicate them
+locally). Then the QA pass **that matches what changed** (browser for
+`web-client/**`, Simulator for `ios/**`, skip when neither was touched).
 
 **With a multi-slice work order it walks the stack bottom-up**, running those gates
 per PR against that slice's own diff and merging each before starting the next. So
@@ -111,7 +112,7 @@ hollow one, and say so.
 **Gate:** it stops at any red CI check or surfaced QA bug — raise them to the
 user, don't auto-fix; resolving one may take a separate conversation, at which
 point `/epic` picks back up from its resumability rules below. If every step
-lands clean, `/land-the-plane`'s own Step 5 **merges the PR itself** — there is
+lands clean, `/land-the-plane`'s own Step 6 **merges the PR itself** — there is
 no separate confirmation pause once the gates are clear.
 Because the Skill tool runs a sub-skill's steps inline, control returns to this
 arc automatically the moment `/land-the-plane` finishes (merged, or stopped at a
@@ -158,7 +159,7 @@ testing-notes ledger, the tickets moved to Done, and hand off.
 ## Invariants (hold these across every phase)
 
 - **Don't merge directly.** `/epic` never runs `gh pr merge` itself — merging is
-  `/land-the-plane`'s own Step 5, reached only once every one of its gates
+  `/land-the-plane`'s own Step 6, reached only once every one of its gates
   (CI, QA) is clean, and repeated once per slice when the work order is a stack.
   If a gate finds something, the merge waits for the user's decision, same as
   any other phase gate.
