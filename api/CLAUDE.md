@@ -257,6 +257,32 @@ interior should never traffic in `Any` or untyped `dict`.
   schema rather than a promise in a docstring, and `extra="forbid"` turns an
   attempt into a 422 naming the field.
 
+  **`default_factory` is not the same trap** — Pydantic emits no `default` key
+  into the JSON schema for one, so `table_catalogue: list[TableWrite] =
+  Field(default_factory=list)` already generates as `table_catalogue?:`. The
+  rule is about the *default's* nullness in the emitted document, so read the
+  document, not the Python, when you're unsure: no `default` key, or a `null`
+  one, means optional.
+
+- **Collapse a nullable wire field to a total value at the boundary.** Making a
+  write field optional buys the client a third value it did not have, and
+  `bool | None` reaching the interior is exactly the tri-state boolean the rule
+  above forbids. Answer the question once, on the schema, and let the interior
+  hold the real type:
+
+  ```python
+  unplace_fixtures_on_removed_tables: bool | None = None
+
+  @property
+  def unplacing_is_confirmed(self) -> bool:
+      return self.unplace_fixtures_on_removed_tables is True
+  ```
+
+  Omitted, `false` and `null` are one answer — nobody opted in — and they are
+  merged where they arrive, so no caller downstream can ask and get three.
+  `RoundRobinDrawSettingsWrite.qualifiers_per_pool` is the same shape. Optional
+  on the wire, total inside.
+
 - **Don't use `assert x is not None` as control flow after a DB load.** A
   loader typed `-> Match | None` forces the caller to handle the `None`; an
   `assert` is stripped under `python -O` and is not a guarantee. If a path
