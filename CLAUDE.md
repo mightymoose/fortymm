@@ -58,7 +58,9 @@ Toolchain pinned in `mise.toml`. Run `mise install` once.
 Each unit has a domain-expert subagent in `.claude/agents/`. When a task's
 implementation lives entirely inside one unit, **hand it off to that expert** (via
 the Agent tool) rather than editing inline — the expert runs in its own context,
-reads its unit's `CLAUDE.md`, and self-verifies with that layer's tests:
+reads its unit's `CLAUDE.md`, and self-verifies with that layer's tests. Reserve
+this for work you wouldn't finish yourself in a handful of tool calls; fix a
+trivial one-line or single-function change directly instead:
 
 | Expert | Owns | Anchor doc |
 | --- | --- | --- |
