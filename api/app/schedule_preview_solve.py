@@ -60,7 +60,11 @@ from app import scheduling
 from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import Tournament, TournamentStatus, User
-from app.schedule_preview import build_preview_snapshot, preview_pool_key
+from app.schedule_preview import (
+    build_preview_snapshot,
+    placeholder_label,
+    preview_pool_key,
+)
 from app.schedule_solves import _solve_num_workers
 from app.scheduling import (
     InfeasibilityReason,
@@ -68,6 +72,7 @@ from app.scheduling import (
     NoSingleCause,
     PastWindow,
     PlacedFixture,
+    PlayerOverSubscribed,
     PoolHasNoTables,
     PoolOverCapacity,
     ScheduleSnapshot,
@@ -88,6 +93,7 @@ from app.schemas.schedule_preview import (
 from app.schemas.schedule_solve import (
     NoSingleCauseRead,
     PastWindowReasonRead,
+    PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     ResolvedReason,
@@ -543,8 +549,10 @@ def _resolve_reasons(
     — reusing the resolved-reason machinery rather than forking it. The pool name +
     ``HH:MM`` come from ``inputs.pool_resolutions``; ``best_of`` from a
     fixture-id → ``length_games`` map derived from the snapshot's events (a preview
-    has no DB to read it from). Exhaustive ``match`` with an ``assert_never`` floor,
-    like ``app.schedule_solves._resolve_reason``."""
+    has no DB to read it from); a blamed *player* from their own synthetic id
+    (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are
+    stand-ins with no name to look up. Exhaustive ``match`` with an
+    ``assert_never`` floor, like ``app.schedule_solves._resolve_reason``."""
     best_of = _fixture_best_of(inputs.snapshot)
     return [
         _resolve_reason(reason, inputs.pool_resolutions, best_of) for reason in reasons
@@ -595,6 +603,22 @@ def _resolve_reason(
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
+            )
+        case PlayerOverSubscribed():
+            # The one arm that names a *player* — and a preview's entrants are
+            # synthetic stand-ins, not humans, so there is no name to look up:
+            # ``placeholder-7`` resolves to the same ``Placeholder 7`` label the
+            # preview surface already shows the director, derived from the id with
+            # no DB read (:func:`app.schedule_preview.placeholder_label`).
+            pool = pool_resolutions[reason.pool_id]
+            return PlayerOverSubscribedRead(
+                player_name=placeholder_label(reason.player_id),
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                match_count=reason.match_count,
+                required_min=reason.required_min,
+                window_span_min=reason.window_span_min,
             )
         case NoSingleCause():
             return NoSingleCauseRead(

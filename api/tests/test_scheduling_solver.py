@@ -30,6 +30,7 @@ from app.scheduling import (
     PlacedFixture,
     PlayerConflict,
     PlayerId,
+    PlayerOverSubscribed,
     PoolHasNoTables,
     PoolId,
     PoolOverCapacity,
@@ -641,22 +642,39 @@ class TestInfeasibility:
         assert "pool_over_capacity" not in by_kind
         assert result.reasons == ()
 
-    def test_tight_shared_window_is_no_single_cause(self) -> None:
-        """Every certain guard passes — each match fits its window, two tables
-        give room to spare, the pool is well under aggregate capacity — yet the
-        two matches share a player and cannot both fit with the rest floor in the
-        tight window, so CP-SAT proves it infeasible. No single structural cause
-        explains that, so the residual :class:`NoSingleCause` is attached, with
+    def test_a_player_shared_across_pools_is_no_single_cause(self) -> None:
+        """Every certain guard passes — each match fits its own pool's window,
+        each pool has a table to itself and is well under aggregate capacity, and
+        no *single pool* over-subscribes anyone (one match each) — yet the two
+        matches share a player across the two pools and cannot both fit with the
+        rest floor in their tight, overlapping windows, so CP-SAT proves it
+        infeasible.
+
+        This is the shape of infeasibility the per-(pool, player) pre-check
+        deliberately does NOT claim: it is scoped to one pool, so a human split
+        across pools is beyond what it can prove. No single structural cause
+        explains it, so the residual :class:`NoSingleCause` is attached, with
         aggregate room to spare (``required_min <= available_min``)."""
         p1, p2, p3 = _players(3)
-        fixtures = (_fixture(1, p1, p2), _fixture(2, p1, p3))  # share P1
-        # 55-minute window, 2 tables. Each 25-min match starts by 30 (fits), and
-        # 2*25=50 <= 55*2=110 (under capacity) — but P1's chain needs 25+10+25=60.
-        snapshot = _one_pool_snapshot(fixtures, tables=2, window=(0, 55))
+        table_ids = _tables(2)
+        snapshot = ScheduleSnapshot(
+            table_ids=table_ids,
+            pools=(
+                SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 30)),
+                SchedulePool(PoolId("B"), (TableId("T2"),), Window(0, 30)),
+            ),
+            events=(EventSettings(EventId("E1"), 3),),
+            # P1 plays once in each pool: one match per (pool, player), so the
+            # per-player pigeonhole never fires — but P1's two 25-min matches plus
+            # the 10-min rest need 60 minutes of P1's time, and both windows end
+            # at 30.
+            fixtures=(_fixture(1, p1, p2, pool="A"), _fixture(2, p1, p3, pool="B")),
+            now_min=0,
+        )
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
-        assert result.reasons == (NoSingleCause(required_min=50, available_min=110),)
+        assert result.reasons == (NoSingleCause(required_min=50, available_min=60),)
         (only,) = result.reasons
         assert isinstance(only, NoSingleCause)
         assert only.required_min <= only.available_min
@@ -693,7 +711,7 @@ class TestInfeasibility:
         """Two independently-broken pools: one has no tables, the other is over
         capacity. Both causes are reported in a single solve (not first-fail),
         each blaming its own pool."""
-        p1, p2, p3, p4 = _players(4)
+        p1, p2, p3, p4, p5, p6 = _players(6)
         table_ids = _tables(1)  # the single table belongs to pool B only
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
@@ -704,8 +722,10 @@ class TestInfeasibility:
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2, pool="A"),
+                # Pool B's two fixtures share no player (each of P3..P6 plays
+                # once), so its only cause is the pool-level capacity one.
                 _fixture(2, p3, p4, pool="B"),
-                _fixture(3, p1, p3, pool="B"),  # 2 * 25 = 50 > 40 * 1
+                _fixture(3, p5, p6, pool="B"),  # 2 * 25 = 50 > 40 * 1
             ),
             now_min=0,
         )
@@ -736,6 +756,177 @@ class TestInfeasibility:
         result = solve(_one_pool_snapshot(()), time_cap_s=CAP)
         assert result.verdict is Verdict.optimal
         assert result.reasons == ()
+
+
+class TestPlayerOverSubscribed:
+    """The per-(pool, player) pigeonhole (ADR "the conflict core is a second,
+    max-placed solve", decision 1): one human's own serial demand — their
+    matches plus the rest between them — measured against the pool window. A
+    *certain* cause, proved by arithmetic in the pre-check pass with no CP-SAT
+    run, so like every certain arm it must never accuse anyone falsely."""
+
+    def test_an_over_subscribed_player_is_reported_without_the_solver(self) -> None:
+        """P1 plays three 25-minute matches in a 60-minute window. However many
+        tables the pool owns, P1 can only play one at a time: 75 minutes of
+        matches plus two 10-minute rests is 95 minutes of P1's day against a
+        60-minute window, so the day cannot fit — blamed on the human by id, with
+        the raw minute arithmetic, and no solver run.
+
+        Note the pool itself is nowhere near over capacity (75 needed against
+        60 × 3 tables = 180), which is exactly why the pool-level arms cannot see
+        this and a per-player one is needed."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
+        )
+        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 60))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.reasons == (
+            PlayerOverSubscribed(
+                pool_id=PoolId("A"),
+                player_id=p1,
+                match_count=3,
+                required_min=95,  # 3 * 25 + 2 * REST_MIN
+                window_span_min=60,
+            ),
+        )
+
+    def test_the_rest_charged_is_one_gap_short_of_the_match_count(self) -> None:
+        """THE falsification for this arm's bound. Two 25-minute matches for P1
+        in a 60-minute window need 25 + 10 + 25 = 60 — exactly the window — and
+        the day genuinely fits (P1 plays [0, 25) and [35, 60)). So no reason may
+        be reported and the solve must succeed.
+
+        With the rest term charged as ``N × REST_MIN`` instead of ``(N − 1)``,
+        demand would read 70 > 60 and this feasible day would be refused with a
+        *certain* reason naming an innocent player — the failure mode the ADR
+        calls unacceptable. Flip the bound in :func:`_build_model` and this test
+        reds on both assertions."""
+        p1, p2, p3 = _players(3)
+        assert 2 * match_minutes(3) + (2 - 1) * REST_MIN == 60
+        fixtures = (_fixture(1, p1, p2), _fixture(2, p1, p3))
+        snapshot = _one_pool_snapshot(fixtures, tables=2, window=(0, 60))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.reasons == ()
+        assert result.verdict in SOLVED
+        _assert_hard_constraints(snapshot, result)
+        assert sorted(p.start_min for p in result.placements) == [0, 35]
+
+    def test_every_over_subscribed_player_is_reported(self) -> None:
+        """Collected exhaustively, like every other certain cause: two humans are
+        each in three matches of a 60-minute window, and both are named in one
+        solve so the director fixes them together rather than re-running into the
+        next. Reported in player-id order for determinism."""
+        p1, p2, p3, p4, p5, p6, p7, p8 = _players(8)
+        fixtures = (
+            _fixture(1, p1, p3),
+            _fixture(2, p1, p4),
+            _fixture(3, p1, p5),
+            _fixture(4, p2, p6),
+            _fixture(5, p2, p7),
+            _fixture(6, p2, p8),
+        )
+        # 4 tables: pool demand is 6 * 25 = 150 against 60 * 4 = 240, so the pool
+        # is under capacity and only the per-player arm can fire.
+        snapshot = _one_pool_snapshot(fixtures, tables=4, window=(0, 60))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (
+            PlayerOverSubscribed(
+                pool_id=PoolId("A"),
+                player_id=p1,
+                match_count=3,
+                required_min=95,
+                window_span_min=60,
+            ),
+            PlayerOverSubscribed(
+                pool_id=PoolId("A"),
+                player_id=p2,
+                match_count=3,
+                required_min=95,
+                window_span_min=60,
+            ),
+        )
+
+    def test_an_over_capacity_pool_also_names_its_over_subscribed_player(
+        self,
+    ) -> None:
+        """The two certain arms coexist: they are proofs about different subjects
+        with different remedies — "this pool needs more table-time" and "this
+        human is in too many matches" — so a pool that is both reports both,
+        rather than one silently dominating the other. One table, a 60-minute
+        window, three matches all involving P1: the pool needs 75 table-minutes
+        against 60, and P1 needs 95 minutes of their own day."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
+        )
+        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 60))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        by_kind = _reasons_by_kind(result)
+        assert by_kind["pool_over_capacity"] == [
+            PoolOverCapacity(
+                pool_id=PoolId("A"),
+                required_min=75,
+                capacity_min=60,
+                table_count=1,
+            )
+        ]
+        assert by_kind["player_over_subscribed"] == [
+            PlayerOverSubscribed(
+                pool_id=PoolId("A"),
+                player_id=p1,
+                match_count=3,
+                required_min=95,
+                window_span_min=60,
+            )
+        ]
+
+    def test_pinned_matches_do_not_count_toward_a_players_load(self) -> None:
+        """Scoped to *unpinned* demand, like every other certain arm: a pin is
+        bound to neither the pool's tables nor its window (ADR-0790), so counting
+        it could invent a false accusation. P1 has one unpinned match in the pool
+        plus two called ones — three in total, which summed naively (95) would
+        overflow the 60-minute window — but only the unpinned one is P1's
+        provable in-window load, and the day solves."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),  # unpinned, in-window
+            _fixture(2, p1, p3, pin=Pin(TableId("T1"), 0)),  # called: [0, 25)
+            _fixture(3, p1, p4, pin=Pin(TableId("T2"), 300)),  # called, past the window
+        )
+        snapshot = _one_pool_snapshot(fixtures, tables=2, window=(0, 60))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.reasons == ()
+        _assert_hard_constraints(snapshot, result)
+
+    def test_a_no_tables_pool_reports_only_that(self) -> None:
+        """The pool-level *unplaceable* causes dominate: a pool with no tables is
+        already unrunnable, so piling a per-player claim on top of it would be
+        noise. P1 is in three matches of a 60-minute no-tables pool and only
+        :class:`PoolHasNoTables` is reported."""
+        p1, p2, p3, p4 = _players(4)
+        snapshot = ScheduleSnapshot(
+            table_ids=(),
+            pools=(SchedulePool(PoolId("A"), (), Window(0, 60)),),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                _fixture(1, p1, p2),
+                _fixture(2, p1, p3),
+                _fixture(3, p1, p4),
+            ),
+            now_min=0,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
 
     def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
         """A pre-live pool whose ENTIRE window is already behind ``now`` is
