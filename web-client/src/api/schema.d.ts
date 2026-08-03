@@ -1167,18 +1167,26 @@ export interface paths {
         head?: never;
         /**
          * Update Event
-         * @description Edit an event. Absent fields are left alone; `predicates` and `pools` replace
-         *     wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
-         *     id identifies one pool, and the fixtures of a draw name their pool by it.
+         * @description Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
+         *     sent.
+         *
+         *     **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
+         *     carries the `id` of a pool this event already has — keeping that pool, with the
+         *     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
+         *     to add a new pool, whose id the server mints. **A pool no entry names is removed.**
+         *     Send back the pools you read, edited: the ids came from the read, and naming an id
+         *     this event does not have is a `422` on that entry. Citing the same pool twice is a
+         *     `422` too — a pool id identifies one pool, and the fixtures of a draw name their
+         *     pool by it.
          *
          *     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
          *     fixtures were derived from:
          *
-         *     * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
-         *       event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
-         *       would leave the fixtures drawn into it pointing at nothing, and an added one would
-         *       arrive with no fixtures, since the draw was dealt across the pools that existed at
-         *       the cut.
+         *     * **its set of pools.** A `pools` payload must cite exactly the pools the event
+         *       already has, or it is refused with a `409`: a removed pool would leave the
+         *       fixtures drawn into it pointing at nothing, and an added one would arrive with no
+         *       fixtures, since the draw was dealt across the pools that existed at the cut.
+         *       Re-ordering them, and editing each one, are still allowed.
          *     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
          *       so changing it under a standing draw is a `409` too: the event would claim a shape
          *       its draw does not have. Re-sending the draw type the event already has is not a
@@ -3662,31 +3670,36 @@ export interface components {
         };
         /**
          * Pool
-         * @description A pool as it is **read back**: everything a client wrote, plus the ``position``
-         *     the server stamped on it.
+         * @description A pool as it is **read back**: everything a client wrote, plus the ``id`` the
+         *     server minted for it and the ``position`` it stamped on it.
          *
          *     It is also the model every interior read of an event's pools arrives through —
          *     ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
          *     is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
          *     nothing above ``app.tournament_pools.pool_read``: the projection composes this same
          *     model out of typed columns where it used to validate it out of untyped dicts.
-         *     Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus a
-         *     field: a column added to the write side is readable without a second edit, and the
-         *     two can never disagree about what a pool *is*.
+         *     Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus two
+         *     fields, exactly as :class:`TournamentTable` derives from
+         *     :class:`TournamentTableWrite`: a column added to the write side is readable without
+         *     a second edit, and the two can never disagree about what a pool *is*.
          *
          *     ``position`` keeps its ``0`` default even though the column is NOT NULL and every
          *     row carries a real one: the default is what lets a **literal** ``Pool`` be built in
          *     a test or a REPL without spelling an order out, and a read boundary that
-         *     hard-required it would gain nothing — the projection always supplies it.
+         *     hard-required it would gain nothing — the projection always supplies it. ``id`` has
+         *     no default, because there is no id a literal pool could sensibly default to.
          */
         Pool: {
-            /** Id */
-            id: string;
             /** Name */
             name: string;
             slot: components["schemas"]["Slot"];
             /** Table Ids */
             table_ids: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /**
              * Position
              * @description Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
@@ -3743,7 +3756,10 @@ export interface components {
          *     client titles the table from the pool it already holds.
          */
         PoolStandingsRead: {
-            /** Pool Id */
+            /**
+             * Pool Id
+             * Format: uuid
+             */
             pool_id: string;
             /** Rows */
             rows: components["schemas"]["StandingRowRead"][];
@@ -3751,24 +3767,63 @@ export interface components {
             complete: boolean;
         };
         /**
+         * PoolUpsert
+         * @description One pool of an event a client **edits** (``PATCH …/events/{id}``): everything
+         *     :class:`PoolWrite` carries, plus an **optional** ``id`` naming a pool the event
+         *     already has.
+         *
+         *     The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
+         *     cases are exhaustive:
+         *
+         *     * ``id`` **present** — "this is the pool you already have, with these words". The
+         *       row keeps its id, and therefore every fixture drawn into it and every table it
+         *       reserves, and takes the new ``name``/``slot``/``table_ids``; its place in the list
+         *       is its new place in the event's pool order.
+         *     * ``id`` **omitted** (or ``null``) — "add a pool". The server mints its id, exactly
+         *       as on create.
+         *     * a stored pool **no entry names** — "remove it".
+         *
+         *     ``X | None = None`` and never a non-null default: an optional field on a *write*
+         *     schema whose default is not ``None`` generates as **required** in the TypeScript
+         *     client, which would make "omit the id to add a pool" unsayable there.
+         *
+         *     An id that names no pool of *this* event is a 422 on the field
+         *     (:class:`~app.tournament_errors.PoolNotInEventError`), not a quietly minted new
+         *     pool. Until this chore that arm was an *addition*, because the id was the client's
+         *     and an id the server had never seen still named the pool the client meant. It is the
+         *     server's now, so an id it did not mint names nothing — and minting a fresh one would
+         *     hand the client back a different id than it asked for while *removing* the pool it
+         *     meant to keep, which is the pair of failures a diff must never confuse.
+         */
+        PoolUpsert: {
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
+            /** Id */
+            id?: string | null;
+        };
+        /**
          * PoolWrite
          * @description A slice of tables reserved for a window of time within an event, as a client
-         *     **sends** it.
+         *     **creates** it.
          *
-         *     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
-         *     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
-         *     these ids. Which is only a coherent thing to say if an id names one pool — see
-         *     ``EventPools``, the type the event's list of them actually has — and if an id is a
-         *     thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
-         *     a fixture drawn into it is pooled by one rule and un-pooled by another.
+         *     It has **no** ``id``, and that absence is the whole content of the chore that minted
+         *     them: a pool's id is a uuid the database mints (ADR 20260801's ``id uuid PRIMARY
+         *     KEY``), so it is not the client's to author and there is nothing here for it to
+         *     author. Sending one is a 422 for an unknown field — the same treatment
+         *     :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
+         *     client that *cites* an id it was given is patching, not creating, and the shape for
+         *     that is :class:`PoolUpsert`.
          *
-         *     Its ``name`` has the same floor for the plainer reason: a pool is *called*
-         *     something — it is what the director clicks, what the conflict warnings quote, and
-         *     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
-         *     is three blank rows is not a thing anyone could act on.
+         *     Its ``name`` has a floor for the plainer reason: a pool is *called* something — it
+         *     is what the director clicks, what the conflict warnings quote, and what a player
+         *     reads off a wall. ``""`` is not a name, and an event whose pools list is three blank
+         *     rows is not a thing anyone could act on.
          *
-         *     What is **absent** is as deliberate as what is here: ``position`` is the server's to
-         *     assign (:data:`PoolPosition`), so it is simply not a field of this model, and
+         *     ``position`` is absent for the same reason the id is: it is the server's to assign
+         *     (:data:`PoolPosition`), so it is simply not a field of this model, and
          *     ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
          *     the treatment ``entered`` already gets on the event schemas — a server-managed value
          *     is kept **off** the write shape rather than accepted and then ignored. Accepting it
@@ -3778,8 +3833,6 @@ export interface components {
          *     control is the order of the list itself.
          */
         PoolWrite: {
-            /** Id */
-            id: string;
             /** Name */
             name: string;
             slot: components["schemas"]["Slot"];
@@ -4862,7 +4915,7 @@ export interface components {
             /** Predicates */
             predicates?: components["schemas"]["Predicate"][] | null;
             /** Pools */
-            pools?: components["schemas"]["PoolWrite"][] | null;
+            pools?: components["schemas"]["PoolUpsert"][] | null;
         };
         /**
          * TournamentFixturePlacementUpdate
