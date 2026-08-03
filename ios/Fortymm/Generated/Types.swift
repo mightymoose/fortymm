@@ -898,6 +898,13 @@ internal protocol APIProtocol: Sendable {
     /// limited per session with a per-IP ceiling: too many previews in quick
     /// succession is a `429`.
     ///
+    /// An event whose **draw type** the scheduler cannot place — a single-elim bracket,
+    /// which has no pool windows to solve over — refuses the whole preview with a `422`
+    /// whose `detail` is an object: `{"code": "unsupported_draw_type", "draw_type": …,
+    /// "message": …}`. Switch on the `code` and name the event from `draw_type`; the
+    /// `message` is fallback prose for a client with no copy of its own, never a
+    /// contract.
+    ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
     func requestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost(_ input: Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Input) async throws -> Operations.RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost.Output
@@ -2379,6 +2386,13 @@ extension APIProtocol {
     /// (there is a real field and a real solve to look at, or it is over). Rate
     /// limited per session with a per-IP ceiling: too many previews in quick
     /// succession is a `429`.
+    ///
+    /// An event whose **draw type** the scheduler cannot place — a single-elim bracket,
+    /// which has no pool windows to solve over — refuses the whole preview with a `422`
+    /// whose `detail` is an object: `{"code": "unsupported_draw_type", "draw_type": …,
+    /// "message": …}`. Switch on the `code` and name the event from `draw_type`; the
+    /// `message` is fallback prose for a client with no copy of its own, never a
+    /// contract.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
@@ -11304,6 +11318,129 @@ internal enum Components {
             }
             internal enum CodingKeys: String, CodingKey {
                 case unreadCount = "unread_count"
+            }
+        }
+        /// The ``detail`` of the schedule-preview enqueue's ``422`` when an event's **draw
+        /// type** is one the CP-SAT table scheduler cannot place (single-elim today: it places
+        /// pooled draws over their pools' windows, and a bracket has none).
+        ///
+        /// Three fields, and the difference between them is the whole point of the ADR:
+        ///
+        /// * ``code`` is the **contract**. Always :data:`UNSUPPORTED_DRAW_TYPE_CODE`, carried
+        ///   as the field's default so the one constant is the single source of the string and
+        ///   the concrete value still surfaces in the generated OpenAPI. Typed ``str`` rather
+        ///   than a closed enum (the :class:`~app.tournament_geocoding.AddressNotGeocodable`
+        ///   precedent) precisely so a client that meets a code added *after* it shipped still
+        ///   decodes the body and degrades to ``message``, instead of failing to parse it.
+        /// * ``draw_type`` is the **domain fact the refusal turns on**, travelling
+        ///   structurally. :class:`~app.draws.UnsupportedDrawType` has always carried it that
+        ///   way in the API's interior — "so the HTTP/MCP layers compose their own sentence
+        ///   from the fact rather than parsing a message" — and this is the HTTP layer finally
+        ///   honouring that instead of flattening it to prose a director's client then throws
+        ///   away (#1221: with four events, generic copy cannot say *which* one blocks).
+        /// * ``message`` is **fallback prose, never a contract**. It is the sentence the route
+        ///   used to send bare, kept on the wire for consumers with no copy of their own — the
+        ///   raw API, and any client meeting a ``code`` it does not know. Rewording it is
+        ///   therefore safe; switching on it is the bug ADR-0968 replaced.
+        ///
+        /// Scope: this is the ``UnsupportedDrawType`` arm alone. The other draw refusals
+        /// (``NonSinglesDraw``, ``DegenerateDraw``, the generic fallback) still answer with a
+        /// plain-string ``detail``; ``DegenerateDraw``'s in particular interpolates live
+        /// numbers ("0 entrants across 2 pools") that a code alone cannot reconstruct, and
+        /// migrating it is deliberately out of scope (recorded in the ADR's consequences).
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeRefusal`.
+        internal struct UnsupportedDrawTypeRefusal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeRefusal/code`.
+            internal var code: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeRefusal/draw_type`.
+            internal var drawType: Components.Schemas.DrawType
+            /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeRefusal/message`.
+            internal var message: Swift.String
+            /// Creates a new `UnsupportedDrawTypeRefusal`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - drawType:
+            ///   - message:
+            internal init(
+                code: Swift.String? = nil,
+                drawType: Components.Schemas.DrawType,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.drawType = drawType
+                self.message = message
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case drawType = "draw_type"
+                case message
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.drawType = try container.decode(
+                    Components.Schemas.DrawType.self,
+                    forKey: .drawType
+                )
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "draw_type",
+                    "message"
+                ])
+            }
+        }
+        /// The whole ``422`` body — ``{"detail": {"code", "draw_type", "message"}}`` — as
+        /// the enqueue route's ``responses={422: ...}`` declares it, so both generated clients
+        /// get a shape for the refusal rather than an untyped blob.
+        ///
+        /// The **envelope** is modeled here, not just the detail, because on ``422`` a declared
+        /// model *replaces* FastAPI's own ``HTTPValidationError`` for this operation, and that
+        /// one is envelope-shaped (``{"detail": [...]}``). Documenting the inner object alone
+        /// (as the ``409`` precedents ``AddressNotGeocodable`` / ``MatchGameScoreConflict`` do,
+        /// where nothing is displaced) would swap an accurate envelope for an inaccurate one.
+        ///
+        /// Nothing *constructs* it — FastAPI builds the envelope itself from
+        /// ``HTTPException(detail=...)`` — so it is a documentation type first; the route test
+        /// validates a real response against it, which is what keeps the declaration and the
+        /// wire from drifting apart.
+        ///
+        /// It is not the **only** ``422`` this operation can answer with, and cannot be: a
+        /// malformed ``tournament_id`` or body is still FastAPI's validation array, and the
+        /// other ``DrawError`` arms still send a plain-string ``detail``. ``code`` is what
+        /// discriminates — a client that finds an object with one is holding this body.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeResponse`.
+        internal struct UnsupportedDrawTypeResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UnsupportedDrawTypeResponse/detail`.
+            internal var detail: Components.Schemas.UnsupportedDrawTypeRefusal
+            /// Creates a new `UnsupportedDrawTypeResponse`.
+            ///
+            /// - Parameters:
+            ///   - detail:
+            internal init(detail: Components.Schemas.UnsupportedDrawTypeRefusal) {
+                self.detail = detail
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case detail
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.detail = try container.decode(
+                    Components.Schemas.UnsupportedDrawTypeRefusal.self,
+                    forKey: .detail
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "detail"
+                ])
             }
         }
         /// - Remark: Generated from `#/components/schemas/UpdateCurrentUserRequest`.
@@ -24628,6 +24765,13 @@ internal enum Operations {
     /// limited per session with a per-IP ceiling: too many previews in quick
     /// succession is a `429`.
     ///
+    /// An event whose **draw type** the scheduler cannot place — a single-elim bracket,
+    /// which has no pool windows to solve over — refuses the whole preview with a `422`
+    /// whose `detail` is an object: `{"code": "unsupported_draw_type", "draw_type": …,
+    /// "message": …}`. Switch on the `code` and name the event from `draw_type`; the
+    /// `message` is fallback prose for a client with no copy of its own, never a
+    /// contract.
+    ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/schedule/preview`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)`.
     internal enum RequestSchedulePreviewV1TournamentsTournamentIdSchedulePreviewPost {
@@ -24754,12 +24898,12 @@ internal enum Operations {
                 /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/422/content`.
                 internal enum Body: Sendable, Hashable {
                     /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/schedule/preview/POST/responses/422/content/application\/json`.
-                    case json(Components.Schemas.HTTPValidationError)
+                    case json(Components.Schemas.UnsupportedDrawTypeResponse)
                     /// The associated value of the enum case if `self` is `.json`.
                     ///
                     /// - Throws: An error if `self` is not `.json`.
                     /// - SeeAlso: `.json`.
-                    internal var json: Components.Schemas.HTTPValidationError {
+                    internal var json: Components.Schemas.UnsupportedDrawTypeResponse {
                         get throws {
                             switch self {
                             case let .json(body):
@@ -24778,7 +24922,7 @@ internal enum Operations {
                     self.body = body
                 }
             }
-            /// Validation Error
+            /// An event's draw type cannot be placed by the table scheduler. The `detail` carries a machine-readable `code` and the offending `draw_type`; its `message` is fallback prose, not a contract.
             ///
             /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/schedule/preview/post(request_schedule_preview_v1_tournaments__tournament_id__schedule_preview_post)/responses/422`.
             ///
