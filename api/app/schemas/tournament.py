@@ -994,6 +994,23 @@ class ScheduleSolveRead(BaseModel):
     want a good answer now, not a proof), and ``infeasible`` is a designed outcome,
     not an error — it is the whole point of pre-live solves.
 
+    A run ends in one of **four** terminal statuses, and the last three are three
+    different facts rather than three shades of failure (ADR "a time-capped solve is
+    its own outcome, not a failure") — each wants its own sentence in the UI, and
+    re-running is the right advice for exactly one of them:
+
+    * ``succeeded`` — a plan was found and applied.
+    * ``infeasible`` — the solver **proved** the day does not fit: over-constrained,
+      so widen a window, add a table, or trim the field (the reasons are in
+      ``infeasibility_reasons``).
+    * ``timed_out`` — the CP-SAT time cap ran out before *any* answer, so this run
+      proved **nothing at all**: make the problem smaller or give it longer. Re-running
+      the same model against the same cap cannot help.
+    * ``failed`` — the run itself broke (a bug, a dead worker, or inputs that changed
+      mid-solve): retry.
+
+    Read the status, never the ``error`` prose, to tell them apart.
+
     **Every ``null`` marks a stage not (or never) reached**, not a missing field:
 
     * ``verdict`` — ``null`` until the solver has actually run; forever ``null`` for
@@ -1005,15 +1022,18 @@ class ScheduleSolveRead(BaseModel):
       ``null`` until (unless) the run reaches its guarded apply. A solve whose output
       was discarded for drift re-runs rather than reporting partial counts — the
       apply is whole-or-nothing.
-    * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
+    * ``error`` — human-readable detail for a run that produced no plan: why a
+      ``failed`` run broke, or the "the cap ran out" sentence on a ``timed_out`` one;
+      ``null`` on every other status. It is **detail, never a discriminator** — the
+      outcome is ``status``, so no client may branch on this text.
 
     ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
     on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
     end while the tournament is **live** — the window went soft so the day keeps being
     scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
     wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
-    run that placed nothing (``infeasible`` / ``failed``). A schedule surface reads it
-    to label the day "overrunning".
+    run that placed nothing (``infeasible`` / ``timed_out`` / ``failed``). A schedule
+    surface reads it to label the day "overrunning".
 
     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
     every row that is not ``infeasible`` (so a client never null-checks it). An
@@ -1398,9 +1418,10 @@ class TournamentDetailRead(TournamentRead):
     # The Schedule tab's solve strip (ADR "the schedule is solved, the call is
     # pinned"): the NEWEST row of the tournament's solve ledger, by ``requested_at``.
     # One row, not the ledger — the strip shows the current run's state (queued /
-    # running / succeeded / infeasible / failed) and the counts of the last applied
-    # plan; the full history is the admin page's read, not this page's. It rides on
-    # this payload for the same one-endpoint-per-page reason ``fixtures`` does.
+    # running / succeeded / infeasible / timed_out / failed) and the counts of the
+    # last applied plan; the full history is the admin page's read, not this page's.
+    # It rides on this payload for the same one-endpoint-per-page reason ``fixtures``
+    # does.
     #
     # ``null`` means **no solve has ever been requested** for this tournament — the
     # designed state of every tournament until a draw exists and something (go-live,

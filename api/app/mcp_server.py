@@ -1940,6 +1940,15 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
     ``infeasible``) once the worker finishes. Poll it; do not expect the answer in
     this return value.
 
+    The final ``status`` is one of four, and the last three are three different facts,
+    not three shades of failure — only one of them is worth retrying: ``succeeded``
+    (a plan was applied), ``infeasible`` (the solver *proved* the day does not fit —
+    widen a window, add a table, or trim the field; ``infeasibility_reasons`` says
+    which), ``timed_out`` (the CP-SAT time cap ran out before any answer, so the run
+    proved *nothing* — make the problem smaller or give it longer; re-running the same
+    model against the same cap cannot help), and ``failed`` (the run broke — retry).
+    Read the ``status``; never string-match the ``error`` prose to tell them apart.
+
     Mirrors ``POST /v1/tournaments/{tournament_id}/schedule/solves``: it reuses the
     shared ``request_schedule_solve`` verb (the ``FOR UPDATE`` tournament row lock,
     the owner gate, the has-a-drawn-event gate, and the one coalesced enqueue every

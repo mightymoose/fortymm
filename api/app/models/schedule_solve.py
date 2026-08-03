@@ -35,14 +35,29 @@ class ScheduleSolveTrigger(enum.Enum):
 
 
 class ScheduleSolveStatus(enum.Enum):
-    """The run's lifecycle. ``infeasible`` is a *terminal outcome*, not a failure:
-    the solver proved the day does not fit, which is exactly what a pre-live solve
-    is for. ``failed`` means the job itself broke (see ``error``)."""
+    """The run's lifecycle. Four terminal outcomes, and the last three are three
+    different *facts* rather than three shades of failure (ADR "a time-capped
+    solve is its own outcome, not a failure") — each earns its own remediation:
+
+    * ``succeeded`` — a plan was found and applied.
+    * ``infeasible`` — the solver **proved** the day does not fit (over-constrained:
+      widen a window, add a table, trim a field). A designed outcome, not a failure;
+      it is exactly what a pre-live solve is for.
+    * ``timed_out`` — the CP-SAT time cap ran out before *any* answer, so the run
+      proved **nothing at all** (make the problem smaller, or give it longer).
+      Re-running the same model against the same cap cannot help.
+    * ``failed`` — the job itself broke (see ``error``); retrying is the right advice
+      for this one alone.
+
+    Nothing may distinguish these by string-matching ``error``: the status *is* the
+    fact.
+    """
 
     queued = "queued"
     running = "running"
     succeeded = "succeeded"
     infeasible = "infeasible"
+    timed_out = "timed_out"
     failed = "failed"
 
 
@@ -51,7 +66,13 @@ class SolverVerdict(enum.Enum):
     facts: a solve can end ``succeeded`` on a merely ``feasible`` verdict (the ADR
     accepts FEASIBLE under the time cap — mid-tournament we want a good answer now,
     not a proof), and a run that never reached the solver has no verdict at all
-    (``NULL``)."""
+    (``NULL``).
+
+    Deliberately has **no** ``unknown`` member, and the ``timed_out`` status did not
+    change that (ADR "a time-capped solve is its own outcome, not a failure" layers
+    on top of this decision rather than reversing it): a run whose cap ran out before
+    any answer genuinely reached no verdict, so it records none — the *outcome* is
+    carried by ``status`` instead."""
 
     optimal = "optimal"
     feasible = "feasible"
@@ -140,18 +161,23 @@ class ScheduleSolve(Base):
     #: solve whose soft window let unplayed fixtures spill past their planned end
     #: while the tournament is live — a success qualifier, never a failure. Stays
     #: ``False`` pre-live (the window is a hard constraint) and on any run that
-    #: placed nothing (infeasible / failed): an honest "this run did not overrun".
+    #: placed nothing (infeasible / timed_out / failed): an honest "this run did not
+    #: overrun".
     overrunning: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
     #: Hash of the input snapshot the job solved against — the drift guard's
     #: comparison key. ``NULL`` for a run that never snapshotted.
     input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    #: Why a ``failed`` run failed. ``NULL`` on every other status.
+    #: Human-readable detail for a run that produced no plan — why a ``failed`` run
+    #: broke, and the "the cap ran out" sentence on a ``timed_out`` one. ``NULL`` on
+    #: every other status. **Detail, never a discriminator**: no reader may branch on
+    #: its text (ADR "a time-capped solve is its own outcome, not a failure") — the
+    #: fact lives in ``status``.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Structured reasons an ``infeasible`` solve did not fit, kept raw here; a
     #: later boundary parses this into Pydantic models. ``NULL`` on every other
-    #: status.
+    #: status — a ``timed_out`` run proved nothing, so it has no reasons to give.
     infeasibility_reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, nullable=True
     )

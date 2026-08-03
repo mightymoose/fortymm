@@ -38,11 +38,17 @@ schedule_solve_trigger_enum = postgresql.ENUM(
     name="schedule_solve_trigger",
     create_type=False,
 )
+# Four terminal outcomes, and the last three are three different facts rather
+# than three shades of failure (ADR "a time-capped solve is its own outcome, not
+# a failure"): ``infeasible`` proved the day does not fit, ``timed_out`` proved
+# nothing at all (the CP-SAT cap ran out before any answer), ``failed`` means the
+# job broke. Added to this migration in place, per the pre-deploy convention.
 schedule_solve_status_enum = postgresql.ENUM(
     "queued",
     "running",
     "succeeded",
     "infeasible",
+    "timed_out",
     "failed",
     name="schedule_solve_status",
     create_type=False,
@@ -50,6 +56,8 @@ schedule_solve_status_enum = postgresql.ENUM(
 # Kept apart from status because they are different facts: a solve can end
 # ``succeeded`` on a merely ``feasible`` verdict (the ADR accepts FEASIBLE under
 # the time cap), and a run that never reached the solver has no verdict at all.
+# Deliberately has no ``unknown`` member — a time-capped run records ``status =
+# timed_out`` and no verdict, since it genuinely reached none.
 solver_verdict_enum = postgresql.ENUM(
     "optimal",
     "feasible",
@@ -115,11 +123,14 @@ def upgrade() -> None:
         # Hash of the input snapshot the job solved against — the drift guard's
         # comparison key. NULL for a run that never snapshotted.
         sa.Column("input_fingerprint", sa.Text(), nullable=True),
-        # Why a ``failed`` run failed. NULL on every other status.
+        # Human-readable detail for a run that produced no plan: why a ``failed``
+        # run broke, and the "the cap ran out" sentence on a ``timed_out`` one.
+        # NULL on every other status. Detail, never a discriminator — the fact
+        # lives in ``status``.
         sa.Column("error", sa.Text(), nullable=True),
         # Structured reasons an ``infeasible`` solve did not fit — raw JSONB
         # here, parsed into Pydantic at a later boundary. NULL on every other
-        # status.
+        # status (a ``timed_out`` run proved nothing, so it has no reasons).
         sa.Column("infeasibility_reasons", postgresql.JSONB(), nullable=True),
         # The coalesced enqueue's second arm: a trigger that lands while a solve
         # is *running* cannot be absorbed by the queued row (there isn't one) and

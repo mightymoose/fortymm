@@ -88,7 +88,7 @@ detects pins physics broke, so they never reach the solver *as pins*:
 
 The *repair* is applied only by phase (c), in the same transaction and under
 the same locks as every other placement write — and only on a successful
-verdict (whole-or-nothing: an infeasible/failed run writes nothing, and the
+verdict (whole-or-nothing: an infeasible/timed-out/failed run writes nothing, and the
 still-broken pin is re-detected by every later snapshot until a solve lands).
 A moved pin gets the solver's new placement with ``pinned_at`` **refreshed to
 now** — the promise is renewed, not demoted to an estimate. A voided pin has
@@ -264,9 +264,14 @@ def _solve_num_workers() -> int:
 #: it requested is the run that will produce something.
 SUPERSEDED_ERROR = "inputs changed during solve; superseded by re-run"
 
-#: What an ``unknown`` verdict records: the time cap ran out before *any*
-#: solution was found. The DB verdict enum deliberately has no ``unknown`` —
-#: a run that proved nothing has no verdict at all.
+#: The human-readable ``error`` detail an ``unknown`` verdict records alongside
+#: ``ScheduleSolveStatus.timed_out``: the time cap ran out before *any* solution
+#: was found. The DB verdict enum deliberately has no ``unknown`` — a run that
+#: proved nothing has no verdict at all — and the *outcome* is carried by the
+#: status, not by this string. **Not load-bearing** (ADR "a time-capped solve is
+#: its own outcome, not a failure"): nothing may branch on this text, because
+#: string-matching prose to recover a fact is exactly what the status exists to
+#: replace.
 TIME_CAP_ERROR = "time cap exhausted without a solution"
 
 #: Module seam for the pure solver, so tests can interpose on the gap between
@@ -1441,9 +1446,16 @@ async def _apply_result(
                     reason.model_dump(mode="json") for reason in resolved
                 ]
             case scheduling.Verdict.unknown:
-                # The cap ran out before any answer. No verdict — the DB enum
-                # has no ``unknown``, and a run that proved nothing has none.
-                row.status = ScheduleSolveStatus.failed
+                # The cap ran out before any answer: its own terminal outcome,
+                # NOT a failure (ADR "a time-capped solve is its own outcome,
+                # not a failure"). The run did not break — it proved nothing —
+                # so re-running the same model against the same cap cannot help,
+                # and the client must be told that rather than "run it again".
+                # Still no verdict: the DB enum has no ``unknown``, and a run
+                # that proved nothing reached none. ``TIME_CAP_ERROR`` rides
+                # along as human-readable detail only — the fact is the status,
+                # and nothing anywhere branches on that string.
+                row.status = ScheduleSolveStatus.timed_out
                 row.error = TIME_CAP_ERROR
 
         # Placement conflicts are orthogonal to the verdict (ADR "overlapping
