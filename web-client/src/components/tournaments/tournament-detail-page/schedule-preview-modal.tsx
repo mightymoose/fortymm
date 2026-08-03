@@ -3,7 +3,7 @@ import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { ApiError } from '@/api/client'
+import { ApiError, extractDetail } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -132,7 +132,6 @@ const UNSUPPORTED_DRAW_TYPE_CODE = 'unsupported_draw_type'
 const codedRefusalSchema = z.object({
   detail: z.object({
     code: z.string().min(1),
-    message: z.string().trim().min(1).nullish(),
     draw_type: z.unknown().optional(),
   }),
 })
@@ -155,28 +154,33 @@ const UNPREVIEWABLE_GENERIC =
  * Three fallbacks, in descending order of what we know:
  *
  * 1. A recognised code + a slug this build knows + a catalogue row for it → name it.
- * 2. Any other coded refusal (an unknown code, a slug we have no word for, an empty
- *    catalogue) → the server's `message`, which is on the wire precisely for this.
  *    Never the raw slug: "…uses a “single-elim” draw" is the leak `labelFor` exists to
  *    prevent (`drawTypeFreeze`, `data/draw.ts`).
- * 3. A body that doesn't parse at all → the generic sentence.
+ * 2. **Any other refusal we have no better words for → the server's own sentence**,
+ *    read through `extractDetail`, which is the one reader for "what did the server
+ *    say?" and already handles both wire shapes (a plain-string `detail` and a coded
+ *    `detail.message`). This arm is deliberately *not* limited to coded refusals: the
+ *    draw-refusal mapper still answers with prose for `DegenerateDraw`, which genuinely
+ *    reaches this route (an `rr-then-ko` event whose qualifiers exceed its smallest
+ *    pool — `app/schedule_preview.py` plans the full draw and lets that refusal
+ *    propagate). Falling through to the generic there would tell a director their
+ *    *draw type* is unsupported when the real cause is their entrant numbers — naming
+ *    the wrong thing, while the sentence naming the right one sat unread.
+ * 3. No sentence at all (no body, an empty detail) → the generic.
  */
 function unpreviewableDrawTypeCopy(
   body: unknown,
   drawTypes: DrawTypeOption[],
 ): string {
   const parsed = codedRefusalSchema.safeParse(body)
-  if (!parsed.success) return UNPREVIEWABLE_GENERIC
-  const { code, message, draw_type } = parsed.data.detail
-
-  if (code === UNSUPPORTED_DRAW_TYPE_CODE) {
-    const slug = drawTypeSchema.safeParse(draw_type)
+  if (parsed.success && parsed.data.detail.code === UNSUPPORTED_DRAW_TYPE_CODE) {
+    const slug = drawTypeSchema.safeParse(parsed.data.detail.draw_type)
     const label = slug.success ? labelFor(drawTypes, slug.data, null) : null
     if (label !== null) {
       return `A preview runs over a round-robin draw. This tournament has a “${label}” event, which the preview does not support yet.`
     }
   }
-  return message ?? UNPREVIEWABLE_GENERIC
+  return extractDetail(body) ?? UNPREVIEWABLE_GENERIC
 }
 
 /** Map an enqueue refusal to its inline notice. `422` — the draw type can't be

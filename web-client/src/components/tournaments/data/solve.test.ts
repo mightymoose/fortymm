@@ -559,14 +559,13 @@ describe('solveStripState', () => {
         error: 'time cap exhausted without a solution',
       }),
     )
+    // The exact-equality assertion IS the "not folded into failed/infeasible" guard —
+    // `kind` is a discriminated union tag, so it cannot be two of them at once.
     expect(state).toEqual({
       kind: 'timed_out',
       wallTimeMs: 30_000,
       trigger: 'manual',
     })
-    // The two arms it must NOT be folded into.
-    expect(state.kind).not.toBe('failed')
-    expect(state.kind).not.toBe('infeasible')
   })
 
   it('maps failed to its arm, carrying the server error for the detail line', () => {

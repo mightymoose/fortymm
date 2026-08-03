@@ -2,7 +2,6 @@ import {
   buildDrawnEvent,
   buildEntrants,
   buildEvent,
-  buildFixture,
   buildPool,
 } from '../../data/seed.factory'
 import type { TournamentEvent } from '../../data/types'
@@ -96,11 +95,10 @@ export function buildCrowdedPoolsEvent(
  * `rerender`. Both arms are the same evidence to the same server guard. */
 export function buildUnderWayEvent(): TournamentEvent {
   const drawn = buildDrawnEvent()
-  return buildDrawnEvent({
+  return {
+    ...drawn,
     fixtures: drawn.fixtures.map((fixture, i) =>
-      i === 0
-        ? buildFixture({ ...fixture, winnerEntryId: fixture.entryAId })
-        : fixture,
+      i === 0 ? { ...fixture, winnerEntryId: fixture.entryAId } : fixture,
     ),
-  })
+  }
 }

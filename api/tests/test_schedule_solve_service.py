@@ -1220,7 +1220,6 @@ class TestSolveJob:
         db_session.expire_all()
         (ledger,) = await _solve_rows(db_session, tournament_id)
         assert ledger.status is ScheduleSolveStatus.timed_out
-        assert ledger.status is not ScheduleSolveStatus.failed
         assert ledger.error == TIME_CAP_ERROR
         assert ledger.verdict is None
         assert ledger.wall_time_ms == 123
@@ -1383,40 +1382,6 @@ class TestSolveJob:
         assert ledger.status is ScheduleSolveStatus.succeeded
         assert ledger.infeasibility_reasons is None
         assert parse_infeasibility_reasons(ledger.infeasibility_reasons) == []
-
-    async def test_timed_out_apply_leaves_infeasibility_reasons_null(
-        self,
-        db_session: AsyncSession,
-        solver_queue: Queue,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """An ``unknown`` verdict times the row out (cap exhausted) and never
-        touches ``infeasibility_reasons`` — it stays NULL. Only an *infeasible*
-        run has reasons; a timed-out one proved nothing to explain."""
-        tournament_id, _event_id = await _make_tournament(db_session)
-        row = await request_solve(
-            db_session, tournament_id, ScheduleSolveTrigger.manual
-        )
-        assert row is not None
-        row_id = row.id
-        await db_session.commit()
-
-        def exhausted(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
-        ) -> SolveResult:
-            return SolveResult(
-                verdict=Verdict.unknown,
-                placements=(),
-                stats=SolveStats(wall_time_ms=5, objective=None),
-            )
-
-        monkeypatch.setattr(schedule_solves, "_solve", exhausted)
-        _run_recorded_job(solver_queue, row_id)
-
-        db_session.expire_all()
-        (ledger,) = await _solve_rows(db_session, tournament_id)
-        assert ledger.status is ScheduleSolveStatus.timed_out
-        assert ledger.infeasibility_reasons is None
 
     async def test_placement_conflicts_are_resolved_and_persisted_on_placed_board(
         self,

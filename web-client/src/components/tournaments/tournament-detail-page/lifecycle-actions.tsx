@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 
 import { useTransitionTournament } from '../data/api'
 import {
+  fingerprintSet,
   noticeFingerprint,
   useExpiringNotice,
   type NoticeFingerprint,
@@ -42,14 +43,6 @@ const TONE: Record<
   ghost: { variant: 'ghost' },
 }
 
-/** A set of ids as one comparable part: de-duplicated, **sorted** (so the server's
- * ordering is not mistaken for a change) and encoded, with `null`s dropped — a `null`
- * fixture side is TBD, and the precondition counts it as nothing (`draw_currency_by_event`,
- * `api/app/tournament_draws.py`). */
-function idSet(ids: (string | null)[]): string {
-  return JSON.stringify([...new Set(ids.filter((id) => id !== null))].sort())
-}
-
 /**
  * One event, summarised down to **exactly the three facts the go-live precondition reads
  * about it** (ADR-0786, `_enforce_ready_to_go_live`): whether it has a draw at all, which
@@ -70,15 +63,18 @@ function idSet(ids: (string | null)[]): string {
  * refusal untrue, and withdrawing a still-true work list is worse than leaving it up
  * (`../data/expiring-notice`).
  */
-function eventFingerprint(event: TournamentEvent): string {
-  return JSON.stringify([
+function eventFingerprint(event: TournamentEvent): NoticeFingerprint {
+  return noticeFingerprint(
     event.id,
     event.fixtures.length > 0,
-    idSet(event.entrants.map((entrant) => entrant.id)),
-    idSet(
+    // `null` fixture sides are dropped by `fingerprintSet`: a TBD side is nobody, and
+    // the precondition counts it as nothing (`draw_currency_by_event`,
+    // `api/app/tournament_draws.py`).
+    fingerprintSet(event.entrants.map((entrant) => entrant.id)),
+    fingerprintSet(
       event.fixtures.flatMap((fixture) => [fixture.entryAId, fixture.entryBId]),
     ),
-  ])
+  )
 }
 
 /**

@@ -208,15 +208,45 @@ describe('SchedulePreviewModal', () => {
     expect(error).not.toHaveTextContent('undefined')
   })
 
-  // A detail that is not a coded object at all — the other `DrawError` arms still
-  // send a plain-string `detail`, and a malformed body is always possible. It must
-  // degrade to the generic sentence, never crash the modal or render `undefined`.
-  it('falls back to the generic copy for a 422 whose detail does not parse', async () => {
+  // A detail that is not a coded object at all — the draw-refusal mapper still answers
+  // with a plain-string `detail` for its other arms, and `DegenerateDraw` genuinely
+  // reaches this route (an `rr-then-ko` event whose qualifiers exceed its smallest
+  // pool). The server's sentence names the real cause and the numbers behind it, so it
+  // is shown; falling through to the generic would tell a director their *draw type*
+  // was unsupported when their entrant counts were the problem.
+  it("shows the server's own sentence for a 422 that is not a coded refusal", async () => {
     mockSchedulePreviewEnqueueEndpoint(server, () =>
       HttpResponse.json(
-        { detail: 'Only round-robin draws can be previewed.' },
+        {
+          detail:
+            'Taking 3 qualifiers from each pool is more than the 2 entrants in the smallest pool.',
+        },
         { status: 422 },
       ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'more than the 2 entrants in the smallest pool',
+    )
+    // The generic would have named the wrong cause entirely.
+    expect(error).not.toHaveTextContent(
+      'uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('undefined')
+    // Still actionable — the modal is intact, not a blown-up boundary.
+    expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
+  })
+
+  // Nothing to read at all: no body, so no sentence to borrow. This is the only case
+  // the generic is for, and it must still be reachable.
+  it('falls back to the generic copy for a 422 carrying no sentence at all', async () => {
+    mockSchedulePreviewEnqueueEndpoint(
+      server,
+      () => new HttpResponse(null, { status: 422 }),
     )
 
     schedulePreviewModalPage.render()
@@ -227,7 +257,6 @@ describe('SchedulePreviewModal', () => {
       'This tournament uses a draw type the preview does not support yet',
     )
     expect(error).not.toHaveTextContent('undefined')
-    // Still actionable — the modal is intact, not a blown-up boundary.
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
   })
 

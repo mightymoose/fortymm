@@ -8,7 +8,7 @@
 // So a notice is not stored on its own. It is stored **with a fingerprint of the state it
 // turns on**, and shown only while that fingerprint still matches. This module is the one
 // place that rule lives: the surfaces that report refusals inline (the header's lifecycle
-// alert, the draw panel, the schedule preview) adopt it in a line, rather than each
+// alert, the draw panel) adopt it in a line, rather than each
 // rediscovering when to clear a banner.
 //
 // ## Why a fingerprint, and not the two things we tried first
@@ -65,6 +65,31 @@ export function noticeFingerprint(
   ...parts: FingerprintPart[]
 ): NoticeFingerprint {
   return JSON.stringify(parts)
+}
+
+/**
+ * A **set** of ids as one fingerprint part — de-duplicated, **sorted**, with `null`s
+ * dropped.
+ *
+ * Here rather than in a surface file because two of those three steps are load-bearing
+ * and only one is obvious, and getting them wrong fails in the expensive direction:
+ *
+ * - **Sorted**, so the server returning the same ids in a different order is not
+ *   mistaken for a state change. A surface that forgets this withdraws a refusal that
+ *   is still perfectly true, which is the failure mode this whole module exists to
+ *   avoid — worse than the staleness it was fixing.
+ * - **De-duplicated**, so the part describes membership rather than multiplicity.
+ * - **`null`s dropped**, because an absent id is not a member.
+ *
+ * Reach for this when the refusal turns on *which* things are there — a set comparison,
+ * the way the go-live precondition compares entrants against the entries its fixtures
+ * seat. When it turns only on *how many*, pass the count as a plain part instead: a set
+ * would then withdraw a still-true refusal the moment one member was swapped for
+ * another, which is exactly the distinction the two adopting surfaces make differently
+ * and on purpose.
+ */
+export function fingerprintSet(ids: (string | null)[]): FingerprintPart {
+  return noticeFingerprint(...[...new Set(ids.filter((id) => id !== null))].sort())
 }
 
 /** A notice and the state it was produced about — the pair, never one without the other. */

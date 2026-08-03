@@ -34,15 +34,13 @@ describe('solveChip', () => {
   it('gives a timed-out run its OWN label and the warn tone — not the crash chip', () => {
     // A run that proved nothing is not a run that broke (ADR "a time-capped
     // solve is its own outcome, not a failure").
+    // Exact equality is the whole guard: a chip that read "Failed"/`loss` could not
+    // also satisfy this, so a separate not-the-failed-chip assertion proves nothing.
     expect(solveChip('timed_out', null)).toEqual({
       label: 'Timed out',
       tone: 'warn',
       verdict: null,
     })
-    expect(solveChip('timed_out', null).label).not.toBe(
-      solveChip('failed', null).label,
-    )
-    expect(solveChip('timed_out', null).tone).not.toBe('loss')
   })
 
   it("speaks a succeeded run's verdict in the strip's own words", () => {

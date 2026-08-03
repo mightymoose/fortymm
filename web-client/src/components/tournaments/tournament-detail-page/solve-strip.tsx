@@ -307,9 +307,22 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  * arrives — the double-click family (#436).
  */
 export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
-  // The last refusal, in words. Cleared when a new attempt starts — a notice
-  // about the click before last is worse than none. (The `LifecycleActions`
-  // pattern, which is the page's other inline-refusal surface.)
+  // The last refusal, in words. Cleared when a new attempt starts — a notice about the
+  // click before last is worse than none.
+  //
+  // A DELIBERATE non-adopter of `useExpiringNotice` (`../data/expiring-notice`), which
+  // the header's lifecycle alert and the draw panel both use so a refusal is withdrawn
+  // once the state it described has moved (`CONTEXT.md`, "Refusal"). This strip's
+  // `no_drawn_events` refusal is the same *class* of statement — a work list that stops
+  // being true once the director cuts a draw — but a draw is cut on the **Events** tab,
+  // and the tab set does not `forceMount`, so navigating away to do the work unmounts
+  // this component and takes the notice with it. `LifecycleActions` needed the hook
+  // precisely because it sits in the always-mounted header and has no such escape.
+  //
+  // The gap that remains: a draw cut in a second tab or on another device, or fresh data
+  // arriving by poll, leaves this refusal standing. If that is ever worth closing, the
+  // fingerprint is `tournament.events.some((e) => e.fixtures.length > 0)` — the one fact
+  // this refusal turns on — and it belongs here, not in a wider one.
   const [notice, setNotice] = useState<RunSchedulerNotice | null>(null)
   // The strip's OWN in-flight latch: set synchronously on click, so the second
   // click of a double-click cannot land in a render gap (#436 family). It spans
