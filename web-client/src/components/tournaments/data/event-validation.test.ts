@@ -13,6 +13,12 @@ import {
   QUALIFIERS_PER_POOL_MIN,
   qualifiersPerPoolSchema,
 } from './event-validation'
+import { addedPool, keepPool, poolEntryKey } from './pool-entries'
+import { buildPool } from './seed.factory'
+import type { PoolEntry, Slot } from './types'
+
+/** Any window at all — the pool-name rules care about the name and nothing else. */
+const SLOT: Slot = { date: '2026-06-13', start: '09:00', end: '12:30' }
 
 /** Longer than `tournament_events.name` (`VARCHAR(255)`) — the 422 the organizer used
  * to meet only *after* the request had gone, in Pydantic's words. */
@@ -231,7 +237,9 @@ describe('poolNameSchema', () => {
 })
 
 describe('poolNameIssues', () => {
-  const pool = (id: string, name: string) => ({ id, name })
+  /** A pool the server already holds, cited by its id (`keepPool`). */
+  const pool = (id: string, name: string): PoolEntry =>
+    keepPool(buildPool({ id, name }))
 
   /** Keyed by pool id, so the red lands under the box that is empty. A director with six
    * pools and one blank name must not be pointed at all six. */
@@ -239,6 +247,23 @@ describe('poolNameIssues', () => {
     expect(
       poolNameIssues([pool('p-a', ''), pool('p-b', 'Pool B'), pool('p-c', '  ')]),
     ).toEqual({ 'p-a': 'Name is required.', 'p-c': 'Name is required.' })
+  })
+
+  /**
+   * ⚠️ **A pool the director added a moment ago has no id at all** (ADR 20260801: the
+   * server mints it), and it still has a name box they can still empty. Keyed off the id
+   * alone, every added pool would collide on `undefined` — one red under the wrong card,
+   * and none under the others — so the key is `poolEntryKey`, which is also what the
+   * cards are keyed on.
+   */
+  it('blames an ADDED pool too, by the key its card is rendered under', () => {
+    const blank = addedPool({ name: ' ', slot: SLOT, tableIds: [] })
+    const named = addedPool({ name: 'Pool B', slot: SLOT, tableIds: [] })
+
+    const issues = poolNameIssues([blank, named])
+
+    expect(issues).toEqual({ [poolEntryKey(blank)]: 'Name is required.' })
+    expect(poolEntryKey(blank)).not.toBe(poolEntryKey(named))
   })
 
   it('says nothing about a list of named pools', () => {

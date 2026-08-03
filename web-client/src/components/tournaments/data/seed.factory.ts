@@ -7,9 +7,11 @@ import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.fa
 
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
+import { keepPools } from './pool-entries'
 import type {
   Address,
   DrawTypeOption,
+  EditedEvent,
   Entrant,
   EventEntryState,
   FinishesResults,
@@ -17,6 +19,7 @@ import type {
   Fixture,
   FixtureTime,
   Pool,
+  PoolEntry,
   PoolStandings,
   Predicate,
   StandingRow,
@@ -189,6 +192,38 @@ export function buildEvent(
       ? { state: 'event_full' }
       : { state: 'open' })
   return { ...event, entryState, entered: event.entrants.length }
+}
+
+/**
+ * The same event as the **editor** would hand it back with nothing about its pools
+ * changed: every stored pool cited by the id the server minted (`keepPools`,
+ * `data/pool-entries`).
+ *
+ * This is the shape the write mappers take (`EditedEvent`), and building it through the
+ * production constructor is the point: a test that hand-wrote `kind: 'kept'` entries
+ * could keep passing after `keepPools` stopped citing ids, which is the exact regression
+ * — a no-op diff read as "remove every pool" — that shape exists to prevent.
+ *
+ * Pass `pools` to state a real edit: `[...keepPools(event.pools), addedPool({…})]` adds
+ * one, a shorter list removes one.
+ */
+export function buildEditedEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered' | 'pools'>> & {
+    pools?: PoolEntry[]
+  } = {},
+): EditedEvent {
+  const { pools, ...eventOverrides } = overrides
+  const event = buildEvent(eventOverrides)
+  return { ...event, pools: pools ?? keepPools(event.pools) }
+}
+
+/** One read event, re-expressed as the editor's no-op diff — `buildEditedEvent` for a
+ * test that already holds the event it means. */
+export function asEditedEvent(
+  event: TournamentEvent,
+  pools: PoolEntry[] = keepPools(event.pools),
+): EditedEvent {
+  return { ...event, pools }
 }
 
 /** An event with **no entrant cap** (`max_players: null`, ADR-0935): open to

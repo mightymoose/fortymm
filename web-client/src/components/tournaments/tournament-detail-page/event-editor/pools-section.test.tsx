@@ -2,6 +2,7 @@ import userEvent from '@testing-library/user-event'
 
 import { fireEvent, screen } from '@/test/utilities'
 
+import { poolEntryKey } from '../../data/pool-entries'
 import {
   buildDrawnEvent,
   buildEvent,
@@ -88,7 +89,7 @@ describe('PoolsSection', () => {
       await userEvent.click(poolsSectionPage.getRemovePoolButtons()[0])
       const remaining = poolsSectionPage.getPools()
       expect(remaining).toHaveLength(1)
-      expect(remaining[0].id).toBe('p-2')
+      expect(remaining[0]).toMatchObject({ kind: 'kept', id: 'p-2' })
     })
   })
 
@@ -148,43 +149,152 @@ describe('PoolsSection', () => {
       expect(poolsSectionPage.getPools().map((p) => p.name)).toEqual(
         TEN_POOLS_BY_POSITION,
       )
-      expect(poolsSectionPage.getPools().map((p) => p.position)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-      ])
+      // …and every one of them CITES the id the server minted (ADR 20260801). An entry
+      // that arrived as an `added` would be an insert, and the pool it stopped citing a
+      // removal — a no-op edit that silently replaced ten pools with ten new ones and
+      // took the draw dealt across them with it.
+      expect(poolsSectionPage.getPools().map((p) => p.kind)).toEqual(
+        Array(10).fill('kept'),
+      )
+      expect(poolsSectionPage.getPools().map((p) => poolEntryKey(p))).toEqual(
+        buildTenPools()
+          .sort((a, b) => a.position - b.position)
+          .map((p) => p.id),
+      )
     })
 
-    it('gives a pool added at the end the NEXT position, never a reused one', async () => {
+    /**
+     * **The order is now the only thing that says where a pool sits**, so a pool added
+     * at the end has to *be* at the end: the server derives each position from the index
+     * of the entry in the list it is sent (`PoolWrite` has no `position` — sending one is
+     * a 422 naming the field), and the array the editor serializes is this one.
+     *
+     * Ten pools, so "last" cannot be confused with anything else, and the removal case
+     * below is the one the old client-side position arithmetic got wrong.
+     */
+    it('appends an added pool at the END, with no id and no position', async () => {
       poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
 
       await userEvent.click(poolsSectionPage.getAddPoolButton())
 
-      const positions = poolsSectionPage.getPools().map((p) => p.position)
-      expect(positions).toHaveLength(11)
-      // 10 — one past the highest, and NOT a duplicate of any pool already there. (It is
-      // also the count here, which is why the interesting case is the one below.)
-      expect(positions.at(-1)).toBe(10)
-      expect(new Set(positions).size).toBe(11)
+      const pools = poolsSectionPage.getPools()
+      expect(pools).toHaveLength(11)
+      expect(pools.at(-1)?.kind).toBe('added')
+      // Structurally impossible to hold an id, and asserted on the JSON anyway: this is
+      // the claim the whole chore is about, and a key that came back as `undefined`
+      // would satisfy a value assertion while still being a key on the wire.
+      expect(pools.at(-1) && 'id' in pools.at(-1)!).toBe(false)
+      expect(pools.at(-1) && 'position' in pools.at(-1)!).toBe(false)
+      // The ten it joined are untouched — same ids, same order.
+      expect(pools.slice(0, 10).map((p) => p.kind)).toEqual(Array(10).fill('kept'))
     })
 
     /**
-     * The case the count and the next position part company: remove a pool from the
-     * MIDDLE, then add one. Ten pools minus one is nine, so `fields.length` would hand
-     * the newcomer position 9 — which pool 10 already holds. Two pools tied for last is
-     * an order that is no order, and it would show up as a pair of cards swapping places
-     * on the next read.
+     * Remove a pool from the MIDDLE, then add one. This is where the client's own
+     * position arithmetic used to matter (ten pools minus one is nine, so a
+     * count-derived position would have handed the newcomer a `9` that pool 10 already
+     * held) — and where it now matters that there is none: what is sent is nine cited
+     * pools in their director-chosen order, then one id-less entry, and the server reads
+     * the positions off that.
      */
-    it('does not reuse a position freed by removing a pool from the middle', async () => {
+    it('keeps the surviving pools cited, in order, with the newcomer last', async () => {
       poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
 
       // The third card is Pool 3 (position 2).
       await userEvent.click(poolsSectionPage.getRemovePoolButtons()[2])
       await userEvent.click(poolsSectionPage.getAddPoolButton())
 
-      const positions = poolsSectionPage.getPools().map((p) => p.position)
-      expect(positions).toEqual([0, 1, 3, 4, 5, 6, 7, 8, 9, 10])
-      // Nine pools were left, so the default name is the tenth letter — the naming and
-      // the positioning are independent, and only the positioning is load-bearing.
-      expect(poolsSectionPage.getPoolNames().at(-1)).toBe('Pool J')
+      const pools = poolsSectionPage.getPools()
+      expect(pools.map((p) => p.name)).toEqual([
+        'Pool 1',
+        'Pool 2',
+        'Pool 4',
+        'Pool 5',
+        'Pool 6',
+        'Pool 7',
+        'Pool 8',
+        'Pool 9',
+        'Pool 10',
+        // Nine pools were left, so the default name is the tenth letter — the naming and
+        // the diff are independent, and only the diff is load-bearing.
+        'Pool J',
+      ])
+      expect(pools.map((p) => p.kind)).toEqual([
+        ...Array(9).fill('kept'),
+        'added',
+      ])
+      // Pool 3 is simply gone from the payload — an uncited stored pool is what a
+      // removal IS on the wire (ADR 20260801), never a flag or a tombstone.
+      expect(pools.map((p) => p.name)).not.toContain('Pool 3')
+    })
+  })
+
+  /**
+   * The two things a pools save must get right about identity, asserted on the form
+   * state the save serializes.
+   *
+   * They are opposite failures and both are silent: an added pool that carried an id
+   * would be a 422 (`extra_forbidden` on `body.pools[i].id`) or — before the ids moved
+   * server-side — a duplicate, and a stored pool that lost one would be read as a
+   * removal, taking every fixture dealt into it.
+   */
+  describe('who owns a pool id', () => {
+    it('adds a pool with NO id — the server mints it', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: [buildPool()] }) })
+
+      await userEvent.click(poolsSectionPage.getAddPoolButton())
+
+      const [kept, added] = poolsSectionPage.getPools()
+      expect(kept).toMatchObject({ kind: 'kept', id: 'p-1' })
+      expect(added.kind).toBe('added')
+      expect('id' in added).toBe(false)
+    })
+
+    // …and the other half: editing a stored pool re-words it, it does not re-create it.
+    // Every field the card can touch is exercised, because the card hands its whole draft
+    // back through one `onChange` — a mapper that rebuilt the entry from that draft would
+    // drop the id on the FIRST keystroke, whichever box it was in.
+    it('keeps a stored pool’s id through a rename, a re-window and a re-table', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: [buildPool()] }) })
+
+      fireEvent.change(poolsSectionPage.getNameInput(), {
+        target: { value: 'Morning Pool' },
+      })
+      fireEvent.change(screen.getByLabelText('Start'), {
+        target: { value: '10:30' },
+      })
+      await userEvent.click(poolsSectionPage.getTableToggle('T9'))
+
+      expect(poolsSectionPage.getPools()).toEqual([
+        {
+          kind: 'kept',
+          id: 'p-1',
+          name: 'Morning Pool',
+          slot: { date: '2026-06-13', start: '10:30', end: '12:30' },
+          tableIds: ['t1', 't2', 't3', 't4', 't9'],
+        },
+      ])
+    })
+
+    /** A card is handed a `PoolDraft` — three fields — so the arm and the id are not
+     * values it can reach, let alone change. Proved by editing an ADDED pool, the case
+     * where a leaked identity would be a client-authored id: it stays id-less. */
+    it('cannot promote an added pool into a kept one by editing it', async () => {
+      // An event with no pools yet, so the one card on screen after the click is the
+      // added one and the card-scoped name box addresses it. (`getAddPoolButton` matches
+      // both the header's button and the empty state's, so the empty state's is named.)
+      poolsSectionPage.render({ event: buildEvent({ pools: [] }) })
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Add first pool' }),
+      )
+      fireEvent.change(poolsSectionPage.getNameInput(), {
+        target: { value: 'Pool Zero' },
+      })
+
+      const [added] = poolsSectionPage.getPools()
+      expect(added).toMatchObject({ kind: 'added', name: 'Pool Zero' })
+      expect('id' in added).toBe(false)
     })
   })
 
@@ -277,13 +387,15 @@ describe('PoolsSection', () => {
       expect(poolsSectionPage.getPools()[0].slot.start).toBe('10:30')
 
       // And the display name is only a display name — identity lives in the `id`, which
-      // no control here can touch, so every fixture still resolves.
+      // no control here can touch, so every fixture still resolves. (The card is handed
+      // three fields and the id is not one of them, which is what makes that structural
+      // rather than merely true today.)
       fireEvent.change(poolsSectionPage.getNameInput(), {
         target: { value: 'Morning Pool' },
       })
       const [pool] = poolsSectionPage.getPools()
       expect(pool.name).toBe('Morning Pool')
-      expect(pool.id).toBe('p-1')
+      expect(pool).toMatchObject({ kind: 'kept', id: 'p-1' })
 
       // None of which added or removed a pool.
       expect(poolsSectionPage.getPools()).toHaveLength(1)

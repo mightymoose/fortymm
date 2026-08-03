@@ -26,6 +26,7 @@ import {
 } from '../data/save-failure'
 import type {
   DrawTypeOption,
+  EditedEvent,
   TournamentEvent,
   TournamentTable,
 } from '../data/types'
@@ -55,14 +56,17 @@ export interface EventEditorProps {
   /** When false (a non-creator), the Save and Delete actions are hidden and the
    * editor becomes a read-only view of the event. */
   canEdit: boolean
-  /** Persist the edited event. **May be async — and the editor awaits it**: it
+  /** Persist the edited event — an `EditedEvent`, whose pools are the organizer's
+   * **diff** (`PoolEntry`) rather than rows read back: each one either cites the id the
+   * server minted or carries none at all, and a stored pool no entry cites is a removal
+   * (ADR 20260801). **May be async — and the editor awaits it**: it
    * closes itself only when the promise RESOLVES, and a rejection keeps the sheet
    * open, with the work intact and the failure on screen. A caller that fires the
    * mutation and closes regardless turns every server refusal into a silently
    * discarded event (the #614 rule, learned again in #933 / #934, and once more here
    * from a `between` rule with no bounds: a 422 came back, the sheet shut, and
    * everything the organizer had typed went with it). */
-  onSave: (event: TournamentEvent) => void | Promise<void>
+  onSave: (event: EditedEvent) => void | Promise<void>
   onDelete: (id: string) => void
   /**
    * Whether the save MUTATION is still in flight — the repo's pending-mutation gate
@@ -221,7 +225,12 @@ export const EventEditor = ({
   const submit = form.handleSubmit(
     async (formValues) => {
       if (!event) return
-      const saved: TournamentEvent = { ...event, ...formValues }
+      // The event that was opened, with every editable field taken from the form —
+      // `pools` included, which is why this is an `EditedEvent` and not a
+      // `TournamentEvent`: the form holds entries, and an entry is not a pool. Handing
+      // the read model's pools back instead would re-send the ids on a create (a 422) and
+      // lose the added/kept distinction on a patch.
+      const saved: EditedEvent = { ...event, ...formValues }
       setFailure(null)
       try {
         await onSave(saved)

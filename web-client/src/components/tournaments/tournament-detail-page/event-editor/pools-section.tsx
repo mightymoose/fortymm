@@ -6,8 +6,9 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import type { EditFreeze } from '../../data/draw'
-import { findPoolConflicts, genId, nextPoolPosition } from '../../data/helpers'
-import type { Pool, TournamentTable } from '../../data/types'
+import { findPoolConflicts } from '../../data/helpers'
+import { addedPool, poolEntryKey } from '../../data/pool-entries'
+import type { PoolEntry, TournamentTable } from '../../data/types'
 import { EmptyState } from '../../empty-state'
 import type { EventFormValues } from '../event-form'
 import { SectionHeader } from '../section-header'
@@ -27,8 +28,11 @@ export interface PoolsSectionProps {
   /** Whether the event's **set of pools** may still change (`poolSetFreeze`,
    * `data/draw`). Frozen once its draw is cut — see the component doc below. */
   freeze: EditFreeze
-  /** What is wrong with each pool's **name**, keyed by pool id (`poolNameIssues`,
-   * `data/event-validation`) — rendered in red under the box it is about.
+  /** What is wrong with each pool's **name**, keyed by `poolEntryKey`
+   * (`poolNameIssues`, `data/event-validation`) — rendered in red under the box it is
+   * about. The key is the server's id for a stored pool and the card key for one the
+   * director has just added, which is the same thing the cards themselves are keyed on:
+   * a pool with no id yet still has a name box, and it can still be emptied.
    *
    * `undefined` is *"do not say anything yet"*, and it is what the editor passes until
    * the organizer has actually pressed Save: a name box they are halfway through
@@ -70,8 +74,9 @@ export interface PoolsSectionProps {
  * ## A pool is *called* something
  *
  * The name box being live is also the one way this editor can author a pool the server
- * refuses: an id and a default name are **minted** (`addPool`), but an emptied name box
- * is a `min_length=1` 422 (`Pool.name`, `api/app/schemas/tournament.py`). So the rule is
+ * refuses: a default name is **minted** (`addPool`) — the id is the server's, and this
+ * editor authors none — but an emptied name box is a `min_length=1` 422 (`PoolWrite.name`,
+ * `api/app/schemas/tournament.py`). So the rule is
  * mirrored client-side (`poolNameSchema`) and its verdict arrives here as `nameIssues`,
  * in red, under the box — and the save is refused in the form, which is what means
  * Pydantic's prose never reaches anybody.
@@ -87,9 +92,11 @@ export const PoolsSection = ({
   // `aria-describedby`: one explanation, in one place, said once.
   const freezeNoticeId = useId()
   const frozen = freeze.kind === 'frozen'
-  // `keyName: 'rhfKey'` keeps the field array's internal key off our domain
-  // `id`, so a card is keyed on the stable `id` and an in-place `update`
-  // re-renders it rather than remounting it (which would drop input focus).
+  // `keyName: 'rhfKey'` keeps the field array's internal key off our own fields — and
+  // the cards are NOT keyed on it, because `update()` regenerates it for the row it
+  // touches, which would remount the card the director is typing in and drop their
+  // cursor. They are keyed on `poolEntryKey` instead: the server's id for a stored pool,
+  // the card key for one that has just been added.
   const { fields, append, remove, update } = useFieldArray({
     control,
     name: 'pools',
@@ -102,21 +109,22 @@ export const PoolsSection = ({
   // window. Watched, so changing it on the Basics tab relabels the pools live.
   const timezone = useWatch({ control, name: 'timezone' })
 
-  // Clean domain pools (no `rhfKey`) for the conflict check and the cards, so an
-  // edit never writes the field array's internal key back into form state.
+  // Clean domain entries (no `rhfKey`) for the conflict check and the cards, so an
+  // edit never writes the field array's internal key back into form state. Rebuilt
+  // per arm rather than spread, so an entry cannot pick up a field its arm does not
+  // have — an `added` pool that grew an `id` would be the 422 this union exists to
+  // prevent.
   //
   // NOT re-sorted here. The field array arrived in position order (`eventToFormValues`
   // seeds it that way) and its order is the director's, kept across every add and remove
-  // — and it is the order a save puts on the wire, from which the server re-derives the
+  // — and it is the order a save puts on the wire, from which the server derives the
   // positions. Sorting the *render* while `update(i, …)` / `remove(i)` still addressed
   // the underlying array by index would edit the wrong card.
-  const pools: Pool[] = fields.map((f) => ({
-    id: f.id,
-    name: f.name,
-    slot: f.slot,
-    tableIds: f.tableIds,
-    position: f.position,
-  }))
+  const pools: PoolEntry[] = fields.map((f) =>
+    f.kind === 'kept'
+      ? { kind: 'kept', id: f.id, name: f.name, slot: f.slot, tableIds: f.tableIds }
+      : { kind: 'added', key: f.key, name: f.name, slot: f.slot, tableIds: f.tableIds },
+  )
 
   // Double-booking is a diagnostic only the organizer can act on, so a viewer
   // is neither shown it nor pays to compute it.
@@ -125,20 +133,23 @@ export const PoolsSection = ({
   // several overlapping pools yields multiple conflict entries.
   const conflictTableCount = new Set(conflicts.map((c) => c.table)).size
 
+  // A pool the server has never seen: a default name, the event's window, no tables —
+  // and, pointedly, **no id** (`addedPool`, `data/pool-entries`). The id is minted by the
+  // server when this entry reaches it with none (ADR 20260801); an id authored here would
+  // be a 422 naming this very entry, and before the ids moved server-side it was worse
+  // than that — the client's id was accepted, so a name collision was a silent identity
+  // swap.
+  //
+  // It joins at the END, which is where `append` puts it and where the server will
+  // therefore position it: the array order is the pool order, and nothing else is.
   const addPool = () =>
-    append({
-      id: genId('p'),
-      name: `Pool ${String.fromCharCode(65 + fields.length)}`,
-      slot: { ...eventSlot },
-      tableIds: [],
-      // One past the highest position in the list, never `fields.length` — the two part
-      // company as soon as a pool is removed from the middle, and a duplicate position is
-      // an order that is no order (`nextPoolPosition`, `data/helpers`). A new pool joins
-      // at the END, which is also where `append` puts it, so the array order and the
-      // positions agree — and they must, because the array order is what the save sends
-      // and the positions are what the next read comes back sorted by.
-      position: nextPoolPosition(pools),
-    })
+    append(
+      addedPool({
+        name: `Pool ${String.fromCharCode(65 + fields.length)}`,
+        slot: { ...eventSlot },
+        tableIds: [],
+      }),
+    )
 
   return (
     <div className="flex flex-col gap-4" data-testid="pools-section">
@@ -235,10 +246,14 @@ export const PoolsSection = ({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {fields.map((field, i) => (
+          {pools.map((entry, i) => (
             <PoolCard
-              key={field.id}
-              pool={pools[i]}
+              // The server's id, or the card key of a pool it has never seen — never the
+              // field array's `rhfKey`, which `update()` regenerates on the row being
+              // edited (a remount mid-keystroke), and never the index, which renumbers
+              // when a card above is removed.
+              key={poolEntryKey(entry)}
+              pool={entry}
               tables={tables}
               timezone={timezone ?? ''}
               canEdit={canEdit}
@@ -253,8 +268,13 @@ export const PoolsSection = ({
               // The one thing on this card the organizer can *clear* — and the server
               // now refuses a pool with no name (`min_length=1`). The card says so under
               // the box; the save never leaves the room.
-              nameError={nameIssues?.[pools[i].id]}
-              onChange={(np) => update(i, np)}
+              nameError={nameIssues?.[poolEntryKey(entry)]}
+              // The card hands back a `PoolDraft` — the three fields it can edit — and
+              // the entry's identity is re-attached HERE, from the entry that is already
+              // in form state. That is what makes it structurally impossible for a card
+              // to promote an added pool into a kept one (or the reverse): it never sees
+              // the arm, so it cannot change it.
+              onChange={(draft) => update(i, { ...entry, ...draft })}
               onRemove={() => remove(i)}
             />
           ))}
