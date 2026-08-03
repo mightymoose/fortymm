@@ -124,7 +124,7 @@ test.describe('Tournaments · schedule solve strip', () => {
     // The 202 answered a queued row; the reconcile read shows the run in flight…
     await expect(pom.solveStripState('solving')).toBeVisible()
     await expect(pom.solveStripState('solving')).toContainText(
-      'Solving the schedule…',
+      'Placing matches on tables…',
     )
     // …and the button is withheld while it is (the server would absorb a second
     // click anyway — one solve in flight per tournament).

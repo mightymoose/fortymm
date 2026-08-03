@@ -51,7 +51,7 @@ describe('SolveStrip', () => {
         }),
       })
       const text = solveStripPage.getStateText('solving')
-      expect(text).toContain('Solving the schedule…')
+      expect(text).toContain('Placing matches on tables…')
       expect(text).toContain('Run by hand')
       // The raw enum never reaches the UI.
       expect(text).not.toContain('manual')

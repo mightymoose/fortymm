@@ -96,7 +96,9 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
           <Line
             icon={<Loader2 size={18} className="animate-spin" />}
             tint="text-[color:var(--ball-500)]"
-            title="Solving the schedule…"
+            // Says what the solver is actually doing, in the same words the
+            // `none` state used to promise it ("place every match on a table").
+            title="Placing matches on tables…"
           >
             {TRIGGER_LABEL[state.trigger]}.
           </Line>
