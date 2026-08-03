@@ -16,10 +16,21 @@ this change exists to remove.
 
 ## The pod template names a digest, not a tag
 
-The publish workflow tags each image `<git-short-sha>` (plus a moving `main`),
-but the chart deploys `repository@sha256:…`: `redeploy-uat.sh` resolves the tag
-to its manifest-list digest at deploy time and passes
-`--set images.{api,web}.digest=`.
+The publish workflow tags each image with a **fixed 12-character truncation of
+the full commit SHA** (plus a moving `main`), but the chart deploys
+`repository@sha256:…`: `redeploy-uat.sh` resolves that tag to its manifest-list
+digest at deploy time and passes `--set images.{api,web}.digest=`.
+
+The truncation is deliberately **not** `git rev-parse --short`, and that is a
+decision rather than an implementation detail, because the two sides of it live
+in different repositories' worth of state. `--short` picks its length from the
+local object count (`core.abbrev=auto`) and from any `core.abbrev` the operator
+has set, so the same commit abbreviates to 7 in a shallow CI clone, 8 in a full
+clone of this repo today, and 9 once it grows. CI writes the tag and the deploy
+script reads it, so a length that drifts between those two clones is a
+tag-not-found on a commit that published perfectly well — and it would surface
+only on the operator's machine, after the merge, where no CI check can see it.
+Truncating the full SHA depends on no git configuration at all.
 
 This supersedes the `$(git rev-parse --short HEAD)-$(date +%s)` tag scheme, and
 the reasoning is worth keeping because the old scheme's rationale no longer
@@ -35,7 +46,7 @@ A digest is content-addressed, so the guarantee stops being a convention and
 becomes structural: two replicas naming the same digest **cannot** be running
 different content, and re-running the publish workflow for an
 already-published commit cannot silently change what UAT is running the way
-overwriting a `:<short-sha>` tag would. It also makes a same-commit redeploy a
+overwriting that SHA tag would. It also makes a same-commit redeploy a
 correct no-op rather than a pointless roll of both replicas — which is now the
 desired behaviour, since byte-identical content has nothing to roll to.
 
