@@ -89,6 +89,8 @@ type WindowTooShortForMatchWire =
   components['schemas']['WindowTooShortForMatchRead']
 type PoolOverCapacityWire =
   components['schemas']['PoolOverCapacityRead']
+type PlayerOverSubscribedWire =
+  components['schemas']['PlayerOverSubscribedRead']
 type NoSingleCauseWire =
   components['schemas']['NoSingleCauseRead']
 type PastWindowReasonWire =
@@ -107,7 +109,13 @@ type PastWindowReasonWire =
  *   contiguously, whatever the table count.
  * - **`pool_over_capacity`** — a pool's aggregate match-time exceeds what its
  *   window × tables can hold (a *certain* pre-check, not a CP-SAT guess).
- * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–3 all passed: a
+ * - **`player_over_subscribed`** — ONE human is in more matches inside a pool's
+ *   window than that window can hold, counting the rest owed between them: a
+ *   pigeonhole over a single person (CONTEXT.md, "Over-subscribed"), so it is the
+ *   one structural cause that names a *person* rather than a pool or fixture —
+ *   and the one where adding tables is provably useless (extra tables let *other*
+ *   people play in parallel, never this one).
+ * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–4 all passed: a
  *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
  * - **`past_window`** — a pool's ENTIRE planned window is already a day behind
  *   now (ADR "a past day is named, not disguised"), fixed by moving the date, not
@@ -134,6 +142,16 @@ export type InfeasibilityReason =
       requiredMin: number
       capacityMin: number
       tableCount: number
+    }
+  | {
+      kind: 'player_over_subscribed'
+      playerName: string
+      poolName: string
+      windowStart: string
+      windowEnd: string
+      matchCount: number
+      requiredMin: number
+      windowSpanMin: number
     }
   | { kind: 'no_single_cause'; requiredMin: number; availableMin: number }
   | { kind: 'past_window'; date: string }
@@ -167,6 +185,17 @@ const poolOverCapacityWireSchema = z.object({
   table_count: z.number().int(),
 }) satisfies z.ZodType<PoolOverCapacityWire>
 
+const playerOverSubscribedWireSchema = z.object({
+  kind: z.literal('player_over_subscribed'),
+  player_name: z.string(),
+  pool_name: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  match_count: z.number().int(),
+  required_min: z.number().int(),
+  window_span_min: z.number().int(),
+}) satisfies z.ZodType<PlayerOverSubscribedWire>
+
 const noSingleCauseWireSchema = z.object({
   kind: z.literal('no_single_cause'),
   required_min: z.number().int(),
@@ -178,13 +207,14 @@ const pastWindowReasonWireSchema = z.object({
   date: z.string(),
 }) satisfies z.ZodType<PastWindowReasonWire>
 
-/** The five arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
+/** The six arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
  * has no arm and throws, which is exactly the boundary rule: a reason this
  * client cannot render must fail the parse, not blank the row. */
 export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
   poolHasNoTablesWireSchema,
   windowTooShortForMatchWireSchema,
   poolOverCapacityWireSchema,
+  playerOverSubscribedWireSchema,
   noSingleCauseWireSchema,
   pastWindowReasonWireSchema,
 ])
@@ -192,7 +222,7 @@ export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
 /** One wire arm → one domain `InfeasibilityReason`. Annotated `: InfeasibilityReason`
  * so the union above and the wire arms are one thing — drop or rename a field on
  * either and this is a compile error. Exhaustive over `kind` (a `never` default),
- * so a fifth arm added to the API cannot slip through unmapped. */
+ * so a further arm added to the API cannot slip through unmapped. */
 export function infeasibilityReasonFromWire(
   r: z.infer<typeof infeasibilityReasonWireSchema>,
 ): InfeasibilityReason {
@@ -218,6 +248,17 @@ export function infeasibilityReasonFromWire(
         requiredMin: r.required_min,
         capacityMin: r.capacity_min,
         tableCount: r.table_count,
+      }
+    case 'player_over_subscribed':
+      return {
+        kind: r.kind,
+        playerName: r.player_name,
+        poolName: r.pool_name,
+        windowStart: r.window_start,
+        windowEnd: r.window_end,
+        matchCount: r.match_count,
+        requiredMin: r.required_min,
+        windowSpanMin: r.window_span_min,
       }
     case 'no_single_cause':
       return {
@@ -629,12 +670,19 @@ export interface InfeasibilityReasonCopy {
 
 /**
  * Map one resolved reason to its designed copy. Exhaustive over `kind` — a `never`
- * default makes a fifth arm added to the API a compile error here until it is
+ * default makes a further arm added to the API a compile error here until it is
  * given words, so a reason can never reach the UI as a blank line.
  *
- * The residual (`no_single_cause`) is deliberately worded to steer the director
- * *away* from adding tables: by construction there is a table-time surplus, so the
- * problem is timing, not capacity (the ADR's "don't add tables here").
+ * Two arms are deliberately worded to steer the director *away* from adding
+ * tables, for two different reasons:
+ *
+ * - the residual (`no_single_cause`), because by construction there is a
+ *   table-time surplus — the problem is timing, not capacity;
+ * - `player_over_subscribed`, because a table is parallelism and this is a
+ *   pigeonhole over ONE human — a second table lets somebody *else* play, never
+ *   this person twice at once. Its remedies are fewer matches for them in that
+ *   pool, or a longer window (ADR "the conflict core is a second, max-placed
+ *   solve", decision 1).
  */
 export function infeasibilityReasonCopy(
   reason: InfeasibilityReason,
@@ -654,6 +702,20 @@ export function infeasibilityReasonCopy(
       return {
         sentence: `${reason.poolName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
         remedy: `Add a table to ${reason.poolName}, widen its window, or trim the field.`,
+      }
+    case 'player_over_subscribed':
+      // The ticket's headline example, in the director's words: "player X is in 4
+      // matches inside a 90-minute window". Both figures go through the shared
+      // `fmtTableTime`, which owns the hour/minute rounding and leaves "about" to
+      // this sentence. `matchCount` is always ≥2 — a lone fixture that cannot fit
+      // is `window_too_short_for_match`'s finding, so the API never emits this arm
+      // with one match and the plural is safe.
+      return {
+        sentence: `${reason.playerName} is in ${reason.matchCount} matches inside ${reason.poolName}'s ${reason.windowStart}–${reason.windowEnd} window — playing one at a time, with a rest between, they need about ${fmtTableTime(reason.requiredMin)}, but the window is only ${fmtTableTime(reason.windowSpanMin)} long.`,
+        // NOT "add tables": a table is parallelism, and one human cannot play two
+        // matches at once, so a second table would relieve nothing here (the same
+        // trap `no_single_cause`'s remedy avoids, for a different reason).
+        remedy: `Give ${reason.playerName} fewer matches in ${reason.poolName} — a smaller pool, or a shorter match format — or widen its window; adding tables won't help one player.`,
       }
     case 'no_single_cause':
       return {
