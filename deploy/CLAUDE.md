@@ -105,28 +105,32 @@ half). The practical consequence is that **a merge is not deployable until this
 workflow has finished for it** — the deploy script waits for the digest rather
 than quietly deploying an older commit.
 
-### One-time per package: flip visibility to public
+### Package visibility — public automatically, no manual step
 
-**GHCR publishes a package private on its first push — even from a public
-repository. Visibility is not inherited from the repo.** After the first
-successful run that creates a package, someone with admin on the repo must flip
-it by hand:
+**Both packages came out public on the very first publish, with no manual
+step.** A package pushed by a workflow using `GITHUB_TOKEN` with
+`packages: write` is automatically *linked* to the repository that published it
+and inherits that repository's visibility — and this repo is public. Verified
+against the first run (commit `b17a29fa`): an unauthenticated pull of both
+`fortymm-api` and `fortymm-web-client` returned their manifests immediately.
 
-> repository → **Packages** → the package → **Package settings** → **Change
-> visibility** → **Public**
+This corrects what this file and
+`docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md` originally
+claimed. Both said GHCR publishes private on first push even from a public repo
+and that someone must flip each package by hand under *Package settings →
+Change visibility*. **That rule is real but does not apply here** — it governs
+packages published with a *personal access token* that are not linked to a
+repository. Nothing was flipped by hand for these two, and nothing needs to be.
 
-This is needed **once per package**, so twice in total (`fortymm-api`,
-`fortymm-web-client`), and never again — subsequent pushes keep the visibility
-the package already has. **The workflow cannot do it:** `GITHUB_TOKEN` can push
-to a package with `packages: write` but cannot change its visibility, so there is
-no way to automate this from CI with the built-in token.
+Public packages are why no downstream consumer needs registry credentials and
+why the chart carries no `imagePullSecrets`.
 
-Until the flip, **nothing can pull these images anonymously** — an
-unauthenticated `docker pull` / `docker buildx imagetools inspect` fails with
-`denied` or `unauthorized`, and it fails that way whether or not the repo itself
-is public. If a pull is denied, check package visibility *before* you suspect the
-tag. Public packages are also why no downstream consumer will need registry
-credentials or an `imagePullSecrets` entry.
+If an anonymous pull ever *is* denied (`denied` / `unauthorized` from
+`docker pull` or `docker buildx imagetools inspect`), the likely causes are that
+the package's visibility was changed by hand afterwards, or that the repository
+itself went private — check visibility before you suspect the tag.
+`redeploy-uat.sh` preflights this on every deploy and prints the click-path,
+so the guard remains even though the routine case needs it.
 
 ### `VITE_GOOGLE_MAPS_API_KEY` — optional repository secret
 

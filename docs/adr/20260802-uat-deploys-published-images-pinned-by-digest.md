@@ -61,12 +61,24 @@ serves both the operator's cluster today and an amd64 Hetzner box later,
 without a second decision.
 
 The packages are **public**, so nothing downstream needs credentials and the
-chart carries no `imagePullSecrets`. GHCR publishes packages **private on first
-push even from a public repository**, so this requires a one-time manual
-visibility flip per package after the first successful run; `redeploy-uat.sh`
-preflights anonymous pullability and fails with the exact click-path rather
-than letting the deploy die as an `ErrImagePull` five minutes into `helm
---wait`.
+chart carries no `imagePullSecrets`.
+
+This ADR originally said that would require a one-time manual visibility flip
+per package, because GHCR publishes packages private on first push even from a
+public repository. **That turned out not to apply here, and the correction is
+worth recording rather than quietly deleting.** The private-by-default rule
+governs packages published with a personal access token that are not linked to
+a repository; a package pushed by a workflow using `GITHUB_TOKEN` with
+`packages: write` is automatically linked to the publishing repository and
+inherits its visibility. Verified against the first real publish (commit
+`b17a29fa`): both packages were anonymously pullable immediately, and nothing
+was flipped by hand.
+
+`redeploy-uat.sh` still preflights anonymous pullability and fails with the
+click-path rather than letting the deploy die as an `ErrImagePull` five minutes
+into `helm --wait`. That guard is worth keeping even though the routine case no
+longer needs it — it still catches a package whose visibility is changed later,
+or a repository that goes private.
 
 ## Consequences
 

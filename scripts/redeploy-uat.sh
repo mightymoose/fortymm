@@ -164,14 +164,16 @@ ghcr_pull_token() {
 ghcr_visibility_help() {
   local pkg="$1"
   echo "ERROR: anonymous pull DENIED for ghcr.io/${GHCR_OWNER}/${pkg}." >&2
-  echo "       Either no publish has created this package yet, or it is still private." >&2
-  echo "       GHCR publishes a package private on its first push even from a public repo," >&2
-  echo "       and visibility is not inherited from the repo. Flip it BY HAND, once per" >&2
-  echo "       package (never again after that):" >&2
+  echo "       Either no publish has ever created this package, or it is not public." >&2
+  echo "       Normally it IS public without anyone doing anything: a package pushed by a" >&2
+  echo "       workflow using GITHUB_TOKEN is linked to the publishing repo and inherits" >&2
+  echo "       its visibility, and this repo is public. So seeing this means something" >&2
+  echo "       changed -- the package's visibility was edited by hand, or the repository" >&2
+  echo "       itself went private. Check, and set it back if needed:" >&2
   echo "         github.com/${GHCR_OWNER}/fortymm -> Packages -> ${pkg} ->" >&2
   echo "         Package settings -> Change visibility -> Public" >&2
-  echo "       The workflow cannot do this: GITHUB_TOKEN can push to a package but cannot" >&2
-  echo "       change its visibility. Runs: $PUBLISH_RUNS_URL" >&2
+  echo "       (CI cannot do this for you: GITHUB_TOKEN can push to a package but cannot" >&2
+  echo "       change its visibility.) Runs: $PUBLISH_RUNS_URL" >&2
 }
 
 # HEAD one manifest and print its Docker-Content-Digest. HEAD is enough — the
