@@ -242,10 +242,14 @@ is the one who can act on it, and they can only act on what they can see.
 _Avoid_: unranked, provisional (they hold no rating at all, not a soft one).
 
 **Refusal code**:
-The machine-readable reason an entry was refused — `already_entered`,
-`registration_closed`, `event_full`, `rating_ineligible` — carried on a `409` as
-`detail: {code, message}` (ADR-0968). The client switches on the **code** and owns
-the copy; the server's `message` is a fallback, never a contract.
+The machine-readable reason something was refused — for an **entry**,
+`already_entered`, `registration_closed`, `event_full`, `rating_ineligible` —
+carried as `detail: {code, message}` (ADR-0968). The client switches on the
+**code** and owns the copy; the server's `message` is a fallback, never a
+contract. A refusal that turns on a **domain fact** carries that fact
+alongside the code, structurally, so the client can name it without parsing a
+sentence: the schedule-preview `422` carries the offending **draw type**, the
+way `UnsupportedDrawType` already carries it in the API's own interior.
 _Avoid_: error string, detail (matching on the prose is the bug this replaced).
 
 ## Player profile
@@ -604,8 +608,14 @@ One run of the **scheduler** over a tournament: the CP-SAT job that packs the
 event's unplayed, **free** **placements** onto **tables** within each **pool**'s
 **Slot**, holding **pinned** ones fixed, and writes the resulting placements back.
 A solve is **requested** (queued), **running**, then reaches a **verdict** —
-`succeeded`, `infeasible`, or `failed` — recorded on the tournament's **solve
-ledger**; at most one is in flight per tournament at a time (a fresh request
+`succeeded`, `infeasible`, `timed_out`, or `failed` — recorded on the tournament's
+**solve ledger**. Those last three are three different facts, not three shades of
+failure, and each earns its own remediation: **infeasible** *proved* the day does
+not fit (over-constrained — widen a window, add a **table**, trim a field);
+**timed_out** proved *nothing at all* (the CP-SAT time cap ran out before any
+answer — make the problem smaller or give it longer); **failed** means the run
+broke (a bug — retry). Re-running is the right advice for exactly one of them.
+At most one is in flight per tournament at a time (a fresh request
 coalesces onto the running one), and a **stale running** solve is reaped by the
 next reader or request. Requesting a solve is what "run the scheduler" means; it
 is **not** a hypothetical or Monte-Carlo projection of who will win — it computes
