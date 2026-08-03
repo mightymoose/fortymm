@@ -11,15 +11,19 @@ import {
   seedTournament,
   transitionTournament,
   type PoolSpec,
+  type StoredPool,
   type TableSpec,
 } from '../support/tournament-api'
 
 const EVENT_NAME = 'Open Singles'
 
-/** **Ten** pools — the smallest number that reproduces the bug, and not negotiable.
- * The collision needs a two-digit pool number: `p-10-` sorts between `p-1-` and `p-2-`,
- * so ten pools ordered by id read 1, 10, 2, 3 … 9. With nine, the id order and the
- * position order coincide exactly and the spec would prove nothing. */
+/** **Ten** pools — the number that reproduced the bug, and still the number that gives
+ * this spec its teeth. When pool ids were client-minted strings the collision needed a
+ * two-digit pool number (`p-10-` sorts between `p-1-` and `p-2-`, so ten pools ordered by
+ * id read 1, 10, 2, 3 … 9). The ids are server-minted uuids now, so the wrong order is no
+ * longer *that* order — it is an arbitrary one — and what ten buys is that an arbitrary
+ * order is overwhelmingly unlikely to be the right one (one permutation in `10!`), which
+ * the guard below checks rather than assumes. */
 const POOL_COUNT = 10
 
 /** Two entrants per pool — the round-robin cut refuses a pool of fewer than two
@@ -29,12 +33,6 @@ const POOL_COUNT = 10
 const ENTRANTS_PER_POOL = 2
 const ENTRANT_COUNT = POOL_COUNT * ENTRANTS_PER_POOL
 
-/** The base-36 suffix `genId('p')` appends — one shared "timestamp" for a burst of pools
- * added in the editor, which is exactly how a real ten-pool event's ids look. Fixing it
- * here keeps the ids' lexicographic order a property of the *index*, which is the thing
- * under test, rather than of when the spec happened to run. */
-const ID_SUFFIX = 'mkq1x'
-
 /** Ten tables, one per pool: ten pools sharing one table is a double-booking the editor
  * warns about, and this spec's subject is the order, not the warning. */
 const TABLES: ReadonlyArray<TableSpec> = Array.from(
@@ -43,19 +41,19 @@ const TABLES: ReadonlyArray<TableSpec> = Array.from(
 )
 
 /**
- * The ten pools **in the director's order**, `Pool 1` … `Pool 10`, with the ids the
- * event editor would have minted for them (`p-1-…` … `p-10-…`).
+ * The ten pools **in the director's order**, `Pool 1` … `Pool 10`, carrying **no ids** —
+ * the server mints those (ADR 20260801), so the list's order is the only thing about
+ * order the payload can say at all.
  *
- * The list's order is the payload's only statement about pool order — the server stamps
- * each pool's `position` from its index here (ADR 20260801) — and it is deliberately at
- * odds with both the ids' and the names' lexicographic order. That disagreement is the
- * entire experiment: a seed whose id order matched its intended order could not tell a
- * stack that orders by position from one that orders by id.
+ * That is what the server stamps each pool's `position` from, and it is deliberately at
+ * odds with the names' lexicographic order (`Pool 10` sorts between `Pool 1` and
+ * `Pool 2`) and — checked below rather than assumed — with the minted ids'. That
+ * disagreement is the entire experiment: a seed whose id order matched its intended order
+ * could not tell a stack that orders by position from one that orders by id.
  */
 const POOLS: ReadonlyArray<PoolSpec> = Array.from(
   { length: POOL_COUNT },
   (_, i) => ({
-    id: `p-${i + 1}-${ID_SUFFIX}`,
     name: `Pool ${i + 1}`,
     tableLabels: [`Table ${i + 1}`],
   }),
@@ -64,14 +62,19 @@ const POOLS: ReadonlyArray<PoolSpec> = Array.from(
 /** What the draw must read, top to bottom: `Pool 1`, `Pool 2`, … `Pool 10`. */
 const NAMES_BY_POSITION = POOLS.map((pool) => pool.name)
 
-/** The same ten pools sorted by **id**, by codepoint — the wrong answer, and the one
- * this stack actually produced before pools carried a position: `Pool 1`, `Pool 10`,
- * `Pool 2` … `Pool 9`. Compared against, not asserted on: it is how the spec proves its
- * own fixture is capable of failing. (`localeCompare` is deliberately avoided — it
- * collates digits by locale rules and would quietly stop reproducing the bug.) */
-const NAMES_BY_ID = [...POOLS]
-  .sort((a, b) => (a.id < b.id ? -1 : 1))
-  .map((pool) => pool.name)
+/** The seeded pools' names sorted by **id**, by codepoint — the wrong answer, and the
+ * shape of the one this stack actually produced before pools carried a position.
+ *
+ * Computed from the pools the server minted rather than declared as a constant, because
+ * the ids are no longer the spec's to choose: a uuid's sort order is not knowable until
+ * the row exists. Compared against, never asserted on — it is how the spec proves its own
+ * fixture is capable of failing. (`localeCompare` is deliberately avoided: it collates by
+ * locale rules and would quietly stop being a codepoint sort.) */
+function namesById(pools: ReadonlyArray<StoredPool>): string[] {
+  return [...pools]
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map((pool) => pool.name)
+}
 
 /**
  * Which entrants the snake deals into each pool, by **registration index**.
@@ -95,12 +98,19 @@ const dealtTo = (poolIndex: number): [number, number] => [
  * **A ten-pool event's draw reads 1 … 10, through the whole composed stack** (#1226,
  * ADR 20260801 "Pools carry an explicit `position`").
  *
- * Pool ids are client-minted strings — `p-1-…`, `p-2-…`, `p-10-…` — and sorted as
+ * Pool ids were client-minted strings — `p-1-…`, `p-2-…`, `p-10-…` — and sorted as
  * strings `p-10-` falls *between* `p-1-` and `p-2-`. Every site that ordered pools by id
  * therefore read a ten-pool event as 1, 10, 2, 3 … 9: the read query that returns the
  * fixtures, the `ready_fixtures` grouping, and `DrawConfig.pool_ids` — the order the
  * snake seeds against. A director with ten pools got a draw whose sections were in one
  * order and whose deal was in another.
+ *
+ * The ids are **server-minted uuids** now (ADR 20260801), which does not retire the
+ * claim — it generalises it. Ordering by id no longer produces that one memorable wrong
+ * order; it produces an arbitrary one, which is a *worse* bug and a less legible one. So
+ * the spec no longer writes the wrong answer down: it reads the minted ids back, sorts
+ * the pools by them, and checks that order really does disagree with the positions before
+ * trusting anything below it.
  *
  * ## Why this claim needs the composed stack
  *
@@ -118,8 +128,8 @@ const dealtTo = (poolIndex: number): [number, number] => [
  *    order they were sent — the fact a client cannot manufacture, since it cannot send
  *    the field at all.
  * 2. **The wire carries it.** The detail's fixtures arrive grouped by pool in position
- *    order, so the pool ids' first appearances read `p-1-…` … `p-10-…` and not
- *    `p-1-…, p-10-…, p-2-…`.
+ *    order, so the pool ids' first appearances read exactly the ids the create response
+ *    handed back, in that order — and not those ids in any other.
  * 3. **The browser renders it** — the ten headings top to bottom, *and* the membership
  *    the deal put under each one. The second is the assertion that would red for a stack
  *    that ordered `DrawConfig.pool_ids` by id, which the headings alone would not.
@@ -149,24 +159,27 @@ test.describe('Tournament — ten-pool draw order', () => {
     test.setTimeout(300_000)
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
 
-    // The fixture's own falsification guard: if the ids ever came to sort the way the
-    // positions do, every assertion below would still pass and none of them would mean
-    // anything. Fail here, where the reason is legible, rather than three screens away.
-    expect(
-      NAMES_BY_ID,
-      'the seeded pool ids must sort DIFFERENTLY from their positions, or this spec cannot fail',
-    ).not.toEqual(NAMES_BY_POSITION)
-
     // The director IS the browser's own session, so page navigations run as them.
     const director = await guestFromContext(page.request)
     grantBetaTester(director.username)
 
     // ----- seed: a tournament whose event has ten pools, in order -------------
     const name = `Pools ${faker.string.alphanumeric(8)}`
-    const { tournamentId, eventId, poolIds } = await seedTournament(director, name, {
+    const { tournamentId, eventId, pools } = await seedTournament(director, name, {
       tables: TABLES,
       pools: POOLS,
     })
+    const poolIds = pools.map((pool) => pool.id)
+
+    // The fixture's own falsification guard, and it can only be asked once the ids exist:
+    // if the minted ids happened to sort the way the positions do, every assertion below
+    // would still pass and none of them would mean anything. One uuid permutation in
+    // `10!` does, so this is a real (if rare) possibility and not a formality — fail here,
+    // where the reason is legible, rather than three screens away.
+    expect(
+      namesById(pools),
+      'the minted pool ids must sort DIFFERENTLY from their positions, or this spec cannot fail',
+    ).not.toEqual(NAMES_BY_POSITION)
 
     // ----- 1. the SERVER stamped the order the director sent ------------------
     // Positions 0…9 against the pools in the sent order. A client could not have

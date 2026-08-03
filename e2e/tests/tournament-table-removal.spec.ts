@@ -47,7 +47,7 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * no pool reserves — a spare, which is a perfectly ordinary thing for a venue to have.
  */
 const POOLS: ReadonlyArray<PoolSpec> = [
-  { id: 'pool-a', name: 'Pool A', tableLabels: [DOOMED] },
+  { name: 'Pool A', tableLabels: [DOOMED] },
 ]
 
 /** A uuid — what a table id is now that the catalogue is a real table with a

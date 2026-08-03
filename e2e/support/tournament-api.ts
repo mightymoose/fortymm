@@ -30,9 +30,12 @@ const CSRF_HEADER = 'x-csrf-token'
  * A label, not an id, because the id is no longer the seed's to choose (see
  * `TableSpec`). */
 const TABLE_LABEL = 'Table 1'
-/** The id of the event's single pool — a round-robin needs ≥1 pool, and two
- * entrants in one pool is exactly one fixture: the minimal playable draw. */
-const POOL_ID = 'pool-a'
+/** The **name** of the event's single pool — a round-robin needs ≥1 pool, and two
+ * entrants in one pool is exactly one fixture: the minimal playable draw.
+ *
+ * A name, not an id, for the same reason `TABLE_LABEL` is a label: the id is no longer
+ * the seed's to choose (see `PoolSpec`). */
+const POOL_NAME = 'Pool A'
 
 /** A pool/event window (`Slot` on the wire): a date plus `HH:MM` bounds, all
  * naive wall-clock strings in the venue's frame (ADR-0790). */
@@ -98,31 +101,55 @@ export interface StoredTable {
   readonly court: string
 }
 
-/** One pool of the event's draw, as a **client sends it** (`PoolWrite` on the wire).
+/** One pool of the event's draw, as a **client sends it** (`PoolWrite` on the wire):
+ * what it is called and which tables it reserves, and deliberately **neither an `id` nor
+ * a `position`**.
  *
- * It carries no `position`, and that is not an omission this helper could choose to fix:
- * `PoolWrite` is `extra="forbid"`, so a create/patch body carrying a `position` is a
- * **422** naming the field. The server stamps the position from the pool's index in the
- * list it was sent (ADR 20260801, "Pools carry an explicit `position`"), which makes the
- * **order of `SeedTournamentOptions.pools`** the payload's one statement about pool
- * order — and the thing `tournament-pool-order.spec.ts` seeds deliberately at odds with
- * the ids' lexicographic order.
+ * Both absences are the wire's, not this helper's taste. `PoolWrite` is `extra="forbid"`
+ * and has no field for either, so a seed supplying its own `pool-a` is a **422 naming
+ * `body.pools[i].id`** — which is exactly how this helper broke when a pool became a real
+ * row with a `gen_random_uuid()` primary key (ADR 20260801). The id is the database's
+ * now, the same as a catalogue table's.
+ *
+ * So nothing here names a pool by id:
+ *
+ * - a pool is written down by **name**, which is also what the draw renders and what a
+ *   spec's ordering assertions read;
+ * - a pool cites the tables it reserves by **label** (`tableLabels`), resolved against
+ *   the catalogue `seedTournament` just created — the ids are minted too;
+ * - anything that needs the real pool id reads it back off the create response
+ *   (`StoredPool`, returned by `seedTournament`).
+ *
+ * The **order of `SeedTournamentOptions.pools`** is therefore the payload's one statement
+ * about pool order: the server stamps each pool's `position` from its index in the list
+ * it was sent (ADR 20260801, "Pools carry an explicit `position`"), and that is what the
+ * draw, the deal and the rendered pool sections are all ordered by.
  *
  * `tableLabels` is optional because the single-pool default reserves the whole catalogue;
  * a multi-pool seed usually wants a table each, so ten pools raise no double-booking
  * warning over one shared table.
  *
- * Tables are cited by **label**, not by id: the ids are minted by the server (see
- * `TableSpec`), so at the moment a caller writes down its pools there is no id to name.
- * `seedTournament` resolves each label against the catalogue it just created, and throws
- * on one that names no seeded table rather than sending a reservation the solver would
- * quietly intersect away to nothing. */
+ * `tableIdsFor` throws on a label that names no seeded table rather than sending a
+ * reservation the solver would quietly intersect away to nothing. */
 export interface PoolSpec {
-  readonly id: string
   readonly name: string
   /** The catalogue tables this pool reserves, **by label**. Omitted = **every** seeded
    * table. */
   readonly tableLabels?: ReadonlyArray<string>
+}
+
+/** One pool as the API **reads it back** (`Pool` on the wire): what was sent, plus the
+ * uuid the server minted for it and the 0-based `position` it stamped from the pool's
+ * index in the list it arrived in (ADR 20260801).
+ *
+ * The only place a spec can learn a pool id — and the id everything downstream is keyed
+ * by: a fixture's `pool_id`, the draw's pool sections, the `pool-standings-{id}` table.
+ * Only the three fields an ordering assertion is about are named; the window and tables
+ * ride along untyped. */
+export interface StoredPool {
+  readonly id: string
+  readonly name: string
+  readonly position: number
 }
 
 /** A venue's six free-text address components (`AddressInput` on the wire). The
@@ -215,12 +242,13 @@ export interface CreatedTournament {
 /** A seeded tournament and the ids a spec needs to address it and its event. */
 export interface SeededTournament extends CreatedTournament {
   readonly eventId: string
+  /** The event's pools **as stored** — read off the create response, so each carries the
+   * uuid the server minted and the `position` it stamped, in the order they were sent.
+   * The only handle a spec has on a pool id, and the order the draw must read in. */
+  readonly pools: ReadonlyArray<StoredPool>
   /** The event's **first** pool id — its only one under the default seed — so a spec
-   * can scope its standings assertions. */
+   * can scope its standings assertions without indexing `pools` itself. */
   readonly poolId: string
-  /** Every seeded pool id, **in the order they were sent** — which is the order the
-   * server stamped their positions from, and so the order the draw must read in. */
-  readonly poolIds: ReadonlyArray<string>
 }
 
 /**
@@ -317,7 +345,7 @@ export async function seedTournament(
     end: '17:00',
   }
   const tables = options.tables ?? [{ label: TABLE_LABEL, court: 'A' }]
-  const pools = options.pools ?? [{ id: POOL_ID, name: 'Pool A' }]
+  const pools = options.pools ?? [{ name: POOL_NAME }]
   // Resolve the catalogue HERE and pass it down, rather than letting
   // `createTournament` default it again: the pools below reserve tables out of the
   // catalogue it creates, so the two must be the same list by construction. What comes
@@ -354,11 +382,11 @@ export async function seedTournament(
         predicates: [],
         // Sent in the caller's order and NEVER re-sorted here: this array's order is
         // what `stored_pools` stamps the pools' `position`s from, so re-ordering it —
-        // even "tidily", by id — would silently seed a different event than the one the
-        // spec asked for. No pool carries a `position` key either; sending one is a 422
-        // (`PoolWrite` is `extra="forbid"`).
+        // even "tidily", by name — would silently seed a different event than the one the
+        // spec asked for. No pool carries an `id` or a `position` key either; sending
+        // either is a 422 naming it (`PoolWrite` is `extra="forbid"` and has neither
+        // field).
         pools: pools.map((pool) => ({
-          id: pool.id,
           name: pool.name,
           slot,
           // Labels resolved to the ids the server just minted — a pool's `table_ids`
@@ -375,14 +403,26 @@ export async function seedTournament(
       `create event failed: ${eventRes.status()} ${await eventRes.text()}`,
     )
   }
-  const eventId = ((await eventRes.json()) as { id: string }).id
+  // `TournamentEventRead` carries the stored pools, ordered by the `position` the server
+  // just stamped (the relationship's own `order_by`) — so the minted ids come back on the
+  // create itself, in the order they were sent, and no second read is needed to learn
+  // them.
+  const created = (await eventRes.json()) as {
+    id: string
+    pools: ReadonlyArray<StoredPool>
+  }
+  if (created.pools.length !== pools.length) {
+    throw new Error(
+      `seeded ${pools.length} pools but the event stored ${created.pools.length}`,
+    )
+  }
 
   return {
     tournamentId,
     tables: storedTables,
-    eventId,
-    poolId: pools[0].id,
-    poolIds: pools.map((pool) => pool.id),
+    eventId: created.id,
+    pools: created.pools,
+    poolId: created.pools[0].id,
   }
 }
 
@@ -489,16 +529,6 @@ export async function findEventByName(
     )
   }
   return event
-}
-
-/** A pool as the event **reads back** (`Pool` on the wire): what the client sent, plus
- * the 0-based `position` the server stamped on it from its index in the list it was sent
- * (ADR 20260801). Only the three fields an ordering assertion is about are named; the
- * window and tables ride along untyped. */
-export interface StoredPool {
-  readonly id: string
-  readonly name: string
-  readonly position: number
 }
 
 /**

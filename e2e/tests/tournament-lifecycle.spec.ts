@@ -59,6 +59,17 @@ test.describe('Tournament — round-robin lifecycle', () => {
     page,
     baseURL,
   }) => {
+    // Five full page loads off a Vite **dev** server (each paying for its route's
+    // on-demand transform), a second minted guest, a real draw cut, a go-live that
+    // materializes the fixture and enqueues a CP-SAT solve on the stack's own worker, and
+    // a scored match — measured at just over a minute here, against a 30s default this
+    // spec never declared. Every other tournament spec in this suite already carries an
+    // explicit budget for the same reason; this one predates them.
+    //
+    // It is a **budget, not a wait**: nothing below sleeps, and every assertion is
+    // web-first, so a genuine regression still reds on its own locator rather than
+    // burning the whole 3 minutes.
+    test.setTimeout(180_000)
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
 
     // The director IS the browser's own session (`page.request` shares the page
