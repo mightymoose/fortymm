@@ -13,6 +13,7 @@ import {
   buildInfeasiblePreviewResult,
   buildPreviewJobState,
   buildPreviewResult,
+  buildUnsupportedDrawTypeRefusal,
 } from '@/mocks/factories/tournaments/preview.factory'
 import { server } from '@/mocks/server'
 import {
@@ -136,10 +137,7 @@ describe('SchedulePreviewModal', () => {
   // hang forever on "Preparing preview…".
   it('surfaces an enqueue refusal as an actionable error, not a permanent spinner', async () => {
     mockSchedulePreviewEnqueueEndpoint(server, () =>
-      HttpResponse.json(
-        { detail: 'Only round-robin draws can be previewed.' },
-        { status: 422 },
-      ),
+      HttpResponse.json(buildUnsupportedDrawTypeRefusal(), { status: 422 }),
     )
 
     schedulePreviewModalPage.render()
@@ -152,6 +150,103 @@ describe('SchedulePreviewModal', () => {
     // Actionable: a retry and a close.
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
     expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  // #1221: the refusal's whole point. The old copy named nothing ("a draw type the
+  // preview does not support yet"), so a director with four events could not tell
+  // WHICH one blocks the preview. The server now sends the offending type
+  // structurally — `detail.draw_type`, the hyphenated wire slug — beside a
+  // machine-readable `code`, and the client resolves it through the SERVED
+  // draw-type catalogue, so the notice says "Single elimination".
+  it('names the offending draw type, in the director’s words, on a coded 422', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        buildUnsupportedDrawTypeRefusal({ draw_type: 'single-elim' }),
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    // The load-bearing assertion: the draw type is NAMED, in the words the event
+    // editor's picker shows.
+    expect(error).toHaveTextContent('Single elimination')
+    // …and never the wire slug, nor the server's own sentence (which says
+    // "single-elim"), nor the old copy that named nothing.
+    expect(error).not.toHaveTextContent('single-elim')
+    expect(error).not.toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+  })
+
+  // The deliberate degradation the server's `message` exists for: a refusal code
+  // minted AFTER this build shipped still decodes, and the director reads the
+  // server's fallback prose rather than a code, an `undefined`, or a crash.
+  it('falls back to the server’s message for a 422 code it does not recognise', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: {
+            code: 'a_refusal_from_the_future',
+            message: 'This tournament has an event the scheduler cannot place.',
+          },
+        },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament has an event the scheduler cannot place.',
+    )
+    // Never the code itself, and never a hole where a fact should be.
+    expect(error).not.toHaveTextContent('a_refusal_from_the_future')
+    expect(error).not.toHaveTextContent('undefined')
+  })
+
+  // A detail that is not a coded object at all — the other `DrawError` arms still
+  // send a plain-string `detail`, and a malformed body is always possible. It must
+  // degrade to the generic sentence, never crash the modal or render `undefined`.
+  it('falls back to the generic copy for a 422 whose detail does not parse', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'Only round-robin draws can be previewed.' },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('undefined')
+    // Still actionable — the modal is intact, not a blown-up boundary.
+    expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
+  })
+
+  // A slug this build has no word for (an empty catalogue stands in for "the
+  // payload withheld it" / "a draw type seeded after this build"). Naming it
+  // "single-elim" would be exactly the raw-slug leak `labelFor` exists to prevent,
+  // so the notice drops to the server's fallback sentence instead.
+  it('falls back to the server’s message when the catalogue has no word for the draw type', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(buildUnsupportedDrawTypeRefusal(), { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render({ drawTypes: [] })
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent(
+      'A single-elim draw cannot be scheduled yet.',
+    )
+    expect(error).not.toHaveTextContent('undefined')
   })
 
   it('heads a synthetic grid card with the human pool name, not the composite id', async () => {

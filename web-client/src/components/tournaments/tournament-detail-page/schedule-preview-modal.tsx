@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
+import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -15,6 +16,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
+import { type DrawTypeOption, drawTypeSchema } from '../data/draw-types'
+import { labelFor } from '../data/options'
 import {
   type PreviewEnqueued,
   type PreviewFixture,
@@ -48,6 +51,12 @@ export interface SchedulePreviewModalProps {
   tournamentId: string
   /** The tournament's events, for labeling the per-event override control. */
   events: PreviewEventMeta[]
+  /** The **served** draw-type catalogue (ADR 20260726) — the one place a draw
+   * type's words live. Used to name the offending draw type when the enqueue is
+   * refused with `unsupported_draw_type`, so the notice reads "Single
+   * elimination" and not the wire slug `single-elim`. Pass `[]` where the
+   * catalogue was not sent; the notice degrades rather than leaking a slug. */
+  drawTypes: DrawTypeOption[]
 }
 
 /** The four preview verdicts in the director's words — never the raw enum
@@ -97,18 +106,93 @@ interface PreviewEnqueueNotice {
   description: string
 }
 
+/** The `code` the enqueue `422` carries when an event's draw type is one the table
+ * scheduler cannot place (`UnsupportedDrawTypeRefusal` in `schema.d.ts`). This — not
+ * the sentence beside it — is what the client switches on: matching on prose is the
+ * bug ADR-0968 was written to kill, and the server's `message` is explicitly "fallback
+ * prose, never a contract". */
+const UNSUPPORTED_DRAW_TYPE_CODE = 'unsupported_draw_type'
+
+/** A **coded** refusal body, PARSED not cast (`.claude/rules/parse-at-boundaries.md`):
+ * `ApiError.body` is `unknown`, and an error body is untrusted input like any other.
+ *
+ * Three deliberate loosenesses, each buying a degradation path:
+ *
+ * - `code` is a plain `string`, not an enum — a code minted after this build shipped
+ *   must still *decode* so it can fall back to `message`, rather than fail the parse
+ *   and lose the server's only words.
+ * - `message` is nullish — the fallback prose is what a code we don't know degrades
+ *   to, so its absence is a case, not a malformation.
+ * - `draw_type` is `unknown` here and narrowed below: the fact only means something
+ *   for the code that carries it, so requiring it of *every* coded refusal would make
+ *   an unrelated code unparseable.
+ *
+ * Anything that isn't this shape at all (a plain-string `detail`, FastAPI's validation
+ * array, no body) simply fails the parse and takes the generic copy. */
+const codedRefusalSchema = z.object({
+  detail: z.object({
+    code: z.string().min(1),
+    message: z.string().trim().min(1).nullish(),
+    draw_type: z.unknown().optional(),
+  }),
+})
+
+/** The 422 copy for a refusal this build has no better words for: the honest generic,
+ * naming nothing (it is what a director saw for *every* 422 before #1221). */
+const UNPREVIEWABLE_GENERIC =
+  'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.'
+
+/**
+ * The sentence under "This schedule can't be previewed yet" — the #1221 fix.
+ *
+ * The server sends the offending draw type **structurally** (`detail.draw_type`, the
+ * enum's hyphenated wire slug) beside a machine-readable `code`, so the client names
+ * it in the director's own words instead of showing generic copy that, with four
+ * events, cannot say which one is the blocker. The label comes from the **served**
+ * draw-type catalogue through `labelFor` — the same lookup the event editor's picker
+ * and `drawTypeFreeze` use — so there is exactly one place a draw type's words live.
+ *
+ * Three fallbacks, in descending order of what we know:
+ *
+ * 1. A recognised code + a slug this build knows + a catalogue row for it → name it.
+ * 2. Any other coded refusal (an unknown code, a slug we have no word for, an empty
+ *    catalogue) → the server's `message`, which is on the wire precisely for this.
+ *    Never the raw slug: "…uses a “single-elim” draw" is the leak `labelFor` exists to
+ *    prevent (`drawTypeFreeze`, `data/draw.ts`).
+ * 3. A body that doesn't parse at all → the generic sentence.
+ */
+function unpreviewableDrawTypeCopy(
+  body: unknown,
+  drawTypes: DrawTypeOption[],
+): string {
+  const parsed = codedRefusalSchema.safeParse(body)
+  if (!parsed.success) return UNPREVIEWABLE_GENERIC
+  const { code, message, draw_type } = parsed.data.detail
+
+  if (code === UNSUPPORTED_DRAW_TYPE_CODE) {
+    const slug = drawTypeSchema.safeParse(draw_type)
+    const label = slug.success ? labelFor(drawTypes, slug.data, null) : null
+    if (label !== null) {
+      return `A preview runs over a round-robin draw. This tournament has a “${label}” event, which the preview does not support yet.`
+    }
+  }
+  return message ?? UNPREVIEWABLE_GENERIC
+}
+
 /** Map an enqueue refusal to its inline notice. `422` — the draw type can't be
- * previewed yet (only round-robin is); `409` — the tournament is no longer pre-live;
- * `429` — the single preview slot is busy (retry in a moment); `403` — not the
- * owner; status `0` — the server was never reached; anything else — the honest
- * generic. */
-function previewEnqueueNotice(error: unknown): PreviewEnqueueNotice {
+ * previewed yet (only round-robin is), named from the refusal's coded `draw_type`;
+ * `409` — the tournament is no longer pre-live; `429` — the single preview slot is
+ * busy (retry in a moment); `403` — not the owner; status `0` — the server was never
+ * reached; anything else — the honest generic. */
+function previewEnqueueNotice(
+  error: unknown,
+  drawTypes: DrawTypeOption[],
+): PreviewEnqueueNotice {
   if (error instanceof ApiError) {
     if (error.status === 422) {
       return {
         title: "This schedule can't be previewed yet",
-        description:
-          'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+        description: unpreviewableDrawTypeCopy(error.body, drawTypes),
       }
     }
     if (error.status === 409) {
@@ -237,6 +321,7 @@ function hasInvalidOverride(
 
 interface PreviewBodyProps {
   events: PreviewEventMeta[]
+  drawTypes: DrawTypeOption[]
   enqueue: ReturnType<typeof useEnqueueSchedulePreview>
   poll: UseQueryResult<PreviewJobState>
   overrides: Record<string, number>
@@ -263,6 +348,7 @@ interface PreviewBodyProps {
  */
 const PreviewBody = ({
   events,
+  drawTypes,
   enqueue,
   poll,
   overrides,
@@ -286,7 +372,7 @@ const PreviewBody = ({
   // render — show the actionable notice with a Close/Retry, never a permanent
   // spinner.
   if (!enqueued && enqueue.isError) {
-    const notice = previewEnqueueNotice(enqueue.error)
+    const notice = previewEnqueueNotice(enqueue.error, drawTypes)
     return (
       <Alert variant="destructive" data-testid="preview-enqueue-error" className="mt-2">
         <TriangleAlert size={16} />
@@ -531,6 +617,7 @@ export const SchedulePreviewModal = ({
   onOpenChange,
   tournamentId,
   events,
+  drawTypes,
 }: SchedulePreviewModalProps) => {
   const enqueue = useEnqueueSchedulePreview(tournamentId)
   const cancel = useCancelSchedulePreview(tournamentId)
@@ -616,6 +703,7 @@ export const SchedulePreviewModal = ({
         {open && (
           <PreviewBody
             events={events}
+            drawTypes={drawTypes}
             enqueue={enqueue}
             poll={poll}
             overrides={overrides}

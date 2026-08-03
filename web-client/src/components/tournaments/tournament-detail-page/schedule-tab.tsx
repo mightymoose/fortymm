@@ -609,6 +609,10 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             id: event.id,
             name: event.name,
           }))}
+          // The served catalogue (`null` only where the payload withheld it — a
+          // list row, never this page) is how a refused preview names the
+          // offending draw type in the director's words.
+          drawTypes={tournament.drawTypes ?? []}
         />
       )}
 
