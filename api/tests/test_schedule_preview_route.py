@@ -16,9 +16,9 @@ status codes:
   token (dropping the job so it can no longer be polled) and ``204`` for a token
   Redis never knew (a no-op success, never a ``500``);
 * a non-owner is ``403``, a ``live``/``archived`` tournament ``409``, an event
-  whose draw type the scheduler cannot place (single-elim) ``422`` — in a
-  sentence that names the draw type — and exceeding the per-session rate limit
-  ``429``.
+  whose draw type the scheduler cannot place (single-elim) ``422`` — a coded
+  ``detail`` carrying the offending draw type structurally — and exceeding the
+  per-session rate limit ``429``.
 
 Under the async (record-only) ``preview_queue`` fixture the enqueued job is
 inspected and then run through a real in-process worker (the DB-blind preview job
@@ -49,6 +49,10 @@ from app.models import (
     User,
 )
 from app.schedule_preview_solve import RUN_SCHEDULE_PREVIEW_JOB
+from app.schemas.schedule_preview import (
+    UNSUPPORTED_DRAW_TYPE_CODE,
+    UnsupportedDrawTypeResponse,
+)
 from tests._helpers import make_client, start_session
 
 TABLE_CATALOGUE: list[dict[str, object]] = [
@@ -440,13 +444,15 @@ async def test_preview_on_a_post_live_tournament_is_409(
     assert preview_queue.jobs == []
 
 
-async def test_preview_of_a_single_elim_event_is_a_422_that_names_the_draw_type(
+async def test_preview_of_a_single_elim_event_is_a_coded_422_carrying_the_draw_type(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     preview_queue: Queue,
 ) -> None:
-    """A single-elim event is a 422 whose sentence names the **draw type** — the one
-    thing the director has to change — not the generic "as the event stands".
+    """A single-elim event is a 422 whose ``detail`` is an **object**: the
+    machine-readable ``code``, the offending ``draw_type`` as a field, and the sentence
+    demoted to a ``message`` fallback (ADR "a refusal carries a code and the client owns
+    the sentence").
 
     ``app.schedule_preview`` is the last live raiser of ``UnsupportedDrawType``: the
     CP-SAT scheduler places pooled draws over their pools' windows and a bracket has
@@ -458,8 +464,15 @@ async def test_preview_of_a_single_elim_event_is_a_422_that_names_the_draw_type(
     blames the event's own pools and field and sends the director hunting through two
     things that are perfectly fine.
 
-    So the assertion is on the **sentence**, not the status. ``status_code == 422``
-    passes with the arm deleted; naming ``single-elim`` does not.
+    So the assertion is on the **shape**, not the status. ``status_code == 422`` passes
+    with the arm deleted, and passed for the whole time the route sent a bare sentence
+    the client then threw away (#1221); a ``detail`` that parses as
+    ``UnsupportedDrawTypeResponse`` and holds ``draw_type == single_elim`` does not.
+
+    Validating against the model the route DECLARES (``responses={422: …}``) rather
+    than picking keys out by hand is deliberate: it is what keeps the OpenAPI document
+    both clients are generated from tied to what actually crosses the wire, and
+    ``extra="forbid"`` makes an undeclared key a failure rather than a shrug.
     """
     client, owner = authed_client
     tournament_id = await _make_tournament(
@@ -469,14 +482,18 @@ async def test_preview_of_a_single_elim_event_is_a_422_that_names_the_draw_type(
     response = await client.post(_preview_url(tournament_id))
 
     assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    # The load-bearing assertion: the draw type is named, off the error's structural
-    # ``draw_type`` rather than parsed out of a developer's message.
-    assert DrawType.single_elim.value in detail, detail
+    body = UnsupportedDrawTypeResponse.model_validate(response.json())
+    # The load-bearing assertions: the code a client switches on, and the domain fact
+    # it turns on, carried structurally so nobody has to parse English for it.
+    assert body.detail.code == UNSUPPORTED_DRAW_TYPE_CODE
+    assert body.detail.draw_type is DrawType.single_elim
+    # The sentence is retained as a fallback — for the raw API and for a client that
+    # meets a code it does not know — and still names the draw type, so a consumer
+    # with no copy of its own degrades to words rather than to silence.
+    assert DrawType.single_elim.value in body.detail.message, body.detail.message
     # And it is not the generic fallback, which is about the event's state (and, in
     # the cut route's voice, about cutting — a verb this route never performs).
-    assert detail != "This event's draw cannot be cut as the event stands."
-    assert "cannot be cut" not in detail
+    assert "cannot be cut" not in body.detail.message
     # Nothing is queued: an un-schedulable event refuses the whole preview up front,
     # never a partial solve over the events that would have worked.
     assert preview_queue.jobs == []

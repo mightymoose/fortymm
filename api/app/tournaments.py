@@ -34,6 +34,8 @@ from app.schemas.schedule_preview import (
     PreviewEnqueued,
     PreviewJobState,
     PreviewRequest,
+    UnsupportedDrawTypeRefusal,
+    UnsupportedDrawTypeResponse,
 )
 from app.schemas.tournament import (
     GeocodePreview,
@@ -983,7 +985,8 @@ async def withdraw_from_event(
 
 
 def _draw_refusal(error: DrawError) -> HTTPException:
-    """The 422 for a draw the domain will not produce — in words a director can read.
+    """The 422 for a draw the domain will not produce — a coded object where a client
+    has to act on *which* refusal it is, otherwise words a director can read.
 
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
     a competition (``DegenerateDraw``) or is not a shape a fixture can seat
@@ -1006,15 +1009,24 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
       director reads.
-    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
-      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
-      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
+    * ``UnsupportedDrawType`` is the one arm whose ``detail`` is a **coded object**
+      rather than a sentence — ``{"code": "unsupported_draw_type", "draw_type": …,
+      "message": …}`` (ADR "a refusal carries a code and the client owns the sentence",
+      extending ADR-0968 past the entry endpoint). It carries its ``draw_type``
+      **structurally**, and now so does the response: the client switches on the
+      ``code`` and names the draw type off the field, instead of being handed English
+      to either parse or — as the schedule-preview modal did (#1221) — throw away and
+      replace with copy that names nothing, leaving a director with four events unable
+      to tell which one is the blocker. The sentence survives as ``message``, a
+      fallback for a consumer with no copy of its own, never a contract.
+
+      It can no longer arrive from the **cut** route — ``strategy_for`` is total now
+      that the enum holds only what runs (ADR 20260726) — but this mapper is shared
       with the **schedule-preview** route below, and ``app.schedule_preview`` still
       raises it for ``single_elim``: the CP-SAT scheduler is round-robin-only, so a
-      pool-less bracket has no windows to solve over. A director previewing a bracket's
-      schedule must be told it is the *draw type* that cannot be previewed, not left
-      with the generic sentence, which says the event's own state is at fault and would
-      send them hunting through pools and entrants that are perfectly fine.
+      pool-less bracket has no windows to solve over. That asymmetry is why only the
+      preview route declares the body (``responses={422: …}``): it is the only route
+      that can send it.
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking
@@ -1037,12 +1049,28 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             detail = str(error)
         case UnsupportedDrawType():
             # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
-            # ``strategy_for`` is total). Named from the structural ``draw_type`` so the
-            # sentence says which format cannot be previewed.
-            detail = (
-                f"A {error.draw_type.value} draw cannot be scheduled yet. The "
-                "scheduler places pooled draws over their pools' time windows, and a "
-                "bracket has none to place. Preview a round-robin event instead."
+            # ``strategy_for`` is total). The one arm that returns early, because it is
+            # the one whose ``detail`` is an OBJECT rather than a sentence: the
+            # structural ``draw_type`` travels as a field beside the machine-readable
+            # ``code``, and the sentence rides along as ``message`` — fallback prose for
+            # a consumer with no copy of its own, not the contract.
+            return HTTPException(
+                status_code=422,
+                # ``.model_dump(mode="json")`` gives the plain ``{"code", "draw_type",
+                # "message"}`` object FastAPI nests under ``detail`` (``mode="json"`` so
+                # ``draw_type`` is its wire slug, not a ``DrawType`` member) — the same
+                # coded-detail envelope ``entry_refused`` / ``_address_not_geocodable``
+                # already send, and exactly what ``UnsupportedDrawTypeResponse``
+                # declares on the preview route.
+                detail=UnsupportedDrawTypeRefusal(
+                    draw_type=error.draw_type,
+                    message=(
+                        f"A {error.draw_type.value} draw cannot be scheduled yet. The "
+                        "scheduler places pooled draws over their pools' time windows, "
+                        "and a bracket has none to place. Preview a round-robin event "
+                        "instead."
+                    ),
+                ).model_dump(mode="json"),
             )
         case _:
             detail = "This event's draw cannot be cut as the event stands."
@@ -1457,6 +1485,21 @@ preview_request_ip_rate_limit = RedisRateLimiter(
     "/tournaments/{tournament_id}/schedule/preview",
     response_model=PreviewEnqueued,
     status_code=status.HTTP_202_ACCEPTED,
+    # The coded refusal, declared so both generated clients get a shape for it instead
+    # of an untyped blob. Declaring a ``422`` model replaces FastAPI's own
+    # ``HTTPValidationError`` for THIS operation, which is why the model is the whole
+    # envelope: a malformed id still answers with the validation array, and swapping an
+    # accurate envelope for an inaccurate inner object would trade one lie for another.
+    responses={
+        422: {
+            "model": UnsupportedDrawTypeResponse,
+            "description": (
+                "An event's draw type cannot be placed by the table scheduler. The "
+                "`detail` carries a machine-readable `code` and the offending "
+                "`draw_type`; its `message` is fallback prose, not a contract."
+            ),
+        }
+    },
     dependencies=[
         Depends(preview_request_ip_rate_limit),
         Depends(preview_request_rate_limit),
@@ -1488,6 +1531,13 @@ async def request_schedule_preview(
     (there is a real field and a real solve to look at, or it is over). Rate
     limited per session with a per-IP ceiling: too many previews in quick
     succession is a `429`.
+
+    An event whose **draw type** the scheduler cannot place — a single-elim bracket,
+    which has no pool windows to solve over — refuses the whole preview with a `422`
+    whose `detail` is an object: `{"code": "unsupported_draw_type", "draw_type": …,
+    "message": …}`. Switch on the `code` and name the event from `draw_type`; the
+    `message` is fallback prose for a client with no copy of its own, never a
+    contract.
     """
     # Thin adapter over the transport-neutral ``request_schedule_preview`` verb: it
     # owns the owner gate (404 → 403), the pre-live gate, the synchronous snapshot
@@ -1497,7 +1547,9 @@ async def request_schedule_preview(
     #   TournamentNotFoundError        -> 404 "Tournament not found."
     #   NotTournamentOwnerError        -> 403 "You can only modify tournaments you …"
     #   TournamentNotPreLiveError      -> 409, the status-carrying domain sentence
-    #   DrawError (the family)         -> 422, the sentence ``_draw_refusal`` composes
+    #   DrawError (the family)         -> 422, the body ``_draw_refusal`` composes
+    #                                     (coded object for UnsupportedDrawType, prose
+    #                                     for the rest)
     #   ScheduleQueueUnavailableError  -> 503 "The scheduling queue is unavailable, …"
     overrides = body.overrides if body is not None else {}
     try:
@@ -1518,8 +1570,10 @@ async def request_schedule_preview(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DrawError as error:
         # A non-round-robin (or otherwise degenerate) draw the synthetic field
-        # cannot be planned — the same 422 the cut route produces, in words a
-        # director can read.
+        # cannot be planned — the same 422 the cut route produces. This is the only
+        # route that can reach the ``UnsupportedDrawType`` arm, and so the only one
+        # that sends the coded ``{"code", "draw_type", "message"}`` detail the
+        # ``responses={422: …}`` above declares; the other arms are still prose.
         raise _draw_refusal(error) from error
     except ScheduleQueueUnavailableError as exc:
         raise HTTPException(
