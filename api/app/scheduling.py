@@ -1027,8 +1027,13 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         required_min = sum(duration_of(f) for f in pool_unpinned)
         table_count = len(pool.table_ids)
         # Effective end: pre-live this is the planned window; live it is softened
-        # so an overrunning live day is never falsely flagged over-capacity.
-        capacity_min = (effective_end(pool) - pool.window.start_min) * table_count
+        # so an overrunning live day is never falsely flagged over-capacity. Bound
+        # once, here, because BOTH certain arms below measure against it — a pool's
+        # capacity and one human's own day are different proofs about the same
+        # window, and computing the span twice would let them drift into reporting
+        # contradictory numbers for the same pool.
+        window_span = effective_end(pool) - pool.window.start_min
+        capacity_min = window_span * table_count
         if required_min > capacity_min:
             reasons.append(
                 PoolOverCapacity(
@@ -1039,52 +1044,47 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                 )
             )
 
-    # Per (pool, human): a pigeonhole over ONE person, run in the same cheap
-    # pre-check pass (ADR "the conflict core is a second, max-placed solve" —
-    # certain per-player over-subscription is a pre-check, not a residual). A
-    # player plays one match at a time and their unpinned fixtures in a pool must
-    # all run inside that pool's window, so
-    #     Σ durations + (N − 1) × REST_MIN > window span
-    # proves the day cannot fit no matter how many tables the pool owns.
-    #
-    # The (N − 1) is load-bearing: the model pads EVERY player interval by
-    # REST_MIN (correct for AddNoOverlap, which needs the gap in either
-    # direction), but the last match of the day owes no trailing rest inside the
-    # window — charging N × REST_MIN would overcount and could falsely accuse a
-    # player, which is unacceptable for an arm whose whole claim is certainty.
-    #
-    # Reported ALONGSIDE PoolOverCapacity rather than dominated by it: they are
-    # proofs about different subjects with different remedies (add tables vs. this
-    # human is in too many matches), so both are actionable and both are certain.
-    # The pool-level *unplaceable* causes above do dominate — a past-window,
-    # no-tables or too-short-window pool is already unrunnable, so piling a
-    # per-player claim on top of it would just be noise.
-    for pool in snapshot.pools:
-        pool_unpinned = unpinned_by_pool.get(pool.id)
-        if not pool_unpinned:
-            continue
-        if pool.id in pools_past_window or pool.id in pools_short_window:
-            continue
-        if not pool.table_ids:
-            continue  # PoolHasNoTables already names this pool
-        fixtures_by_player: defaultdict[PlayerId, list[ScheduleFixture]] = defaultdict(
-            list
-        )
+        # Per (pool, human): a pigeonhole over ONE person, run in the same cheap
+        # pre-check pass (ADR "the conflict core is a second, max-placed solve" —
+        # certain per-player over-subscription is a pre-check, not a residual). A
+        # player plays one match at a time and their unpinned fixtures in a pool
+        # must all run inside that pool's window, so
+        #     Σ durations + (N − 1) × REST_MIN > window span
+        # proves the day cannot fit no matter how many tables the pool owns.
+        #
+        # The (N − 1) is load-bearing: the model pads EVERY player interval by
+        # REST_MIN (correct for AddNoOverlap, which needs the gap in either
+        # direction), but the last match of the day owes no trailing rest inside
+        # the window — charging N × REST_MIN would overcount and could falsely
+        # accuse a player, unacceptable for an arm whose whole claim is certainty.
+        #
+        # Reported ALONGSIDE PoolOverCapacity rather than dominated by it: they
+        # are proofs about different subjects with different remedies (add tables
+        # vs. this human is in too many matches), so both are actionable and both
+        # are certain. It shares this loop's guards rather than re-deriving them,
+        # so the "a pool already proven unplaceable dominates every finer claim
+        # about it" rule is stated once — a sixth arm cannot drop a clause and
+        # start piling per-player noise onto a pool that cannot run at all.
+        #
+        # Only each match's LENGTH is accumulated, never the fixture: the bound
+        # reads a count and a sum, and nothing else about the match matters to it.
+        minutes_by_player: defaultdict[PlayerId, list[int]] = defaultdict(list)
         for fixture in pool_unpinned:
+            minutes = duration_of(fixture)
             for player in (fixture.player_a_id, fixture.player_b_id):
-                fixtures_by_player[player].append(fixture)
-        # Effective end: pre-live the planned window; live it is softened, so an
-        # overrunning live day is never falsely flagged over-subscribed (the same
-        # span PoolOverCapacity measures itself against).
-        window_span = effective_end(pool) - pool.window.start_min
-        for player_id, player_fixtures in sorted(fixtures_by_player.items()):
-            match_count = len(player_fixtures)
+                minutes_by_player[player].append(minutes)
+        # Sorted by player id (the keys alone — sorting `.items()` would make the
+        # report's order depend on ScheduleFixture being orderable, which it is
+        # neither meant nor guaranteed to be).
+        for player_id in sorted(minutes_by_player):
+            # NOT `match_minutes` — that is this module's own function, and a
+            # local of that name shadows it for the whole of `_build_model`,
+            # breaking the `duration_of` closure that calls it.
+            player_minutes = minutes_by_player[player_id]
+            match_count = len(player_minutes)
             if match_count < 2:
                 continue  # one match is a window question, not over-subscription
-            required = (
-                sum(duration_of(f) for f in player_fixtures)
-                + (match_count - 1) * REST_MIN
-            )
+            required = sum(player_minutes) + (match_count - 1) * REST_MIN
             if required > window_span:
                 reasons.append(
                     PlayerOverSubscribed(
