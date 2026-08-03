@@ -298,6 +298,69 @@ test.describe('Tournaments · schedule solve strip', () => {
     )
   })
 
+  test('names the CONFLICT CORE — the `unplaceable_fixtures` matches cross the real wire by matchup, and the sentence never claims they are the minimum', async ({
+    page,
+  }) => {
+    // An `unplaceable_fixtures` arm of `infeasibility_reasons` crosses the real
+    // wire (MSW off, this stub IS the API) carrying the SAME nested fixture shape
+    // a placement conflict uses; the client Zod-parses it in the queryFn and the
+    // strip names the matches by who is playing whom (ADR "the conflict core is a
+    // second, max-placed solve", decision 2).
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        trigger: 'manual',
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        infeasibility_reasons: [
+          {
+            kind: 'unplaceable_fixtures',
+            fixtures: [
+              {
+                fixture_id: 'fx-1',
+                player_a: 'crafty-otter',
+                player_b: 'spiked-frigatebird',
+              },
+              {
+                fixture_id: 'fx-2',
+                player_a: 'dazed-marmot',
+                player_b: 'wily-heron',
+              },
+            ],
+          },
+        ],
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('infeasible')
+    await expect(state).toBeVisible()
+    // WHICH matches, by who is playing whom — every one of them named.
+    await expect(state).toContainText("2 matches couldn't all be placed")
+    await expect(state).toContainText('crafty-otter-vs-spiked-frigatebird')
+    await expect(state).toContainText('dazed-marmot-vs-wily-heron')
+    // …and NEVER as a minimum: the set comes off a capped optimization that may
+    // stop at good-enough, and the API carries no proven/partial flag to lean on
+    // (ADR decision 4).
+    await expect(state).toContainText("aren't necessarily the smallest set")
+    await expect(state).not.toContainText('minimum')
+    await expect(state).not.toContainText('must remove')
+    // Capacity already passed to reach this arm, so: not the add-tables trap.
+    await expect(state).toContainText("adding tables won't help here")
+    await expect(state).not.toContainText('Add tables, widen a pool window')
+    // Still a designed state, not an error; the raw wire code and the fixture ids
+    // both stay off screen.
+    await expect(pom.runSchedulerNotice).not.toBeVisible()
+    await expect(pom.toasts).toHaveCount(0)
+    await expect(state).not.toContainText('unplaceable_fixtures')
+    await expect(state).not.toContainText('fx-1')
+    await expect(pom.runScheduler).toBeEnabled()
+
+    await expectAxeClean(page, 'schedule tab — conflict-core infeasible solve on the strip')
+  })
+
   test('answers the coded 422 with the designed "cut a draw first" message, inline on the strip', async ({
     page,
   }) => {

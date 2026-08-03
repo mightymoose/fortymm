@@ -64,10 +64,12 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
       fixtures_pinned: null,
       tournament_id: 'summer-slam-2026',
       tournament_name: 'Summer Slam 2026',
-      // The resolved causes the day doesn't fit — three arms, so the expansion
+      // The resolved causes the day doesn't fit — four arms, so the expansion
       // proves it renders each reason's sentence + remedy (the same list the
-      // Schedule-tab strip shows), including the one that names a *human*
-      // (`player_over_subscribed`) rather than a pool or a fixture.
+      // Schedule-tab strip shows): the one that names a *human*
+      // (`player_over_subscribed`), the one that names the *matches* that
+      // couldn't all be placed (`unplaceable_fixtures`, the conflict core), and
+      // the whole-day floor.
       infeasibility_reasons: [
         {
           kind: 'window_too_short_for_match',
@@ -87,6 +89,17 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
           match_count: 4,
           required_min: 150,
           window_span_min: 90,
+        },
+        {
+          kind: 'unplaceable_fixtures',
+          fixtures: [
+            {
+              fixture_id: 'fx-1',
+              player_a: 'crafty-otter',
+              player_b: 'spiked-frigatebird',
+            },
+            { fixture_id: 'fx-2', player_a: 'dazed-marmot', player_b: 'wily-heron' },
+          ],
         },
         {
           kind: 'no_single_cause',

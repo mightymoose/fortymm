@@ -34,6 +34,13 @@ const overSubscribedCopy = infeasibilityReasonCopy({
   requiredMin: 150,
   windowSpanMin: 90,
 })
+const conflictCoreCopy = infeasibilityReasonCopy({
+  kind: 'unplaceable_fixtures',
+  fixtures: [
+    { fixtureId: 'fx-1', playerA: 'crafty-otter', playerB: 'spiked-frigatebird' },
+    { fixtureId: 'fx-2', playerA: 'dazed-marmot', playerB: 'wily-heron' },
+  ],
+})
 const noSingleCauseCopy = infeasibilityReasonCopy({
   kind: 'no_single_cause',
   requiredMin: 420,
@@ -147,6 +154,17 @@ describe('SolveLedgerPage', () => {
     expect(detail).toHaveTextContent(overSubscribedCopy.sentence)
     expect(detail).toHaveTextContent(overSubscribedCopy.remedy)
     expect(overSubscribedCopy.remedy).not.toMatch(/add (a |another |more )?tables?/i)
+    // The arm that names the MATCHES: which fixtures couldn't all be placed, by
+    // matchup — and never as a minimum (ADR "the conflict core is a second,
+    // max-placed solve", decision 4).
+    expect(detail).toHaveTextContent("2 matches couldn't all be placed")
+    expect(detail).toHaveTextContent('crafty-otter-vs-spiked-frigatebird')
+    expect(detail).toHaveTextContent('dazed-marmot-vs-wily-heron')
+    expect(detail).toHaveTextContent(conflictCoreCopy.sentence)
+    expect(detail).toHaveTextContent(conflictCoreCopy.remedy)
+    expect(`${conflictCoreCopy.sentence} ${conflictCoreCopy.remedy}`).not.toMatch(
+      /\bminimum\b|\bminimal\b|must (remove|drop|cut)/i,
+    )
     expect(detail).toHaveTextContent(noSingleCauseCopy.sentence)
     expect(detail).toHaveTextContent(noSingleCauseCopy.remedy)
     // An infeasible run carries no failed `error` sentence.
