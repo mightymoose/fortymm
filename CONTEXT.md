@@ -247,9 +247,13 @@ can act on. A refusal is **a statement about a moment**: it is never wrong when
 it is produced, and it stops being true the instant the state it describes
 changes. So a refusal **expires** — once an event is added, an entrant arrives,
 or a **draw type** changes, the refusal that named the old state is withdrawn
-rather than left contradicting the page around it. It is not a **notification**
-(nobody is being told news) and not a form error (it answers an *action*, not a
-field).
+rather than left contradicting the page around it. **But a refusal that is
+*about* a state having changed is not withdrawn by that change** — "this
+tournament is already published" is earned precisely because the status moved,
+so treating the status as the thing that expires it deletes the sentence in the
+same beat it appears, and the reader watches the page correct itself with no
+explanation. It is not a **notification** (nobody is being told news) and not a
+form error (it answers an *action*, not a field).
 _Avoid_: error, warning (a refusal is a designed outcome, not a malfunction),
 banner (that is where it is shown, not what it is).
 
