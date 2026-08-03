@@ -7,11 +7,11 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    PrimaryKeyConstraint,
     Text,
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -58,20 +58,29 @@ class TournamentEventPool(Base):
     ``HH:MM`` strings compose from and to these columns at the boundary
     (``app.tournament_pools``).
 
-    ``id`` is still the **client's** string, not a server-minted uuid, and only until
-    the chore that mints them (#1226 slice 3d) — which is also the chore that flips this
-    column, ``tournament_fixtures.pool_id`` and ``PoolId`` onto ``uuid`` together,
+    ``id`` is a **server-minted uuid** — ``gen_random_uuid()``, the same default a venue
+    table's id has. It was a client-supplied string (``p-1-…``) for as long as a pool
+    was a JSONB value-object with nothing to mint it; the column,
+    ``tournament_fixtures.pool_id`` and ``PoolId`` moved onto ``uuid`` in one step,
     because they are one representation and a half-moved one is not a state worth
     having."""
 
     __tablename__ = "tournament_event_pools"
     __table_args__ = (
-        # Declared explicitly, rather than by two ``primary_key=True`` columns, so the
-        # **order** of the pair is stated: ``event_id`` leads, which is what makes the
-        # key's own index answer "the pools of this event" (every read there is) and
-        # the event-delete cascade's lookup. Keyed on the pair because a pool id is
-        # per-event; see the ``id`` column below.
-        PrimaryKeyConstraint("event_id", "id", name="pk_tournament_event_pools"),
+        # The target of the fixture's — and the reservation's — composite foreign key:
+        # SQL can only reference a unique set of columns, and the *pair* is what carries
+        # "my pool is my own event's pool". Redundant against the primary key as a
+        # uniqueness claim (a uuid id is unique on its own), and that is exactly what
+        # the ADR says it is for: "``UNIQUE (event_id, id)`` is redundant against the
+        # primary key and exists purely as the target that composite FK needs."
+        #
+        # It earns its index twice over anyway: ``event_id`` leads, so it answers "the
+        # pools of this event" (every read there is), the event-delete cascade's lookup,
+        # and the referential check of both composite foreign keys — none of which the
+        # single-column primary key's index can serve.
+        UniqueConstraint(
+            "event_id", "id", name="uq_tournament_event_pools_event_id_id"
+        ),
         # Two pools of one event never share a place in its order — the guarantee
         # ``stored_pools`` made by construction (it stamps ``range(len(pools))``) said
         # here as a constraint, now that pools are rows and a constraint is available.
@@ -93,27 +102,22 @@ class TournamentEventPool(Base):
         ),
     )
 
-    #: The pool's identity, and what a fixture's ``pool_id`` holds. A client-supplied
-    #: string today (``p-1-…``); see the class docstring on when it becomes a uuid.
+    #: The pool's identity, and what a fixture's ``pool_id`` holds — a uuid the
+    #: **database** mints (ADR 20260801's DDL: ``id uuid PRIMARY KEY``).
     #:
-    #: **The primary key is ``(event_id, id)``, not ``id``** — the pair, in that order,
-    #: is also the target of the fixture's composite foreign key, so the ADR's separate
-    #: ``UNIQUE (event_id, id)`` is not needed: the primary key already *is* it, and a
-    #: second index over the same two columns would buy nothing. (It also gives the
-    #: REFERENCING ``event_id`` the index Postgres does not create for one, which the
-    #: event-delete cascade path wants.)
-    #:
-    #: Composite because a pool id is **per-event**, exactly as it was as a JSONB
-    #: value-object: two events of one tournament may each hold a “pool-a”, which
-    #: ``app.schedule_solves`` relies on when it namespaces the solver's ``PoolId`` by
-    #: event id, and which two of ``tests/test_tournament_fixtures.py``'s cases assert
-    #: directly. A bare ``id`` primary key would have made a client-minted string
-    #: globally unique across the platform — a rule nothing in the domain asks for, that
-    #: nothing above the database enforces, and that would fail at the second event.
-    #: When the ids become server-minted uuids the key can shrink to ``id`` alone, with
-    #: the pair kept as the ADR's ``UNIQUE (event_id, id)``; that is the same DDL either
-    #: way and it is why the fixture's FK does not have to change then.
-    id: Mapped[str] = mapped_column(Text, nullable=False)
+    #: **The primary key is ``id`` alone**, where it was ``(event_id, id)``. The pair
+    #: was never about the fixture's foreign key (that references the ``UNIQUE
+    #: (event_id, id)`` above, which stands either way) — it was there because a
+    #: *client-minted* string is only unique per event: two events of one tournament
+    #: could each hold a “pool-a”, and a bare ``id`` key would have imposed
+    #: platform-wide uniqueness on a string nothing above the database controlled. A
+    #: minted uuid is globally unique by construction, so the reason is gone and the
+    #: narrower key is the honest one: a pool id names one pool, anywhere.
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
     event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_events.id", ondelete="CASCADE"),

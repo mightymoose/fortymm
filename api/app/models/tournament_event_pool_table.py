@@ -8,7 +8,6 @@ from sqlalchemy import (
     Index,
     Integer,
     PrimaryKeyConstraint,
-    Text,
     UniqueConstraint,
     func,
 )
@@ -141,11 +140,11 @@ class TournamentEventPoolTable(Base):
     #: tournament's" leg. Both foreign keys read this one column, which is what ties the
     #: pool and the table into the same tournament.
     event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    #: The other half of the pool's key. ``Text``, like ``TournamentEventPool.id``,
-    #: while pool ids are still the client's strings; it moves to ``uuid`` with them
-    #: (#1226 slice 3d), which is the same DDL on both sides and no change to any of the
-    #: constraints above.
-    pool_id: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The other half of the pool's key — a ``uuid``, exactly as
+    #: :attr:`~app.models.tournament_event_pool.TournamentEventPool.id` is now that the
+    #: server mints it. The two moved off ``Text`` in one step, which is the same DDL on
+    #: both sides and changed none of the constraints above.
+    pool_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     #: The reserved table. ``UUID(as_uuid=False)`` — a real ``uuid`` column typed as
     #: ``str`` in Python, exactly as ``TournamentFixture.table_id`` is, because a table
     #: id crosses this codebase as its canonical text: here, on a placement, and as the

@@ -8,7 +8,6 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
-    Text,
     UniqueConstraint,
     func,
     text,
@@ -128,7 +127,11 @@ class TournamentFixture(Base):
     )
     #: Names a pool of **this fixture's own event** — half of the composite foreign key
     #: declared above. ``NULL`` = the draw is un-pooled.
-    pool_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #:
+    #: A ``uuid``, moved off ``Text`` in the same step as
+    #: :attr:`~app.models.tournament_event_pool.TournamentEventPool.id` — the column it
+    #: references, and therefore the column whose type it *is*.
+    pool_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     #: 1-based.
     round: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 1-based within its round (and pool, when pooled).

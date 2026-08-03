@@ -6,11 +6,15 @@ the subject here: the pool's ``position`` in its event's own pool order — the
 server-stamped, 0-based field pools carry (ADR 20260801, "Pools carry an explicit
 ``position``") — and *not* the pool's id.
 
-The distinction is not academic and is not about the future. Pool ids are client-minted
-strings, ``p-1-…``, ``p-2-…``, ``p-10-…``, and lexicographically ``p-10-`` falls between
-``p-1-`` and ``p-2-``: an event with ten or more pools rendered its draw as pool 1, pool
-10, pool 2, pool 3, … Every test below is written to fail against an id sort, which is
-why the ids are chosen so their lexicographic order differs from the director's.
+The distinction is not academic and is not about the future. Pool ids were
+client-minted strings, ``p-1-…``, ``p-2-…``, ``p-10-…``, and lexicographically ``p-10-``
+falls between ``p-1-`` and ``p-2-``: an event with ten or more pools rendered its draw
+as pool 1, pool 10, pool 2, pool 3, … They are server-minted uuids now (ADR 20260801),
+which
+does not fix it — it makes it *worse*, because a uuid sort is not merely a different
+order, it is a random one. Every test below is written to fail against an id sort, and
+each asserts up front that the two orders really do disagree, so a run where the random
+ids happened to sort into the director's order cannot pass by luck.
 
 These go through the database, because the ordering *is* the query — asserting it
 against anything else would be asserting about a different artifact.
@@ -36,22 +40,28 @@ from app.models import (
 from app.tournament_queries import fixtures_by_event
 from tests._helpers import event_pools, make_user
 
-#: Ten pool ids in the **director's** order, minted the way the client mints them. Their
-#: lexicographic order is ``p-1-…, p-10-…, p-2-…, p-3-…`` — deliberately not this one,
-#: which is the whole point: a test whose ids happened to sort right could not tell an
-#: id sort from a position sort.
-POOL_IDS = [f"p-{n}-{uuid.uuid4().hex[:6]}" for n in range(1, 11)]
+#: How many pools the events below carry. Ten is the smallest field that used to tell an
+#: id sort from a position sort under the old client-minted ids (``p-10-`` sorts between
+#: ``p-1-`` and ``p-2-``); under server-minted uuids any two would do, and ten keeps the
+#: odds of a random id order coinciding with the director's at one in 3,628,800.
+POOL_COUNT = 10
 
 
-def _pool(pool_id: str, position: int) -> dict[str, Any]:
-    """One pool as it is stored — the JSONB shape the write boundary produces."""
+def _pool(position: int) -> dict[str, Any]:
+    """One pool as the seed helper takes it — no ``id``, because a pool id is the
+    database's to mint (ADR 20260801) and the seed reads it back off the event."""
     return {
-        "id": pool_id,
         "name": f"Pool {position + 1}",
         "position": position,
         "slot": {},
         "table_ids": [],
     }
+
+
+def _pool_ids(event: TournamentEvent) -> list[uuid.UUID]:
+    """The event's pool ids **in the director's order** — ``event.pools`` is ordered by
+    ``position``, which is the order they were seeded in."""
+    return [pool.id for pool in event.pools]
 
 
 async def _make_event(
@@ -107,7 +117,7 @@ async def _make_event(
 async def _seed_fixtures(
     db_session: AsyncSession,
     event: TournamentEvent,
-    rows: list[tuple[str | None, int, int]],
+    rows: list[tuple[uuid.UUID | None, int, int]],
 ) -> None:
     """Write ``(pool_id, round, position)`` fixtures — in the order given, which every
     caller below deliberately scrambles: insertion order is what an unsorted read
@@ -128,40 +138,40 @@ async def _seed_fixtures(
 @pytest_asyncio.fixture
 async def ten_pool_event(db_session: AsyncSession) -> TournamentEvent:
     """An event with ten pools, positions 0..9, in the director's order."""
-    return await _make_event(
-        db_session,
-        [_pool(pool_id, position) for position, pool_id in enumerate(POOL_IDS)],
-    )
+    return await _make_event(db_session, [_pool(n) for n in range(POOL_COUNT)])
 
 
 async def test_ten_pools_come_back_in_the_directors_pool_order(
     db_session: AsyncSession, ten_pool_event: TournamentEvent
 ) -> None:
-    """The one this exists for: ten pools read back 1..10, not 1, 10, 2, 3…
+    """The one this exists for: ten pools read back 1..10, not in the order their ids
+    happen to sort in.
 
-    Ten is the smallest field that tells the two rules apart, because ``p-10-`` is the
-    first client-minted id whose lexicographic place is not its director's place — it
-    sorts between ``p-1-`` and ``p-2-``. Under the old ``ORDER BY pool_id`` this event's
-    draw came back with pool 10's fixtures wedged between pool 1's and pool 2's, on
-    every read, for every client. Nothing about the response looked wrong; it was simply
-    the wrong draw on screen.
+    Under the old ``ORDER BY pool_id`` a ten-pool event's draw came back with pool 10's
+    fixtures wedged between pool 1's and pool 2's, on every read, for every client;
+    under server-minted uuids the same bug deals the pools in a *random* order. Nothing
+    about the response looks wrong either way; it is simply the wrong draw on screen.
 
     The assertion is the **full sequence**, so it fails on an id sort rather than merely
     on an unsorted one — a "the pools are contiguous" check would pass against both.
     """
+    pool_ids = _pool_ids(ten_pool_event)
+    # The premise, asserted rather than assumed: the ids do NOT sort into the director's
+    # order, so a loader that fell back to an id sort produces a different sequence.
+    assert sorted(pool_ids) != pool_ids
     await _seed_fixtures(
         db_session,
         ten_pool_event,
-        # Scrambled: the ids' own lexicographic order, which is the order the broken
-        # rule produced and the one a re-broken implementation would fall back into.
-        [(pool_id, 1, 1) for pool_id in sorted(POOL_IDS)],
+        # Scrambled: the ids' own order, which is the order the broken rule produced and
+        # the one a re-broken implementation would fall back into.
+        [(pool_id, 1, 1) for pool_id in sorted(pool_ids)],
     )
 
     fixtures = (await fixtures_by_event(db_session, [ten_pool_event.id]))[
         ten_pool_event.id
     ]
 
-    assert [fixture.pool_id for fixture in fixtures] == POOL_IDS
+    assert [fixture.pool_id for fixture in fixtures] == pool_ids
 
 
 async def test_a_pools_round_and_position_still_decide_within_the_pool(
@@ -169,7 +179,7 @@ async def test_a_pools_round_and_position_still_decide_within_the_pool(
 ) -> None:
     """Pool order is the *outermost* key, not the only one: inside a pool the order is
     still round then position, and the pools do not interleave."""
-    first, second = POOL_IDS[0], POOL_IDS[1]
+    first, second = _pool_ids(ten_pool_event)[:2]
     await _seed_fixtures(
         db_session,
         ten_pool_event,
@@ -212,8 +222,8 @@ async def test_un_pooled_fixtures_sort_last_behind_every_pool(
         [
             (None, 1, 1),
             (None, 1, 2),
-            (POOL_IDS[9], 1, 1),
-            (POOL_IDS[0], 1, 1),
+            (_pool_ids(ten_pool_event)[9], 1, 1),
+            (_pool_ids(ten_pool_event)[0], 1, 1),
         ],
     )
 
@@ -222,8 +232,8 @@ async def test_un_pooled_fixtures_sort_last_behind_every_pool(
     ]
 
     assert [(f.pool_id, f.position) for f in fixtures] == [
-        (POOL_IDS[0], 1),
-        (POOL_IDS[9], 1),
+        (_pool_ids(ten_pool_event)[0], 1),
+        (_pool_ids(ten_pool_event)[9], 1),
         (None, 1),
         (None, 2),
     ]
@@ -241,30 +251,31 @@ async def test_un_pooled_fixtures_sort_last_behind_every_pool(
 async def test_each_events_pool_order_is_read_from_its_own_pools(
     db_session: AsyncSession, ten_pool_event: TournamentEvent
 ) -> None:
-    """The loader is batched over many events at once, so the pool-order lookup has to
-    be correlated to *each fixture's own event* — a subquery that leaked across events
-    would resolve one event's pool ref against another's pools and read a position that
-    is not its own (or, with a shared id, the wrong one entirely).
+    """The loader is batched over many events at once, and each event's draw must come
+    back in **its own** pool order — not in one order the whole batch shares.
 
-    The second event reuses the **same ids in the opposite order**, which is the input
-    that tells a correlated lookup from a leaky one: under a leak both events come back
-    in one of the two orders, and the two assertions cannot both hold.
+    Two ten-pool events whose orders deliberately disagree with each other and with the
+    ids: the first is read back in its director's order, the second in its own, and no
+    single global sort key satisfies both. That is what tells a per-event lookup from a
+    batch-wide one — a loader that ordered by the id, or by any one column of its own
+    table, would satisfy at most one of the two assertions.
+
+    (Its predecessor gave the two events the **same** pool ids in opposite orders, to
+    catch a subquery that leaked across events. That input is no longer constructible:
+    a pool id is a server-minted uuid and its primary key is the id alone, so two events
+    cannot share one — the leak it was written against would now find the right pool
+    whatever event it looked in.)
     """
-    reversed_event = await _make_event(
-        db_session,
-        [
-            _pool(pool_id, position)
-            for position, pool_id in enumerate(reversed(POOL_IDS))
-        ],
-    )
-    for event in (ten_pool_event, reversed_event):
+    other_event = await _make_event(db_session, [_pool(n) for n in range(POOL_COUNT)])
+    ours, theirs = _pool_ids(ten_pool_event), _pool_ids(other_event)
+    # The premise: neither event's order is the id order, so an id sort reds both.
+    assert sorted(ours) != ours and sorted(theirs) != theirs
+    for event, pool_ids in ((ten_pool_event, ours), (other_event, theirs)):
         await _seed_fixtures(
-            db_session, event, [(pool_id, 1, 1) for pool_id in sorted(POOL_IDS)]
+            db_session, event, [(pool_id, 1, 1) for pool_id in sorted(pool_ids)]
         )
 
-    fixtures = await fixtures_by_event(
-        db_session, [ten_pool_event.id, reversed_event.id]
-    )
+    fixtures = await fixtures_by_event(db_session, [ten_pool_event.id, other_event.id])
 
-    assert [f.pool_id for f in fixtures[ten_pool_event.id]] == POOL_IDS
-    assert [f.pool_id for f in fixtures[reversed_event.id]] == list(reversed(POOL_IDS))
+    assert [f.pool_id for f in fixtures[ten_pool_event.id]] == ours
+    assert [f.pool_id for f in fixtures[other_event.id]] == theirs

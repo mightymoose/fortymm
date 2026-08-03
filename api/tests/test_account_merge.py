@@ -997,7 +997,7 @@ async def _make_rr_event(
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
         pools=event_pools(
-            [{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
+            [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
             tournament=tournament,
         ),
     )

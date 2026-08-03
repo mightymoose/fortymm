@@ -587,7 +587,9 @@ def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
             assert_never(status)
 
 
-def _round_label(draw_type: DrawType, pool_id: str | None, round_number: int) -> str:
+def _round_label(
+    draw_type: DrawType, pool_id: uuid.UUID | None, round_number: int
+) -> str:
     """A round number in its draw type's own vocabulary, composed here so no client
     maps an integer to a word.
 

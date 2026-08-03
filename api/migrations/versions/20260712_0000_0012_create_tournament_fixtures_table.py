@@ -41,7 +41,7 @@ def upgrade() -> None:
         # is un-pooled (single-elim), or this is the KO stage of an rr-then-ko event —
         # and a composite FK with a NULL member is satisfied vacuously under MATCH
         # SIMPLE, which is exactly what an un-pooled fixture wants.
-        sa.Column("pool_id", sa.Text(), nullable=True),
+        sa.Column("pool_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("round", sa.Integer(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
         # NULL means exactly one thing: TBD — ``advance()`` fills it when the feeding

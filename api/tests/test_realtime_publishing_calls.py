@@ -136,7 +136,6 @@ async def _stage(
         pools=event_pools(
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],
@@ -162,7 +161,7 @@ async def _stage(
 
     called_fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="pool-a",
+        pool_id=event.pools[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -170,7 +169,7 @@ async def _stage(
     )
     later_fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="pool-a",
+        pool_id=event.pools[0].id,
         round=1,
         position=2,
         entry_a_id=entry_c.id,

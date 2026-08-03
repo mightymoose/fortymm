@@ -149,7 +149,6 @@ async def _make_tournament(
         pools=event_pools(
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {"date": DATE, "start": window[0], "end": window[1]},
                     "table_ids": [str(row.id) for row in catalogue],
@@ -939,7 +938,6 @@ async def _hold_user_in_second_event(
         pools=event_pools(
             [
                 {
-                    "id": "pool-b",
                     "name": "Pool B",
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": [table_id],

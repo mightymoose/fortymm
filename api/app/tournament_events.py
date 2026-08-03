@@ -192,14 +192,17 @@ def _pool_set_frozen_detail(removed: list[str], added: list[str]) -> str:
     has — composed exactly as the router's ``_pool_set_refusal`` used to compose it
     inline, so :class:`PoolSetFrozenError` carries the byte-identical body.
 
-    Both halves are named, because a re-**id**'d pool is exactly one removal plus one
-    addition and the director has to be told which of their pools went missing: a
-    **removed** pool leaves its fixtures pointing at a pool that no longer exists (the
-    dangling ref no foreign key is there to catch, ADR-0786), and an **added** pool
+    Both halves are named, because a payload can move both at once and the director has
+    to be told which of their pools went missing: a **removed** pool leaves its fixtures
+    pointing at a pool that no longer exists (which the composite foreign key would
+    refuse too, but only at COMMIT and only as a driver error), and an **added** pool
     arrives with **no fixtures**, because the draw was dealt across the pools the event
     had at the cut. The sentence ends with the way out (remove the draw, change the
     pools, cut again) and with what is still allowed, so a director who has to move a
     broken table is never left with nowhere to go.
+
+    It no longer offers "re-identify" as a third thing to do: a pool id is minted by the
+    server (ADR 20260801), so re-identifying one is not a payload a client can send.
     """
     clauses = []
     if removed:
@@ -216,8 +219,7 @@ def _pool_set_frozen_detail(removed: list[str], added: list[str]) -> str:
         "This event's draw is already cut, so its set of pools is frozen: "
         + "; and ".join(clauses)
         + ". A pool's tables, its time and its name can all still be changed. "
-        "To add, remove or re-identify a pool, remove the draw first, then cut it "
-        "again."
+        "To add or remove a pool, remove the draw first, then cut it again."
     )
 
 
@@ -276,19 +278,27 @@ async def _enforce_pool_set_frozen(
     """Raise :class:`PoolSetFrozenError` once a ``pools`` payload would change *which
     pools* an event with a cut draw has (ADR-0786).
 
-    Remove a pool (or change its ``id``, which is a removal with an addition standing
-    where it was) and every fixture drawn into it refers to nothing; add one and it
+    Remove a pool and every fixture drawn into it refers to nothing; add one and it
     arrives with no fixtures, because the draw was dealt across the pools that existed
     at the cut.
 
-    Pools are rows now and a fixture's ``pool_id`` is a real (composite) foreign key
-    onto them, so the *dangling* half of that is no longer a state the database will
-    hold — but this guard is not thereby redundant, in either direction. The database
-    refuses the removal with a deferred constraint violation at COMMIT: a 500 the
-    director cannot act on, where this is a 409 naming the pools and the way out. And
-    the **addition** half breaks no constraint at all: a pool arriving into a cut draw
-    with no fixtures in it is perfectly legal SQL and still an incoherent draw. So the
-    two lines of defence answer two different questions, and this one is asked first.
+    **What this guard is left saying, now that the ids are minted.** Three categories
+    used to reach it; only two still can, and neither is one a foreign key could answer.
+
+    * **Re-identifying** a pool — the case that used to be a removal and an addition at
+      once, and the loudest reason this guard was written — is **no longer
+      expressible**.
+      A pool id is a server-minted uuid, so a client cannot author one; it either cites
+      an id the event has (which keeps that row) or omits one (which adds a pool). That
+      whole category left with the minting, not with this function.
+    * **Removing** a pool: the composite foreign key does refuse it, but *deferred*, at
+      COMMIT, as an ``IntegrityError`` — a 500 the director cannot act on, where this is
+      a 409 naming the pools and the way out. So the ordering matters and is deliberate:
+      this runs before anything is written, and the constraint underneath is the
+      backstop for every path that does not come through this verb.
+    * **Adding** a pool: no constraint says anything at all. A pool arriving into a cut
+      draw with no fixtures in it is perfectly legal SQL and still an incoherent draw,
+      so this is the only thing standing between a director and one.
 
     What is frozen is the **id set**, and only the id set. A pool's ``table_ids``, its
     ``slot`` and its ``name`` stay editable with a draw standing, on purpose — this is
@@ -296,8 +306,10 @@ async def _enforce_pool_set_frozen(
 
     Asked **before** anything is written (and, like every judge-then-write guard, under
     the tournament's row lock the verb holds), so a refusal leaves both the pools and
-    the fixtures exactly as they were — never written, not merely rolled back. With
-    **no draw cut** this is a no-op and ``pools`` replaces wholesale, as it always has.
+    the fixtures exactly as they were — never written, not merely rolled back. It is
+    also asked before :func:`~app.tournament_pools.apply_event_pools`'s own 422 for an
+    id this event does not have, so a cut event answers the 409 that names its pools.
+    With **no draw cut** this is a no-op and the diff applies as it always has.
     """
     # An absent ``pools`` key is the only way this is ``None`` — an explicit ``null`` is
     # a 422 at the schema (the column is NOT NULL) — so "not sent" is the whole meaning
@@ -309,19 +321,28 @@ async def _enforce_pool_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    # Parsed ONCE, and kept: the id set decides *whether* to refuse, and the pools
-    # themselves say *which* — a refusal names them (``named_list``), and re-parsing the
-    # JSONB to recover the names would be the same validation run twice per pool.
+    # Projected ONCE, and kept: the id set decides *whether* to refuse, and the pools
+    # themselves say *which* — a refusal names them (``named_list``), and re-projecting
+    # the rows to recover the names would be the same work run twice per pool.
     current = event_pools(event)
     existing = {PoolId(pool.id) for pool in current}
-    incoming = {PoolId(pool.id) for pool in updates.pools}
-    if existing == incoming:
+    # An entry with no ``id`` is an addition and contributes nothing to the incoming
+    # SET — which is what makes ``existing == incoming`` "you cited exactly the pools
+    # you have" rather than "you sent the same number of them".
+    incoming = {PoolId(pool.id) for pool in updates.pools if pool.id is not None}
+    if existing == incoming and len(updates.pools) == len(incoming):
         return
     # Named by their names, from whichever side of the change still knows them: a pool
     # being removed is only described by the row we hold, and one being added only by
-    # the payload.
+    # the payload. An entry citing an id this event does not have counts as an addition
+    # here — it is one in effect, and past this guard it is the 422
+    # ``apply_event_pools`` raises.
     removed = [pool.name for pool in current if PoolId(pool.id) not in incoming]
-    added = [pool.name for pool in updates.pools if pool.id not in existing]
+    added = [
+        pool.name
+        for pool in updates.pools
+        if pool.id is None or PoolId(pool.id) not in existing
+    ]
     raise PoolSetFrozenError(
         _pool_set_frozen_detail(removed, added), removed=removed, added=added
     )
@@ -392,7 +413,7 @@ async def _enforce_draw_settings_frozen(
 
 def _event_scheduling_facts(
     event: TournamentEvent,
-) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int, str]:
+) -> tuple[tuple[tuple[uuid.UUID, Slot, tuple[str, ...]], ...], int, str]:
     """The slice of an event the schedule solver actually reads (ADR "the schedule is
     solved; the call is pinned"), in a comparable shape — what the update verb compares
     before/after its write to decide whether a re-solve is owed.
@@ -607,6 +628,14 @@ async def update_event(
         await _reanchor_placements_for_timezone_change(
             db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
         )
+    # Flushed before the facts are re-read, because one of them is a pool's ``id`` and a
+    # pool this payload ADDED does not have one until the INSERT runs: the id is the
+    # database's (``gen_random_uuid()``), not the client's, so an unflushed row would
+    # project as ``id=None`` and the read boundary (``Pool``) would refuse it. Flushing
+    # is safe here for the same reason the diff is: both position constraints and the
+    # fixture's composite foreign key are DEFERRABLE INITIALLY DEFERRED, so an
+    # intermediate state is nobody's business until COMMIT.
+    await db.flush()
     if facts_before != _event_scheduling_facts(event) and await event_has_draw(
         db, event.id
     ):

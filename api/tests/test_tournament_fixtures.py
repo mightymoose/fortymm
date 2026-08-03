@@ -95,10 +95,14 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
+        # Two pools, whose ids the seed mints up front (``event_pools``) because a
+        # fixture below has to name one before the rows are flushed — and because a pool
+        # id is a server-minted uuid now (ADR 20260801), not a string a literal can
+        # spell. ``_pool_a`` / ``_pool_b`` read them back off the event.
         pools=event_pools(
             [
-                {"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []},
-                {"id": "pool-b", "name": "Pool B", "slot": {}, "table_ids": []},
+                {"name": "Pool A", "slot": {}, "table_ids": []},
+                {"name": "Pool B", "slot": {}, "table_ids": []},
             ]
         ),
     )
@@ -106,6 +110,17 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
     await db_session.commit()
     await db_session.refresh(event)
     return event
+
+
+def _pool_a(event: TournamentEvent) -> uuid.UUID:
+    """The id of the event's first pool — ``event.pools`` is ordered by ``position``,
+    which is the order ``_make_event`` seeded them in."""
+    return event.pools[0].id
+
+
+def _pool_b(event: TournamentEvent) -> uuid.UUID:
+    """The id of the event's second pool."""
+    return event.pools[1].id
 
 
 async def _make_entry(db_session: AsyncSession, event: TournamentEvent) -> User:
@@ -165,7 +180,7 @@ async def test_a_fixture_holds_its_two_entries(
     db_session.add(
         TournamentFixture(
             event_id=event.id,
-            pool_id="pool-a",
+            pool_id=_pool_a(event),
             round=1,
             position=1,
             entry_a_id=entry_a.id,
@@ -189,12 +204,16 @@ async def test_duplicate_round_and_position_in_the_same_pool_is_rejected(
     ``(event, pool-a, round 1, position 1)`` is a corrupt draw, and the *database* —
     not a read-then-write check — is what refuses it."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     await db_session.commit()
 
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
@@ -254,10 +273,14 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
     a round 1, position 1. A unique constraint that left ``pool_id`` out would reject
     this legitimate row, so this test is what pins the constraint's *scope*."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-b", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_b(event), round=1, position=1
+        )
     )
     await db_session.commit()
 
@@ -270,23 +293,28 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
         .scalars()
         .all()
     )
-    assert sorted(f.pool_id or "" for f in stored) == ["pool-a", "pool-b"]
+    assert {f.pool_id for f in stored} == {_pool_a(event), _pool_b(event)}
 
 
 async def test_the_same_round_and_position_in_a_different_event_is_accepted(
     db_session: AsyncSession, event: TournamentEvent
 ) -> None:
     """Fixture identity is scoped to its event: two events' draws both have a
-    ``(pool-a, round 1, position 1)``. A constraint that omitted ``event_id`` would
-    reject the second event's draw."""
+    ``(their first pool, round 1, position 1)``. A constraint that omitted ``event_id``
+    would reject the second event's draw."""
     other_event = await _make_event(db_session)
 
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     db_session.add(
         TournamentFixture(
-            event_id=other_event.id, pool_id="pool-a", round=1, position=1
+            event_id=other_event.id,
+            pool_id=_pool_a(other_event),
+            round=1,
+            position=1,
         )
     )
     await db_session.commit()
@@ -314,9 +342,10 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     that), which is a difference in *when*, not in *whether*.
     """
     other_event = await _make_event(db_session)
+    elsewhere = uuid.uuid4()
     db_session.add(
         TournamentEventPool(
-            id="pool-only-in-the-other-event",
+            id=elsewhere,
             event_id=other_event.id,
             name="Pool Elsewhere",
             position=2,
@@ -326,18 +355,21 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
         )
     )
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     await db_session.commit()
     # Read before the refusal: the rollback below expires every instance in the session,
     # and re-reading an attribute off one afterwards is a lazy refresh in sync context.
     event_id = event.id
+    pool_a = _pool_a(event)
 
     db_session.add(
         TournamentFixture(
             # The other event's pool, under THIS event's id.
             event_id=event.id,
-            pool_id="pool-only-in-the-other-event",
+            pool_id=elsewhere,
             round=1,
             position=2,
         )
@@ -350,7 +382,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     # And the legitimate row is still there: the refusal took the offending write, not
     # the draw around it.
     stored = (await db_session.execute(select(TournamentFixture))).scalars().all()
-    assert [(f.event_id, f.pool_id) for f in stored] == [(event_id, "pool-a")]
+    assert [(f.event_id, f.pool_id) for f in stored] == [(event_id, pool_a)]
 
 
 async def test_a_fixture_naming_a_pool_that_does_not_exist_is_refused(
@@ -362,7 +394,7 @@ async def test_a_fixture_naming_a_pool_that_does_not_exist_is_refused(
     at — the dangling ref ADR-0786 could only protect procedurally, with
     ``_enforce_pool_set_frozen``. It is a foreign-key violation now."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-z", round=1, position=1)
+        TournamentFixture(event_id=event.id, pool_id=uuid.uuid4(), round=1, position=1)
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
@@ -383,7 +415,9 @@ async def test_deleting_the_event_takes_its_pools_with_it(
     on a foreign-key violation. This test reds against ``RESTRICT``.
     """
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+        TournamentFixture(
+            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+        )
     )
     await db_session.commit()
     event_id = event.id
@@ -419,7 +453,7 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     db_session.add(
         TournamentFixture(
             event_id=event.id,
-            pool_id="pool-a",
+            pool_id=_pool_a(event),
             round=1,
             position=1,
             entry_a_id=entry.id,
@@ -464,12 +498,13 @@ async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
     to no pool"), not a missing one, so it has a defined place in the order rather than
     wherever the dialect's default happens to put it.
     """
+    pool_a, pool_b = _pool_a(event), _pool_b(event)
     for pool_id, round_number, position in [
         (None, 1, 1),
-        ("pool-b", 1, 1),
-        ("pool-a", 2, 1),
-        ("pool-a", 1, 2),
-        ("pool-a", 1, 1),
+        (pool_b, 1, 1),
+        (pool_a, 2, 1),
+        (pool_a, 1, 2),
+        (pool_a, 1, 1),
     ]:
         db_session.add(
             TournamentFixture(
@@ -489,10 +524,16 @@ async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
         )
     ).scalar_one()
 
+    # The relationship orders by the pool **id**, which under server-minted uuids is
+    # arbitrary — so the expectation is written against whichever of the two sorts
+    # first. What is asserted is unchanged and is the whole claim: the pools do not
+    # INTERLEAVE (all of one pool's fixtures, then all of the other's), each pool's own
+    # fixtures run round → position, and the un-pooled fixture sorts LAST.
+    first, second = sorted([pool_a, pool_b])
     assert [(f.pool_id, f.round, f.position) for f in loaded.fixtures] == [
-        ("pool-a", 1, 1),
-        ("pool-a", 1, 2),
-        ("pool-a", 2, 1),
-        ("pool-b", 1, 1),
+        (first, 1, 1),
+        *([(first, 1, 2), (first, 2, 1)] if first == pool_a else []),
+        (second, 1, 1),
+        *([(second, 1, 2), (second, 2, 1)] if second == pool_a else []),
         (None, 1, 1),
     ]

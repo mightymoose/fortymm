@@ -64,6 +64,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -191,7 +192,6 @@ async def _make_tournament(
         pools=event_pools(
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {"date": slot_date, "start": window[0], "end": window[1]},
                     "table_ids": [str(row.id) for row in catalogue],
@@ -211,6 +211,22 @@ async def _make_tournament(
     await cut_draw(db, event)
     await db.commit()
     return tournament.id, event.id
+
+
+async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
+    """The solver's namespaced ``{event}:{pool}`` key for the event's one pool.
+
+    Looked up rather than spelled, because a pool id is a server-minted uuid now
+    (ADR 20260801). The namespacing itself is unchanged — see
+    ``app.schedule_preview.preview_pool_key`` for why it stayed."""
+    pool_id = (
+        await db.execute(
+            select(TournamentEventPool.id).where(
+                TournamentEventPool.event_id == event_id
+            )
+        )
+    ).scalar_one()
+    return PoolId(f"{event_id}:{pool_id}")
 
 
 async def _fixtures_of(
@@ -1321,7 +1337,7 @@ class TestSolveJob:
         row_id = row.id
         await db_session.commit()
 
-        pool_id = PoolId(f"{event_id}:pool-a")
+        pool_id = await _solver_pool_id(db_session, event_id)
 
         def infeasible(
             snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
@@ -1395,6 +1411,8 @@ class TestSolveJob:
             )
         ).one()
 
+        pool_id = await _solver_pool_id(db_session, event_id)
+
         def infeasible(
             snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
         ) -> SolveResult:
@@ -1404,7 +1422,7 @@ class TestSolveJob:
                 stats=SolveStats(wall_time_ms=42, objective=None),
                 reasons=(
                     PlayerOverSubscribed(
-                        pool_id=PoolId(f"{event_id}:pool-a"),
+                        pool_id=pool_id,
                         player_id=PlayerId(str(user_id)),
                         match_count=3,
                         required_min=95,

@@ -78,6 +78,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1424,7 +1425,6 @@ def _event_payload() -> dict[str, object]:
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
         "pools": [
             {
-                "id": "p-os-1",
                 "name": "Pool A",
                 "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
@@ -1755,6 +1755,18 @@ async def _first_event_id(db_session: AsyncSession, tournament_id: str) -> uuid.
     ).scalar_one()
 
 
+async def _only_pool_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
+    """The id of the event's one pool — server-minted (ADR 20260801), so a seed that
+    puts a fixture in it has to look it up rather than spell it."""
+    return (
+        await db_session.execute(
+            select(TournamentEventPool.id).where(
+                TournamentEventPool.event_id == event_id
+            )
+        )
+    ).scalar_one()
+
+
 async def _seed_placed_fixture(
     db_session: AsyncSession,
     event_id: uuid.UUID,
@@ -1780,7 +1792,7 @@ async def _seed_placed_fixture(
     await db_session.commit()
     fixture = TournamentFixture(
         event_id=event_id,
-        pool_id="p-os-1",
+        pool_id=await _only_pool_id(db_session, event_id),
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -1854,7 +1866,7 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
         "local_label": "9:00 AM",
         "tz_abbrev": "CDT",
     }
-    assert placed["pool_id"] == "p-os-1"
+    assert placed["pool_id"] == str(fixture.pool_id)
     assert placed["round"] == 1
     assert placed["position"] == 1
     assert body["latest_schedule_solve"]["status"] == "succeeded"
@@ -2068,13 +2080,11 @@ async def test_edit_tournament_league_change_after_publish_raises_tool_error(
 # Two pools, so the round-robin snake deals a clean draw a fixture's ``pool_id``
 # refs against — the same shape ``test_tournament_draw_service.py`` cuts across.
 _DRAW_POOL_A: dict[str, object] = {
-    "id": "p-a",
     "name": "Pool A",
     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
     "table_ids": ["t1"],
 }
 _DRAW_POOL_B: dict[str, object] = {
-    "id": "p-b",
     "name": "Pool B",
     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
     "table_ids": ["t2"],
@@ -2180,7 +2190,19 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
         assert cut.structuredContent is not None
         fixtures = cut.structuredContent["result"]
         assert len(fixtures) == 2
-        assert all(f["pool_id"] in {"p-a", "p-b"} for f in fixtures)
+        pool_ids = {
+            str(pool_id)
+            for pool_id in (
+                await db_session.execute(
+                    select(TournamentEventPool.id).where(
+                        TournamentEventPool.event_id == event.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+        assert all(f["pool_id"] in pool_ids for f in fixtures)
 
         # The cut draw is visible through the schedule projection.
         schedule = await client.call_tool_mcp(
@@ -2667,7 +2689,6 @@ async def _seed_previewable_tournament(
             tournament,
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {
                         "date": "2030-01-01",
@@ -3517,7 +3538,6 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         pools=event_pools(
             [
                 {
-                    "id": "p-1",
                     "name": "Pool A",
                     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
                     # No tables: this tournament is seeded without a catalogue, and a
@@ -3534,7 +3554,7 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
     await db.refresh(event)
     fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="p-1",
+        pool_id=event.pools[0].id,
         round=1,
         position=1,
     )
@@ -4033,7 +4053,6 @@ async def _seed_placeable_fixture(
             tournament,
             [
                 {
-                    "id": "p-os-1",
                     "name": "Pool A",
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1"],
@@ -4058,7 +4077,7 @@ async def _seed_placeable_fixture(
     await db.commit()
     fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="p-os-1",
+        pool_id=event.pools[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,

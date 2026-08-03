@@ -195,7 +195,6 @@ async def _seed_field(
         pools=event_pools(
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": [str(row.id) for row in catalogue],

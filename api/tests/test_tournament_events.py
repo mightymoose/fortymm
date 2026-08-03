@@ -90,9 +90,10 @@ def _event_body(**overrides: Any) -> dict[str, Any]:
         # minted for THIS tournament — which a module-level literal cannot know. The
         # reservation round trip has its own section at the foot of this file, built off
         # the tournament's real catalogue.
+        # No ``id`` either: a pool id is a server-minted uuid (ADR 20260801), so the
+        # create shape has no field for one and sending one is a 422.
         "pools": [
             {
-                "id": "p-os-1",
                 "name": "Pool A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": [],
@@ -171,8 +172,10 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     assert event.name == "Open Singles"
     # The nested value-objects persisted as plain JSONB.
     assert event.slot == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
-    # The pools persisted as rows of their own, not as a value inside the event.
-    assert [pool.id for pool in event.pools] == ["p-os-1"]
+    # The pools persisted as rows of their own, not as a value inside the event, each
+    # with an id the SERVER minted (ADR 20260801) — the payload carried none.
+    assert [pool.name for pool in event.pools] == ["Pool A"]
+    assert all(isinstance(pool.id, uuid.UUID) for pool in event.pools)
     event_id = event.id
 
     # Persisted, not merely returned.
@@ -243,16 +246,15 @@ async def test_create_on_a_missing_tournament_raises_not_found(
 #     schema, which a client can read, instead of a sentence in a docstring, which it
 #     cannot; and
 #   * a payload that does not is stored in the *order sent*, and nothing else. Every
-#     pool below is named and id'd so that alphabetical order (by either) is a DIFFERENT
-#     answer from the order sent, which is what makes these able to fail — asserting
-#     "each pool has a position" would pass against an implementation that assigned all
-#     zeros or sorted by name.
+#     pool below is named so that alphabetical order is a DIFFERENT answer from the
+#     order sent, which is what makes these able to fail — asserting "each pool has a
+#     position" would pass against an implementation that assigned all zeros or sorted
+#     by name.
 
 
-def _pool(pool_id: str, name: str, **extra: Any) -> dict[str, Any]:
+def _pool(name: str, **extra: Any) -> dict[str, Any]:
     """One pool payload, valid but for whatever ``extra`` the caller adds."""
     return {
-        "id": pool_id,
         "name": name,
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
         "table_ids": ["t1"],
@@ -280,8 +282,9 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
 ) -> None:
     """Three pools sent as **C, A, B** are stored as positions 0, 1, 2 *in that order*.
 
-    Sorted by name — or by id, which is how pool order used to be recovered — the
-    answer would be C=2, A=0, B=1. Sorted by nothing at all it would be three zeros.
+    Sorted by name — or by id, which is how pool order used to be recovered and which is
+    now random — the answer would be C=2, A=0, B=1. Sorted by nothing at all it would
+    be three zeros.
     The event's pool order is the order the director sent, and this is the assertion
     that distinguishes the three.
     """
@@ -294,9 +297,9 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
         actor=owner,
         payload=_event_payload(
             pools=[
-                _pool("p-c", "Pool C"),
-                _pool("p-a", "Pool A"),
-                _pool("p-b", "Pool B"),
+                _pool("Pool C"),
+                _pool("Pool A"),
+                _pool("Pool B"),
             ]
         ),
     )
@@ -318,9 +321,9 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
 
 
 _POOLS_CLAIMING_A_POSITION = [
-    _pool("p-c", "Pool C", position=7),
-    _pool("p-a", "Pool A", position=7),
-    _pool("p-b", "Pool B", position=7),
+    _pool("Pool C", position=7),
+    _pool("Pool A", position=7),
+    _pool("Pool B", position=7),
 ]
 """Three pools that each claim position ``7`` — the payload a client writes when it
 mistakes a server-assigned field for one of its own."""
@@ -398,9 +401,9 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
         actor=owner,
         payload=_event_payload(
             pools=[
-                _pool("p-c", "Pool C"),
-                _pool("p-a", "Pool A"),
-                _pool("p-b", "Pool B"),
+                _pool("Pool C"),
+                _pool("Pool A"),
+                _pool("Pool B"),
             ]
         ),
     )
@@ -414,9 +417,9 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
         updates=TournamentEventUpdate.model_validate(
             {
                 "pools": [
-                    _pool("p-b", "Pool B"),
-                    _pool("p-c", "Pool C"),
-                    _pool("p-a", "Pool A"),
+                    _pool("Pool B"),
+                    _pool("Pool C"),
+                    _pool("Pool A"),
                 ]
             }
         ),
@@ -459,7 +462,7 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
         db_session,
         tournament_id=tournament.id,
         actor=owner,
-        payload=_event_payload(pools=[_pool("p-a", "Pool A"), _pool("p-b", "Pool B")]),
+        payload=_event_payload(pools=[_pool("Pool A"), _pool("Pool B")]),
     )
     event_id = event.id
 
@@ -478,10 +481,15 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
         )
     ).all()
 
-    assert rows == [
-        (event_id, "p-a", "Pool A", 0, date(2026, 6, 13), time(9, 0), time(12, 30)),
-        (event_id, "p-b", "Pool B", 1, date(2026, 6, 13), time(9, 0), time(12, 30)),
+    # The ids are the server's (``gen_random_uuid()``), so what is asserted about them
+    # is that they exist, are uuids, and are distinct — not their value, which no test
+    # could spell.
+    assert [(r[0], *r[2:]) for r in rows] == [
+        (event_id, "Pool A", 0, date(2026, 6, 13), time(9, 0), time(12, 30)),
+        (event_id, "Pool B", 1, date(2026, 6, 13), time(9, 0), time(12, 30)),
     ]
+    assert len({r[1] for r in rows}) == 2
+    assert all(isinstance(r[1], uuid.UUID) for r in rows)
 
 
 @pytest.mark.parametrize(
@@ -518,7 +526,7 @@ def test_a_pool_window_the_columns_cannot_hold_is_refused(
     """
     with pytest.raises(ValidationError) as refusal:
         TournamentEventCreate.model_validate(
-            _event_body(pools=[_pool("p-a", "Pool A", slot=slot)])
+            _event_body(pools=[_pool("Pool A", slot=slot)])
         )
 
     (error,) = refusal.value.errors()
@@ -657,9 +665,12 @@ async def _add_cut_event(
     timezone: str = "America/Chicago",
     scheduled_start: datetime | None = None,
 ) -> TournamentEvent:
-    """An event carrying one pool (``p-1``) AND a fixture — so ``event_has_draw`` is
-    True and the two freezes are live. The fixture optionally carries a
-    ``scheduled_start`` placement, for the timezone-reanchor path."""
+    """An event carrying one pool (named "Pool A") AND a fixture — so ``event_has_draw``
+    is True and the two freezes are live. The fixture optionally carries a
+    ``scheduled_start`` placement, for the timezone-reanchor path.
+
+    The pool's id is minted here (``event_pools``) rather than by the column's default,
+    because the fixture below has to name it before either row is flushed."""
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Cut Singles",
@@ -674,7 +685,6 @@ async def _add_cut_event(
         pools=event_pools(
             [
                 {
-                    "id": "p-1",
                     "name": "Pool A",
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1", "t2"],
@@ -688,7 +698,7 @@ async def _add_cut_event(
     await db.refresh(event)
     fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="p-1",
+        pool_id=event.pools[0].id,
         round=1,
         position=1,
         scheduled_start=scheduled_start,
@@ -795,7 +805,6 @@ async def test_update_event_frozen_pool_set_change_is_refused(
             "name": "Should Not Apply",
             "pools": [
                 {
-                    "id": "p-2",
                     "name": "Pool B",
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1"],
@@ -820,7 +829,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool.id for pool in row.pools] == ["p-1"]
+    assert [pool.name for pool in row.pools] == ["Pool A"]
 
 
 async def test_update_event_frozen_draw_type_change_is_refused(
@@ -979,11 +988,10 @@ async def _reservation_rows(
     ]
 
 
-def _pool_payload(*table_ids: str, pool_id: str = "p-os-1") -> dict[str, Any]:
+def _pool_payload(*table_ids: str, name: str = "Pool A") -> dict[str, Any]:
     """One pool reserving exactly ``table_ids``, in that order."""
     return {
-        "id": pool_id,
-        "name": "Pool A",
+        "name": name,
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
         "table_ids": list(table_ids),
     }
@@ -1014,12 +1022,13 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
         payload=_event_payload(pools=[_pool_payload(table_2, table_1)]),
     )
     event_id = event.id
+    pool_id = event.pools[0].id
 
     # Rows, carrying the denormalized tournament and the order sent.
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, "p-os-1", table_2, 0),
-        (tournament_id, "p-os-1", table_1, 1),
+        (tournament_id, pool_id, table_2, 0),
+        (tournament_id, pool_id, table_1, 1),
     ]
     # And the same order back through the read shape everything above the database uses.
     stored = (
@@ -1062,10 +1071,11 @@ async def test_a_reservation_of_another_tournaments_table_never_reaches_the_data
         payload=_event_payload(pools=[_pool_payload(mine, foreign_table)]),
     )
     event_id = event.id
+    pool_id = event.pools[0].id
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, "p-os-1", mine, 0)
+        (tournament_id, pool_id, mine, 0)
     ]
 
 
@@ -1105,12 +1115,13 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
         payload=_event_payload(pools=[_pool_payload()]),
     )
     event_id = event.id
+    pool_id = event.pools[0].id
 
     db_session.add(
         TournamentEventPoolTable(
             tournament_id=tournament_id,
             event_id=event_id,
-            pool_id="p-os-1",
+            pool_id=pool_id,
             table_id=foreign_table,
             position=0,
         )
@@ -1124,7 +1135,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
         TournamentEventPoolTable(
             tournament_id=other_id,
             event_id=event_id,
-            pool_id="p-os-1",
+            pool_id=pool_id,
             table_id=foreign_table,
             position=0,
         )
@@ -1161,7 +1172,7 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
         TournamentEventPoolTable(
             tournament_id=tournament_id,
             event_id=event.id,
-            pool_id="p-os-1",
+            pool_id=event.pools[0].id,
             table_id=str(uuid.uuid4()),
             position=0,
         )
@@ -1203,13 +1214,14 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
         payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
     )
     event_id = event.id
+    pool_id = event.pools[0].id
 
     await db_session.delete(doomed)
     await db_session.commit()
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, "p-os-1", table_1, 0)
+        (tournament_id, pool_id, table_1, 0)
     ]
     # The pool itself is untouched — a reservation went, not a pool.
     assert (
@@ -1218,7 +1230,7 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
                 TournamentEventPool.event_id == event_id
             )
         )
-    ).scalars().all() == ["p-os-1"]
+    ).scalars().all() == [pool_id]
 
 
 async def test_removing_a_pool_takes_its_table_reservations_with_it(
@@ -1282,6 +1294,7 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
     )
     event_id = event.id
+    pool_id = event.pools[0].id
     created_at = (
         await db_session.execute(
             select(TournamentEventPoolTable.created_at).where(
@@ -1297,14 +1310,16 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         event_id=event_id,
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
-            {"pools": [_pool_payload(table_2, table_1)]}
+            # The pool is CITED by the id the server minted, so the diff keeps its row —
+            # which is the whole premise of the claim below about its reservations.
+            {"pools": [{**_pool_payload(table_2, table_1), "id": str(pool_id)}]}
         ),
     )
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, "p-os-1", table_2, 0),
-        (tournament_id, "p-os-1", table_1, 1),
+        (tournament_id, pool_id, table_2, 0),
+        (tournament_id, pool_id, table_1, 1),
     ]
     assert (
         await db_session.execute(

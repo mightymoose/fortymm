@@ -660,7 +660,6 @@ async def _make_tournament_at(
             pools=event_pools(
                 [
                     {
-                        "id": "pool-a",
                         "name": "Pool A",
                         "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
                         "table_ids": ["t1", "t2"],

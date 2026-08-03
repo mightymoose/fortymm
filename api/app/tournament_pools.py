@@ -32,6 +32,12 @@ now take the parent tournament: the denormalized column is what the composite fo
 keys underneath compare, and a reservation composed without it is not a row Postgres
 will accept.
 
+**The id.** A pool's id is a uuid the **database** mints (ADR 20260801's ``id uuid
+PRIMARY KEY``), so nothing here assigns one on the create path and the create shape has
+no field for one. On the edit path a client *cites* an id it was given, and citing one
+this event does not have is refused rather than silently minted — the same split, and
+the same 422, ``app.tournament_tables`` already makes for the venue catalogue.
+
 The edit path is an **id-keyed diff** and not a wholesale replace, which is a change of
 mechanism and not of meaning: the pool set an event may end up with is exactly what it
 was (the freeze in ``app.tournament_events`` decides that), but a JSONB column could be
@@ -39,9 +45,10 @@ reassigned and rows cannot — re-sending a pool the event already has must UPDA
 row, or the write would try to insert a duplicate primary key and, worse, would delete
 and recreate the row every fixture in the event points at.
 
-It imports the models, the schemas and nothing else — no session, no router, no FastAPI
-— so it stays callable from a REPL and cycle-free."""
+It imports the models, the schemas and the domain-error leaf, and nothing else — no
+session, no router, no FastAPI — so it stays callable from a REPL and cycle-free."""
 
+import uuid
 from collections.abc import Sequence
 from datetime import date, time
 
@@ -51,7 +58,8 @@ from app.models import (
     TournamentEventPool,
     TournamentEventPoolTable,
 )
-from app.schemas.tournament import Pool, PoolWrite, Slot
+from app.schemas.tournament import Pool, PoolUpsert, PoolWrite, Slot
+from app.tournament_errors import PoolNotInEventError
 
 __all__ = ["apply_event_pools", "pool_read", "stored_pools"]
 
@@ -169,10 +177,10 @@ def stored_pools(
     catalogue each ``table_ids`` entry is resolved against and the ``tournament_id``
     every reservation row carries (:func:`_reservations`).
 
-    The pool's ``id`` is the client's, for now — the pool-set freeze and the fixtures
-    both name a pool by that string — unlike a venue table's, which the database mints.
-    The chore that moves pools onto server-minted uuids (#1226 slice 3d) is the one that
-    changes it, together with the column type and ``PoolId``.
+    No ``id`` is set: that is the database's (``gen_random_uuid()``), exactly as a venue
+    table's is (:func:`app.tournament_tables.stored_tables`), and the point of the ADR
+    is that it is not the client's to author — the create shape (:class:`PoolWrite`) has
+    no field for one.
     """
     return [
         _new_pool(tournament, pool, position) for position, pool in enumerate(submitted)
@@ -182,10 +190,10 @@ def stored_pools(
 def _new_pool(
     tournament: Tournament, submitted: PoolWrite, position: int
 ) -> TournamentEventPool:
-    """One brand-new pool row, at ``position``, from the pool a client sent."""
+    """One brand-new pool row, at ``position``, from the pool a client sent — with no
+    ``id``, which the database mints."""
     slot_date, slot_start, slot_end = _slot_columns(submitted.slot)
     return TournamentEventPool(
-        id=submitted.id,
         name=submitted.name,
         position=position,
         slot_date=slot_date,
@@ -196,7 +204,7 @@ def _new_pool(
 
 
 def apply_event_pools(
-    tournament: Tournament, event: TournamentEvent, submitted: Sequence[PoolWrite]
+    tournament: Tournament, event: TournamentEvent, submitted: Sequence[PoolUpsert]
 ) -> None:
     """Make ``event``'s pools equal ``submitted``, as an **id-keyed diff**.
 
@@ -204,10 +212,11 @@ def apply_event_pools(
     supplies the catalogue each pool's ``table_ids`` are resolved against and the
     ``tournament_id`` their rows carry (:func:`_reservations`).
 
-    A pool whose ``id`` the event already has keeps its row — re-named, re-timed,
-    re-tabled and re-positioned as this payload says — and one whose id is new is added.
-    A stored pool no entry names is **removed**, by leaving it out of the reassigned
-    collection, which ``delete-orphan`` turns into a ``DELETE``.
+    Each entry either cites the ``id`` of a pool the event already has — which keeps
+    that row, re-named, re-timed, re-tabled and re-positioned as this payload says — or
+    omits one, which adds a row the database mints an id for. A stored pool no entry
+    cites is **removed**, by leaving it out of the reassigned collection, which
+    ``delete-orphan`` turns into a ``DELETE``.
 
     **Keying on the id is not an optimization, it is the only correct mechanism.** A
     fixture holds its pool's id (and, since ADR 20260801, holds it as a foreign key), so
@@ -215,13 +224,21 @@ def apply_event_pools(
     it or be refused outright. The JSONB column this replaces could be reassigned
     wholesale precisely because nothing pointed into it.
 
-    What may change is decided **before** this runs, not here:
-    ``_enforce_pool_set_frozen`` (``app.tournament_events``) refuses a payload that
-    would add or remove a pool of an event whose draw is cut. With no draw, any diff is
-    legal — which is why this function has no refusal of its own, and why a new id is an
-    addition rather than the 422 the venue catalogue's diff answers an unknown table id
-    with (a table id is the server's to mint, so an id it did not mint names nothing; a
-    pool id is still the client's).
+    Two refusals, and they are asked in two different places:
+
+    * an entry citing an id this **event** does not have →
+      :class:`~app.tournament_errors.PoolNotInEventError` (a 422 on that entry's
+      ``id``), judged here and before anything is written. Until the ids were minted
+      this arm was an *addition*: the id was the client's, so one the server had never
+      seen still named the pool the client meant. It is the server's now, so an id it
+      did not mint names nothing — and quietly minting a fresh one would hand the client
+      back a different id than it asked for while *removing* the pool it meant to keep.
+      It is the same 422 :func:`~app.tournament_tables.apply_table_catalogue` answers an
+      unknown table id with, for the same reason and now with the same justification.
+    * a payload that would add or remove a pool of an event whose draw is **cut** →
+      ``_enforce_pool_set_frozen`` (``app.tournament_events``), which runs *before* this
+      function, so the 409 wins over the 422 whenever both apply. With no draw, any diff
+      is legal.
 
     Reassigning the whole collection is what expresses all three operations at once, in
     the payload's order — the same gesture ``apply_table_catalogue`` makes, and the
@@ -229,6 +246,14 @@ def apply_event_pools(
     row onto a position its neighbour has not vacated yet.
     """
     stored = {pool.id: pool for pool in event.pools}
+    # Judged first, over the whole payload, for the reason the catalogue's twin is: a
+    # pool list naming a pool this event does not have is not a pool list, and every
+    # subsequent question (what is kept, and therefore what is removed) would be
+    # answered against a list the client did not mean. Named by index so the refusal
+    # lands on the entry that caused it.
+    for index, entry in enumerate(submitted):
+        if entry.id is not None and entry.id not in stored:
+            raise PoolNotInEventError(index=index, pool_id=str(entry.id))
     event.pools = [
         _pool_for(tournament, stored, entry, position)
         for position, entry in enumerate(submitted)
@@ -237,20 +262,24 @@ def apply_event_pools(
 
 def _pool_for(
     tournament: Tournament,
-    stored: dict[str, TournamentEventPool],
-    entry: PoolWrite,
+    stored: dict[uuid.UUID, TournamentEventPool],
+    entry: PoolUpsert,
     position: int,
 ) -> TournamentEventPool:
-    """The row one submitted pool resolves to: the event's own pool of that id, updated
-    in place, or a brand-new one.
+    """The row one submitted pool resolves to: the cited pool, updated in place, or a
+    brand-new one.
 
     ``position`` is the entry's index in the submitted list and is assigned on both
     arms, so a patch that re-orders the pools re-orders them (and one that re-sends them
     unchanged writes the positions they already had).
+
+    ``stored[entry.id]`` cannot miss — every cited id was checked against ``stored``
+    before this runs, so this is an indexing operation rather than a second lookup with
+    a second opinion about what an unknown id means.
     """
-    row = stored.get(entry.id)
-    if row is None:
+    if entry.id is None:
         return _new_pool(tournament, entry, position)
+    row = stored[entry.id]
     row.name = entry.name
     row.position = position
     row.slot_date, row.slot_start, row.slot_end = _slot_columns(entry.slot)

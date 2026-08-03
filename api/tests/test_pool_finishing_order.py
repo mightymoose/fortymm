@@ -174,7 +174,7 @@ def test_the_standings_table_is_this_order() -> None:
     entrants = [w, x, y, z]
     outcomes = [_outcome(x, w, 3, 0), _outcome(y, z, 3, 1), _outcome(w, y, 3, 2)]
     pool = PoolInput(
-        pool_id=PoolId("pool-a"),
+        pool_id=PoolId(uuid.uuid4()),
         entrants=tuple(entrants),
         fixture_count=6,
         outcomes=tuple(outcomes),

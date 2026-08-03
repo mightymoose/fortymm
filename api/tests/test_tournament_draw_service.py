@@ -48,13 +48,11 @@ from tests._helpers import (
 # ref that resolves against the right one — the same shape ``test_tournaments.py``'s
 # draw tests cut across.
 POOL_A: dict[str, object] = {
-    "id": "p-a",
     "name": "Pool A",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t1"],
 }
 POOL_B: dict[str, object] = {
-    "id": "p-b",
     "name": "Pool B",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t2"],

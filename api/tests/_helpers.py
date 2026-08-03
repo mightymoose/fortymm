@@ -163,6 +163,16 @@ def event_pools(
     as the write boundary parses them, so a seeded pool and a POSTed one are the same
     row.
 
+    The ``id`` is a ``uuid.UUID`` and is **optional**: pass one when the test needs to
+    name the pool from somewhere else (a fixture's ``pool_id``, an assertion), and leave
+    it out when it does not care. A minted ``uuid4`` per call, never a module constant —
+    the id is a primary key, so two events in one test cannot share one. Minted *here*,
+    up front, rather than left to the column's ``gen_random_uuid()`` default, for the
+    reason :func:`venue_tables` mints table ids: a seed that names the pool needs the id
+    before the row is flushed. Through the API the ids are the *server's* and there is
+    no ``id`` on the create shape at all (ADR 20260801); this is the direct-to-database
+    seam, which no HTTP caller can reach.
+
     A pool's ``table_ids`` become ``TournamentEventPoolTable`` **rows** (ADR 20260801),
     so naming any table needs the ``tournament`` — twice over. It supplies the alias
     map, rewriting the positional aliases a test writes (``"t1"``, ``"t2"``, …) into the
@@ -189,17 +199,18 @@ def event_pools(
     for position, pool in enumerate(pools):
         slot = pool.get("slot") or {}
         table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
+        name = pool.get("name", f"Pool {position + 1}")
         if table_ids and tournament is None:
             raise ValueError(
-                f"pool {pool['id']!r} reserves {table_ids} but no tournament was "
+                f"pool {name!r} reserves {table_ids} but no tournament was "
                 "given: a reservation is a row carrying the tournament's id, so the "
                 "seed has to say which tournament's tables these are — pass "
                 "tournament=… (or with_table_aliases(tournament, pools))"
             )
         rows.append(
             TournamentEventPool(
-                id=pool["id"],
-                name=pool.get("name", pool["id"]),
+                id=pool.get("id") or uuid.uuid4(),
+                name=name,
                 position=pool.get("position", position),
                 slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
                 slot_start=time.fromisoformat(slot.get("start", "09:00")),

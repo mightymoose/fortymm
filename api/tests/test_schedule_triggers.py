@@ -43,6 +43,7 @@ from app.models import (
     TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -121,7 +122,6 @@ async def _make_tournament(
         pools=event_pools(
             [
                 {
-                    "id": "pool-a",
                     "name": "Pool A",
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": [str(row.id) for row in catalogue],
@@ -509,12 +509,28 @@ async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[str
     ]
 
 
-def _pools_payload(*, end: str, table_ids: Sequence[str]) -> list[dict[str, Any]]:
-    """The event's one pool, re-sent with the same id (the pool-set freeze
-    demands it) and whatever window/tables the test is moving."""
+async def _pool_id(db: AsyncSession, event_id: uuid.UUID) -> str:
+    """The id of the event's one pool — server-minted (ADR 20260801), so a payload that
+    means to KEEP that pool has to look it up and cite it."""
+    return str(
+        (
+            await db.execute(
+                select(TournamentEventPool.id).where(
+                    TournamentEventPool.event_id == event_id
+                )
+            )
+        ).scalar_one()
+    )
+
+
+def _pools_payload(
+    *, pool_id: str, end: str, table_ids: Sequence[str]
+) -> list[dict[str, Any]]:
+    """The event's one pool, re-sent **citing its id** (the pool-set freeze demands it)
+    with whatever window/tables the test is moving."""
     return [
         {
-            "id": "pool-a",
+            "id": pool_id,
             "name": "Pool A",
             "slot": {"date": DATE, "start": "09:00", "end": end},
             "table_ids": list(table_ids),
@@ -622,7 +638,13 @@ async def test_a_pool_window_edit_requests_a_settings_solve(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"pools": _pools_payload(end="18:00", table_ids=table_ids)},
+        json={
+            "pools": _pools_payload(
+                pool_id=await _pool_id(db_session, event.id),
+                end="18:00",
+                table_ids=table_ids,
+            )
+        },
     )
 
     assert response.status_code == 200, response.text
@@ -647,7 +669,13 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     )
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"pools": _pools_payload(end="17:00", table_ids=table_ids)},
+        json={
+            "pools": _pools_payload(
+                pool_id=await _pool_id(db_session, event.id),
+                end="17:00",
+                table_ids=table_ids,
+            )
+        },
     )
 
     assert renamed.status_code == 200, renamed.text
@@ -831,7 +859,6 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         pools=event_pools(
             [
                 {
-                    "id": "pool-b",
                     "name": "Pool B",
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],

@@ -270,7 +270,7 @@ def _pool_inputs(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> list[PoolInput]:
-    by_pool: dict[str, list[TournamentFixtureRead]] = defaultdict(list)
+    by_pool: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
         # A round-robin fixture is always pooled; a NULL pool would be a different draw
         # type's fixture and has no pool table to stand in. Skip it rather than key a
