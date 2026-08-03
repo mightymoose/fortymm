@@ -50,7 +50,10 @@ turns on travels with it structurally. The client switches on the code and
 authors the sentence.**
 
 For the schedule-preview `422` that means `detail: {code:
-"unsupported_draw_type", draw_type: "single_elim", message: …}`. The API's
+"unsupported_draw_type", draw_type: "single-elim", message: …}`. Note the
+`draw_type` value is the enum's **wire slug** — hyphenated `"single-elim"`, not the
+Python member name `single_elim`. A client switching on it must match the slug.
+The API's
 interior already models this correctly — `UnsupportedDrawType` carries the
 offending `DrawType` structurally, with a docstring saying it does so "so the
 HTTP/MCP layers compose their own sentence from the fact rather than parsing a
