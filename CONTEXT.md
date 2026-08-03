@@ -662,8 +662,9 @@ diagnostic.
 **Structural cause** (scheduler-era):
 An **infeasibility reason** the scheduler is *certain* of, provable by arithmetic before
 CP-SAT runs, and that **names an entity**: a **pool** with no tables, a **fixture** whose
-window is too short to hold even one of its matches, or a pool over **per-pool capacity**.
-Contrast the **timing conflict**, which is the residual best-effort case.
+window is too short to hold even one of its matches, a pool over **per-pool capacity**, or
+an **over-subscribed** player. Contrast the **timing conflict**, which is the residual
+best-effort case.
 _Avoid_: hard failure, constraint violation.
 
 **Per-pool capacity** (scheduler-era):
@@ -673,12 +674,28 @@ match-time exceeding this ceiling is a *proof* the pool cannot fit (sharing tabl
 pools only lowers real capacity, never raises it) — one of the **structural causes**.
 _Avoid_: table-time budget (reserve for the whole-day figure the **timing conflict** cites).
 
+**Over-subscribed** (scheduler-era):
+A **player** whose matches within one **pool** need more time than that pool's window holds,
+counting the rest gap owed *between* consecutive matches. A pigeonhole over a single human —
+one person plays one match at a time — so it is a **structural cause**, certain, and the one
+that names a *person* rather than a pool or fixture.
+_Avoid_: overbooked, double-booked (that is a **placement conflict** — two matches already
+recorded on top of each other, not a day that cannot be arranged).
+
+**Conflict core** (scheduler-era):
+The set of **fixtures** that cannot all be placed together — the scheduler's answer to
+*which* matches form a **timing conflict**. Reported as a set whose removal would let the day
+fit; it is never claimed to be the smallest such set, so the director hears "these could not
+be placed", never "you must remove exactly these".
+_Avoid_: minimal core, unsat core (both promise a minimality the scheduler does not prove).
+
 **Timing conflict** (scheduler-era):
-The single residual **infeasibility reason**: CP-SAT proved the day infeasible, yet every
+The residual **infeasibility reason**: CP-SAT proved the day infeasible, yet every
 **structural cause** passed — so there *is* enough total table-time and the obstacle is
-*arrangement*, not capacity (a **player** in too many matches too close together, or tables
-contended across overlapping windows). Reported best-effort, telling the director not to add
-tables; naming the exact fixtures/players is deferred (#1129).
+*arrangement*, not capacity (tables contended across overlapping windows, or matches that
+cannot be sequenced). Tells the director not to add tables, and carries a **conflict core**
+naming the fixtures. The bare whole-day figure survives only as a floor, for when no core can
+be extracted.
 _Avoid_: over capacity (the opposite — capacity is sufficient here), unknown (that is the
 time-cap verdict, which carries no reason at all).
 
