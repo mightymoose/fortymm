@@ -1,16 +1,21 @@
-import { useState, type ComponentProps } from 'react'
+import { type ComponentProps } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import { useTransitionTournament } from '../data/api'
 import {
+  noticeFingerprint,
+  useExpiringNotice,
+  type NoticeFingerprint,
+} from '../data/expiring-notice'
+import {
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
   type LifecycleRefusal,
   type LifecycleTone,
 } from '../data/lifecycle'
-import type { Tournament } from '../data/types'
+import type { Tournament, TournamentEvent } from '../data/types'
 
 export interface LifecycleActionsProps {
   tournament: Tournament
@@ -35,6 +40,71 @@ const TONE: Record<
       'border border-[color:var(--serve-500)]/35 bg-[color:var(--bg-live-soft)] text-[color:var(--serve-500)] hover:bg-[color:var(--serve-500)]/20',
   },
   ghost: { variant: 'ghost' },
+}
+
+/** A set of ids as one comparable part: de-duplicated, **sorted** (so the server's
+ * ordering is not mistaken for a change) and encoded, with `null`s dropped — a `null`
+ * fixture side is TBD, and the precondition counts it as nothing (`draw_currency_by_event`,
+ * `api/app/tournament_draws.py`). */
+function idSet(ids: (string | null)[]): string {
+  return JSON.stringify([...new Set(ids.filter((id) => id !== null))].sort())
+}
+
+/**
+ * One event, summarised down to **exactly the three facts the go-live precondition reads
+ * about it** (ADR-0786, `_enforce_ready_to_go_live`): whether it has a draw at all, which
+ * entries are active in it, and which entries its fixtures seat.
+ *
+ * `has a draw` is its own fact and not inferred from the seated set being empty — the two
+ * come apart on an event nobody has entered, which is the server's own reason for reading
+ * it off the rows.
+ *
+ * The two id sets are **sets, not counts**, for the same reason the server compares sets:
+ * one player withdraws and another enters, or a stale draw is re-cut over the same-sized
+ * field, and every count stays put while the answer flips. A count here would leave the
+ * "…has a draw that no longer matches its entrants" refusal on screen after the director
+ * had gone and re-cut it — the bug half-fixed.
+ *
+ * Nothing else about the event is in here. A renamed event, a moved slot, a new table
+ * assignment, a solved schedule, a match going in-progress: none of them can make this
+ * refusal untrue, and withdrawing a still-true work list is worse than leaving it up
+ * (`../data/expiring-notice`).
+ */
+function eventFingerprint(event: TournamentEvent): string {
+  return JSON.stringify([
+    event.id,
+    event.fixtures.length > 0,
+    idSet(event.entrants.map((entrant) => entrant.id)),
+    idSet(
+      event.fixtures.flatMap((fixture) => [fixture.entryAId, fixture.entryBId]),
+    ),
+  ])
+}
+
+/**
+ * The state a lifecycle refusal turns on — the fingerprint this surface holds its refusal
+ * against (`../data/expiring-notice`).
+ *
+ * **Every event, summarised by what the go-live precondition reads about it**, and nothing
+ * else. That one list carries the empty tournament too: it *is* empty when there are no
+ * events, and it grows the moment the director adds one, which is precisely when "This
+ * tournament has no events, so there is nothing to start." stops being true (#1216).
+ *
+ * The per-event parts are **sorted**, so the fingerprint is a statement about the *set* of
+ * events, exactly as the precondition is ("every event has a current draw"); a re-ordered
+ * list is not a change of state.
+ *
+ * ⚠️ **The status is deliberately NOT in here**, tempting as it looks. The refusal that
+ * turns on the status is the stale-tab 409 ("This tournament is already published.") — and
+ * that refusal is *about* the status having moved: the click's own `onSettled` reconciles
+ * the tournament, the badge corrects itself from Draft to Published, and the sentence
+ * explaining why the click did nothing has to survive exactly that (`tournament-lifecycle`
+ * e2e, "a REFUSED transition (409) tells the user, and the stale view corrects itself").
+ * Fingerprinting the status withdrew it inside the same beat it appeared in — a 409 the
+ * user never got to read.
+ */
+function lifecycleFingerprint(tournament: Tournament): NoticeFingerprint {
+  return noticeFingerprint(...tournament.events.map(eventFingerprint).sort())
 }
 
 /**
@@ -87,8 +157,14 @@ const TONE: Record<
 export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const transition = useTransitionTournament(tournament.id)
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none.
-  const [refusal, setRefusal] = useState<LifecycleRefusal | null>(null)
+  // click before last is worse than none — and **withdrawn on its own** the moment the
+  // state it described changes, since a refusal is a statement about a moment
+  // (`CONTEXT.md`, "Refusal"; the rule lives in `../data/expiring-notice`). Without that,
+  // "This tournament has no events, so there is nothing to start." sat above a header
+  // reading `1 EVENTS` until the director clicked Start again (#1216).
+  const [refusal, setRefusal] = useExpiringNotice<LifecycleRefusal>(
+    lifecycleFingerprint(tournament),
+  )
 
   const edge = lifecycleEdgeFor(tournament)
   if (!edge) return null

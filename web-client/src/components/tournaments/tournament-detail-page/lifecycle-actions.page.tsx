@@ -1,3 +1,5 @@
+import { StrictMode } from 'react'
+
 import { render, screen, type Container } from '@/test/utilities'
 
 import { LifecycleActions, type LifecycleActionsProps } from './lifecycle-actions'
@@ -35,6 +37,15 @@ const scoped = (container: Container) => ({
     const notice = await container.findByRole('alert')
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
   },
+  /** The notice as one normalised string, **synchronously** — `''` when there is none.
+   * For the tests that assert a refusal is STILL on screen after fresh server data: a
+   * refusal already shown does not need waiting for, and an `await find…` there would red
+   * as a five-second timeout rather than as "the notice is gone"
+   * (`web-client/CLAUDE.md`: an undiscriminated red proves nothing). */
+  queryNoticeText() {
+    const notice = container.queryByRole('alert')
+    return (notice?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
   /** Which designed case the refusal fell into (`LifecycleRefusal['kind']`) — so a test
    * can pin "this rendered the 403 state", not merely "some words appeared". */
   async findNoticeKind() {
@@ -42,6 +53,16 @@ const scoped = (container: Container) => ({
     return notice.getAttribute('data-kind')
   },
 })
+
+/** The component under `StrictMode`, because its refusal is held by a hook that keeps the
+ * state-stamp in a ref written from an effect (`../data/expiring-notice`): a mount →
+ * cleanup → remount must leave that ref correct, and only the double-invoke shows it
+ * (`web-client/CLAUDE.md`). */
+const mount = (props: LifecycleActionsProps) => (
+  <StrictMode>
+    <LifecycleActions {...props} />
+  </StrictMode>
+)
 
 /**
  * Test page-object for `LifecycleActions`.
@@ -52,8 +73,16 @@ const scoped = (container: Container) => ({
  * nothing.
  */
 export const lifecycleActionsPage = {
+  /** Render, and hand back the one thing a caller may do afterwards: hand the component
+   * **fresh server data**, the way the detail page does when the tournament refetches.
+   * That is how a refusal's expiry is exercised — nobody clicks anything for it. */
   render(overrides: Partial<LifecycleActionsProps> = {}) {
-    render(<LifecycleActions {...buildLifecycleActionsProps(overrides)} />)
+    const { rerender } = render(mount(buildLifecycleActionsProps(overrides)))
+    return {
+      rerender(next: Partial<LifecycleActionsProps> = {}) {
+        rerender(mount(buildLifecycleActionsProps(next)))
+      },
+    }
   },
 
   within(container: Container = screen) {
