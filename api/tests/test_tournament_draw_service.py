@@ -39,6 +39,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from tests._helpers import (
+    event_pools,
     make_user,
     venue_tables,
 )
@@ -109,7 +110,7 @@ async def _make_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[POOL_A, POOL_B] if pools is None else pools,
+        pools=event_pools([POOL_A, POOL_B] if pools is None else pools),
     )
     db.add(event)
     await db.commit()

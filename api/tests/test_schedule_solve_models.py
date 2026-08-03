@@ -41,7 +41,7 @@ from app.models import (
     VenueTable,
 )
 from app.schemas.tournament import ScheduleSolveRead
-from tests._helpers import make_user, venue_tables
+from tests._helpers import event_pools, make_user, venue_tables
 
 
 async def _make_tournament(db_session: AsyncSession) -> Tournament:
@@ -89,7 +89,9 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        pools=[{"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []}],
+        pools=event_pools(
+            [{"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []}]
+        ),
     )
     db_session.add(event)
     await db_session.commit()

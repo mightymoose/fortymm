@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
@@ -40,11 +41,18 @@ class TournamentFixture(Base):
     things, and the "is this side unknown, or is it a bye?" question would have to be
     answered by reading a second column.
 
-    ``pool_id`` is a **string ref, not a foreign key**: pools are JSONB value-objects
-    on the event (``{id, name, slot, table_ids}`` — a slice of the venue), so there is
-    no table to point at. Integrity is procedural: the event's pool *id set* freezes
-    while a draw exists. ``NULL`` means the draw is un-pooled — single-elim today, and
-    the knockout stage of a pools-then-knockout draw type once #787 adds one.
+    ``pool_id`` is a **foreign key**, and a *composite* one: ``(event_id, pool_id) →
+    tournament_event_pools (event_id, id)``. Pools are rows now (ADR 20260801 "a pool
+    belongs to its event, not to the event's draw settings"), and the composite form is
+    what makes the reference say the thing that actually matters — not merely "this pool
+    exists" but "this pool is **my own event's**". A plain FK to
+    ``tournament_event_pools.id`` would happily seat one event's fixture in another
+    event's pool, and that is the illegal state the ADR is about; it is unrepresentable
+    here because the two tables share ``event_id`` and the constraint requires it to
+    agree. ``NULL`` means the draw is un-pooled — single-elim, and the knockout stage of
+    an rr-then-ko draw. (A composite FK with one NULL member is satisfied vacuously
+    under the SQL default MATCH SIMPLE, which is exactly right: an un-pooled fixture
+    names no pool to check.)
 
     The ``UNIQUE (event_id, pool_id, round, position)`` below is the identity a re-cut
     reconciles on, and it is declared **NULLS NOT DISTINCT** (Postgres 15+). Under the
@@ -57,6 +65,32 @@ class TournamentFixture(Base):
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
+        # "My pool is my own event's pool", as one line of DDL (ADR 20260801). The
+        # referenced ``(event_id, id)`` is a unique constraint on
+        # ``tournament_event_pools`` that exists for no other purpose — SQL can only
+        # reference a unique set of columns, and the *pair* is what carries the claim.
+        #
+        # DEFERRABLE INITIALLY DEFERRED with the default (NO ACTION) delete rule, rather
+        # than ``RESTRICT``, because of the **event-delete** path — the same hazard the
+        # entry FKs below name. Deleting an event removes its pools through the ORM (the
+        # collection is eagerly loaded, so the unit of work issues that DELETE itself)
+        # and its fixtures through Postgres' ``ON DELETE CASCADE``, in that order and in
+        # two separate statements. An immediately-checked constraint fires between them,
+        # on fixtures that are about to be deleted one statement later, and kills the
+        # whole delete. Deferring is not a weakening: the pair is checked, in full,
+        # before the transaction can commit — a fixture pointing at another event's pool
+        # is refused either way, just at COMMIT rather than at the INSERT.
+        #
+        # Removing a pool a fixture is drawn into is refused before it ever reaches this
+        # constraint, by ``_enforce_pool_set_frozen``'s 409 (ADR-0786) — which is now
+        # the *second* line of defence rather than the only one.
+        ForeignKeyConstraint(
+            ["event_id", "pool_id"],
+            ["tournament_event_pools.event_id", "tournament_event_pools.id"],
+            name="fk_tournament_fixtures_event_id_pool_id",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         # The identity of a fixture within its draw. NULLS NOT DISTINCT so the guard
         # also covers un-pooled draws, where ``pool_id`` is NULL for every row — see
         # the class docstring.
@@ -92,8 +126,8 @@ class TournamentFixture(Base):
         ForeignKey("tournament_events.id", ondelete="CASCADE"),
         nullable=False,
     )
-    #: Names a ``Pool`` value-object in the event's own ``pools`` JSONB — deliberately
-    #: not a FK (there is no pools table). ``NULL`` = the draw is un-pooled.
+    #: Names a pool of **this fixture's own event** — half of the composite foreign key
+    #: declared above. ``NULL`` = the draw is un-pooled.
     pool_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 1-based.
     round: Mapped[int] = mapped_column(Integer, nullable=False)

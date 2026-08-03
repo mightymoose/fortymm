@@ -1,0 +1,158 @@
+import uuid
+from datetime import date, datetime, time
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    PrimaryKeyConstraint,
+    Text,
+    Time,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.tournament import TournamentEvent
+
+
+class TournamentEventPool(Base):
+    """One pool of an event — a slice of the venue reserved for a window of time, as a
+    **row** (ADR 20260801 "a pool belongs to its event, not to the event's draw
+    settings").
+
+    It used to be an element of ``tournament_events.pools``: a JSONB array of
+    ``{id, name, slot, table_ids}`` value-objects. That is why a fixture's ``pool_id``
+    could name a pool that did not exist — there was no key to point at — and why the
+    integrity of that reference had to be procedural (``_enforce_pool_set_frozen``,
+    ADR-0786). It is a row now, so the reference is a foreign key, and specifically the
+    **composite** one on :class:`~app.models.tournament_fixture.TournamentFixture`:
+    ``(event_id, pool_id) → (event_id, id)``, which says the thing a plain FK to ``id``
+    cannot — that a fixture's pool belongs to *that fixture's own event*.
+
+    **The parent is the event, not the event's draw settings row.** The 2026-07-26 ADR
+    sketched ``draw_settings_id`` here; the composite FK above is what makes that
+    impossible, because ``tournament_event_draw_settings`` deliberately carries no
+    ``event_id`` and so shares no column with a fixture. The ADR named at the top is
+    that correction, and it also holds the rest of the reasoning: a pool is a 1:N
+    collection of entities with their own identity, not a scalar of a configuration.
+
+    **The slot is ``date``/``time``, not ``timestamptz``, and that is deliberate** — the
+    one place in this schema where api/CLAUDE.md's "datetimes are timezone-aware,
+    always" does not apply, because these three columns are not datetimes. A pool's
+    window is *wall-clock*: the director types "the 13th, 09:00 to 12:30" and means it
+    in the venue's own frame, which is carried once by ``tournament_events.timezone``
+    and anchored into real instants at the seam that needs instants
+    (``app.schedule_solves``). Storing an instant here would bake that anchoring into
+    the column, so correcting the event's timezone would have to rewrite every pool
+    window rather than re-read the same wall-clock in the new zone (ADR "tournament
+    times are timezone-aware instants" — "wall-clock is preserved across a timezone
+    edit"). The wire shape is unchanged: the ``Slot`` value-object's ``YYYY-MM-DD`` /
+    ``HH:MM`` strings compose from and to these columns at the boundary
+    (``app.tournament_pools``).
+
+    ``id`` is still the **client's** string, not a server-minted uuid, and only until
+    the chore that mints them (#1226 slice 3d) — which is also the chore that flips this
+    column, ``tournament_fixtures.pool_id`` and ``PoolId`` onto ``uuid`` together,
+    because they are one representation and a half-moved one is not a state worth
+    having."""
+
+    __tablename__ = "tournament_event_pools"
+    __table_args__ = (
+        # Declared explicitly, rather than by two ``primary_key=True`` columns, so the
+        # **order** of the pair is stated: ``event_id`` leads, which is what makes the
+        # key's own index answer "the pools of this event" (every read there is) and
+        # the event-delete cascade's lookup. Keyed on the pair because a pool id is
+        # per-event; see the ``id`` column below.
+        PrimaryKeyConstraint("event_id", "id", name="pk_tournament_event_pools"),
+        # Two pools of one event never share a place in its order — the guarantee
+        # ``stored_pools`` made by construction (it stamps ``range(len(pools))``) said
+        # here as a constraint, now that pools are rows and a constraint is available.
+        #
+        # DEFERRABLE INITIALLY DEFERRED, for the reason
+        # ``uq_tournament_tables_tournament_position`` is: the pools of an event are
+        # written as an id-keyed diff, and a diff **re-orders** — patching pools C, A, B
+        # back as B, C, A moves each row onto a position its neighbour has not vacated
+        # yet, and SQLAlchemy cannot emit three UPDATEs as one statement. Checked
+        # immediately, the constraint would refuse a transaction whose END state is
+        # perfectly unique, i.e. it would forbid reordering — which is the one gesture
+        # the payload's order exists to express.
+        UniqueConstraint(
+            "event_id",
+            "position",
+            name="uq_tournament_event_pools_event_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
+    #: The pool's identity, and what a fixture's ``pool_id`` holds. A client-supplied
+    #: string today (``p-1-…``); see the class docstring on when it becomes a uuid.
+    #:
+    #: **The primary key is ``(event_id, id)``, not ``id``** — the pair, in that order,
+    #: is also the target of the fixture's composite foreign key, so the ADR's separate
+    #: ``UNIQUE (event_id, id)`` is not needed: the primary key already *is* it, and a
+    #: second index over the same two columns would buy nothing. (It also gives the
+    #: REFERENCING ``event_id`` the index Postgres does not create for one, which the
+    #: event-delete cascade path wants.)
+    #:
+    #: Composite because a pool id is **per-event**, exactly as it was as a JSONB
+    #: value-object: two events of one tournament may each hold a “pool-a”, which
+    #: ``app.schedule_solves`` relies on when it namespaces the solver's ``PoolId`` by
+    #: event id, and which two of ``tests/test_tournament_fixtures.py``'s cases assert
+    #: directly. A bare ``id`` primary key would have made a client-minted string
+    #: globally unique across the platform — a rule nothing in the domain asks for, that
+    #: nothing above the database enforces, and that would fail at the second event.
+    #: When the ids become server-minted uuids the key can shrink to ``id`` alone, with
+    #: the pair kept as the ADR's ``UNIQUE (event_id, id)``; that is the same DDL either
+    #: way and it is why the fixture's FK does not have to change then.
+    id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tournament_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: ``Text``, not ``String(255)``: the write boundary floors a pool name at one
+    #: character and puts no ceiling on it, so a column with one would 500 on a payload
+    #: the schema accepted.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Where this pool sits in its event's pool order: 0-based, contiguous, assigned by
+    #: the server from the pool's index in the list it was sent in.
+    #:
+    #: Load-bearing, not decoration (ADR 20260801, "Pools carry an explicit
+    #: ``position``"): pool order was carried by the JSONB array's order and by the
+    #: lexicographic sort of client-minted ids, and both of those disappear here. The
+    #: snake seeds against this order, so under random ids an id-sort would deal a draw
+    #: that still cuts but seeds differently — invisible to the type checker.
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The venue-local calendar day of this pool's window. See the class docstring for
+    #: why these three are wall-clock columns rather than instants.
+    slot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    slot_start: Mapped[time] = mapped_column(Time, nullable=False)
+    slot_end: Mapped[time] = mapped_column(Time, nullable=False)
+    #: The tables this pool reserves, still as a JSONB array of table-id text. It
+    #: becomes ``tournament_event_pool_tables`` — rows with composite FKs to both sides,
+    #: so a pool cannot reserve another tournament's table — in the next chore of this
+    #: slice; the ADR's "the tournament-scoping stops at the join table" is about that
+    #: table, not this column.
+    table_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    event: Mapped["TournamentEvent"] = relationship(back_populates="pools")

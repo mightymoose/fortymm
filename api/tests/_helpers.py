@@ -8,6 +8,8 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import date, time
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Request
@@ -26,6 +28,7 @@ from app.models import (
     Role,
     RolePermission,
     Tournament,
+    TournamentEventPool,
     User,
     UserLeagueRating,
     UserRole,
@@ -144,29 +147,63 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
     ]
 
 
-def with_table_aliases(
-    tournament: Tournament, pools: Sequence[Mapping[str, object]]
-) -> list[dict[str, object]]:
-    """Rewrite each pool's ``table_ids`` from the positional aliases a test writes
-    (``"t1"``, ``"t2"``, …) into the real ids of ``tournament``'s catalogue rows.
+def event_pools(
+    pools: Sequence[Mapping[str, Any]], *, tournament: Tournament | None = None
+) -> list[TournamentEventPool]:
+    """``TournamentEventPool`` rows for an event a test seeds straight through the ORM,
+    written from the ``{id, name, slot, table_ids}`` dict shape the pools JSONB used to
+    hold and positioned in the order given.
 
-    A pool reserves a slice of the venue by naming table ids, and those ids are UUIDs
-    the server minted (ADR 20260801) — so a seeded pool cannot spell one as a literal.
-    The alias is 1-based and positional: ``"t1"`` is the tournament's first table, in
-    its own catalogue order. It exists so a test can go on saying which tables a pool
-    holds in the terms the test is about, instead of threading a UUID through every
-    helper it passes a pool to.
+    Pools are rows now (ADR 20260801), so ``TournamentEvent(pools=[{...}])`` is a
+    ``TypeError`` waiting to happen; this is the one translation from the shape the
+    tests already say a pool in, so a seed reads as the pool it is about rather than as
+    five keyword arguments. The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are
+    parsed into the row's ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly
+    as the write boundary parses them, so a seeded pool and a POSTed one are the same
+    row.
+
+    With a ``tournament``, each pool's ``table_ids`` are also rewritten from the
+    positional aliases a test writes (``"t1"``, ``"t2"``, …) into the real ids of that
+    tournament's catalogue rows — 1-based and in catalogue order — because a table id is
+    a server-minted UUID a seed cannot spell as a literal.
     """
-    by_alias = {
-        f"t{position}": str(table.id)
-        for position, table in enumerate(tournament.tables, start=1)
-    }
-    resolved: list[dict[str, object]] = []
-    for pool in pools:
-        aliases = pool["table_ids"]
-        assert isinstance(aliases, list)
-        resolved.append({**pool, "table_ids": [by_alias[alias] for alias in aliases]})
-    return resolved
+    by_alias = (
+        {
+            f"t{position}": str(table.id)
+            for position, table in enumerate(tournament.tables, start=1)
+        }
+        if tournament is not None
+        else {}
+    )
+    rows: list[TournamentEventPool] = []
+    for position, pool in enumerate(pools):
+        slot = pool.get("slot") or {}
+        table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
+        rows.append(
+            TournamentEventPool(
+                id=pool["id"],
+                name=pool.get("name", pool["id"]),
+                position=pool.get("position", position),
+                slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
+                slot_start=time.fromisoformat(slot.get("start", "09:00")),
+                slot_end=time.fromisoformat(slot.get("end", "18:00")),
+                table_ids=[by_alias.get(table_id, table_id) for table_id in table_ids],
+            )
+        )
+    return rows
+
+
+def with_table_aliases(
+    tournament: Tournament, pools: Sequence[Mapping[str, Any]]
+) -> list[TournamentEventPool]:
+    """:func:`event_pools` with the tournament bound — the spelling the seeds that name
+    tables already use.
+
+    Kept as its own name because it is what the call sites are *about*: "these pools
+    reserve this tournament's first two tables", said without threading a UUID through
+    every helper the pools are passed to.
+    """
+    return event_pools(pools, tournament=tournament)
 
 
 async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:

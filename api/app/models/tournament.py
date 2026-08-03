@@ -25,6 +25,7 @@ from app.db import Base
 if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
+    from app.models.tournament_event_pool import TournamentEventPool
     from app.models.tournament_fixture import TournamentFixture
     from app.models.tournament_table import VenueTable
 
@@ -196,8 +197,9 @@ class Tournament(Base):
 class TournamentEvent(Base):
     """An event (a draw) within a tournament — its own format, draw type, entry
     rules, schedule slot, and pool layout. The value-objects (``slot``,
-    ``match_settings``, ``predicates``, ``pools``) are typed JSONB decoded to
-    Pydantic models at the API boundary."""
+    ``match_settings``, ``predicates``) are typed JSONB decoded to Pydantic models at
+    the API boundary; the pool layout is **not** — it is ``pools``, a real child table
+    (ADR 20260801 "a pool belongs to its event")."""
 
     __tablename__ = "tournament_events"
     __table_args__ = (
@@ -282,9 +284,11 @@ class TournamentEvent(Base):
     predicates: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    pools: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'[]'::jsonb")
-    )
+    # There is deliberately no ``pools`` JSONB column. An event's pools were a NOT NULL
+    # JSONB list of ``{id, name, slot, table_ids}`` value-objects keyed by
+    # client-supplied strings; they are the ``pools`` relationship below now, so a
+    # fixture can foreign-key the pool it names — and name one of its OWN event's pools
+    # (ADR 20260801 "a pool belongs to its event").
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -340,6 +344,32 @@ class TournamentEvent(Base):
         order_by="TournamentEntry.created_at",
     )
 
+    # The event's pools, as rows (ADR 20260801), in the director's own order — which is
+    # what ``TournamentEventPool.position`` carries, and what the snake seeds against.
+    #
+    # ``lazy="selectin"``, and declared here rather than as an option at each call site,
+    # for the reason ``Tournament.tables`` and ``draw_settings`` are eager: async
+    # SQLAlchemy raises instead of emitting a lazy load, so each of the ~8 readers of an
+    # event's pools (``event_pools`` and everything through it — the serializer, the
+    # draw config, the solver's input load, the preview, the call copy, the dashboard)
+    # would have to remember one. ``selectin`` and not ``joined`` because this is a
+    # one-to-many: a joined load would multiply the event rows, which the tournament
+    # list's LIMIT/OFFSET could not survive. It batches over the whole result set, so a
+    # page of events costs ONE extra statement however many events it holds.
+    #
+    # ``delete-orphan`` is what the pools *write* leans on — a pool dropped from the
+    # submitted list is removed by taking it out of this collection — and
+    # ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` is the delete path for
+    # everything that does not load the collection first (the tournament delete's single
+    # cascading statement, a raw DELETE, psql).
+    pools: Mapped[list["TournamentEventPool"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="TournamentEventPool.position",
+    )
+
     # The event's draw: every fixture the cut produced (ADR-0786). Empty until the
     # draw is cut; a re-cut replaces the set wholesale, which is what
     # ``delete-orphan`` buys.
@@ -360,13 +390,12 @@ class TournamentEvent(Base):
     #
     # It orders the pools by ``pool_id``, where ``fixtures_by_event`` orders them by the
     # pool's ``position`` in the event's own pool order (ADR 20260801) — a relationship
-    # ``order_by`` is an expression over *this* table, and the position lives in the
-    # event's ``pools`` JSONB, so saying it here would take a correlated subquery in a
-    # string. The two agree wherever the ids sort as the director ordered them and part
-    # company where they do not (``p-10-`` sorts between ``p-1-`` and ``p-2-``). Nothing
-    # in the app reads this relationship's order today — every draw a client sees comes
-    # through the loader — and when pools become rows the ``position`` is joinable and
-    # this becomes sayable.
+    # ``order_by`` is an expression over *this* table, so saying it here would still
+    # take a correlated subquery in a string, even now that the position is a column on
+    # ``tournament_event_pools`` and joinable. The two agree wherever the ids sort as
+    # the director ordered them and part company where they do not (``p-10-`` sorts
+    # between ``p-1-`` and ``p-2-``). Nothing in the app reads this relationship's order
+    # today — every draw a client sees comes through the loader.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",

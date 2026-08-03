@@ -31,6 +31,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -43,6 +44,7 @@ from app.tournament_queries import (
     game_counts_by_match,
 )
 from tests._helpers import (
+    event_pools,
     make_user,
     venue_tables,
 )
@@ -89,7 +91,7 @@ async def _make_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[POOL_A],
+        pools=event_pools([POOL_A]),
     )
     db.add(event)
     await db.flush()
@@ -305,20 +307,20 @@ async def test_a_match_that_has_not_completed_projects_no_games(
 TEN_POOL_IDS = [f"p-{n}-x" for n in range(1, 11)]
 
 
-def _pools(ids: list[str], *, positions: bool = True) -> list[dict[str, object]]:
-    """These pool ids as stored JSONB, in this list's order — with or without the
-    ``position`` key, the latter being how every pool written before the field existed
-    still sits in the database today."""
-    return [
-        {
-            "id": pool_id,
-            "name": f"Pool {index + 1}",
-            "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-            "table_ids": [],
-            **({"position": index} if positions else {}),
-        }
-        for index, pool_id in enumerate(ids)
-    ]
+def _pools(ids: list[str]) -> list[TournamentEventPool]:
+    """These pool ids as stored rows, in this list's order — each carrying the
+    ``position`` of its index, which is what the write boundary stamps."""
+    return event_pools(
+        [
+            {
+                "id": pool_id,
+                "name": f"Pool {index + 1}",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": [],
+            }
+            for index, pool_id in enumerate(ids)
+        ]
+    )
 
 
 def test_draw_config_orders_the_pools_by_position_not_by_id() -> None:
@@ -336,14 +338,10 @@ def test_draw_config_orders_the_pools_by_position_not_by_id() -> None:
     assert draw_config(event).pool_ids == tuple(TEN_POOL_IDS)
 
 
-def test_draw_config_keeps_the_array_order_of_pools_that_have_no_position() -> None:
-    """Pools stored before ``position`` existed all parse to the default ``0``, and a
-    stable sort leaves them exactly where they were — the array order, which is the only
-    thing that ever carried their order. A read boundary must not re-seed a standing
-    draw's pools just because it cannot see their positions."""
-    event = TournamentEvent(pools=_pools(TEN_POOL_IDS, positions=False))
-
-    assert draw_config(event).pool_ids == tuple(TEN_POOL_IDS)
+# There is deliberately no "pools stored before ``position`` existed keep their array
+# order" test any more. That case was about a JSONB object with no ``position`` key;
+# pools are rows with a ``NOT NULL position`` (ADR 20260801), so the state it described
+# is not one the database will hold — and there is no pre-deploy data to describe.
 
 
 def test_pool_order_ranks_every_pool_id_by_the_events_order() -> None:

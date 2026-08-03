@@ -1,7 +1,6 @@
 import uuid
 from collections import Counter
-from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -286,13 +285,16 @@ def _draw_settings_write(
 # ----- value-objects (typed JSONB) -----------------------------------------
 
 ValueObjectId = Annotated[str, Field(min_length=1)]
-"""The **identity** of a JSONB value-object — today, a pool.
+"""The **identity** a client authors for a pool.
 
-These ids are *string refs*, not foreign keys: a pool has no table of its own, so it is
-addressed by a client-supplied string and nothing in the database constrains it. That is
-precisely why the constraint has to be stated *here*: the empty
-string is not an identity, and it was a **representable** one — ``Pool(id="")``
-validated, and an event could be created and patched holding it.
+It is no longer the identity of a *value-object*: a pool is a row in
+``tournament_event_pools`` (ADR 20260801) and a fixture's ``pool_id`` is a real
+composite foreign key to it. What survives from the JSONB era is the id's **authorship**
+— the string is still the client's to mint, until the chore that moves pools onto
+server-minted uuids (#1226 slice 3d) deletes this alias the way the venue catalogue's
+move already deleted its own use of it. Until then the floor still has to be stated
+here: the empty string is not an identity, and it was a **representable** one —
+``Pool(id="")`` validated, and an event could be created and patched holding it.
 
 It is not a theoretical illegal state. A fixture names its pool by this string
 (ADR-0786) and the rest of the system asks two questions of that ref, which an empty id
@@ -313,8 +315,9 @@ under the field instead of in a 422.
 
 It used to cover the venue catalogue's tables as well. It does not any more: a table is
 a row with a server-minted UUID primary key (ADR 20260801), so its identity is neither a
-string nor the client's to author, and there is nothing here left to floor. Pools follow
-when they become rows, and this alias goes with them."""
+string nor the client's to author, and there is nothing here left to floor. A pool is a
+row now too, but its id is still authored by the client — the *minting* moves in a chore
+of its own, and this alias goes with it."""
 
 
 MAX_ADDRESS_COMPONENT = 255
@@ -725,22 +728,67 @@ PoolPosition = Annotated[
 """A pool's place in its event's pool order — 0-based, server-assigned, read-only.
 
 Pool order is a **fact about the event**, and until this field existed it was carried by
-two things that are both about to disappear (ADR 20260801, "Pools carry an explicit
-``position``"): the JSONB array's order, and the lexicographic sort of the client-minted
-``p-1-…``/``p-2-…`` ids. Under the random UUID primary keys the pools table will have,
-sorting by id is *arbitrary* — pools would render in a random order and the snake would
-seed against a random order, producing a draw that still cuts but seeds differently.
-Invisible to the type checker; findable only by QA. An explicit ordering column is the
-only thing that survives the id change, so it is written now, while the array order is
-still there to derive it from.
+two things that have now both gone (ADR 20260801, "Pools carry an explicit
+``position``"): the JSONB array's order, which ended when pools became rows, and the
+lexicographic sort of the client-minted ``p-1-…``/``p-2-…`` ids, which ends when those
+ids become uuids. Under a random uuid primary key, sorting by id is *arbitrary* — pools
+would render in a random order and the snake would seed against a random order,
+producing a draw that still cuts but seeds differently. Invisible to the type checker;
+findable only by QA. An explicit ordering column is the only thing that survives the id
+change, which is why it was written first, while the array order was still there to
+derive it from.
 
 It lives on :class:`Pool`, the shape a client **reads**, and deliberately not on
-:class:`PoolWrite`, the shape it **sends**. The server stamps it in :func:`stored_pools`
-— the one seam between the two — from the pool's index in the list it was sent, so an
-event's positions are ``range(len(pools))`` by construction. That is what makes "two
-pools of one event share a position" unrepresentable through the API, and it is why
-"server-assigned" is a property of the schema here rather than a claim in prose: the
-field a client cannot send is a field it cannot decide."""
+:class:`PoolWrite`, the shape it **sends**. The server stamps it in
+``app.tournament_pools`` — the one seam between the two — from the pool's index in the
+list it was sent, so an event's positions are ``range(len(pools))`` by construction.
+That is what makes "two pools of one event share a position" unrepresentable through the
+API, and it is why "server-assigned" is a property of the schema here rather than a
+claim in prose: the field a client cannot send is a field it cannot decide."""
+
+
+def _slot_is_storable(slot: Slot) -> Slot:
+    """Refuse a pool window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM`` this
+    shape has always claimed to be (422).
+
+    A pool's window is three real columns now — ``slot_date DATE``, ``slot_start TIME``,
+    ``slot_end TIME`` (ADR 20260801) — where it used to be three strings inside a JSONB
+    blob that accepted literally anything. ``"next Tuesday"`` was a storable pool window
+    until this line existed; past it, it is a driver error at the INSERT, i.e. a 500 for
+    a payload the boundary waved through. A boundary that admits what the interior
+    cannot hold is not a boundary (:data:`EventMaxPlayers` is the same lesson in a
+    different key).
+
+    Seconds are refused rather than truncated. The stored value must compose back into
+    the ``HH:MM`` the wire shape promises, and a window silently read back one minute
+    from where the director set it is worse than a refusal that says what to send.
+
+    An ``AfterValidator`` on the *pool's* slot only, not on :class:`Slot` itself: the
+    event's own ``slot`` is still an untyped JSONB value-object with no columns behind
+    it, and tightening it here would be a rule about a field this chore does not move.
+    It contributes nothing to the JSON schema, so the OpenAPI shape of a pool's ``slot``
+    is the ``Slot`` it always was.
+    """
+    try:
+        date.fromisoformat(slot.date)
+        start = time.fromisoformat(slot.start)
+        end = time.fromisoformat(slot.end)
+    except ValueError as exc:
+        raise ValueError(
+            "A pool's window is a date and two times: “date” must be YYYY-MM-DD and "
+            f"“start”/“end” must be HH:MM ({exc})."
+        ) from exc
+    if any(t.second or t.microsecond for t in (start, end)):
+        raise ValueError(
+            "A pool's window is stated to the minute: “start” and “end” must be HH:MM, "
+            "with no seconds."
+        )
+    return slot
+
+
+PoolSlot = Annotated[Slot, AfterValidator(_slot_is_storable)]
+"""A pool's window — a :class:`Slot` that the pool's own ``date``/``time`` columns can
+actually hold. See :func:`_slot_is_storable`."""
 
 
 class PoolWrite(BaseModel):
@@ -774,7 +822,7 @@ class PoolWrite(BaseModel):
 
     id: ValueObjectId
     name: str = Field(min_length=1)
-    slot: Slot
+    slot: PoolSlot
     table_ids: list[str]
 
 
@@ -782,21 +830,19 @@ class Pool(PoolWrite):
     """A pool as it is **read back**: everything a client wrote, plus the ``position``
     the server stamped on it.
 
-    It is also the model every interior read of an event's ``pools`` JSONB parses
-    through — ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule
-    snapshots — so the column becomes typed values at the read boundary rather than
-    stringly-keyed dict lookups (api/CLAUDE.md — "parse, don't validate"). Deriving it
-    from :class:`PoolWrite` is what keeps the two shapes one shape plus a field: a
-    column added to the write side is readable without a second edit, and the two can
-    never disagree about what a pool *is*.
+    It is also the model every interior read of an event's pools arrives through —
+    ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
+    is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
+    nothing above ``app.tournament_pools.pool_read``: the projection composes this same
+    model out of typed columns where it used to validate it out of untyped dicts.
+    Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus a
+    field: a column added to the write side is readable without a second edit, and the
+    two can never disagree about what a pool *is*.
 
-    ``position`` defaults to ``0`` so that pools stored before the field existed stay
-    *readable* — a read boundary must not turn a history it cannot change into a
-    ``ValidationError`` (the same asymmetry :data:`AddressComponent` is about). Every
-    pool written since goes through :func:`stored_pools` and carries a real one. The
-    default is a **read** concession only; it is not a way to write one, because there
-    is no way to write one.
-    """
+    ``position`` keeps its ``0`` default even though the column is NOT NULL and every
+    row carries a real one: the default is what lets a **literal** ``Pool`` be built in
+    a test or a REPL without spelling an order out, and a read boundary that
+    hard-required it would gain nothing — the projection always supplies it."""
 
     position: PoolPosition = 0
 
@@ -827,10 +873,10 @@ def named_list(names: list[str]) -> str:
 def _pool_ids_are_unique(pools: list[PoolWrite]) -> list[PoolWrite]:
     """Refuse an event's pools when two of them claim the same ``id`` (422).
 
-    A pool id is an **identity**, and everything downstream of these value-objects is
-    built on the assumption that it identifies one pool. Nothing enforced it: pools are
-    JSONB with client-supplied string ids, there is no pools table and so no unique
-    index, and ``[A, A]`` was stored verbatim (measured: **201**). The bill arrived at
+    A pool id is an **identity**, and everything downstream is built on the assumption
+    that it identifies one pool. Nothing enforced it: pools were JSONB with
+    client-supplied string ids, there was no pools table and so no unique index, and
+    ``[A, A]`` was stored verbatim (measured: **201**). The bill arrived at
     the cut, which deals the field across the event's pool ids and writes a fixture per
     pairing — two pools with one id deal onto the same ``(event_id, pool_id, round,
     position)``, the fixture table's unique constraint fires, and the director gets a
@@ -838,6 +884,13 @@ def _pool_ids_are_unique(pools: list[PoolWrite]) -> list[PoolWrite]:
     (``uq_tournament_fixtures_event_id_pool_id_round_position``, reproduced before this
     validator existed). A boundary that admits what the interior cannot hold is not a
     boundary.
+
+    Pools are rows now (ADR 20260801), so ``id`` is a primary key and a duplicate is
+    also a thing the database would refuse — but this validator is still the enforcement
+    worth having, and not only because a 422 naming the ids beats an ``IntegrityError``:
+    the write is an id-keyed diff (``app.tournament_pools``), and ``[A, A]`` would
+    resolve *both* entries onto the one stored row, so the payload would be accepted as
+    a single-pool event rather than refused as the two-pool one it claims to be.
 
     It is a rule about the **list**, not about a ``PoolWrite``, so it is a validator on
     the list type — and it is stated **once**, on the alias both write schemas share,
@@ -877,7 +930,7 @@ what makes the *shape* impossible to drift: create and patch take the same pool,
 there is no verb through which a ``position`` could be smuggled in.
 
 The list's **order** is the payload's one statement about pool order, and it is honoured
-on both verbs: :func:`stored_pools` turns it into the stored positions, so a patch
+on both verbs: ``app.tournament_pools`` turns it into the stored positions, so a patch
 re-orders an event's pools by simply sending them re-ordered.
 
 An ``AfterValidator``, deliberately: it runs on the parsed ``list[PoolWrite]`` (so it
@@ -941,40 +994,10 @@ so the OpenAPI shape of ``table_catalogue`` stays the array it always was — th
 arrangement :data:`EventPools` uses for the same reason."""
 
 
-def stored_pools(pools: Sequence[PoolWrite]) -> list[dict[str, Any]]:
-    """The rows an event's ``pools`` JSONB column holds, composed from the pools a
-    client sent — each stamped with the ``position`` of its index in that list.
-
-    This is the seam between the two pool shapes, and **the only place a ``position`` is
-    ever assigned**. The pool order an event has is the order its pools arrived in —
-    that is what the director dragged into place, and it is what every ordered read has
-    always meant — so here is where that fact stops being the array's order and becomes
-    a stored value (ADR 20260801, "Pools carry an explicit ``position``"), before the
-    array order and the lexicographic sort of client-minted ids both stop existing.
-
-    Stamping *from the index* is what makes two pools of one event unable to share a
-    position: what is written is ``range(len(pools))``, by construction. There is no
-    pools table yet and so no ``UNIQUE (event_id, position)`` underneath to catch a
-    duplicate — that constraint arrives with the table — which is exactly why the value
-    must not be assembled from anything a caller could repeat, or send.
-
-    Called by **both** write verbs (``create_event`` and ``update_event``), for the
-    reason ``_pool_ids_are_unique`` lives on the shared alias: "the patch path is the
-    hole" is the same bug wearing a different verb, and an event born with positions and
-    then patched without them would be an event whose order silently reverted to
-    whatever its ids sorted as. That is why this is a function over the *list* rather
-    than a per-pool conversion — an index only exists relative to the whole list, and a
-    caller holding one pool has nothing to stamp it with.
-
-    Returns plain ``dict``s because the column is plain JSONB, but composes them through
-    :class:`Pool` rather than by hand: what is written is by construction something the
-    read boundary (``Pool.model_validate``, in ``event_pools`` / ``draw_config`` /
-    ``_ordered_pools``) can parse back.
-    """
-    return [
-        Pool(**pool.model_dump(), position=index).model_dump()
-        for index, pool in enumerate(pools)
-    ]
+# The composition of the pools an event stores lives in ``app.tournament_pools`` now,
+# not here. It used to be ``stored_pools``, a list of JSONB dicts, because the column
+# was JSONB; a pool is a row (ADR 20260801), so what a write verb composes is
+# ``TournamentEventPool`` rows — a model, which a schema module must not import.
 
 
 # ----- read models ----------------------------------------------------------
@@ -1163,8 +1186,9 @@ class TournamentFixtureRead(BaseModel):
       live, not a copy frozen at go-live.
     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
-      set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
-      JSONB, not a foreign key, because pools are value-objects with no table.
+      set, it names a pool of **this same event**, and it is guaranteed to: the column
+      is half of a composite foreign key onto ``tournament_event_pools (event_id, id)``,
+      so it is neither a dangling ref nor another event's pool (ADR 20260801).
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
@@ -1357,9 +1381,8 @@ class PoolStandingsRead(BaseModel):
     """One pool's standings: its rows in finishing order, and whether every one of its
     fixtures has been decided.
 
-    ``pool_id`` names a ``Pool`` in this same event's ``pools`` — the string ref a
-    fixture also carries — so a client titles the table from the pool it already
-    holds."""
+    ``pool_id`` names a pool of this same event — the id a fixture also carries — so a
+    client titles the table from the pool it already holds."""
 
     pool_id: str
     rows: list[StandingRowRead]

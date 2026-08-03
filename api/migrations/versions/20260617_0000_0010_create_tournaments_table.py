@@ -399,12 +399,14 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
-        sa.Column(
-            "pools",
-            postgresql.JSONB(),
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
+        # There is deliberately NO ``pools`` column. An event's pools were a NOT NULL
+        # JSONB list of ``{id, name, slot, table_ids}`` objects keyed by client-supplied
+        # strings; they are the ``tournament_event_pools`` table created below (ADR
+        # 20260801 "a pool belongs to its event, not to the event's draw settings"), so
+        # a fixture can foreign-key the pool it names — and specifically one of its OWN
+        # event's pools. Edited out of this migration in place, per the pre-deploy
+        # convention in api/CLAUDE.md — revision ids and the ``down_revision`` chain
+        # stay frozen.
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -442,8 +444,102 @@ def upgrade() -> None:
         ["draw_settings_id"],
     )
 
+    # An event's pools, as rows (ADR 20260801 "a pool belongs to its event, not to the
+    # event's draw settings"). Created after ``tournament_events`` because it FKs it, and
+    # before ``tournament_fixtures`` (0012), which carries the composite foreign key onto
+    # the ``(event_id, id)`` unique constraint below. Added here in place per the
+    # pre-deploy convention, not as a chained ALTER.
+    #
+    # ``id`` is still a client-supplied string — unlike ``tournament_tables.id``, whose
+    # move to a server-minted uuid landed with its own chore. It becomes a uuid in the
+    # chore that mints them, together with ``tournament_fixtures.pool_id``: the two are
+    # one representation and must move in one step.
+    #
+    # The window is ``date``/``time``, NOT ``timestamptz``, and that is the ADR's call
+    # rather than an oversight (api/CLAUDE.md's "datetimes are timezone-aware, always"
+    # governs datetimes, and these are not datetimes). A pool's window is wall-clock in
+    # the venue's own frame, which ``tournament_events.timezone`` carries and the solver
+    # anchors; storing an instant would bake that anchoring into the column, so a
+    # timezone correction would have to rewrite every pool window instead of re-reading
+    # the same wall-clock in the new zone.
+    op.create_table(
+        "tournament_event_pools",
+        sa.Column("id", sa.Text(), nullable=False),
+        # CASCADE: deleting an event takes its pools with it, exactly as it takes its
+        # entries and fixtures.
+        sa.Column(
+            "event_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("name", sa.Text(), nullable=False),
+        # Where the pool sits in the event's own pool order: 0-based, contiguous,
+        # server-assigned from the order the pools were sent in. The JSONB array carried
+        # this for free and the client-minted ids sorted into it by accident; neither
+        # survives, and the snake seeds against this order (ADR 20260801, "Pools carry an
+        # explicit ``position``").
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("slot_date", sa.Date(), nullable=False),
+        sa.Column("slot_start", sa.Time(), nullable=False),
+        sa.Column("slot_end", sa.Time(), nullable=False),
+        # The tables this pool reserves, still as JSONB text ids. It becomes
+        # ``tournament_event_pool_tables`` — rows with composite FKs to both sides — in
+        # the next chore of this slice.
+        sa.Column(
+            "table_ids",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        # The key is the PAIR, ``event_id`` first — which is also what a fixture's
+        # composite foreign key references, so the ADR's separate
+        # ``UNIQUE (event_id, id)`` is unnecessary: this key already is it, and it gives
+        # the REFERENCING ``event_id`` the index Postgres does not create for one (the
+        # event-delete cascade path, and every read of "this event's pools").
+        #
+        # Composite because a pool id is per-event, exactly as it was as a JSONB
+        # value-object: two events of one tournament may each hold a "pool-a". A bare
+        # ``id`` key would make a client-minted string globally unique across the
+        # platform — a rule the domain does not have. When the ids become server-minted
+        # uuids the key can shrink to ``id`` with the pair kept as a UNIQUE constraint;
+        # the fixture's FK is unchanged either way.
+        sa.PrimaryKeyConstraint("event_id", "id", name="pk_tournament_event_pools"),
+        # Two pools of one event never share a place in its order.
+        #
+        # DEFERRABLE INITIALLY DEFERRED, exactly as ``tournament_tables``' position
+        # constraint is: the pools are written as an id-keyed diff, and a diff re-orders
+        # — sending C, A, B back as B, C, A moves each row onto a position its neighbour
+        # has not vacated yet. An immediately-checked constraint would refuse that
+        # intermediate state and so forbid reordering, though the transaction's END state
+        # is perfectly unique.
+        sa.UniqueConstraint(
+            "event_id",
+            "position",
+            name="uq_tournament_event_pools_event_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
 
 def downgrade() -> None:
+    # Dropped before the events it references (and before the fixtures of 0012 reference
+    # it — that migration is torn down first by the chain).
+    op.drop_table("tournament_event_pools")
+
     op.drop_index(
         "ix_tournament_events_draw_settings_id",
         table_name="tournament_events",

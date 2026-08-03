@@ -65,6 +65,7 @@ from app.tournament_eligibility import (
     evaluate_rating_eligibility,
     event_is_full,
 )
+from app.tournament_pools import pool_read
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -475,7 +476,11 @@ def serialize_event(
             "slot": e.slot,
             "match_settings": e.match_settings,
             "predicates": e.predicates,
-            "pools": e.pools,
+            # Projected from the event's pool ROWS (ADR 20260801), not handed over as a
+            # JSONB column. They ride on the event's own eager ``selectin`` load, so
+            # this costs the page no statement of its own — the same arrangement the
+            # venue catalogue has.
+            "pools": [pool_read(pool) for pool in e.pools],
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,

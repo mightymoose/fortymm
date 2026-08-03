@@ -51,6 +51,7 @@ from app.models import (
 from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
+    event_pools,
     grant_permissions,
     make_user,
     opponent_session,
@@ -117,14 +118,16 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": [str(row.id) for row in catalogue],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": [str(row.id) for row in catalogue],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()
@@ -820,14 +823,16 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-b",
-                "name": "Pool B",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": ["t1", "t2"],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-b",
+                    "name": "Pool B",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": ["t1", "t2"],
+                }
+            ]
+        ),
     )
     db_session.add(second_event)
     await db_session.flush()

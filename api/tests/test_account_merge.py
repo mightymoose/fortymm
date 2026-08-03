@@ -47,6 +47,7 @@ from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
 from tests._helpers import (
+    event_pools,
     start_session,
     venue_tables,
 )
@@ -986,7 +987,9 @@ async def _make_rr_event(
         slot=slot,
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
+        pools=event_pools(
+            [{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}]
+        ),
     )
     tournament.events.append(event)
     db.add(tournament)

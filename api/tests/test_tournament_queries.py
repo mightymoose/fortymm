@@ -34,7 +34,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.tournament_queries import fixtures_by_event
-from tests._helpers import make_user
+from tests._helpers import event_pools, make_user
 
 #: Ten pool ids in the **director's** order, minted the way the client mints them. Their
 #: lexicographic order is ``p-1-…, p-10-…, p-2-…, p-3-…`` — deliberately not this one,
@@ -60,8 +60,8 @@ async def _make_event(
     """A published round-robin event carrying exactly these pools.
 
     Written straight to the database: nothing here is about who may create a tournament,
-    and the pools are seeded in shapes (a stored ``position``, and a legacy one with no
-    such key) that only the write boundary can produce or refuse.
+    and the pool *order* these seed is the thing under test, which the write boundary
+    would take from the payload's own order rather than from the positions stated here.
     """
     owner = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
     league = await get_default_league(db_session)
@@ -96,7 +96,7 @@ async def _make_event(
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        pools=pools,
+        pools=event_pools(pools),
     )
     db_session.add(event)
     await db_session.commit()
@@ -229,29 +229,13 @@ async def test_un_pooled_fixtures_sort_last_behind_every_pool(
     ]
 
 
-async def test_pools_stored_before_positions_existed_keep_their_id_order(
-    db_session: AsyncSession,
-) -> None:
-    """A pool written before ``position`` existed carries no such key, so the subquery
-    reads NULL for it — and the whole event degrades to exactly the id order the loader
-    had before this change, rather than to no order at all.
-
-    That is what the pool **id** is still doing as a secondary sort key. A read boundary
-    must not turn a history it cannot change into a scrambled draw, and there is no
-    migration in this slice: these rows exist today.
-    """
-    legacy = [
-        {"id": pool_id, "name": pool_id, "slot": {}, "table_ids": []}
-        for pool_id in POOL_IDS
-    ]
-    event = await _make_event(db_session, legacy)
-    await _seed_fixtures(
-        db_session, event, [(pool_id, 1, 1) for pool_id in reversed(POOL_IDS)]
-    )
-
-    fixtures = (await fixtures_by_event(db_session, [event.id]))[event.id]
-
-    assert [fixture.pool_id for fixture in fixtures] == sorted(POOL_IDS)
+# There is deliberately no "pools stored before ``position`` existed keep their id
+# order" test any more. It seeded pools with no ``position`` key at all, which a JSONB
+# array could hold and the ``NOT NULL position`` column of ``tournament_event_pools``
+# cannot (ADR 20260801) — and, pre-deploy, there are no such rows for it to describe.
+# The pool id remains the loader's secondary sort key for the case that IS still
+# reachable: an un-pooled draw, where the position subquery is NULL for every fixture
+# (``test_un_pooled_fixtures_sort_last_behind_every_pool``).
 
 
 async def test_each_events_pool_order_is_read_from_its_own_pools(

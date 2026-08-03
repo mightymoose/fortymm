@@ -24,6 +24,7 @@ covered by running ``alembic upgrade head`` against a fresh database.
 """
 
 import uuid
+from datetime import date, time
 from decimal import Decimal
 
 import pytest
@@ -41,13 +42,18 @@ from app.models import (
     TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
 )
-from tests._helpers import make_user
+from tests._helpers import event_pools, make_user
 
 FIXTURE_IDENTITY_CONSTRAINT = "uq_tournament_fixtures_event_id_pool_id_round_position"
+#: The composite foreign key that says a fixture's pool is its own event's pool
+#: (ADR 20260801). Asserted by name, so a test that reds proves the constraint refused
+#: this row — not that some other write in the transaction happened to fail.
+FIXTURE_POOL_CONSTRAINT = "fk_tournament_fixtures_event_id_pool_id"
 
 
 async def _make_event(db_session: AsyncSession) -> TournamentEvent:
@@ -89,10 +95,12 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        pools=[
-            {"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []},
-            {"id": "pool-b", "name": "Pool B", "slot": {}, "table_ids": []},
-        ],
+        pools=event_pools(
+            [
+                {"id": "pool-a", "name": "Pool A", "slot": {}, "table_ids": []},
+                {"id": "pool-b", "name": "Pool B", "slot": {}, "table_ids": []},
+            ]
+        ),
     )
     db_session.add(event)
     await db_session.commit()
@@ -286,6 +294,115 @@ async def test_the_same_round_and_position_in_a_different_event_is_accepted(
     assert (
         len((await db_session.execute(select(TournamentFixture))).scalars().all()) == 2
     )
+
+
+async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
+    db_session: AsyncSession, event: TournamentEvent
+) -> None:
+    """The claim the **composite** foreign key exists to make (ADR 20260801): a
+    fixture's pool is one of *its own event's* pools.
+
+    The pool named here **exists** — it is a real row, belonging to the *other* event —
+    which is what makes this test able to fail. A plain
+    ``pool_id → tournament_event_pools.id`` foreign key would look that id up, find it,
+    and accept the row, seating one event's fixture inside another event's pool: exactly
+    the illegal state the ADR is about, and exactly the one a non-composite FK cannot
+    see. What is refused is the *pair*.
+
+    The refusal lands at COMMIT rather than at the INSERT because the constraint is
+    ``DEFERRABLE INITIALLY DEFERRED`` (see the model for why the event-delete path needs
+    that), which is a difference in *when*, not in *whether*.
+    """
+    other_event = await _make_event(db_session)
+    db_session.add(
+        TournamentEventPool(
+            id="pool-only-in-the-other-event",
+            event_id=other_event.id,
+            name="Pool Elsewhere",
+            position=2,
+            slot_date=date(2026, 8, 1),
+            slot_start=time(9, 0),
+            slot_end=time(12, 30),
+        )
+    )
+    db_session.add(
+        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+    )
+    await db_session.commit()
+    # Read before the refusal: the rollback below expires every instance in the session,
+    # and re-reading an attribute off one afterwards is a lazy refresh in sync context.
+    event_id = event.id
+
+    db_session.add(
+        TournamentFixture(
+            # The other event's pool, under THIS event's id.
+            event_id=event.id,
+            pool_id="pool-only-in-the-other-event",
+            round=1,
+            position=2,
+        )
+    )
+    with pytest.raises(IntegrityError) as excinfo:
+        await db_session.commit()
+    assert FIXTURE_POOL_CONSTRAINT in str(excinfo.value)
+    await db_session.rollback()
+
+    # And the legitimate row is still there: the refusal took the offending write, not
+    # the draw around it.
+    stored = (await db_session.execute(select(TournamentFixture))).scalars().all()
+    assert [(f.event_id, f.pool_id) for f in stored] == [(event_id, "pool-a")]
+
+
+async def test_a_fixture_naming_a_pool_that_does_not_exist_is_refused(
+    db_session: AsyncSession, event: TournamentEvent
+) -> None:
+    """The plainer half of the same key: a ``pool_id`` naming no pool at all.
+
+    It was storable for as long as pools were JSONB value-objects with nothing to point
+    at — the dangling ref ADR-0786 could only protect procedurally, with
+    ``_enforce_pool_set_frozen``. It is a foreign-key violation now."""
+    db_session.add(
+        TournamentFixture(event_id=event.id, pool_id="pool-z", round=1, position=1)
+    )
+    with pytest.raises(IntegrityError) as excinfo:
+        await db_session.commit()
+    assert FIXTURE_POOL_CONSTRAINT in str(excinfo.value)
+    await db_session.rollback()
+
+
+async def test_deleting_the_event_takes_its_pools_with_it(
+    db_session: AsyncSession, event: TournamentEvent
+) -> None:
+    """An event's pools go with the event — and they do so while its **fixtures are
+    still there**, which is the case the composite FK's deferral is for.
+
+    Deleting the event removes the pools through the ORM (the collection is eagerly
+    loaded) and the fixtures through Postgres' ``ON DELETE CASCADE``, in that order, in
+    two separate statements. An immediately-checked constraint fires between them, on
+    fixtures that are about to be deleted one statement later, and the whole delete dies
+    on a foreign-key violation. This test reds against ``RESTRICT``.
+    """
+    db_session.add(
+        TournamentFixture(event_id=event.id, pool_id="pool-a", round=1, position=1)
+    )
+    await db_session.commit()
+    event_id = event.id
+
+    await db_session.delete(event)
+    await db_session.commit()
+
+    pools = (
+        (
+            await db_session.execute(
+                select(TournamentEventPool).where(
+                    TournamentEventPool.event_id == event_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert pools == []
 
 
 async def test_deleting_the_event_takes_its_fixtures_with_it(

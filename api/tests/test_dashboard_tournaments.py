@@ -727,13 +727,15 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # entries — joined to their events, those events' tournaments AND, since #1086, those
 # events' draw settings rows — plus ONE batched load of those tournaments' venue tables
 # (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
-# ADR 20260801, and the panel resolves a placement's table LABEL through it), then ONE
-# batched load of every event's active entrants, ONE of every event's fixtures, ONE of
-# the completed matches' game counts, ONE of the handful of focus matches, and that
-# load's own eager options (the match's league, results, sides, settings, side players
-# and those players' users — one batched ``selectin`` each). Twelve, whatever the
-# number of events.
-EXPECTED_DASHBOARD_PANEL_STATEMENTS = 12
+# ADR 20260801, and the panel resolves a placement's table LABEL through it) and ONE of
+# every event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows
+# now too, ADR 20260801, and the panel resolves a fixture's pool NAME through them),
+# then ONE batched load of every event's active entrants, ONE of every event's fixtures,
+# ONE of the completed matches' game counts, ONE of the handful of focus matches, and
+# that load's own eager options (the match's league, results, sides, settings, side
+# players and those players' users — one batched ``selectin`` each). Thirteen, whatever
+# the number of events.
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 13
 
 
 @pytest.mark.parametrize("event_count", [1, 3])

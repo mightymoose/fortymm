@@ -67,6 +67,7 @@ from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, reques
 from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
 from tests._helpers import (
+    event_pools,
     hijack_solve,
     make_user,
     venue_tables,
@@ -145,14 +146,16 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": DATE, "start": window[0], "end": window[1]},
-                "table_ids": [str(row.id) for row in catalogue],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": window[0], "end": window[1]},
+                    "table_ids": [str(row.id) for row in catalogue],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()
@@ -932,14 +935,16 @@ async def _hold_user_in_second_event(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-b",
-                "name": "Pool B",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": [table_id],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-b",
+                    "name": "Pool B",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": [table_id],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()
@@ -1515,13 +1520,12 @@ async def _drop_table_from_pools(
     event = (
         await db.execute(select(TournamentEvent).where(TournamentEvent.id == event_id))
     ).scalar_one()
-    event.pools = [
-        {
-            **pool,
-            "table_ids": [t for t in pool["table_ids"] if t != table_id],
-        }
-        for pool in event.pools
-    ]
+    # Mutated in place on the pool ROWS (ADR 20260801) rather than by reassigning a
+    # JSONB list: dropping a table from a pool's reservation is an edit to the rows
+    # the event already has, and rebuilding the collection would delete and re-insert
+    # the very pools its fixtures foreign-key.
+    for pool in event.pools:
+        pool.table_ids = [t for t in pool.table_ids if t != table_id]
     await db.commit()
 
 

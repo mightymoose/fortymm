@@ -103,6 +103,7 @@ from app.schemas.schedule_solve import (
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
 from tests._helpers import (
+    event_pools,
     hijack_solve,
     make_user,
     table_ids_of,
@@ -187,14 +188,16 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": slot_date, "start": window[0], "end": window[1]},
-                "table_ids": [str(row.id) for row in catalogue],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {"date": slot_date, "start": window[0], "end": window[1]},
+                    "table_ids": [str(row.id) for row in catalogue],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()

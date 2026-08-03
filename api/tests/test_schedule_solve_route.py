@@ -54,6 +54,7 @@ from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB
 from app.tournament_draws import cut_draw
 from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
+    event_pools,
     grant_permissions,
     make_client,
     make_user,
@@ -165,14 +166,16 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": [str(row.id) for row in catalogue],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": [str(row.id) for row in catalogue],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()

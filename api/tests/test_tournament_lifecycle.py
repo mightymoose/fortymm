@@ -61,6 +61,7 @@ from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
     blank_addresses,
+    event_pools,
     make_user,
     venue_tables,
 )
@@ -656,14 +657,16 @@ async def _make_tournament_at(
             timezone="America/Chicago",
             slot={"date": _DATE, "start": "09:00", "end": "17:00"},
             match_settings={"rated": False, "length_games": 3},
-            pools=[
-                {
-                    "id": "pool-a",
-                    "name": "Pool A",
-                    "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
+            pools=event_pools(
+                [
+                    {
+                        "id": "pool-a",
+                        "name": "Pool A",
+                        "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
+                        "table_ids": ["t1", "t2"],
+                    }
+                ]
+            ),
         )
         db.add(event)
         await db.flush()

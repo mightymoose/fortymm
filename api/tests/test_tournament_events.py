@@ -13,7 +13,7 @@ the matrix is exactly: create (owned / non-owned / missing-tournament) and delet
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -30,6 +30,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -44,6 +45,7 @@ from app.tournament_errors import (
 )
 from app.tournament_events import create_event, delete_event, update_event
 from tests._helpers import (
+    event_pools,
     make_user,
     venue_tables,
 )
@@ -161,7 +163,8 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     assert event.name == "Open Singles"
     # The nested value-objects persisted as plain JSONB.
     assert event.slot == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
-    assert event.pools[0]["id"] == "p-os-1"
+    # The pools persisted as rows of their own, not as a value inside the event.
+    assert [pool.id for pool in event.pools] == ["p-os-1"]
     event_id = event.id
 
     # Persisted, not merely returned.
@@ -250,14 +253,17 @@ def _pool(pool_id: str, name: str, **extra: Any) -> dict[str, Any]:
 
 
 def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
-    """``(name, position)`` per stored pool, read off the JSONB in **column order**.
+    """``(name, position)`` per stored pool, read off the ROWS in the relationship's
+    order (which is ``position`` ascending).
 
     Names, not ids, because a pool named "Pool C" sitting at position 0 is the whole
     claim: it is the pool the director put first, and it is not the alphabetically first
-    one. Read from the raw column rather than through ``Pool`` so a default the schema
-    supplies could not stand in for a value the write path failed to store.
+    one. Read off the rows rather than through ``Pool`` so a default the schema supplies
+    could not stand in for a value the write path failed to store — and the names are
+    what discriminate, since ordering by position cannot itself reveal whether the
+    positions were stamped from the payload's order or from the pools' names.
     """
-    return [(pool["name"], pool["position"]) for pool in event.pools]
+    return [(pool.name, pool.position) for pool in event.pools]
 
 
 async def test_create_positions_pools_by_the_order_they_were_sent(
@@ -299,7 +305,7 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
     ).scalar_one()
     assert _named_positions(row) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
     # No two pools of one event share a position.
-    positions = [pool["position"] for pool in row.pools]
+    positions = [pool.position for pool in row.pools]
     assert len(set(positions)) == len(positions)
 
 
@@ -417,8 +423,98 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
         )
     ).scalar_one()
     assert _named_positions(row) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
-    positions = [pool["position"] for pool in row.pools]
+    positions = [pool.position for pool in row.pools]
     assert len(set(positions)) == len(positions)
+
+
+async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A created event's pools are **rows in ``tournament_event_pools``**, each carrying
+    the ``event_id`` that owns it and the window in the DATE/TIME columns the ADR pins
+    (ADR 20260801, "a pool belongs to its event, not to the event's draw settings").
+
+    Read with a **column-only** ``SELECT`` against the pools table, not off
+    ``event.pools``: the relationship would answer just as happily if the pools were
+    still a JSONB list on the event, and the claim here is precisely that they are not.
+
+    The slot columns are asserted as real ``date``/``time`` VALUES rather than as
+    strings, which is the same claim from the other side: a ``timestamptz`` column
+    (api/CLAUDE.md's default rule, which the ADR deliberately excepts here) would read
+    back as a ``datetime``, and this would fail on the type before the value.
+    """
+    owner = await make_user(db_session, "events-pools-are-rows")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool("p-a", "Pool A"), _pool("p-b", "Pool B")]),
+    )
+    event_id = event.id
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(
+            select(
+                TournamentEventPool.event_id,
+                TournamentEventPool.id,
+                TournamentEventPool.name,
+                TournamentEventPool.position,
+                TournamentEventPool.slot_date,
+                TournamentEventPool.slot_start,
+                TournamentEventPool.slot_end,
+            ).order_by(TournamentEventPool.position)
+        )
+    ).all()
+
+    assert rows == [
+        (event_id, "p-a", "Pool A", 0, date(2026, 6, 13), time(9, 0), time(12, 30)),
+        (event_id, "p-b", "Pool B", 1, date(2026, 6, 13), time(9, 0), time(12, 30)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("slot", "field"),
+    [
+        pytest.param(
+            {"date": "next Tuesday", "start": "09:00", "end": "12:30"}, "date"
+        ),
+        pytest.param({"date": "2026-06-13", "start": "9am", "end": "12:30"}, "start"),
+        pytest.param(
+            {"date": "2026-06-13", "start": "09:00:30", "end": "12:30"}, "seconds"
+        ),
+    ],
+    ids=["unparseable-date", "unparseable-start", "a-time-carrying-seconds"],
+)
+def test_a_pool_window_the_columns_cannot_hold_is_refused(
+    slot: dict[str, str], field: str
+) -> None:
+    """A pool window that is not ``YYYY-MM-DD`` + ``HH:MM`` is a **422 at the
+    boundary**, not a driver error at the INSERT.
+
+    The three strings used to sit inside a JSONB blob that accepted anything at all;
+    they are ``slot_date DATE`` / ``slot_start TIME`` / ``slot_end TIME`` now (ADR
+    20260801), so a boundary that let ``"next Tuesday"`` through would be handing the
+    director a 500 for a payload it had just accepted — the ``EventMaxPlayers`` lesson
+    in another key (api/CLAUDE.md, "a boundary that admits what the interior cannot
+    hold is not a boundary").
+
+    Seconds are in the matrix deliberately: ``09:00:30`` parses perfectly well and is
+    the one case a *refusal* has to be argued for. It would be stored and then read
+    back as ``09:00``, moving a director's window by half a minute in a direction
+    nothing told them about; the wire shape says ``HH:MM``, so the round trip stays
+    lossless and the refusal says what to send.
+    """
+    with pytest.raises(ValidationError) as refusal:
+        TournamentEventCreate.model_validate(
+            _event_body(pools=[_pool("p-a", "Pool A", slot=slot)])
+        )
+
+    (error,) = refusal.value.errors()
+    assert error["loc"] == ("pools", 0, "slot"), field
 
 
 # ----- delete --------------------------------------------------------------
@@ -567,14 +663,16 @@ async def _add_cut_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[
-            {
-                "id": "p-1",
-                "name": "Pool A",
-                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1", "t2"],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "p-1",
+                    "name": "Pool A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                    "table_ids": ["t1", "t2"],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.commit()
@@ -713,7 +811,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool["id"] for pool in row.pools] == ["p-1"]
+    assert [pool.id for pool in row.pools] == ["p-1"]
 
 
 async def test_update_event_frozen_draw_type_change_is_refused(

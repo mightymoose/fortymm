@@ -51,6 +51,7 @@ from app.models import (
 )
 from app.realtime import EventKind, RealtimeBroker
 from tests._helpers import (
+    event_pools,
     make_user,
     venue_tables,
 )
@@ -132,14 +133,16 @@ async def _stage(
         timezone=VENUE_TZ_NAME,
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": ["t1", "t2"],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "pool-a",
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": ["t1", "t2"],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.flush()

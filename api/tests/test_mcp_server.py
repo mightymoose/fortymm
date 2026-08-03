@@ -89,6 +89,7 @@ from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
+    event_pools,
     grant_permissions,
     make_user,
     start_session,
@@ -3513,14 +3514,16 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[
-            {
-                "id": "p-1",
-                "name": "Pool A",
-                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1"],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "id": "p-1",
+                    "name": "Pool A",
+                    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                    "table_ids": ["t1"],
+                }
+            ]
+        ),
     )
     db.add(event)
     await db.commit()

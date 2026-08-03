@@ -15,7 +15,7 @@ import json
 import math
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -52,6 +52,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1654,6 +1655,48 @@ async def _enter(
     return entry
 
 
+async def _ensure_pool(
+    db_session: AsyncSession, event_id: uuid.UUID, pool_id: str
+) -> None:
+    """Give ``event_id`` a pool called ``pool_id``, unless it has one already.
+
+    Positioned after whatever pools the event already has, so an event that gains two
+    pools this way holds ``0`` and ``1`` and never trips
+    ``uq_tournament_event_pools_event_id_position``. The window is the shared
+    09:00–12:30 the pool payloads in this module use; no test that seeds a fixture this
+    way asserts anything about it.
+    """
+    existing = (
+        await db_session.execute(
+            select(TournamentEventPool).where(
+                TournamentEventPool.event_id == event_id,
+                TournamentEventPool.id == pool_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    position = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TournamentEventPool)
+            .where(TournamentEventPool.event_id == event_id)
+        )
+    ).scalar_one()
+    db_session.add(
+        TournamentEventPool(
+            id=pool_id,
+            event_id=event_id,
+            name=pool_id,
+            position=position,
+            slot_date=date(2026, 6, 13),
+            slot_start=time(9, 0),
+            slot_end=time(12, 30),
+        )
+    )
+    await db_session.commit()
+
+
 async def _cut(
     db_session: AsyncSession,
     event_id: str,
@@ -1674,7 +1717,17 @@ async def _cut(
     read-path tests needed it before a cut route existed; the statement-count pins need
     it to describe a *drawn* event; and the play-guard tests need it to write the one
     state nothing can produce yet (a fixture with a winner, or with a match).
+
+    A named ``pool_id`` the event does not already have is **created** first
+    (:func:`_ensure_pool`). ``tournament_fixtures.(event_id, pool_id)`` is a composite
+    foreign key onto ``tournament_event_pools`` now (ADR 20260801), so a fixture in a
+    pool that does not exist is no longer a row the database will take — which is the
+    point of the constraint, and which these tests are not about: they seed a *drawn*
+    event and say which pool each fixture is in. Seeding the pool is part of seeding
+    that state, exactly as seeding the event is.
     """
+    if pool_id is not None:
+        await _ensure_pool(db_session, uuid.UUID(event_id), pool_id)
     fixture = TournamentFixture(
         event_id=uuid.UUID(event_id),
         pool_id=pool_id,
@@ -1811,9 +1864,11 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # per card), the events, ONE batched load of every event's active entrants, ONE
 # batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load
 # of the caller's rating on every league those tournaments run on (which each event's
-# ``entry_state`` is judged against, ADR-0783). Six, whatever the number of
-# tournaments, tables and events.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 6
+# ``entry_state`` is judged against, ADR-0783), and ONE batched load of every event's
+# pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
+# ADR 20260801, batched across the whole page exactly as the tables are). Seven,
+# whatever the number of tournaments, tables, events and pools.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 7
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -2143,13 +2198,13 @@ async def test_list_without_location_is_unchanged_with_null_distance(
     assert rows[str(far.id)]["distance_miles"] is None
 
 
-async def test_list_near_me_statement_count_stays_five(
+async def test_list_near_me_statement_count_does_not_grow_with_the_radius_filter(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     engine: AsyncEngine,
 ):
-    """The near-me distance column and radius WHERE ride on the FIRST of the five
-    batched queries — a computed column and a predicate, not a per-row follow-up — so a
+    """The near-me distance column and radius WHERE ride on the FIRST of the batched
+    queries — a computed column and a predicate, not a per-row follow-up — so a
     located list is still exactly ``EXPECTED_TOURNAMENT_LIST_STATEMENTS`` statements (no
     N+1 reintroduced by the filter).
 
@@ -4347,15 +4402,17 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # tournament's league, ONE read of the newest solve-ledger row (the Schedule tab's
 # solve strip, ADR "the schedule is solved, the call is pinned"), and ONE read of the
 # ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
-# seeded row, and the enum holds only what runs"). Eight, whatever the number of
+# seeded row, and the enum holds only what runs"), plus ONE batched load of every
+# event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
+# ADR 20260801). Nine, whatever the number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, and whatever the length of the day's solve ledger.
 #
-# Two of the eight are deliberate flat reads that grow with nothing: the draw-type
+# Two of the nine are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 8
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 9
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4520,6 +4577,13 @@ async def test_an_events_draw_comes_back_in_pool_round_position_order(
         _event_payload(name="Open Singles"),
         _event_payload(name="Under 1500"),
     )
+    # The event's pool ORDER, stated before any fixture names a pool, because that order
+    # is what the read sorts by (ADR 20260801) and it is not the order the fixtures are
+    # written in below — which is the whole point of writing them in the wrong one.
+    # ``_cut`` would otherwise create each pool as it first met it, and pool B would
+    # legitimately come first.
+    await _ensure_pool(db_session, uuid.UUID(drawn["id"]), "p-a")
+    await _ensure_pool(db_session, uuid.UUID(drawn["id"]), "p-b")
 
     await _cut(db_session, drawn["id"], pool_id="p-b", round=2, position=1)
     await _cut(db_session, drawn["id"], pool_id=None, round=1, position=1)
@@ -4673,6 +4737,10 @@ async def test_the_list_and_the_detail_agree_about_an_events_draw(
     a draw the detail page disagrees with — including its order."""
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
+    # Pool A first in the event's pool order, said here rather than left to the order
+    # the fixtures below happen to be seeded in (which is deliberately the reverse).
+    await _ensure_pool(db_session, uuid.UUID(event["id"]), "p-a")
+    await _ensure_pool(db_session, uuid.UUID(event["id"]), "p-b")
     await _cut(db_session, event["id"], pool_id="p-b", round=1, position=1)
     await _cut(db_session, event["id"], pool_id="p-a", round=1, position=1)
 
@@ -5868,23 +5936,47 @@ POOL_C: dict[str, Any] = {
 
 
 async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, Any]]:
-    """The event's ``pools``, read straight from the JSONB column.
+    """The event's pools, read straight from the ``tournament_event_pools`` rows and
+    projected back into the wire shape the payloads in this module are written in.
 
     A column-only ``SELECT``, deliberately: it never touches the identity map, so what
-    comes back is what the *row* holds and not a stale ORM instance the test session
-    happened to be holding from before the request.
+    comes back is what the *rows* hold and not stale ORM instances the test session
+    happened to be holding from before the request. (It used to read one JSONB column;
+    pools are rows now — ADR 20260801 — and the projection is here so every assertion
+    below can go on comparing against the pool dicts it posted.)
 
     This is what "the refusal changed nothing" has to be asserted against. "The event
     still has pools" would pass against a guard that 409'd *after* writing them.
     """
-    pools = (
+    rows = (
         await db_session.execute(
-            select(TournamentEvent.pools).where(
-                TournamentEvent.id == uuid.UUID(event_id)
+            select(
+                TournamentEventPool.id,
+                TournamentEventPool.name,
+                TournamentEventPool.slot_date,
+                TournamentEventPool.slot_start,
+                TournamentEventPool.slot_end,
+                TournamentEventPool.table_ids,
+                TournamentEventPool.position,
             )
+            .where(TournamentEventPool.event_id == uuid.UUID(event_id))
+            .order_by(TournamentEventPool.position)
         )
-    ).scalar_one()
-    return list(pools)
+    ).all()
+    return [
+        {
+            "id": pool_id,
+            "name": name,
+            "slot": {
+                "date": slot_date.isoformat(),
+                "start": slot_start.strftime("%H:%M"),
+                "end": slot_end.strftime("%H:%M"),
+            },
+            "table_ids": list(table_ids),
+            "position": position,
+        }
+        for pool_id, name, slot_date, slot_start, slot_end, table_ids, position in rows
+    ]
 
 
 async def test_an_events_pools_are_read_back_in_the_order_they_were_posted(
