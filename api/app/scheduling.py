@@ -110,6 +110,18 @@ get no hint and solve fresh; the solver derives ``same_start``/``kept``/
 infeasibility. Crucially a hint only *orders the search* — it can never change
 which solution is optimal, so correctness is untouched and only speed changes.
 
+**One builder, flagged.** :func:`_build_model` takes an ``optional_placement``
+flag (default ``False``) that swaps the model into a **max-placed** variant used
+only for diagnosing a proven infeasibility (ADR "the conflict core is a second,
+max-placed solve over optional placements"). In that variant every *unpinned*
+fixture gets a ``placed`` literal, **both** its table intervals and its player
+intervals become optional on it, and the objective becomes ``maximize Σ placed``
+— so the fixtures the solve cannot place are the conflict core. Pins stay hard:
+a called match is a promise already made to two humans, so "drop this one" is
+not a remedy a director can act on. With the flag off the ordinary path
+constructs exactly the model it always did — same variables, same objective,
+same hints, same determinism.
+
 **Verdict.** CP-SAT's OPTIMAL/FEASIBLE map directly; INFEASIBLE returns an
 empty placement set and *never raises* — infeasibility is the point of
 pre-live solves, a designed outcome, not an error. UNKNOWN (time cap exhausted
@@ -770,6 +782,14 @@ class _SolverModel:
     #: whether the applied plan overran a planned window.
     planned_ends: dict[FixtureId, int]
     is_live: bool
+    #: The per-unpinned-fixture ``placed`` literal of the **max-placed variant**
+    #: (``optional_placement=True``), so a caller can read back *which* fixtures
+    #: the diagnostic solve could place and take the rest as the conflict core.
+    #: Empty (``{}``) on the ordinary path, where every fixture is placed by
+    #: construction — an empty mapping is exactly the true statement "this model
+    #: has no droppable fixtures". Pinned fixtures never appear: pins stay hard
+    #: in both variants.
+    placed_literals: dict[FixtureId, Any]
 
 
 def _merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -812,13 +832,45 @@ def _overlapping_fixture_ids(
     return tuple(sorted(colliding))
 
 
-def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
+def _build_model(
+    snapshot: ScheduleSnapshot, *, optional_placement: bool = False
+) -> SolveResult | _SolverModel:
     """Construct the CP-SAT model for one solve, warm-start hints and all.
 
     Returns a finished :class:`SolveResult` for the cases that need no solver —
     nothing to place (trivially optimal) or a structural infeasibility a guard
     can prove without search — and otherwise a :class:`_SolverModel` carrying
     the model and the index :func:`solve` reads its answer back out of.
+
+    ``optional_placement`` swaps in the **max-placed diagnostic variant** (ADR
+    "the conflict core is a second, max-placed solve over optional placements").
+    One flagged builder rather than a parallel ``_build_diagnostic_model``,
+    because a duplicate would re-implement bucket bounds, pin handling, the
+    fixed-obstacle union and snapshot validation — and then silently drift, and
+    a diagnostic that drifts explains a model the tournament never solved. It
+    changes three things and only for *unpinned* fixtures:
+
+    * each gets a ``placed`` literal, exposed on
+      :attr:`_SolverModel.placed_literals`;
+    * **both** its table intervals and its rest-padded player intervals become
+      optional on that literal. Both families, one literal: gating only the
+      table intervals would leave the per-player rest constraint binding on a
+      fixture that was supposedly dropped, so dropping it would relieve nothing
+      and a rest-driven conflict could never be explained at all;
+    * the objective becomes ``maximize Σ placed``, replacing the lexicographic
+      makespan/wait/stability minimization. Stability, the warm-start hints and
+      the instance-computed tier weights are all meaningless when the question
+      is "how many fit?", so the variant simply does not build them.
+
+    Called (pinned) matches are **not** droppable in either variant: a call is a
+    promise already made to two humans, so "drop this one" is not a remedy a
+    director can act on, and the drop set should hold only fixtures they can
+    actually move. The cost is that the variant can itself be infeasible (pins
+    alone overflowing the horizon), which the caller must handle.
+
+    With the flag off — the default, and the only way the ordinary path ever
+    calls it — the model, its objective, its hints and its determinism are
+    exactly what they were before the flag existed.
 
     Raises :class:`IncoherentSnapshot` for inputs that reference things they do
     not contain (via :func:`_validated`).
@@ -1234,10 +1286,21 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # REST_MIN makes per-player NoOverlap enforce "gap ≥ rest floor" between
     # any two of that player's matches, in either order, with no sequencing
     # variables.
+    #
+    # Under `optional_placement` the fixture becomes droppable instead: a
+    # `placed` literal replaces AddExactlyOne with `Σ present == placed` (so no
+    # table is chosen when the fixture is dropped, and choosing one forces
+    # `placed`), and the per-player intervals become optional on that SAME
+    # literal. Both interval families or the variant is a lie: a dropped fixture
+    # whose player intervals stayed mandatory still consumes its two humans'
+    # time and their rest floor, so dropping it relieves nothing and the
+    # diagnostic can never explain a rest-driven conflict — it would simply come
+    # back infeasible, or blame the wrong fixtures, without erroring.
     starts: dict[FixtureId, Any] = {}
     presences: dict[FixtureId, dict[TableId, Any]] = {}
     buckets: dict[FixtureId, Any] = {}
     durations: dict[FixtureId, int] = {}
+    placed_literals: dict[FixtureId, Any] = {}
     for fixture in unpinned:
         pool = pools[fixture.pool_id]
         duration = duration_of(fixture)
@@ -1254,13 +1317,27 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                     start, duration, present, f"fx_{fixture.id}_{table}"
                 )
             )
-        model.AddExactlyOne(list(by_table.values()))
-        for player in (fixture.player_a_id, fixture.player_b_id):
-            player_intervals[player].append(
-                model.NewFixedSizeIntervalVar(
-                    start, duration + REST_MIN, f"fx_{fixture.id}_{player}"
+        if optional_placement:
+            placed = model.NewBoolVar(f"placed_{fixture.id}")
+            placed_literals[fixture.id] = placed
+            model.Add(sum(by_table.values()) == placed)
+            for player in (fixture.player_a_id, fixture.player_b_id):
+                player_intervals[player].append(
+                    model.NewOptionalFixedSizeIntervalVar(
+                        start,
+                        duration + REST_MIN,
+                        placed,
+                        f"fx_{fixture.id}_{player}",
+                    )
                 )
-            )
+        else:
+            model.AddExactlyOne(list(by_table.values()))
+            for player in (fixture.player_a_id, fixture.player_b_id):
+                player_intervals[player].append(
+                    model.NewFixedSizeIntervalVar(
+                        start, duration + REST_MIN, f"fx_{fixture.id}_{player}"
+                    )
+                )
         starts[fixture.id] = start
         presences[fixture.id] = by_table
         buckets[fixture.id] = bucket
@@ -1275,73 +1352,89 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         if len(intervals) > 1:
             model.AddNoOverlap(intervals)
 
-    makespan = model.NewIntVar(0, horizon, "makespan")
-    for end_expr in variable_ends:
-        model.Add(makespan >= end_expr)
-    if fixed_ends:
-        model.Add(makespan >= max(fixed_ends))
+    if optional_placement:
+        # The max-placed variant asks one question — how many of these fixtures
+        # can run at all? — so it carries only that objective. No makespan var,
+        # no wait tier, no stability literals, no instance-computed weights and
+        # no warm-start hints: "finish early", "start promptly" and "don't churn
+        # the board" are all meaningless while the day provably does not fit,
+        # and a hint seeded from a plan that was never feasible would only slow
+        # the search it was meant to speed up.
+        model.Maximize(sum(placed_literals.values()))
+    else:
+        makespan = model.NewIntVar(0, horizon, "makespan")
+        for end_expr in variable_ends:
+            model.Add(makespan >= end_expr)
+        if fixed_ends:
+            model.Add(makespan >= max(fixed_ends))
 
-    # Stability: an unpinned fixture "kept" its previous plan iff it sits on
-    # the same table at the same start. A previous table no longer in the
-    # pool means it must move — a constant 1 in the moved count.
-    previous = {p.fixture_id: p for p in snapshot.previous_plan}
-    kept_literals: list[Any] = []
-    forced_moves = 0
-    stability_span = 0
-    for fixture in unpinned:
-        prior = previous.get(fixture.id)
-        if prior is None:
-            continue
-        stability_span += 1
-        same_table = presences[fixture.id].get(prior.table_id)
-        if same_table is None:
-            forced_moves += 1
-            continue
-        same_start = model.NewBoolVar(f"same_start_{fixture.id}")
-        model.Add(starts[fixture.id] == prior.start_min).OnlyEnforceIf(same_start)
-        model.Add(starts[fixture.id] != prior.start_min).OnlyEnforceIf(same_start.Not())
-        kept = model.NewBoolVar(f"kept_{fixture.id}")
-        model.AddBoolAnd([same_table, same_start]).OnlyEnforceIf(kept)
-        model.AddBoolOr([same_table.Not(), same_start.Not()]).OnlyEnforceIf(kept.Not())
-        kept_literals.append(kept)
+        # Stability: an unpinned fixture "kept" its previous plan iff it sits on
+        # the same table at the same start. A previous table no longer in the
+        # pool means it must move — a constant 1 in the moved count.
+        previous = {p.fixture_id: p for p in snapshot.previous_plan}
+        kept_literals: list[Any] = []
+        forced_moves = 0
+        stability_span = 0
+        for fixture in unpinned:
+            prior = previous.get(fixture.id)
+            if prior is None:
+                continue
+            stability_span += 1
+            same_table = presences[fixture.id].get(prior.table_id)
+            if same_table is None:
+                forced_moves += 1
+                continue
+            same_start = model.NewBoolVar(f"same_start_{fixture.id}")
+            model.Add(starts[fixture.id] == prior.start_min).OnlyEnforceIf(same_start)
+            model.Add(starts[fixture.id] != prior.start_min).OnlyEnforceIf(
+                same_start.Not()
+            )
+            kept = model.NewBoolVar(f"kept_{fixture.id}")
+            model.AddBoolAnd([same_table, same_start]).OnlyEnforceIf(kept)
+            model.AddBoolOr([same_table.Not(), same_start.Not()]).OnlyEnforceIf(
+                kept.Not()
+            )
+            kept_literals.append(kept)
 
-    # Instance-computed strictly-lexicographic weights — see module docstring.
-    # The wait tier now has one term per unpinned *and* per called fixture, so
-    # the count bounding the max total wait swing is len(unpinned) + len(pinned).
-    # A called match's `pin_start - now` can be negative (a floor before now),
-    # which only lowers the total, so `count * span` still bounds the positive
-    # swing and the tiers provably never trade.
-    span = max(1, horizon - now)
-    w_stability = 1
-    w_wait = w_stability * stability_span + 1
-    w_makespan = w_wait * max(1, len(unpinned) + len(pinned)) * span + 1
+        # Instance-computed strictly-lexicographic weights — see module
+        # docstring. The wait tier now has one term per unpinned *and* per called
+        # fixture, so the count bounding the max total wait swing is
+        # len(unpinned) + len(pinned). A called match's `pin_start - now` can be
+        # negative (a floor before now), which only lowers the total, so
+        # `count * span` still bounds the positive swing and the tiers provably
+        # never trade.
+        span = max(1, horizon - now)
+        w_stability = 1
+        w_wait = w_stability * stability_span + 1
+        w_makespan = w_wait * max(1, len(unpinned) + len(pinned)) * span + 1
 
-    objective = w_makespan * makespan
-    for term in wait_terms:
-        objective = objective + w_wait * term
-    for kept in kept_literals:
-        objective = objective + w_stability * (1 - kept)
-    objective = objective + w_stability * forced_moves
-    model.Minimize(objective)
+        objective = w_makespan * makespan
+        for term in wait_terms:
+            objective = objective + w_wait * term
+        for kept in kept_literals:
+            objective = objective + w_stability * (1 - kept)
+        objective = objective + w_stability * forced_moves
+        model.Minimize(objective)
 
-    # Warm start: seed each unpinned fixture's prior (table, start) as a hint so
-    # a mostly-unchanged re-solve begins *at* the previous plan and only repairs
-    # the local delta. A hint whose prior table has left the pool (a forced move)
-    # or that has no prior entry is simply omitted — that fixture solves fresh.
-    # Hints never change which solution is optimal; they only order the search.
-    for fixture in unpinned:
-        prior = previous.get(fixture.id)
-        if prior is None or prior.table_id not in presences[fixture.id]:
-            continue
-        model.AddHint(buckets[fixture.id], prior.start_min // BUCKET_MIN)
-        model.AddHint(starts[fixture.id], prior.start_min)
-        for table, present in presences[fixture.id].items():
-            model.AddHint(present, 1 if table == prior.table_id else 0)
+        # Warm start: seed each unpinned fixture's prior (table, start) as a hint
+        # so a mostly-unchanged re-solve begins *at* the previous plan and only
+        # repairs the local delta. A hint whose prior table has left the pool (a
+        # forced move) or that has no prior entry is simply omitted — that
+        # fixture solves fresh. Hints never change which solution is optimal;
+        # they only order the search.
+        for fixture in unpinned:
+            prior = previous.get(fixture.id)
+            if prior is None or prior.table_id not in presences[fixture.id]:
+                continue
+            model.AddHint(buckets[fixture.id], prior.start_min // BUCKET_MIN)
+            model.AddHint(starts[fixture.id], prior.start_min)
+            for table, present in presences[fixture.id].items():
+                model.AddHint(present, 1 if table == prior.table_id else 0)
 
-    # Warm start each called match's slide variable at its promised time so a
-    # re-solve begins at what the player was told and only slides if forced.
-    for fixture, pin in pinned:
-        model.AddHint(pin_starts[fixture.id], pin.start_min)
+        # Warm start each called match's slide variable at its promised time so a
+        # re-solve begins at what the player was told and only slides if forced.
+        for fixture, pin in pinned:
+            model.AddHint(pin_starts[fixture.id], pin.start_min)
 
     return _SolverModel(
         model=model,
@@ -1356,6 +1449,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         conflicts=conflicts,
         planned_ends=planned_ends,
         is_live=is_live,
+        placed_literals=placed_literals,
     )
 
 

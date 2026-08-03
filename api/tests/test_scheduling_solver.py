@@ -1663,3 +1663,281 @@ class TestWarmStart:
         # the same deterministic search finds is a *different* board.
         built.model.ClearHints()
         assert _first_solution_board(built) != previous
+
+
+def _golden_snapshot() -> ScheduleSnapshot:
+    """The characterization instance for the **ordinary** (flag-off) path.
+
+    Deliberately exercises every family the builder knows at once — three
+    unpinned fixtures chained on one star player and one pool table, a called
+    match on an off-pool table, an in-progress match on a third, a rest shadow
+    on the star player, and a previous plan — so a stray edit inside the shared
+    builder has nowhere to hide.
+
+    Its optimum is **unique**, not merely one of several equally good boards,
+    which is what lets the test below assert an exact board and objective. The
+    makespan is fixed at the pin's end (115) whatever the unpinned fixtures do,
+    so the wait tier alone fixes the start multiset: the shadow blocks the star
+    until 10 and the rest floor spaces the chain 25 apart, giving 10/35/60. The
+    stability tier then breaks the remaining permutation tie toward the previous
+    plan. Forbidding that board raises the proven optimum from 442535 to 442537,
+    so a solver that tie-broke differently could not produce a different green.
+    """
+    star = PlayerId("STAR")
+    table_ids = _tables(3)
+    return ScheduleSnapshot(
+        table_ids=table_ids,
+        pools=(SchedulePool(PoolId("A"), (table_ids[0],), Window(0, 240)),),
+        events=(EventSettings(EventId("E1"), 1),),
+        fixtures=(
+            _fixture(1, star, PlayerId("Q1")),
+            _fixture(2, star, PlayerId("Q2")),
+            _fixture(3, star, PlayerId("Q3")),
+            _fixture(4, PlayerId("Q4"), PlayerId("Q5"), pin=Pin(table_ids[1], 100)),
+            _fixture(5, PlayerId("Q6"), PlayerId("Q7")),
+        ),
+        now_min=0,
+        in_progress=(InProgressMatch(FixtureId("F5"), table_ids[2], 0),),
+        previous_plan=(
+            PreviousPlacement(FixtureId("F1"), table_ids[0], 10),
+            PreviousPlacement(FixtureId("F2"), table_ids[0], 35),
+            PreviousPlacement(FixtureId("F3"), table_ids[0], 60),
+        ),
+        rest_shadows=(RestShadow(star, 0),),
+    )
+
+
+#: The frozen board and objective of :func:`_golden_snapshot` on the ordinary
+#: path — what the solver produced before ``optional_placement`` existed.
+GOLDEN_PLACEMENTS = (
+    PlacedFixture(FixtureId("F1"), TableId("T1"), 10, 25),
+    PlacedFixture(FixtureId("F2"), TableId("T1"), 35, 50),
+    PlacedFixture(FixtureId("F3"), TableId("T1"), 60, 75),
+    PlacedFixture(FixtureId("F4"), TableId("T2"), 100, 115),
+)
+GOLDEN_OBJECTIVE = 442535
+
+
+def _rest_conflict_snapshot() -> ScheduleSnapshot:
+    """A day that is infeasible **because of the per-player rest floor**, and
+    for no other reason — the case the optional-placement variant exists to
+    explain, and the one that silently breaks if only the table intervals are
+    made optional.
+
+    Four tables for two 15-minute fixtures, so table contention is nowhere near
+    binding: both could run *simultaneously* if they did not share a human.
+    They do — ``P1`` plays both — and ``P1`` also carries a rest shadow from a
+    match completed at 0, blocking them until 10. Inside a window whose last
+    legal grid start is 25, ``P1``'s two rest-padded intervals need 25 minutes
+    of separation and have at most 15 available, so the day cannot fit.
+
+    No certain pre-check fires on it (that is the point — it must reach CP-SAT):
+    the pool has tables, one match fits the window, unpinned demand is 30
+    against 160 table-minutes, and ``PlayerOverSubscribed`` charges
+    ``15 + 15 + 10 = 40`` against a 40-minute span, which is not *greater*. The
+    pre-check is blind to rest shadows and to the 5-minute grid, which is
+    exactly why the residual diagnostic has to answer for this shape.
+    """
+    table_ids = _tables(4)
+    return ScheduleSnapshot(
+        table_ids=table_ids,
+        pools=(SchedulePool(PoolId("A"), table_ids, Window(0, 40)),),
+        events=(EventSettings(EventId("E1"), 1),),
+        fixtures=(
+            _fixture(1, PlayerId("P1"), PlayerId("P2")),
+            _fixture(2, PlayerId("P1"), PlayerId("P3")),
+        ),
+        now_min=0,
+        rest_shadows=(RestShadow(PlayerId("P1"), 0),),
+    )
+
+
+def _enforcements(built: _SolverModel) -> dict[str, tuple[int, ...]]:
+    """Every unpinned fixture interval in the built model, by constraint name,
+    mapped to the variable indices enforcing it — ``()`` for a *mandatory*
+    interval. Table intervals are named ``fx_<fixture>_<table>`` and per-player
+    intervals ``fx_<fixture>_<player>``, so this reads back which families the
+    builder actually made optional rather than trusting the source."""
+    return {
+        constraint.name: tuple(constraint.enforcement_literal)
+        for constraint in built.model.Proto().constraints
+        if constraint.name.startswith("fx_")
+    }
+
+
+def _solve_max_placed(built: _SolverModel) -> tuple[int, set[str]]:
+    """Solve a max-placed model with the production solver parameters, returning
+    ``(status, the ids of the fixtures it placed)``."""
+    solver = cp_model.CpSolver()
+    solver.parameters.random_seed = 0
+    solver.parameters.num_search_workers = 1
+    solver.parameters.max_time_in_seconds = CAP
+    status = solver.Solve(built.model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return status, set()
+    return status, {
+        str(fixture_id)
+        for fixture_id, placed in built.placed_literals.items()
+        if solver.Value(placed) == 1
+    }
+
+
+class TestOrdinaryPathIsUnchanged:
+    """The flag defaults off and the fast path must be constructed *exactly* as
+    it was before it existed — same variables, same mandatory intervals, same
+    objective, same warm start, same deterministic answer. These are the guard
+    that a future edit to the now-shared builder cannot silently change the
+    model the tournament actually solves."""
+
+    def test_default_build_carries_no_placement_literals(self) -> None:
+        """No ``placed`` booleans leak into the fast path: the model gains no
+        new variables, so it gains no new presolve work or hint churn."""
+        built = _build_model(_golden_snapshot())
+        assert isinstance(built, _SolverModel)
+        assert built.placed_literals == {}
+        names = [variable.name for variable in built.model.Proto().variables]
+        assert not [name for name in names if name.startswith("placed_")]
+
+    def test_default_build_keeps_every_player_interval_mandatory(self) -> None:
+        """Read back off the proto, not the source: on the fast path every
+        per-player interval is unconditional and every table interval is
+        enforced by exactly its own table-choice literal."""
+        built = _build_model(_rest_conflict_snapshot())
+        assert isinstance(built, _SolverModel)
+        enforcements = _enforcements(built)
+        for fixture in ("F1", "F2"):
+            for player in ("P1", "P2", "P3"):
+                assert enforcements.get(f"fx_{fixture}_{player}", ()) == ()
+            for table in _tables(4):
+                assert len(enforcements[f"fx_{fixture}_{table}"]) == 1
+
+    def test_default_solve_reproduces_its_frozen_board_and_objective(self) -> None:
+        """The characterization: the ordinary path still returns the board and
+        the objective it returned before the flag existed. The objective is
+        asserted too — it pins the instance-computed tier weights, which a board
+        assertion alone would not notice."""
+        result = solve(_golden_snapshot(), time_cap_s=30.0)
+        assert result.verdict is Verdict.optimal
+        assert result.placements == GOLDEN_PLACEMENTS
+        assert result.stats.objective == GOLDEN_OBJECTIVE
+
+    def test_default_solve_is_deterministic_across_repeats(self) -> None:
+        """Determinism is a requirement of the fast path, not an accident of one
+        run: the same snapshot solved twice gives the same board."""
+        first = solve(_golden_snapshot(), time_cap_s=30.0)
+        second = solve(_golden_snapshot(), time_cap_s=30.0)
+        assert first.placements == second.placements == GOLDEN_PLACEMENTS
+
+
+class TestOptionalPlacementVariant:
+    """``_build_model(..., optional_placement=True)`` — the max-placed model the
+    residual diagnostic will run (ADR "the conflict core is a second, max-placed
+    solve over optional placements"). Nothing calls it in production yet; these
+    tests are the whole of its coverage."""
+
+    def test_both_interval_families_are_optional_on_the_same_literal(self) -> None:
+        """The trap this variant exists to avoid, asserted structurally: an
+        unpinned fixture's **player** intervals must be enforced by its own
+        ``placed`` literal, not left mandatory. If only the table intervals were
+        made optional, a dropped fixture would go on consuming its two humans'
+        time and their rest floor — the drop would relieve nothing."""
+        built = _build_model(_rest_conflict_snapshot(), optional_placement=True)
+        assert isinstance(built, _SolverModel)
+        enforcements = _enforcements(built)
+        for fixture, opponent in (("F1", "P2"), ("F2", "P3")):
+            placed = built.placed_literals[FixtureId(fixture)].Index()
+            for player in ("P1", opponent):
+                assert enforcements[f"fx_{fixture}_{player}"] == (placed,)
+
+    def test_a_rest_driven_infeasibility_is_relieved_by_dropping_a_fixture(
+        self,
+    ) -> None:
+        """The behavioural half, and the falsification this chore turns on.
+
+        The day is infeasible *only* because of one human's rest floor (see
+        :func:`_rest_conflict_snapshot`) — the ordinary solve proves it and can
+        say nothing but ``NoSingleCause``. The max-placed model must be able to
+        drop one of the two fixtures and become satisfiable, placing exactly
+        one. It can do that only if the *player* intervals are optional: with
+        them left mandatory the model stays infeasible however the ``placed``
+        literals are set, so this test reds — which is the check that the trap
+        above is really disarmed."""
+        snapshot = _rest_conflict_snapshot()
+
+        ordinary = solve(snapshot, time_cap_s=CAP)
+        assert ordinary.verdict is Verdict.infeasible
+        assert [type(reason) for reason in ordinary.reasons] == [NoSingleCause]
+
+        built = _build_model(snapshot, optional_placement=True)
+        assert isinstance(built, _SolverModel)
+        status, placed = _solve_max_placed(built)
+        assert status == cp_model.OPTIMAL
+        assert len(placed) == 1, "the rest conflict admits exactly one of the two"
+        assert placed < {"F1", "F2"}
+
+    def test_a_feasible_day_places_everything(self) -> None:
+        """Sanity in the other direction: where the ordinary solve succeeds, the
+        variant drops nothing — the drop set is a symptom of infeasibility, not
+        of the encoding."""
+        snapshot = _star_chain_snapshot()
+        assert solve(snapshot, time_cap_s=CAP).verdict in SOLVED
+
+        built = _build_model(snapshot, optional_placement=True)
+        assert isinstance(built, _SolverModel)
+        status, placed = _solve_max_placed(built)
+        assert status == cp_model.OPTIMAL
+        assert placed == {"F1", "F2", "F3", "F4"}
+
+    def test_called_matches_are_not_droppable(self) -> None:
+        """Pins stay hard: a called match is a promise already made to two
+        humans, so "drop this one" is not a remedy a director can act on and it
+        never gets a ``placed`` literal.
+
+        The instance is infeasible only because the pin holds the pool's single
+        table and one of its players from minute 0, leaving the unpinned fixture
+        no legal grid start inside the window. The variant answers by dropping
+        the *unpinned* fixture — placing nothing — rather than by dropping the
+        promise, and the pin still sits at the time its players were told."""
+        table_ids = _tables(1)
+        snapshot = ScheduleSnapshot(
+            table_ids=table_ids,
+            pools=(SchedulePool(PoolId("A"), table_ids, Window(0, 35)),),
+            events=(EventSettings(EventId("E1"), 1),),
+            fixtures=(
+                _fixture(1, PlayerId("P1"), PlayerId("P2")),
+                _fixture(2, PlayerId("P1"), PlayerId("P3"), pin=Pin(table_ids[0], 0)),
+            ),
+            now_min=0,
+        )
+        assert solve(snapshot, time_cap_s=CAP).verdict is Verdict.infeasible
+
+        built = _build_model(snapshot, optional_placement=True)
+        assert isinstance(built, _SolverModel)
+        assert set(built.placed_literals) == {FixtureId("F1")}
+
+        solver = cp_model.CpSolver()
+        solver.parameters.random_seed = 0
+        solver.parameters.num_search_workers = 1
+        solver.parameters.max_time_in_seconds = CAP
+        status = solver.Solve(built.model)
+        assert status == cp_model.OPTIMAL
+        assert solver.Value(built.placed_literals[FixtureId("F1")]) == 0
+        assert solver.Value(built.pin_starts[FixtureId("F2")]) == 0
+
+    def test_a_dropped_fixture_takes_no_table(self) -> None:
+        """``Σ present == placed`` both ways: an unplaced fixture claims no
+        table (so a caller can never read a phantom placement off it), and a
+        fixture that claims a table is necessarily placed."""
+        built = _build_model(_rest_conflict_snapshot(), optional_placement=True)
+        assert isinstance(built, _SolverModel)
+        solver = cp_model.CpSolver()
+        solver.parameters.random_seed = 0
+        solver.parameters.num_search_workers = 1
+        solver.parameters.max_time_in_seconds = CAP
+        assert solver.Solve(built.model) == cp_model.OPTIMAL
+        for fixture in built.unpinned:
+            chosen = sum(
+                int(solver.Value(present))
+                for present in built.presences[fixture.id].values()
+            )
+            assert chosen == int(solver.Value(built.placed_literals[fixture.id]))
