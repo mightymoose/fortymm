@@ -665,7 +665,8 @@ async def _make_tournament_at(
                         "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
                         "table_ids": ["t1", "t2"],
                     }
-                ]
+                ],
+                tournament=tournament,
             ),
         )
         db.add(event)

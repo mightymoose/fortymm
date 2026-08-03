@@ -141,7 +141,8 @@ async def _stage(
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)

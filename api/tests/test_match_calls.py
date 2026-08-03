@@ -154,7 +154,8 @@ async def _make_tournament(
                     "slot": {"date": DATE, "start": window[0], "end": window[1]},
                     "table_ids": [str(row.id) for row in catalogue],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)
@@ -943,7 +944,8 @@ async def _hold_user_in_second_event(
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": [table_id],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)
@@ -1520,12 +1522,17 @@ async def _drop_table_from_pools(
     event = (
         await db.execute(select(TournamentEvent).where(TournamentEvent.id == event_id))
     ).scalar_one()
-    # Mutated in place on the pool ROWS (ADR 20260801) rather than by reassigning a
-    # JSONB list: dropping a table from a pool's reservation is an edit to the rows
-    # the event already has, and rebuilding the collection would delete and re-insert
-    # the very pools its fixtures foreign-key.
+    # Dropping the reservation ROW (ADR 20260801) rather than filtering a JSONB list:
+    # a pool's reserved tables are their own rows now, and taking one out of the
+    # collection is what ``delete-orphan`` turns into the DELETE. The pool rows
+    # themselves are untouched — rebuilding them would delete and re-insert the very
+    # pools this event's fixtures foreign-key.
     for pool in event.pools:
-        pool.table_ids = [t for t in pool.table_ids if t != table_id]
+        pool.tables = [
+            reservation
+            for reservation in pool.tables
+            if reservation.table_id != table_id
+        ]
     await db.commit()
 
 

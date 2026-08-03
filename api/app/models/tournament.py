@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -217,6 +218,16 @@ class TournamentEvent(Base):
         ),
         CheckConstraint(
             "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
+        ),
+        # Redundant against the primary key, and there for exactly one purpose: it is
+        # the target ``tournament_event_pool_tables`` foreign-keys
+        # ``(tournament_id, event_id)`` against, which is the leg that forces a
+        # reservation's denormalized ``tournament_id`` to be the tournament its pool's
+        # event actually belongs to (ADR 20260801). Without it the other two legs of
+        # that row are satisfiable by a cross-tournament reservation — see
+        # ``TournamentEventPoolTable``.
+        UniqueConstraint(
+            "tournament_id", "id", name="uq_tournament_events_tournament_id_id"
         ),
     )
 

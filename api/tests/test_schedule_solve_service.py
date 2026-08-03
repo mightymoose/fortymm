@@ -196,7 +196,8 @@ async def _make_tournament(
                     "slot": {"date": slot_date, "start": window[0], "end": window[1]},
                     "table_ids": [str(row.id) for row in catalogue],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)

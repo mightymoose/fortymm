@@ -91,7 +91,7 @@ async def _make_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=event_pools([POOL_A]),
+        pools=event_pools([POOL_A], tournament=tournament),
     )
     db.add(event)
     await db.flush()

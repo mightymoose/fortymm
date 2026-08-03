@@ -14,7 +14,7 @@ import asyncio
 import json
 import math
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -53,6 +53,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
+    TournamentEventPoolTable,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -169,12 +170,15 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
+        # No ``table_ids``: a reservation names a table by the uuid the server minted
+        # (ADR 20260801), which this literal cannot know. The reservation round trip is
+        # its own test, built off the tournament's real catalogue.
         "pools": [
             {
                 "id": "p-os-1",
                 "name": "Pool A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1", "t2"],
+                "table_ids": [],
             }
         ],
     }
@@ -689,7 +693,7 @@ async def test_create_event_round_trips_jsonb(
             "name": "Pool A",
             "position": 0,
             "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-            "table_ids": ["t1", "t2"],
+            "table_ids": [],
         }
     ]
 
@@ -1228,7 +1232,7 @@ async def test_patch_event_by_creator_updates_jsonb(
             "id": "p-new",
             "name": "Pool Z",
             "slot": {"date": "2026-06-14", "start": "10:00", "end": "14:00"},
-            "table_ids": ["t3"],
+            "table_ids": [],
         }
     ]
     new_predicates = [{"id": "pr-9", "field": "rating", "op": ">=", "value": 1800}]
@@ -1864,11 +1868,15 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # per card), the events, ONE batched load of every event's active entrants, ONE
 # batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load
 # of the caller's rating on every league those tournaments run on (which each event's
-# ``entry_state`` is judged against, ADR-0783), and ONE batched load of every event's
+# ``entry_state`` is judged against, ADR-0783), ONE batched load of every event's
 # pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
-# ADR 20260801, batched across the whole page exactly as the tables are). Seven,
-# whatever the number of tournaments, tables, events and pools.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 7
+# ADR 20260801, batched across the whole page exactly as the tables are), and ONE
+# batched load of every one of THOSE pools' table reservations
+# (``TournamentEventPool.tables``, ``lazy="selectin"`` — the reservations are rows too
+# now, and selectin chains onto the pools' own batched load rather than costing a query
+# per pool). Eight, whatever the number of tournaments, tables, events, pools and
+# reservations.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 8
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4404,7 +4412,10 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
 # seeded row, and the enum holds only what runs"), plus ONE batched load of every
 # event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
-# ADR 20260801). Nine, whatever the number of
+# ADR 20260801), plus ONE batched load of every one of those pools' table reservations
+# (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
+# batched load, so it is one statement per page and not one per pool). Ten, whatever the
+# number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, and whatever the length of the day's solve ledger.
 #
@@ -4412,7 +4423,7 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 9
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 10
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4858,17 +4869,25 @@ async def test_detail_statement_count_does_not_grow_with_drawn_events(
 
 # The pools a round-robin event is cut across. Two, so the snake has somewhere to snake
 # to and a fixture's ``pool_id`` is a ref that has to resolve against the right one.
+#
+# They reserve **no tables**, and that is not laziness. A reservation is a row with a
+# composite foreign key onto ``tournament_tables`` now (ADR 20260801), so the only ids a
+# pool payload can name are the uuids the server minted when the tournament was created
+# — which a module-level literal cannot spell. The tests that are *about* reservations
+# build their pools off ``_catalogue_table_ids`` instead; these are about pool identity,
+# order and the freeze, and a table-less pool says that without pretending to reserve a
+# "t1" that names nothing.
 POOL_A: dict[str, Any] = {
     "id": "p-a",
     "name": "Pool A",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-    "table_ids": ["t1"],
+    "table_ids": [],
 }
 POOL_B: dict[str, Any] = {
     "id": "p-b",
     "name": "Pool B",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-    "table_ids": ["t2"],
+    "table_ids": [],
 }
 
 
@@ -5931,7 +5950,7 @@ POOL_C: dict[str, Any] = {
     "id": "p-c",
     "name": "Pool C",
     "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
-    "table_ids": ["t3"],
+    "table_ids": [],
 }
 
 
@@ -5945,6 +5964,10 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
     pools are rows now — ADR 20260801 — and the projection is here so every assertion
     below can go on comparing against the pool dicts it posted.)
 
+    ``table_ids`` takes a second column-only query, over the
+    ``tournament_event_pool_tables`` rows — the reservations are their own rows now too
+    — reassembled per pool in ``position`` order, which is the order they were named in.
+
     This is what "the refusal changed nothing" has to be asserted against. "The event
     still has pools" would pass against a guard that 409'd *after* writing them.
     """
@@ -5956,13 +5979,23 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
                 TournamentEventPool.slot_date,
                 TournamentEventPool.slot_start,
                 TournamentEventPool.slot_end,
-                TournamentEventPool.table_ids,
                 TournamentEventPool.position,
             )
             .where(TournamentEventPool.event_id == uuid.UUID(event_id))
             .order_by(TournamentEventPool.position)
         )
     ).all()
+    reserved: dict[str, list[str]] = {}
+    for pool_id, table_id in (
+        await db_session.execute(
+            select(TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id)
+            .where(TournamentEventPoolTable.event_id == uuid.UUID(event_id))
+            .order_by(
+                TournamentEventPoolTable.pool_id, TournamentEventPoolTable.position
+            )
+        )
+    ).all():
+        reserved.setdefault(pool_id, []).append(table_id)
     return [
         {
             "id": pool_id,
@@ -5972,10 +6005,10 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
                 "start": slot_start.strftime("%H:%M"),
                 "end": slot_end.strftime("%H:%M"),
             },
-            "table_ids": list(table_ids),
+            "table_ids": reserved.get(pool_id, []),
             "position": position,
         }
-        for pool_id, name, slot_date, slot_start, slot_end, table_ids, position in rows
+        for pool_id, name, slot_date, slot_start, slot_end, position in rows
     ]
 
 
@@ -6129,19 +6162,33 @@ async def _cut_two_pool_event(
 @pytest.mark.parametrize(
     ("edit", "description"),
     [
-        pytest.param({"table_ids": ["t7", "t8"]}, "a table breaks", id="tables"),
+        # Taken as a function of the tournament's own catalogue rather than a literal:
+        # a reservation is a row foreign-keyed to a real table now (ADR 20260801), so
+        # "the director moves this pool onto the other table" can only be said in the
+        # uuids the server minted. It is also a better test than the ``["t7", "t8"]`` it
+        # replaces, which named no table at all and so proved only that the freeze let
+        # the field through.
         pytest.param(
-            {"slot": {"date": "2026-06-13", "start": "10:30", "end": "14:00"}},
+            lambda tables: {"table_ids": [tables[1]]}, "a table breaks", id="tables"
+        ),
+        pytest.param(
+            lambda _tables: {
+                "slot": {"date": "2026-06-13", "start": "10:30", "end": "14:00"}
+            },
             "the pool runs late",
             id="window",
         ),
-        pytest.param({"name": "Morning Pool"}, "the director renames it", id="name"),
+        pytest.param(
+            lambda _tables: {"name": "Morning Pool"},
+            "the director renames it",
+            id="name",
+        ),
     ],
 )
 async def test_a_cut_draw_still_lets_a_pools_venue_attributes_be_edited(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
-    edit: dict[str, Any],
+    edit: Callable[[list[str]], dict[str, Any]],
     description: str,
 ) -> None:
     """The case the freeze exists to **permit**. With the draw cut, the director changes
@@ -6164,7 +6211,10 @@ async def test_a_cut_draw_still_lets_a_pools_venue_attributes_be_edited(
     client, _ = authed_client
     tournament_id, event = await _cut_two_pool_event(client, db_session)
     before = _snapshot(await _fixture_rows(db_session, event["id"]))
-    edited = [{**POOL_A, **edit}, POOL_B]
+    edited = [
+        {**POOL_A, **edit(await _catalogue_table_ids(client, tournament_id))},
+        POOL_B,
+    ]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
@@ -7151,11 +7201,12 @@ async def test_removing_a_catalogue_table_only_a_pool_reserves_succeeds_silently
 
     A pool's ``table_ids`` are a reservation, not a placement: "a table breaks, a table
     frees up" is ordinary venue traffic and is exactly why a pool's tables stay editable
-    mid-event. The pool simply reserves one fewer, which today is derived on read (the
-    solver intersects ``table_ids`` with the catalogue, ``_load_solver_inputs``) — the
-    stored JSONB still lists the dead id, and cleaning that up is Slice 3's
-    ``tournament_event_pool_tables`` CASCADE, not this verb's. Asserted, so that when
-    the join table lands the change is a decision rather than a surprise."""
+    mid-event. The pool simply reserves one fewer — and since ADR 20260801's
+    ``tournament_event_pool_tables`` that is *literally* what happens, in the database:
+    the reservation is a row with ``ON DELETE CASCADE`` onto ``tournament_tables``, so
+    removing the table takes the reservation with it. It used to be derived on read (the
+    solver intersected ``table_ids`` with the catalogue) while the stored JSONB went on
+    listing a dead id; the verb still says nothing, and now neither does the row."""
     client, _ = authed_client
     (
         tournament_id,
@@ -7181,9 +7232,12 @@ async def test_removing_a_catalogue_table_only_a_pool_reserves_succeeds_silently
     assert fixture.table_id == table_1
     assert fixture.scheduled_start is not None
 
+    # The reservation on the removed table is GONE — and the one on the surviving table
+    # is not, so the CASCADE took the row it named and nothing else.
+    db_session.expire_all()
     (event,) = await _events_of(client, tournament_id)
     (pool,) = event["pools"]
-    assert pool["table_ids"] == [table_1, table_2]  # Slice 3's to prune
+    assert pool["table_ids"] == [table_1]
 
 
 # ----- the draw-type freeze (409) -------------------------------------------
@@ -7337,7 +7391,8 @@ async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
     client, _ = authed_client
     tournament_id, event = await _cut_two_pool_event(client, db_session)
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
-    moved = [{**POOL_A, "table_ids": ["t7"]}, POOL_B]
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    moved = [{**POOL_A, "table_ids": [table_1]}, POOL_B]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",

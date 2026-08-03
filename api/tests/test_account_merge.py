@@ -485,6 +485,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
         name="Open Singles",
         format=EventFormat.singles,
         draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
+        tournament=tournament,
         max_players=32,
         entry_fee=40,
         timezone="America/Chicago",
@@ -493,8 +494,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
         predicates=[],
         pools=[],
     )
-    tournament.events.append(event)
-    db.add(tournament)
+    db.add(event)
     await db.commit()
     await db.refresh(event)
     return event
@@ -976,8 +976,17 @@ async def _make_rr_event(
             },
             tables=venue_tables(("Table 1", "A")),
         )
+    db.add(tournament)
+    # Flushed before the event is composed, because the pool below reserves a table and
+    # a reservation row carries the tournament's id — which is the database's to mint
+    # (ADR 20260801).
+    await db.flush()
     slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     event = TournamentEvent(
+        # By id rather than by ``tournament.events.append``: the tournament is flushed
+        # above (its pool reservations need its id), and appending to a *persistent*
+        # tournament's un-loaded ``events`` collection is a lazy load in sync context.
+        tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
         draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
@@ -988,11 +997,11 @@ async def _make_rr_event(
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
         pools=event_pools(
-            [{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}]
+            [{"id": "pool-a", "name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
+            tournament=tournament,
         ),
     )
-    tournament.events.append(event)
-    db.add(tournament)
+    db.add(event)
     await db.commit()
     await db.refresh(event)
     return event

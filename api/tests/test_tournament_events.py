@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -31,6 +32,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
+    TournamentEventPoolTable,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -44,6 +46,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_events import create_event, delete_event, update_event
+from app.tournament_pools import pool_read
 from tests._helpers import (
     event_pools,
     make_user,
@@ -82,12 +85,17 @@ def _event_body(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
+        # No ``table_ids``: a reservation is a row foreign-keyed to a real venue table
+        # (ADR 20260801), so the only ids a payload can name are the uuids the server
+        # minted for THIS tournament — which a module-level literal cannot know. The
+        # reservation round trip has its own section at the foot of this file, built off
+        # the tournament's real catalogue.
         "pools": [
             {
                 "id": "p-os-1",
                 "name": "Pool A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1", "t2"],
+                "table_ids": [],
             }
         ],
     }
@@ -671,7 +679,8 @@ async def _add_cut_event(
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1", "t2"],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)
@@ -916,3 +925,392 @@ async def test_update_event_timezone_change_reanchors_placements(
     assert fixture.scheduled_start == datetime(
         2026, 6, 13, 18, 0, tzinfo=ZoneInfo("America/Denver")
     )
+
+
+# ----- a pool's table reservations (ADR 20260801) ---------------------------
+#
+# The tables a pool reserves are rows now — ``tournament_event_pool_tables`` — where
+# they were a JSONB array of strings that could name anything at all. Three claims live
+# down here, and only the first is visible through the wire shape:
+#
+#   * a reservation round-trips through rows, in the order it was sent;
+#   * a pool cannot reserve **another tournament's** table, and it is the DATABASE that
+#     says so — the two spellings of that illegal state are refused by two different
+#     legs of the same three-legged key;
+#   * removing a table takes the reservations that named it, quietly, because a
+#     reservation is a preference and only a placement is a commitment.
+
+#: The leg that catches a reservation naming a table of a tournament other than the one
+#: the row claims to be inside.
+POOL_TABLE_TABLE_CONSTRAINT = "fk_tournament_event_pool_tables_tournament_id_table_id"
+#: The leg that catches a reservation whose claimed tournament is not the one its pool's
+#: event belongs to — the one that looks redundant and is not (see the model).
+POOL_TABLE_EVENT_CONSTRAINT = "fk_tournament_event_pool_tables_tournament_id_event_id"
+
+
+async def _reservation_rows(
+    db: AsyncSession, event_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str, str, int]]:
+    """``(tournament_id, pool_id, table_id, position)`` per stored reservation of this
+    event, in pool then position order.
+
+    A column-only ``SELECT`` so it reads the rows and not the session's opinion of them:
+    two of the tests below delete rows out from under loaded ORM instances (that is the
+    behaviour under test), and a collection read off those instances would answer with
+    what the session last saw.
+    """
+    return [
+        (tournament_id, pool_id, table_id, position)
+        for tournament_id, pool_id, table_id, position in (
+            await db.execute(
+                select(
+                    TournamentEventPoolTable.tournament_id,
+                    TournamentEventPoolTable.pool_id,
+                    TournamentEventPoolTable.table_id,
+                    TournamentEventPoolTable.position,
+                )
+                .where(TournamentEventPoolTable.event_id == event_id)
+                .order_by(
+                    TournamentEventPoolTable.pool_id,
+                    TournamentEventPoolTable.position,
+                )
+            )
+        ).all()
+    ]
+
+
+def _pool_payload(*table_ids: str, pool_id: str = "p-os-1") -> dict[str, Any]:
+    """One pool reserving exactly ``table_ids``, in that order."""
+    return {
+        "id": pool_id,
+        "name": "Pool A",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+        "table_ids": list(table_ids),
+    }
+
+
+async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_sent(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A pool reserves its tables through **rows**, not a string array — and the wire
+    shape is unchanged, because ``table_ids`` is composed back from them.
+
+    The two tables are named in *reverse* catalogue order, which is what makes this able
+    to fail: rows have no inherent order, and reading them back by ``table_id`` (a
+    random uuid) or by insertion happenstance would give the director's list back
+    shuffled. ``position`` is what carries the order the payload stated, exactly as it
+    does for the pools themselves and for the venue catalogue.
+    """
+    owner = await make_user(db_session, "events-reservation-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    table_1, table_2 = [str(table.id) for table in tournament.tables]
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload(table_2, table_1)]),
+    )
+    event_id = event.id
+
+    # Rows, carrying the denormalized tournament and the order sent.
+    db_session.expire_all()
+    assert await _reservation_rows(db_session, event_id) == [
+        (tournament_id, "p-os-1", table_2, 0),
+        (tournament_id, "p-os-1", table_1, 1),
+    ]
+    # And the same order back through the read shape everything above the database uses.
+    stored = (
+        await db_session.execute(
+            select(TournamentEventPool).where(TournamentEventPool.event_id == event_id)
+        )
+    ).scalar_one()
+    assert pool_read(stored).table_ids == [table_2, table_1]
+
+
+async def test_a_reservation_of_another_tournaments_table_never_reaches_the_database(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A payload naming a table of somebody *else's* tournament reserves nothing, and
+    the event is created anyway.
+
+    This is the quiet half of the ADR's split said at the write boundary: a reservation
+    is a **preference**, so an id that names no table of this tournament is simply not a
+    preference this schema can hold — where a *placement* naming an unknown table is the
+    422 ``test_tournament_placement`` pins. Nothing observable changes: every reader
+    already intersected ``table_ids`` with the catalogue, because a JSONB string could
+    name anything.
+
+    The row the write path declines to compose is one the database would refuse anyway,
+    which the next two tests prove directly.
+    """
+    owner = await make_user(db_session, "events-foreign-reservation-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    stranger = await make_user(db_session, "events-foreign-reservation-other")
+    other = await _make_tournament(db_session, owner=stranger, league=default_league)
+    foreign_table = str(other.tables[0].id)
+    tournament_id = tournament.id
+    mine = str(tournament.tables[0].id)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload(mine, foreign_table)]),
+    )
+    event_id = event.id
+
+    db_session.expire_all()
+    assert await _reservation_rows(db_session, event_id) == [
+        (tournament_id, "p-os-1", mine, 0)
+    ]
+
+
+async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_database(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The claim the composite foreign keys exist to make (ADR 20260801): a pool cannot
+    reserve another tournament's table — and it is the **database** that says so, not
+    the write path above it.
+
+    The illegal state has two spellings, and each is caught by a *different* leg of the
+    three-legged key, which is why it takes three:
+
+    * claim my own tournament, name the other one's table → the
+      ``(tournament_id, table_id)`` leg finds no such table under my tournament. **A
+      plain ``REFERENCES tournament_tables (id)`` would accept this row**: the table
+      exists, which was never the question. Compositeness is what is doing the work.
+    * claim the other tournament (so its table resolves) → the
+      ``(tournament_id, event_id)`` leg finds no such event under it. Without that third
+      leg the first two are both satisfied and the row goes in, which is exactly the
+      reservation this table exists to forbid.
+
+    Both are refused at the INSERT: unlike the fixture's ``(event_id, pool_id)``, none
+    of these constraints is deferred — no delete path needs them to be.
+    """
+    owner = await make_user(db_session, "events-cross-reservation-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    stranger = await make_user(db_session, "events-cross-reservation-other")
+    other = await _make_tournament(db_session, owner=stranger, league=default_league)
+    foreign_table = str(other.tables[0].id)
+    tournament_id, other_id = tournament.id, other.id
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload()]),
+    )
+    event_id = event.id
+
+    db_session.add(
+        TournamentEventPoolTable(
+            tournament_id=tournament_id,
+            event_id=event_id,
+            pool_id="p-os-1",
+            table_id=foreign_table,
+            position=0,
+        )
+    )
+    with pytest.raises(IntegrityError) as excinfo:
+        await db_session.commit()
+    assert POOL_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
+    await db_session.rollback()
+
+    db_session.add(
+        TournamentEventPoolTable(
+            tournament_id=other_id,
+            event_id=event_id,
+            pool_id="p-os-1",
+            table_id=foreign_table,
+            position=0,
+        )
+    )
+    with pytest.raises(IntegrityError) as excinfo:
+        await db_session.commit()
+    assert POOL_TABLE_EVENT_CONSTRAINT in str(excinfo.value)
+    await db_session.rollback()
+
+    # Neither refusal left anything behind.
+    assert await _reservation_rows(db_session, event_id) == []
+
+
+async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The plainer half of the same key: a ``table_id`` naming no table anywhere.
+
+    It was storable for as long as a pool's tables were strings in a JSONB array — the
+    dangling reference ADR-0790 could only shrug at, and the reason "this id names a
+    table" had to be re-derived by every reader. It is a foreign-key violation now."""
+    owner = await make_user(db_session, "events-dangling-reservation-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload()]),
+    )
+
+    db_session.add(
+        TournamentEventPoolTable(
+            tournament_id=tournament_id,
+            event_id=event.id,
+            pool_id="p-os-1",
+            table_id=str(uuid.uuid4()),
+            position=0,
+        )
+    )
+    with pytest.raises(IntegrityError) as excinfo:
+        await db_session.commit()
+    assert POOL_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
+    await db_session.rollback()
+
+
+async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Deleting a venue table takes the reservations naming it — and only those — with
+    no error and no ceremony.
+
+    This is the ADR's asymmetry, from the reservation's side. A fixture *placed* at a
+    table blocks the delete (``ON DELETE RESTRICT``) so the director can be asked; a
+    pool that merely *reserves* it is not consulted, because a table breaking or freeing
+    up is ordinary venue traffic and the pool simply reserves one fewer. Under the JSONB
+    array the pool went on listing the dead id forever; the CASCADE is what makes
+    "reserves one fewer" true in the database rather than derived by every reader.
+
+    Deleted at the row, deliberately, rather than through the tournament-edit verb: this
+    is a claim about the constraint, and the verb's own 409/opt-in path is pinned in
+    ``test_tournaments.py``. The surviving reservation is asserted too — a cascade that
+    took the whole pool's reservations would satisfy "the dead one is gone".
+    """
+    owner = await make_user(db_session, "events-table-cascade-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    table_1, table_2 = [str(table.id) for table in tournament.tables]
+    doomed = tournament.tables[1]
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
+    )
+    event_id = event.id
+
+    await db_session.delete(doomed)
+    await db_session.commit()
+
+    db_session.expire_all()
+    assert await _reservation_rows(db_session, event_id) == [
+        (tournament_id, "p-os-1", table_1, 0)
+    ]
+    # The pool itself is untouched — a reservation went, not a pool.
+    assert (
+        await db_session.execute(
+            select(TournamentEventPool.id).where(
+                TournamentEventPool.event_id == event_id
+            )
+        )
+    ).scalars().all() == ["p-os-1"]
+
+
+async def test_removing_a_pool_takes_its_table_reservations_with_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A pool dropped from a PATCH takes its reservations with it, through the same
+    ``delete-orphan``/CASCADE pair the pool itself goes by — so no reservation outlives
+    the pool that made it."""
+    owner = await make_user(db_session, "events-pool-cascade-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    table_1, _table_2 = [str(table.id) for table in tournament.tables]
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload(table_1)]),
+    )
+    event_id = event.id
+
+    await update_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate({"pools": []}),
+    )
+
+    db_session.expire_all()
+    assert await _reservation_rows(db_session, event_id) == []
+
+
+async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The reservations are written as a **diff** keyed on the table id, not replaced
+    wholesale — and a reorder is expressible.
+
+    Both halves matter and they are the same mechanism. A wholesale replace would ask
+    the unit of work to INSERT a primary key it is about to DELETE (it emits the inserts
+    first), so re-sending a table the pool already reserves would die on
+    ``pk_tournament_event_pool_tables``. And swapping two reservations moves one onto a
+    ``position`` the other has not vacated yet, which is why the uniqueness on
+    ``(event_id, pool_id, position)`` is ``DEFERRABLE INITIALLY DEFERRED`` — checked
+    immediately it would refuse a transaction whose end state is perfectly unique.
+
+    The ``created_at`` of the surviving row is what says its identity was *kept* rather
+    than deleted and re-made under the same key: a re-inserted row would carry a fresh
+    one.
+    """
+    owner = await make_user(db_session, "events-reservation-diff-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    table_1, table_2 = [str(table.id) for table in tournament.tables]
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
+    )
+    event_id = event.id
+    created_at = (
+        await db_session.execute(
+            select(TournamentEventPoolTable.created_at).where(
+                TournamentEventPoolTable.event_id == event_id,
+                TournamentEventPoolTable.table_id == table_1,
+            )
+        )
+    ).scalar_one()
+
+    await update_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {"pools": [_pool_payload(table_2, table_1)]}
+        ),
+    )
+
+    db_session.expire_all()
+    assert await _reservation_rows(db_session, event_id) == [
+        (tournament_id, "p-os-1", table_2, 0),
+        (tournament_id, "p-os-1", table_1, 1),
+    ]
+    assert (
+        await db_session.execute(
+            select(TournamentEventPoolTable.created_at).where(
+                TournamentEventPoolTable.event_id == event_id,
+                TournamentEventPoolTable.table_id == table_1,
+            )
+        )
+    ).scalar_one() == created_at

@@ -29,6 +29,7 @@ from app.models import (
     RolePermission,
     Tournament,
     TournamentEventPool,
+    TournamentEventPoolTable,
     User,
     UserLeagueRating,
     UserRole,
@@ -162,10 +163,19 @@ def event_pools(
     as the write boundary parses them, so a seeded pool and a POSTed one are the same
     row.
 
-    With a ``tournament``, each pool's ``table_ids`` are also rewritten from the
-    positional aliases a test writes (``"t1"``, ``"t2"``, …) into the real ids of that
-    tournament's catalogue rows — 1-based and in catalogue order — because a table id is
-    a server-minted UUID a seed cannot spell as a literal.
+    A pool's ``table_ids`` become ``TournamentEventPoolTable`` **rows** (ADR 20260801),
+    so naming any table needs the ``tournament`` — twice over. It supplies the alias
+    map, rewriting the positional aliases a test writes (``"t1"``, ``"t2"``, …) into the
+    real ids of that tournament's catalogue rows (1-based, in catalogue order), because
+    a table id is a server-minted UUID a seed cannot spell as a literal. And it supplies
+    the ``tournament_id`` every reservation row carries — the denormalized column the
+    composite foreign keys compare, without which the row is not one Postgres accepts.
+    It must already be flushed, since that id is the database's to mint.
+
+    Naming a table with no ``tournament`` is a ``ValueError`` rather than a silently
+    empty reservation list: a seed that means "this pool runs on two tables" and gets a
+    pool running on none would go on passing while testing something else. (A pool with
+    no ``table_ids`` at all needs no tournament, which is most of the suite.)
     """
     by_alias = (
         {
@@ -179,6 +189,13 @@ def event_pools(
     for position, pool in enumerate(pools):
         slot = pool.get("slot") or {}
         table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
+        if table_ids and tournament is None:
+            raise ValueError(
+                f"pool {pool['id']!r} reserves {table_ids} but no tournament was "
+                "given: a reservation is a row carrying the tournament's id, so the "
+                "seed has to say which tournament's tables these are — pass "
+                "tournament=… (or with_table_aliases(tournament, pools))"
+            )
         rows.append(
             TournamentEventPool(
                 id=pool["id"],
@@ -187,10 +204,34 @@ def event_pools(
                 slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
                 slot_start=time.fromisoformat(slot.get("start", "09:00")),
                 slot_end=time.fromisoformat(slot.get("end", "18:00")),
-                table_ids=[by_alias.get(table_id, table_id) for table_id in table_ids],
+                tables=_reservations(tournament, table_ids, by_alias),
             )
         )
     return rows
+
+
+def _reservations(
+    tournament: Tournament | None, table_ids: Sequence[str], by_alias: Mapping[str, str]
+) -> list[TournamentEventPoolTable]:
+    """The reservation rows one seeded pool's ``table_ids`` become, aliases resolved and
+    positioned in the order given.
+
+    Unlike the write path (``app.tournament_pools._reservations``), an id that no
+    catalogue row holds is **not** dropped — it is passed through to the database, which
+    refuses it. This is the direct-to-database seam, and a seed that names a table this
+    tournament does not have is a mistake in the seed; swallowing it here would hide the
+    very foreign keys these rows exist to have.
+    """
+    if tournament is None:
+        return []
+    return [
+        TournamentEventPoolTable(
+            tournament_id=tournament.id,
+            table_id=by_alias.get(table_id, table_id),
+            position=position,
+        )
+        for position, table_id in enumerate(table_ids)
+    ]
 
 
 def with_table_aliases(

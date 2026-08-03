@@ -37,6 +37,7 @@ from app.models.tournament import (
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_event_pool import TournamentEventPool
+from app.models.tournament_event_pool_table import TournamentEventPoolTable
 from app.models.tournament_fixture import TournamentFixture
 from app.models.tournament_table import VenueTable
 from app.models.user import User
@@ -81,6 +82,7 @@ __all__ = [
     "TournamentEvent",
     "TournamentEventDrawSettings",
     "TournamentEventPool",
+    "TournamentEventPoolTable",
     "TournamentFixture",
     "TournamentStatus",
     "User",

@@ -140,7 +140,7 @@ async def create_event(
         # relationship. ``stored_pools`` composes them — turning the WRITE shape, which
         # carries no ``position``, into rows that do, from each pool's index in the list
         # this payload sent.
-        pools=stored_pools(payload.pools),
+        pools=stored_pools(tournament, payload.pools),
     )
     db.add(event)
     await db.commit()
@@ -586,7 +586,7 @@ async def update_event(
     for key, value in changes.items():
         setattr(event, key, value)
     if updates.pools is not None:
-        apply_event_pools(event, updates.pools)
+        apply_event_pools(tournament, event, updates.pools)
     if draw_settings is not None:
         # The one place an event's draw configuration moves after create (the freeze
         # above has already refused this on a cut draw). Assigned through the settings

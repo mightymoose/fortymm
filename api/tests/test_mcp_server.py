@@ -3520,9 +3520,13 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
                     "id": "p-1",
                     "name": "Pool A",
                     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
-                    "table_ids": ["t1"],
+                    # No tables: this tournament is seeded without a catalogue, and a
+                    # reservation is a row foreign-keyed to a real one (ADR 20260801).
+                    # Nothing here is about the venue — the target is the draw-type
+                    # freeze.
+                    "table_ids": [],
                 }
-            ]
+            ],
         ),
     )
     db.add(event)

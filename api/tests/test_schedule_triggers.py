@@ -126,7 +126,8 @@ async def _make_tournament(
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": [str(row.id) for row in catalogue],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db.add(event)
@@ -813,6 +814,10 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
     windows for the survivor — that IS a solver-input change: one row."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
+    # The tournament itself, not just its id: the second event's pool reserves the same
+    # two tables, and a reservation is a row keyed on the catalogue it names.
+    tournament = await db_session.get(Tournament, tournament_id)
+    assert tournament is not None
     second_event = TournamentEvent(
         tournament_id=tournament_id,
         name="Second Singles",
@@ -831,7 +836,8 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
                     "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],
                 }
-            ]
+            ],
+            tournament=tournament,
         ),
     )
     db_session.add(second_event)

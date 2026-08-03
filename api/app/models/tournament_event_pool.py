@@ -12,15 +12,15 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
-    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.tournament import TournamentEvent
+    from app.models.tournament_event_pool_table import TournamentEventPoolTable
 
 
 class TournamentEventPool(Base):
@@ -137,14 +137,13 @@ class TournamentEventPool(Base):
     slot_date: Mapped[date] = mapped_column(Date, nullable=False)
     slot_start: Mapped[time] = mapped_column(Time, nullable=False)
     slot_end: Mapped[time] = mapped_column(Time, nullable=False)
-    #: The tables this pool reserves, still as a JSONB array of table-id text. It
-    #: becomes ``tournament_event_pool_tables`` — rows with composite FKs to both sides,
-    #: so a pool cannot reserve another tournament's table — in the next chore of this
-    #: slice; the ADR's "the tournament-scoping stops at the join table" is about that
-    #: table, not this column.
-    table_ids: Mapped[list[str]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'[]'::jsonb")
-    )
+    # There is deliberately no ``table_ids`` column. The tables a pool reserves were a
+    # NOT NULL JSONB array of table-id strings, which could name a table of another
+    # tournament (or of none); they are the ``tables`` relationship below now — rows
+    # with composite foreign keys to both sides, so a cross-tournament reservation is
+    # not constructible (ADR 20260801, "the tournament-scoping stops at the join
+    # table"). The wire shape is unchanged: ``Pool.table_ids`` is composed from those
+    # rows, in ``position`` order, by ``app.tournament_pools``.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -156,3 +155,30 @@ class TournamentEventPool(Base):
     )
 
     event: Mapped["TournamentEvent"] = relationship(back_populates="pools")
+
+    # The tables this pool reserves (ADR 20260801), in the order the director sent them
+    # — which is what ``TournamentEventPoolTable.position`` carries and what
+    # ``Pool.table_ids`` is composed from.
+    #
+    # ``lazy="selectin"`` for the reason ``TournamentEvent.pools`` itself is eager:
+    # async SQLAlchemy raises rather than emitting a lazy load, so every reader that
+    # reaches a pool's tables — the serializer, the solver's input load, the preview,
+    # the re-solve trigger's before/after comparison — would need to remember an option.
+    # SQLAlchemy chains it onto the pools' own selectin load, so a page of events pays
+    # ONE extra statement however many pools it holds (the
+    # ``EXPECTED_TOURNAMENT_*_STATEMENTS`` pins moved by exactly one).
+    #
+    # ``delete-orphan`` is what the reservation *write* leans on — a table dropped from
+    # the submitted list is removed by taking it out of this collection — and
+    # ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` is the delete path for
+    # everything that does not load the collection first (the event- and
+    # tournament-delete cascades, a raw DELETE, psql). Removing the TABLE is the third
+    # path, and the ORM is never involved in it at all: that cascade comes off
+    # ``tournament_tables``, which has no relationship pointing here.
+    tables: Mapped[list["TournamentEventPoolTable"]] = relationship(
+        back_populates="pool",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="TournamentEventPoolTable.position",
+    )
