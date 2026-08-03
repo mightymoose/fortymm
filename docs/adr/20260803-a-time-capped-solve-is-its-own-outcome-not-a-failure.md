@@ -32,8 +32,12 @@ one wears the third one's clothes.
 
 ## Decision
 
-**`timed_out` becomes a fourth terminal `ScheduleSolveStatus`, beside `done`,
-`infeasible` and `failed`.**
+**`timed_out` becomes a fourth terminal `ScheduleSolveStatus`, beside
+`succeeded`, `infeasible` and `failed`.**
+
+`SolverVerdict` is left alone — it stays `optimal | feasible | infeasible`, and a
+timed-out run continues to record no verdict at all, because it genuinely reached
+none. The two enums are different facts, as that model already documents.
 
 A time-capped run stops being classified as a failure at the point it is
 recorded, rather than being reclassified downstream by reading a magic string.
