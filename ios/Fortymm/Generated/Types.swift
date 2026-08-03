@@ -2912,6 +2912,8 @@ internal enum Components {
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
                 case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/UnplaceableFixturesRead`.
+                case unplaceableFixtures(Components.Schemas.UnplaceableFixturesRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -2934,6 +2936,8 @@ internal enum Components {
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
                         self = .poolOverCapacity(try .init(from: decoder))
+                    case "unplaceable_fixtures":
+                        self = .unplaceableFixtures(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -2955,6 +2959,8 @@ internal enum Components {
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
                     case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .unplaceableFixtures(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -3404,12 +3410,16 @@ internal enum Components {
                 case skipMerge = "skip_merge"
             }
         }
-        /// One of the in-progress matches caught in a conflict, named the way the
-        /// director reads a fixture — by its **matchup**, the two players facing off
-        /// (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
-        /// ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
-        /// it from the names. Resolved once at apply from the pure conflict's fixture
-        /// ids; the client formats the ``a vs b`` label itself.
+        /// One fixture, named the way the director reads a fixture — by its
+        /// **matchup**, the two players facing off (:attr:`player_a` / :attr:`player_b`,
+        /// their display usernames). The raw ``fixture_id`` rides along so a surface can
+        /// key/deep-link without re-deriving it from the names. Resolved once at apply
+        /// from the pure fixture ids; the client formats the ``a vs b`` label itself.
+        ///
+        /// Shared by both id-carrying unions: the in-progress matches caught in a
+        /// :class:`TableConflictRead` / :class:`PlayerConflictRead`, and the fixtures an
+        /// :class:`UnplaceableFixturesRead` says could not be placed. One shape, so the
+        /// client renders a named fixture the same way wherever it appears.
         ///
         /// - Remark: Generated from `#/components/schemas/ConflictFixtureRead`.
         internal struct ConflictFixtureRead: Codable, Hashable, Sendable {
@@ -6102,8 +6112,9 @@ internal enum Components {
                 case submittedAt = "submitted_at"
             }
         }
-        /// CP-SAT proved the day infeasible yet no structural arm explains it — the
-        /// whole-day residual. No pool: it carries only the day aggregate,
+        /// CP-SAT proved the day infeasible, no structural arm explains it, and the
+        /// diagnostic solve could not extract a conflict core either — the whole-day
+        /// floor. No pool and no fixtures: it carries only the day aggregate,
         /// ``required_min`` against ``available_min``, as integer minutes.
         ///
         /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead`.
@@ -8283,6 +8294,8 @@ internal enum Components {
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
                 case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/UnplaceableFixturesRead`.
+                case unplaceableFixtures(Components.Schemas.UnplaceableFixturesRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -8305,6 +8318,8 @@ internal enum Components {
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
                         self = .poolOverCapacity(try .init(from: decoder))
+                    case "unplaceable_fixtures":
+                        self = .unplaceableFixtures(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -8326,6 +8341,8 @@ internal enum Components {
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
                     case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .unplaceableFixtures(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -9091,6 +9108,8 @@ internal enum Components {
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
                 case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/UnplaceableFixturesRead`.
+                case unplaceableFixtures(Components.Schemas.UnplaceableFixturesRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -9113,6 +9132,8 @@ internal enum Components {
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
                         self = .poolOverCapacity(try .init(from: decoder))
+                    case "unplaceable_fixtures":
+                        self = .unplaceableFixtures(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -9134,6 +9155,8 @@ internal enum Components {
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
                     case let .poolOverCapacity(value):
+                        try value.encode(to: encoder)
+                    case let .unplaceableFixtures(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -11376,6 +11399,46 @@ internal enum Components {
                     "table_catalogue",
                     "league_id"
                 ])
+            }
+        }
+        /// The **conflict core**: the fixtures a proven-infeasible day could not
+        /// place, each named by its matchup (:class:`ConflictFixtureRead` — the same
+        /// shape a placement conflict names a fixture with). The client's sentence is
+        /// *"these could not be placed"*, never *"you must remove exactly these"*: the
+        /// core is the drop set of a capped optimization, so it is an upper bound and
+        /// **minimality is never claimed** — which is why there is no proven/partial
+        /// flag here to hang a stronger claim on.
+        ///
+        /// Fixtures only, no players: an over-subscribed human is proved earlier and
+        /// more cheaply by :class:`PlayerOverSubscribedRead`, so naming players here
+        /// could only be a guess. The DB-aware mirror of
+        /// :class:`app.scheduling.UnplaceableFixtures`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnplaceableFixturesRead`.
+        internal struct UnplaceableFixturesRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UnplaceableFixturesRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case unplaceableFixtures = "unplaceable_fixtures"
+            }
+            /// - Remark: Generated from `#/components/schemas/UnplaceableFixturesRead/kind`.
+            internal var kind: Components.Schemas.UnplaceableFixturesRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/UnplaceableFixturesRead/fixtures`.
+            internal var fixtures: [Components.Schemas.ConflictFixtureRead]
+            /// Creates a new `UnplaceableFixturesRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - fixtures:
+            internal init(
+                kind: Components.Schemas.UnplaceableFixturesRead.KindPayload? = nil,
+                fixtures: [Components.Schemas.ConflictFixtureRead]
+            ) {
+                self.kind = kind
+                self.fixtures = fixtures
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case fixtures
             }
         }
         /// Just the unread total — the cheap endpoint the bell badge polls.

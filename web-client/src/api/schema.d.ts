@@ -1794,7 +1794,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["UnplaceableFixturesRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
@@ -1912,12 +1912,16 @@ export interface components {
         };
         /**
          * ConflictFixtureRead
-         * @description One of the in-progress matches caught in a conflict, named the way the
-         *     director reads a fixture — by its **matchup**, the two players facing off
-         *     (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
-         *     ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
-         *     it from the names. Resolved once at apply from the pure conflict's fixture
-         *     ids; the client formats the ``a vs b`` label itself.
+         * @description One fixture, named the way the director reads a fixture — by its
+         *     **matchup**, the two players facing off (:attr:`player_a` / :attr:`player_b`,
+         *     their display usernames). The raw ``fixture_id`` rides along so a surface can
+         *     key/deep-link without re-deriving it from the names. Resolved once at apply
+         *     from the pure fixture ids; the client formats the ``a vs b`` label itself.
+         *
+         *     Shared by both id-carrying unions: the in-progress matches caught in a
+         *     :class:`TableConflictRead` / :class:`PlayerConflictRead`, and the fixtures an
+         *     :class:`UnplaceableFixturesRead` says could not be placed. One shape, so the
+         *     client renders a named fixture the same way wherever it appears.
          */
         ConflictFixtureRead: {
             /** Fixture Id */
@@ -3013,8 +3017,9 @@ export interface components {
         };
         /**
          * NoSingleCauseRead
-         * @description CP-SAT proved the day infeasible yet no structural arm explains it — the
-         *     whole-day residual. No pool: it carries only the day aggregate,
+         * @description CP-SAT proved the day infeasible, no structural arm explains it, and the
+         *     diagnostic solve could not extract a conflict core either — the whole-day
+         *     floor. No pool and no fixtures: it carries only the day aggregate,
          *     ``required_min`` against ``available_min``, as integer minutes.
          */
         NoSingleCauseRead: {
@@ -3913,7 +3918,7 @@ export interface components {
             /** Events */
             events: components["schemas"]["PreviewEventBreakdown"][];
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["UnplaceableFixturesRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Notes */
             notes: string[];
             /**
@@ -4271,7 +4276,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["UnplaceableFixturesRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
@@ -5036,6 +5041,30 @@ export interface components {
             table_catalogue?: components["schemas"]["TournamentTable"][] | null;
             /** League Id */
             league_id?: string | null;
+        };
+        /**
+         * UnplaceableFixturesRead
+         * @description The **conflict core**: the fixtures a proven-infeasible day could not
+         *     place, each named by its matchup (:class:`ConflictFixtureRead` — the same
+         *     shape a placement conflict names a fixture with). The client's sentence is
+         *     *"these could not be placed"*, never *"you must remove exactly these"*: the
+         *     core is the drop set of a capped optimization, so it is an upper bound and
+         *     **minimality is never claimed** — which is why there is no proven/partial
+         *     flag here to hang a stronger claim on.
+         *
+         *     Fixtures only, no players: an over-subscribed human is proved earlier and
+         *     more cheaply by :class:`PlayerOverSubscribedRead`, so naming players here
+         *     could only be a guess. The DB-aware mirror of
+         *     :class:`app.scheduling.UnplaceableFixtures`.
+         */
+        UnplaceableFixturesRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unplaceable_fixtures";
+            /** Fixtures */
+            fixtures: components["schemas"]["ConflictFixtureRead"][];
         };
         /**
          * UnreadCountResponse
