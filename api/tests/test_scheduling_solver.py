@@ -9,11 +9,13 @@ cap so the suite stays fast and deterministic.
 
 import dataclasses
 import random
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from ortools.sat.python import cp_model
 
+from app import scheduling
 from app.scheduling import (
     BUCKET_MIN,
     REST_MIN,
@@ -42,11 +44,13 @@ from app.scheduling import (
     SolveResult,
     TableConflict,
     TableId,
+    UnplaceableFixtures,
     Verdict,
     Window,
     WindowTooShortForMatch,
     _build_model,
     _chosen_table,
+    _diagnose_unplaceable,
     _SolverModel,
     match_minutes,
     solve,
@@ -570,8 +574,9 @@ class TestInfeasibility:
         its own (25 <= 45), so the pool is never reported as over capacity even
         though pinned + unpinned would exceed it. This is the completeness
         trade-off: with a single shared table the pin's occupancy genuinely does
-        leave no room, so CP-SAT proves it infeasible and it surfaces as the
-        honest NoSingleCause residual, never a false PoolOverCapacity."""
+        leave no room, so CP-SAT proves it infeasible and the residual explains
+        it — as the conflict core naming the *unpinned* fixture (the promise is
+        not droppable), never as a false PoolOverCapacity."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # 25 min pinned [0,25]
@@ -585,7 +590,7 @@ class TestInfeasibility:
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
         assert "pool_over_capacity" not in by_kind
-        assert result.reasons == (NoSingleCause(required_min=50, available_min=45),)
+        assert result.reasons == (UnplaceableFixtures(fixture_ids=(FixtureId("F2"),)),)
 
     def test_no_tables_pool_with_only_a_pinned_fixture_is_not_flagged(self) -> None:
         """Regression: a pool with no tables whose only fixture is *pinned* to a
@@ -642,7 +647,7 @@ class TestInfeasibility:
         assert "pool_over_capacity" not in by_kind
         assert result.reasons == ()
 
-    def test_a_player_shared_across_pools_is_no_single_cause(self) -> None:
+    def test_a_player_shared_across_pools_is_named_by_the_conflict_core(self) -> None:
         """Every certain guard passes — each match fits its own pool's window,
         each pool has a table to itself and is well under aggregate capacity, and
         no *single pool* over-subscribes anyone (one match each) — yet the two
@@ -652,9 +657,9 @@ class TestInfeasibility:
 
         This is the shape of infeasibility the per-(pool, player) pre-check
         deliberately does NOT claim: it is scoped to one pool, so a human split
-        across pools is beyond what it can prove. No single structural cause
-        explains it, so the residual :class:`NoSingleCause` is attached, with
-        aggregate room to spare (``required_min <= available_min``)."""
+        across pools is beyond what it can prove. The diagnostic solve answers
+        instead — dropping either one of the two makes the day fit, so the core
+        names exactly one fixture."""
         p1, p2, p3 = _players(3)
         table_ids = _tables(2)
         snapshot = ScheduleSnapshot(
@@ -674,10 +679,9 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
-        assert result.reasons == (NoSingleCause(required_min=50, available_min=60),)
         (only,) = result.reasons
-        assert isinstance(only, NoSingleCause)
-        assert only.required_min <= only.available_min
+        assert isinstance(only, UnplaceableFixtures)
+        assert only.fixture_ids in ((FixtureId("F1"),), (FixtureId("F2"),))
 
     def test_pool_with_no_tables_is_infeasible(self) -> None:
         p1, p2 = _players(2)
@@ -1855,9 +1859,9 @@ class TestOptionalPlacementVariant:
         """The behavioural half, and the falsification this chore turns on.
 
         The day is infeasible *only* because of one human's rest floor (see
-        :func:`_rest_conflict_snapshot`) — the ordinary solve proves it and can
-        say nothing but ``NoSingleCause``. The max-placed model must be able to
-        drop one of the two fixtures and become satisfiable, placing exactly
+        :func:`_rest_conflict_snapshot`) — no certain pre-check can prove it, so
+        the ordinary solve has to reach CP-SAT. The max-placed model must be able
+        to drop one of the two fixtures and become satisfiable, placing exactly
         one. It can do that only if the *player* intervals are optional: with
         them left mandatory the model stays infeasible however the ``placed``
         literals are set, so this test reds — which is the check that the trap
@@ -1866,7 +1870,7 @@ class TestOptionalPlacementVariant:
 
         ordinary = solve(snapshot, time_cap_s=CAP)
         assert ordinary.verdict is Verdict.infeasible
-        assert [type(reason) for reason in ordinary.reasons] == [NoSingleCause]
+        assert [type(reason) for reason in ordinary.reasons] == [UnplaceableFixtures]
 
         built = _build_model(snapshot, optional_placement=True)
         assert isinstance(built, _SolverModel)
@@ -1941,3 +1945,252 @@ class TestOptionalPlacementVariant:
                 for present in built.presences[fixture.id].values()
             )
             assert chosen == int(solver.Value(built.placed_literals[fixture.id]))
+
+
+def _pin_blocked_snapshot() -> ScheduleSnapshot:
+    """A day whose *only* unplaceable fixture is unambiguous.
+
+    One table, a 35-minute window, and a called 15-minute match (``F2``) holding
+    that table from minute 0 with ``P1`` in it. ``F1`` is unpinned and also has
+    ``P1``, so it can start no earlier than 25 (the pin ends at 15, ``P1`` owes
+    10 minutes of rest) — but a 15-minute match must start by 20 to end inside
+    the window. No legal start exists, and no certain pre-check can prove it: the
+    pool has a table, one match fits the 35-minute window, unpinned demand is 15
+    against 35 table-minutes, and ``P1`` has only one *unpinned* match, so the
+    per-player pigeonhole does not apply.
+
+    The core is therefore exactly ``F1``: the promise is not droppable, so it is
+    the only fixture the diagnostic may name."""
+    table_ids = _tables(1)
+    return ScheduleSnapshot(
+        table_ids=table_ids,
+        pools=(SchedulePool(PoolId("A"), table_ids, Window(0, 35)),),
+        events=(EventSettings(EventId("E1"), 1),),
+        fixtures=(
+            _fixture(1, PlayerId("P1"), PlayerId("P2")),
+            _fixture(2, PlayerId("P1"), PlayerId("P3"), pin=Pin(table_ids[0], 0)),
+        ),
+        now_min=0,
+    )
+
+
+class _DiagnosticSpy:
+    """Counts the diagnostic solves :func:`solve` actually runs (and the caps it
+    runs them under), delegating to the real one so the answer is unchanged.
+
+    Interposed on the module attribute, which is how ``solve`` looks the helper
+    up — so "the fast path pays nothing" is *asserted*, not assumed."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.caps: list[float] = []
+
+    def __call__(
+        self,
+        snapshot: ScheduleSnapshot,
+        *,
+        time_cap_s: float,
+        num_search_workers: int,
+    ) -> tuple[UnplaceableFixtures | None, int]:
+        self.calls += 1
+        self.caps.append(time_cap_s)
+        return _diagnose_unplaceable(
+            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+        )
+
+
+class _UnknownSolver:
+    """A ``CpSolver`` stand-in that reports UNKNOWN without searching — the
+    time-cap outcome, which is otherwise reachable only by racing a real cap.
+    Mirrors the three members :func:`solve` uses."""
+
+    def __init__(self) -> None:
+        self.parameters = SimpleNamespace()
+
+    def Solve(self, model: Any) -> int:  # noqa: N802 - mirrors CpSolver's API
+        return cp_model.UNKNOWN
+
+    def WallTime(self) -> float:  # noqa: N802 - mirrors CpSolver's API
+        return 0.0
+
+
+class TestConflictCoreDiagnostic:
+    """The second, max-placed solve behind a *proven* infeasibility (ADR "the
+    conflict core is a second, max-placed solve over optional placements"): it
+    runs on that one path and nowhere else, names the fixtures it could not
+    place, never claims minimality, answers the same way every time, and leaves
+    ``NoSingleCause`` underneath as the floor."""
+
+    def test_a_proven_infeasible_day_names_the_fixtures_it_could_not_place(
+        self,
+    ) -> None:
+        """The headline: CP-SAT proves the day does not fit, and the reason is no
+        longer a whole-day aggregate but the fixture that could not be placed —
+        the unpinned one. The called match is never named: it is not droppable,
+        so "cancel it" is not a remedy this arm is allowed to imply."""
+        result = solve(_pin_blocked_snapshot(), time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.reasons == (UnplaceableFixtures(fixture_ids=(FixtureId("F1"),)),)
+
+    def test_the_core_holds_every_fixture_that_had_to_be_dropped(self) -> None:
+        """Not just the first one found: two independent, identical conflicts in
+        one day (two pools, each with a pin blocking its own single table) yield
+        a core naming both unplaceable fixtures, sorted."""
+        table_ids = _tables(2)
+        snapshot = ScheduleSnapshot(
+            table_ids=table_ids,
+            pools=(
+                SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 35)),
+                SchedulePool(PoolId("B"), (TableId("T2"),), Window(0, 35)),
+            ),
+            events=(EventSettings(EventId("E1"), 1),),
+            fixtures=(
+                _fixture(1, PlayerId("P1"), PlayerId("P2"), pool="A"),
+                _fixture(
+                    2,
+                    PlayerId("P1"),
+                    PlayerId("P3"),
+                    pool="A",
+                    pin=Pin(TableId("T1"), 0),
+                ),
+                _fixture(3, PlayerId("P4"), PlayerId("P5"), pool="B"),
+                _fixture(
+                    4,
+                    PlayerId("P4"),
+                    PlayerId("P6"),
+                    pool="B",
+                    pin=Pin(TableId("T2"), 0),
+                ),
+            ),
+            now_min=0,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (
+            UnplaceableFixtures(fixture_ids=(FixtureId("F1"), FixtureId("F3"))),
+        )
+
+    def test_a_feasible_day_runs_no_diagnostic_solve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fast path pays nothing — asserted, not assumed. A day that solves
+        never enters the diagnostic branch at all, so the extra budget is spent
+        only where the extra answer is wanted."""
+        spy = _DiagnosticSpy()
+        monkeypatch.setattr(scheduling, "_diagnose_unplaceable", spy)
+
+        result = solve(_golden_snapshot(), time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        assert result.reasons == ()
+        assert spy.calls == 0
+
+    def test_a_certain_pre_check_runs_no_diagnostic_solve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A structurally-proven infeasibility never reaches CP-SAT, so it never
+        reaches the diagnostic either: a certain arm is a cheaper and more
+        specific answer than a drop set, and paying for a second solve to
+        re-explain it would be pure waste."""
+        spy = _DiagnosticSpy()
+        monkeypatch.setattr(scheduling, "_diagnose_unplaceable", spy)
+
+        players = _players(6)
+        fixtures = tuple(
+            _fixture(n, players[2 * (n - 1)], players[2 * n - 1]) for n in (1, 2, 3)
+        )
+        result = solve(
+            _one_pool_snapshot(fixtures, tables=1, window=(0, 60)), time_cap_s=CAP
+        )
+
+        assert [reason.kind for reason in result.reasons] == ["pool_over_capacity"]
+        assert spy.calls == 0
+
+    def test_an_unknown_outcome_carries_no_reasons_and_no_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``unknown`` is "did not finish", not "does not fit": there is nothing
+        proven to explain, so no reason is attached and no second solve is run.
+        Running one here would spend a *further* budget on a run that already
+        exhausted its own."""
+        spy = _DiagnosticSpy()
+        monkeypatch.setattr(scheduling, "_diagnose_unplaceable", spy)
+        monkeypatch.setattr(scheduling.cp_model, "CpSolver", _UnknownSolver)
+
+        result = solve(_rest_conflict_snapshot(), time_cap_s=CAP)
+
+        assert result.verdict is Verdict.unknown
+        assert result.reasons == ()
+        assert spy.calls == 0
+
+    def test_the_diagnostic_runs_under_its_own_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its own budget, not a share of the main solve's: the cap the caller
+        passes for the diagnostic is the one it runs under."""
+        spy = _DiagnosticSpy()
+        monkeypatch.setattr(scheduling, "_diagnose_unplaceable", spy)
+
+        result = solve(
+            _pin_blocked_snapshot(), time_cap_s=CAP, diagnostic_time_cap_s=1.5
+        )
+
+        assert result.verdict is Verdict.infeasible
+        assert spy.calls == 1
+        assert spy.caps == [1.5]
+
+    def test_the_core_is_identical_on_every_re_run(self) -> None:
+        """Determinism, on the instance most able to break it: the rest conflict
+        admits *either* fixture as the drop, so a tie-broken answer would drift
+        between runs. Same seed, same worker count, same model construction —
+        same core, three times over."""
+        snapshot = _rest_conflict_snapshot()
+        cores = [solve(snapshot, time_cap_s=CAP).reasons for _ in range(3)]
+        assert cores[0] == cores[1] == cores[2]
+        (only,) = cores[0]
+        assert isinstance(only, UnplaceableFixtures)
+        assert len(only.fixture_ids) == 1
+
+    def test_no_single_cause_survives_as_the_floor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the diagnostic cannot answer — it came back infeasible itself
+        (pins are not droppable), or exhausted its own cap with no solution — the
+        whole-day aggregate is still there underneath. The stub stands in for
+        those outcomes because they are hard to *stage*: a pin can always slide
+        later on its own table, so pins-alone infeasibility is nearly
+        unreachable, and racing a real cap would be flaky. What the helper
+        returns on each of them is asserted directly below."""
+        monkeypatch.setattr(
+            scheduling, "_diagnose_unplaceable", lambda *a, **k: (None, 7)
+        )
+
+        result = solve(_rest_conflict_snapshot(), time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (NoSingleCause(required_min=30, available_min=160),)
+        # The diagnostic's own wall time is folded into the run's: an infeasible
+        # run costs proving it AND trying to explain it.
+        assert result.stats.wall_time_ms >= 7
+
+    def test_the_helper_declines_to_answer_when_it_finds_no_solution(self) -> None:
+        """The floor's trigger, at the seam: a diagnostic solve that reaches no
+        solution (here because its cap is exhausted — the ``_UnknownSolver`` says
+        so without racing a real clock) reports *no* core rather than an empty
+        one. An empty core would claim nothing while looking like an answer."""
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(scheduling.cp_model, "CpSolver", _UnknownSolver)
+            core, _wall_ms = _diagnose_unplaceable(
+                _rest_conflict_snapshot(), time_cap_s=CAP, num_search_workers=1
+            )
+        assert core is None
+
+    def test_the_arm_carries_no_minimality_flag(self) -> None:
+        """The drop set is an upper bound, never a proven minimum (the
+        diagnostic may stop at FEASIBLE under its cap). The arm therefore carries
+        the fixtures and nothing else — no proven/partial field for a caller to
+        build a stronger claim on, and no nested player list (a provably
+        over-subscribed player is caught earlier, by PlayerOverSubscribed)."""
+        names = [f.name for f in dataclasses.fields(UnplaceableFixtures)]
+        assert names == ["fixture_ids", "kind"]

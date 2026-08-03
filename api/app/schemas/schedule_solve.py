@@ -24,6 +24,23 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, TypeAdapter
 
 
+class ConflictFixtureRead(BaseModel):
+    """One fixture, named the way the director reads a fixture — by its
+    **matchup**, the two players facing off (:attr:`player_a` / :attr:`player_b`,
+    their display usernames). The raw ``fixture_id`` rides along so a surface can
+    key/deep-link without re-deriving it from the names. Resolved once at apply
+    from the pure fixture ids; the client formats the ``a vs b`` label itself.
+
+    Shared by both id-carrying unions: the in-progress matches caught in a
+    :class:`TableConflictRead` / :class:`PlayerConflictRead`, and the fixtures an
+    :class:`UnplaceableFixturesRead` says could not be placed. One shape, so the
+    client renders a named fixture the same way wherever it appears."""
+
+    fixture_id: str
+    player_a: str
+    player_b: str
+
+
 class PoolHasNoTablesRead(BaseModel):
     """A pool with active fixtures but no tables at all — nowhere to place them.
     Resolved: the pool's display ``name`` (never the namespaced solver id)."""
@@ -81,9 +98,28 @@ class PlayerOverSubscribedRead(BaseModel):
     window_span_min: int
 
 
+class UnplaceableFixturesRead(BaseModel):
+    """The **conflict core**: the fixtures a proven-infeasible day could not
+    place, each named by its matchup (:class:`ConflictFixtureRead` — the same
+    shape a placement conflict names a fixture with). The client's sentence is
+    *"these could not be placed"*, never *"you must remove exactly these"*: the
+    core is the drop set of a capped optimization, so it is an upper bound and
+    **minimality is never claimed** — which is why there is no proven/partial
+    flag here to hang a stronger claim on.
+
+    Fixtures only, no players: an over-subscribed human is proved earlier and
+    more cheaply by :class:`PlayerOverSubscribedRead`, so naming players here
+    could only be a guess. The DB-aware mirror of
+    :class:`app.scheduling.UnplaceableFixtures`."""
+
+    kind: Literal["unplaceable_fixtures"] = "unplaceable_fixtures"
+    fixtures: list[ConflictFixtureRead]
+
+
 class NoSingleCauseRead(BaseModel):
-    """CP-SAT proved the day infeasible yet no structural arm explains it — the
-    whole-day residual. No pool: it carries only the day aggregate,
+    """CP-SAT proved the day infeasible, no structural arm explains it, and the
+    diagnostic solve could not extract a conflict core either — the whole-day
+    floor. No pool and no fixtures: it carries only the day aggregate,
     ``required_min`` against ``available_min``, as integer minutes."""
 
     kind: Literal["no_single_cause"] = "no_single_cause"
@@ -115,6 +151,7 @@ ResolvedReason = Annotated[
     | WindowTooShortForMatchRead
     | PoolOverCapacityRead
     | PlayerOverSubscribedRead
+    | UnplaceableFixturesRead
     | NoSingleCauseRead
     | PastWindowReasonRead,
     Field(discriminator="kind"),
@@ -136,19 +173,6 @@ def parse_infeasibility_reasons(
     if raw is None:
         return []
     return _REASONS_ADAPTER.validate_python(raw)
-
-
-class ConflictFixtureRead(BaseModel):
-    """One of the in-progress matches caught in a conflict, named the way the
-    director reads a fixture — by its **matchup**, the two players facing off
-    (:attr:`player_a` / :attr:`player_b`, their display usernames). The raw
-    ``fixture_id`` rides along so a surface can key/deep-link without re-deriving
-    it from the names. Resolved once at apply from the pure conflict's fixture
-    ids; the client formats the ``a vs b`` label itself."""
-
-    fixture_id: str
-    player_a: str
-    player_b: str
 
 
 class TableConflictRead(BaseModel):

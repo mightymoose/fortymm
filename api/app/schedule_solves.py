@@ -183,6 +183,7 @@ from app.scheduling import (
     SolveResult,
     TableConflict,
     TableId,
+    UnplaceableFixtures,
     Window,
     WindowTooShortForMatch,
     coalesce_rest_shadows,
@@ -199,6 +200,7 @@ from app.schemas.schedule_solve import (
     ResolvedConflict,
     ResolvedReason,
     TableConflictRead,
+    UnplaceableFixturesRead,
     WindowTooShortForMatchRead,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
@@ -536,11 +538,14 @@ class SolveInputs:
     usernames) are the sibling lookups the apply humanizes a solve's
     *placement conflicts* through (ADR "overlapping in-progress matches are
     tolerated and reported"). Same fingerprinted provenance, so the fresh read's
-    maps resolve exactly the ids a conflict carries. ``player_names`` does
-    double duty: it is also how the one *reason* that names a human
-    (:class:`~app.scheduling.PlayerOverSubscribed`) is resolved — it is built
+    maps resolve exactly the ids a conflict carries. Both do double duty for the
+    two *reason* arms that carry the same kinds of id: ``player_names`` resolves
+    the human named by :class:`~app.scheduling.PlayerOverSubscribed` (it is built
     from every drawn event's entrants, not just the in-progress ones, so it
-    covers any player a pre-check can blame."""
+    covers any player a pre-check can blame), and ``fixture_matchups`` names the
+    conflict core of :class:`~app.scheduling.UnplaceableFixtures` (it covers
+    every placeable fixture, which is a superset of the unpinned ones the core
+    can hold)."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
@@ -1118,6 +1123,19 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 required_min=reason.required_min,
                 window_span_min=reason.window_span_min,
             )
+        case UnplaceableFixtures():
+            # The conflict core, named the way a director reads a fixture: by its
+            # matchup, through the SAME ``_named_fixture`` helper (and the same
+            # ``ConflictFixtureRead`` shape) a placement conflict names its
+            # colliding fixtures with. Only unpinned, placeable fixtures can be in
+            # the core, and every placeable fixture's matchup was recorded in this
+            # same fingerprinted read, so the lookups are total.
+            return UnplaceableFixturesRead(
+                fixtures=[
+                    _named_fixture(fixture_id, inputs)
+                    for fixture_id in reason.fixture_ids
+                ]
+            )
         case NoSingleCause():
             return NoSingleCauseRead(
                 required_min=reason.required_min,
@@ -1132,14 +1150,15 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             assert_never(reason)
 
 
-def _conflict_fixture(
-    fixture_id: FixtureId, inputs: SolveInputs
-) -> ConflictFixtureRead:
-    """Name one colliding in-progress fixture by its matchup — the two players
-    facing off (``inputs.fixture_matchups``). Direct lookup is safe: the apply
-    resolves only after the drift guard proved this read's inputs identical to
-    the ones the conflicts were computed against, and every in-progress fixture
-    a conflict names is a placeable fixture whose matchup was recorded here."""
+def _named_fixture(fixture_id: FixtureId, inputs: SolveInputs) -> ConflictFixtureRead:
+    """Name one fixture by its matchup — the two players facing off
+    (``inputs.fixture_matchups``). The one place a pure fixture id becomes
+    something a director can read, shared by both id-carrying unions: a placement
+    conflict's colliding in-progress matches, and an ``unplaceable_fixtures``
+    reason's conflict core. Direct lookup is safe: the apply resolves only after
+    the drift guard proved this read's inputs identical to the ones the reasons
+    and conflicts were computed against, and every fixture either can name is a
+    placeable fixture whose matchup was recorded here."""
     player_a, player_b = inputs.fixture_matchups[fixture_id]
     return ConflictFixtureRead(
         fixture_id=fixture_id, player_a=player_a, player_b=player_b
@@ -1160,7 +1179,7 @@ def _resolve_conflict(
     an arm to :data:`app.scheduling.PlacementConflict` is a type error here until
     it is handled."""
     fixtures = [
-        _conflict_fixture(fixture_id, inputs) for fixture_id in conflict.fixture_ids
+        _named_fixture(fixture_id, inputs) for fixture_id in conflict.fixture_ids
     ]
     match conflict:
         case TableConflict():
@@ -1241,6 +1260,11 @@ async def execute_solve(
             inputs.snapshot,
             time_cap_s=get_settings().solver_time_cap_s,
             num_search_workers=_solve_num_workers(),
+            # The second, max-placed solve's own budget — spent only when this
+            # one comes back INFEASIBLE, and absorbed by JOB_TIMEOUT_MARGIN_S
+            # (and by the stale-running lease, a multiple of the main cap), so
+            # neither watchdog needs widening for it.
+            diagnostic_time_cap_s=get_settings().diagnostic_solver_time_cap_s,
         )
 
         await _apply_result(sessionmaker, solve_id, tournament_id, inputs, result)

@@ -50,6 +50,20 @@ class Settings(BaseSettings):
     #: ahead of pending real solves, so a low cap keeps a preview snappy.
     preview_solver_time_cap_s: float = 5.0
 
+    #: The CP-SAT wall-clock time cap, in seconds, for the **diagnostic** solve —
+    #: the second, max-placed solve that names the fixtures a proven-infeasible
+    #: day could not place (ADR "the conflict core is a second, max-placed solve
+    #: over optional placements"). Its own budget, not a share of
+    #: ``solver_time_cap_s``: it runs only after CP-SAT has already proved the
+    #: day infeasible, so a solved day never pays it and the two caps add up only
+    #: on the path where the extra answer is worth the extra seconds. 5s (the
+    #: ``preview_solver_time_cap_s`` precedent) sits inside the slack the RQ job
+    #: already holds — ``JOB_TIMEOUT_MARGIN_S`` on the real solve,
+    #: ``PREVIEW_JOB_TIMEOUT_MARGIN_S`` on a preview — so neither watchdog nor the
+    #: stale-running lease needs widening. Raising it past that slack is what
+    #: would.
+    diagnostic_solver_time_cap_s: float = 5.0
+
     #: Auth0 tenant domain (e.g. ``fortymm.us.auth0.com``) — the issuer the MCP
     #: JWT verifier trusts and the origin its JWKS is fetched from. Empty means
     #: Auth0 is unconfigured: the api still boots and MCP still mounts, but every

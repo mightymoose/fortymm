@@ -122,6 +122,20 @@ not a remedy a director can act on. With the flag off the ordinary path
 constructs exactly the model it always did — same variables, same objective,
 same hints, same determinism.
 
+**The conflict core is a second solve, run only after a proof.** When — and only
+when — CP-SAT returns ``INFEASIBLE``, :func:`solve` runs
+:func:`_diagnose_unplaceable`: the max-placed variant over the same snapshot,
+under its own ``diagnostic_time_cap_s`` budget and the same fixed seed and worker
+count, so the answer is deterministic. Its unplaced fixtures become
+:class:`UnplaceableFixtures` — *"these could not be placed"*, never *"you must
+remove exactly these"*: the diagnostic is an optimization under a cap and may
+stop at ``FEASIBLE``, so the set is an upper bound and minimality is never
+claimed. A solved day pays nothing for any of this, and ``unknown`` (the cap
+exhausted before any solution) still carries no reason at all — "did not finish"
+is not "does not fit". When the diagnostic itself cannot answer — infeasible
+because pins are undroppable, or its own cap exhausted — the whole-day
+:class:`NoSingleCause` aggregate survives underneath as the floor.
+
 **Verdict.** CP-SAT's OPTIMAL/FEASIBLE map directly; INFEASIBLE returns an
 empty placement set and *never raises* — infeasibility is the point of
 pre-live solves, a designed outcome, not an error. UNKNOWN (time cap exhausted
@@ -497,13 +511,46 @@ class PlayerOverSubscribed:
 
 
 @dataclass(frozen=True, slots=True)
+class UnplaceableFixtures:
+    """The **conflict core**: the fixtures a second, max-placed solve could not
+    place (ADR "the conflict core is a second, max-placed solve over optional
+    placements"). Reached only when CP-SAT *proved* the day infeasible and every
+    certain pre-check passed — so this is the timing conflict named by fixture
+    rather than left as a whole-day aggregate.
+
+    **It never claims minimality.** The diagnostic is an optimization under its
+    own time cap, so it may stop at ``FEASIBLE`` rather than ``OPTIMAL``: an
+    upper bound ("dropping these lets the day fit"), not a proven minimum ("you
+    must drop at least these"). Both statuses say the same true thing under the
+    wording this arm is for — *these could not be placed* — so it carries no
+    proven/partial flag to tempt a caller into the stronger claim.
+
+    **Fixtures only, no player list.** A provably over-subscribed player is
+    caught by :class:`PlayerOverSubscribed` in the cheap pre-check pass *before*
+    CP-SAT ever runs, so by construction none can appear here; naming players by
+    a heuristic ("appears in ≥2 dropped fixtures") would put an unprovable claim
+    inside a union whose every other arm is a proof.
+
+    Called (pinned) matches are never in the set: they are not droppable in the
+    diagnostic model, because "cancel this promise" is not a remedy a director
+    can act on. ``fixture_ids`` is sorted, so an unchanged infeasible day reports
+    the same core every time."""
+
+    fixture_ids: tuple[FixtureId, ...]
+    kind: Literal["unplaceable_fixtures"] = "unplaceable_fixtures"
+
+
+@dataclass(frozen=True, slots=True)
 class NoSingleCause:
-    """The honest residual: CP-SAT *proved* the day infeasible, yet no certain
-    structural cause (arms above) explains it — the infeasibility lives in the
-    combinatorial interaction of windows, rest, and no-double-booking that only
-    search sees. Carries the whole-day aggregate for context: ``required_min``
-    (Σ every active fixture's duration) against ``available_min`` (Σ over pools
-    of ``window_span × table_count``). Typically ``required_min ≤ available_min``
+    """The honest **floor**: CP-SAT *proved* the day infeasible, no certain
+    structural cause (arms above) explains it, and the diagnostic solve could not
+    extract a conflict core either — it came back infeasible itself (the called
+    matches alone do not fit, and pins are not droppable) or exhausted its own
+    cap with no solution. The infeasibility lives in the combinatorial
+    interaction of windows, rest, and no-double-booking that only search sees.
+    Carries the whole-day aggregate for context: ``required_min`` (Σ every active
+    fixture's duration) against ``available_min`` (Σ over pools of
+    ``window_span × table_count``). Typically ``required_min ≤ available_min``
     here — aggregate room exists, but it cannot be packed."""
 
     required_min: int
@@ -544,16 +591,20 @@ class PastWindow:
 #: ``PlayerOverSubscribed`` about a single *human* (ADR "the conflict core is a
 #: second, max-placed solve") — ``PastWindow`` is the equally-certain pre-live
 #: "the day is dated in the past" cause (ADR "a past day is named, not
-#: disguised", #1101), and ``NoSingleCause`` is the best-effort residual when
-#: CP-SAT refuses but no structure does. Frozen dataclasses + a ``kind``
-#: discriminator so a downstream humanizer can ``match`` exhaustively with no
-#: catch-all. Ids + minute-ints only: turning these into names and wall-clock
-#: is a later, DB-aware layer's job, not this pure module's.
+#: disguised", #1101), ``UnplaceableFixtures`` is the conflict core a second,
+#: max-placed solve extracts once CP-SAT has proved infeasibility, and
+#: ``NoSingleCause`` is the floor beneath it — the whole-day aggregate, for when
+#: CP-SAT refuses, no structure explains it, *and* the diagnostic cannot answer.
+#: Frozen dataclasses + a ``kind`` discriminator so a downstream humanizer can
+#: ``match`` exhaustively with no catch-all. Ids + minute-ints only: turning
+#: these into names and wall-clock is a later, DB-aware layer's job, not this
+#: pure module's.
 InfeasibilityReason = (
     PoolHasNoTables
     | WindowTooShortForMatch
     | PoolOverCapacity
     | PlayerOverSubscribed
+    | UnplaceableFixtures
     | NoSingleCause
     | PastWindow
 )
@@ -1453,10 +1504,87 @@ def _build_model(
     )
 
 
+#: The diagnostic solve's own wall-clock budget, in seconds — the default for
+#: :func:`solve`'s ``diagnostic_time_cap_s``. Kept separate from the main cap:
+#: the diagnostic is a *second* solve that only ever runs after a proven
+#: infeasibility, and it must fit inside the slack the caller's job already
+#: holds (the DB-aware layer overrides it from
+#: ``Settings.diagnostic_solver_time_cap_s``).
+DIAGNOSTIC_TIME_CAP_S = 5.0
+
+
+def _diagnose_unplaceable(
+    snapshot: ScheduleSnapshot,
+    *,
+    time_cap_s: float,
+    num_search_workers: int,
+) -> tuple[UnplaceableFixtures | None, int]:
+    """The conflict core, from a **second** solve over the same snapshot (ADR
+    "the conflict core is a second, max-placed solve over optional placements").
+
+    Called by :func:`solve` on one path only — CP-SAT *proved* the ordinary model
+    infeasible — so a feasible day, a trivially-optimal one, a structural
+    pre-check refusal and an ``unknown`` (time-cap) outcome all pay nothing. The
+    max-placed variant of the model (``optional_placement=True``) makes every
+    *unpinned* fixture droppable and maximizes how many are placed; the ones it
+    could not place are the core. Returns ``(core, wall_time_ms)`` — the elapsed
+    time so the caller can report the run's whole cost honestly, not just the
+    first solve's.
+
+    Returns ``(None, …)`` — the caller then falls back to the
+    :class:`NoSingleCause` floor — whenever the diagnostic cannot answer:
+
+    * the model is **infeasible** itself. Pins are not droppable, so the called
+      matches alone can overflow the horizon and no drop set exists;
+    * it **exhausted its cap** with no solution at all (``UNKNOWN``);
+    * it answered but dropped **nothing**, which cannot happen while the ordinary
+      model is infeasible (placing everything satisfies the ordinary model) —
+      belt-and-braces, since an empty core would claim nothing;
+    * the builder returned a finished :class:`SolveResult` rather than a model,
+      which likewise cannot happen on this path (the same snapshot just built a
+      model) but is handled rather than asserted.
+
+    ``MODEL_INVALID`` is deliberately folded into that same fallback rather than
+    raising the way the ordinary path does: at this point the tournament already
+    has a *proven* answer, and a bug in the diagnostic variant must degrade the
+    explanation, never destroy the verdict.
+
+    Determinism is the ordinary path's: ``random_seed = 0`` and the caller's
+    ``num_search_workers``, so an unchanged infeasible day names the same
+    fixtures on every re-run.
+    """
+    built = _build_model(snapshot, optional_placement=True)
+    if isinstance(built, SolveResult):
+        return None, 0
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_cap_s
+    solver.parameters.num_search_workers = num_search_workers
+    solver.parameters.random_seed = 0
+    status = solver.Solve(built.model)
+    wall_time_ms = int(solver.WallTime() * 1000)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None, wall_time_ms
+
+    # Sorted, like every other fixture-id tuple this module emits, so the core is
+    # a stable value rather than a search-order artefact.
+    unplaceable = tuple(
+        sorted(
+            fixture_id
+            for fixture_id, placed in built.placed_literals.items()
+            if solver.Value(placed) == 0
+        )
+    )
+    if not unplaceable:
+        return None, wall_time_ms
+    return UnplaceableFixtures(fixture_ids=unplaceable), wall_time_ms
+
+
 def solve(
     snapshot: ScheduleSnapshot,
     time_cap_s: float = 10.0,
     num_search_workers: int = 1,
+    diagnostic_time_cap_s: float = DIAGNOSTIC_TIME_CAP_S,
 ) -> SolveResult:
     """Place every active fixture: a called match on its fixed table at the
     promised start or a slid-later one (never earlier), everything else solved
@@ -1473,6 +1601,12 @@ def solve(
     available, and a value above the caller's CPU limit gets CFS-throttled.
     The default of 1 is also what keeps ``random_seed = 0`` below pinning the
     result: CP-SAT's parallel portfolio is not deterministic across workers.
+
+    ``diagnostic_time_cap_s`` is the budget for the **second**, max-placed solve
+    that explains a proven infeasibility (:func:`_diagnose_unplaceable`). It is a
+    separate budget because that solve runs only on the proven-``INFEASIBLE``
+    path: a solved day never pays it, and the two caps therefore add up only in
+    the one case where the extra answer is worth the extra seconds.
     """
     built = _build_model(snapshot)
     if isinstance(built, SolveResult):
@@ -1494,15 +1628,34 @@ def solve(
         )
     if status == cp_model.INFEASIBLE:
         # CP-SAT proved it, but the structural pre-check found no certain cause
-        # (by construction: it returns before we ever build the model). Attach
-        # the honest residual — the whole-day aggregate, no single blamed pool.
-        required_min, available_min = _aggregate_capacity(snapshot)
+        # (by construction: it returns before we ever build the model). THIS —
+        # and only this — is where the diagnostic runs: a second, max-placed
+        # solve that names the fixtures which could not be placed (the conflict
+        # core). It cannot run earlier, because a proof of infeasibility is what
+        # makes the question meaningful, and it must not run on `unknown` (that
+        # is "did not finish", not "does not fit", and carries no reason at all).
+        core, diagnostic_ms = _diagnose_unplaceable(
+            snapshot,
+            time_cap_s=diagnostic_time_cap_s,
+            num_search_workers=num_search_workers,
+        )
+        reason: InfeasibilityReason
+        if core is not None:
+            reason = core
+        else:
+            # The diagnostic could not answer (see :func:`_diagnose_unplaceable`)
+            # — fall back to the honest whole-day aggregate floor, no single
+            # blamed pool.
+            required_min, available_min = _aggregate_capacity(snapshot)
+            reason = NoSingleCause(
+                required_min=required_min, available_min=available_min
+            )
         return _no_plan(
             Verdict.infeasible,
-            wall_time_ms,
-            reasons=(
-                NoSingleCause(required_min=required_min, available_min=available_min),
-            ),
+            # Both solves really ran, so the ledger records both: an infeasible
+            # run's wall time is the cost of proving it AND of explaining it.
+            wall_time_ms + diagnostic_ms,
+            reasons=(reason,),
             conflicts=built.conflicts,
         )
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

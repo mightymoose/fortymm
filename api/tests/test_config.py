@@ -34,6 +34,28 @@ def test_solver_time_cap_reads_from_env(
     assert get_settings().solver_time_cap_s == expected
 
 
+def test_diagnostic_solver_time_cap_defaults_to_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The conflict-core diagnostic's own budget (ADR decision 6) — 5s, the
+    ``preview_solver_time_cap_s`` precedent, chosen to sit inside the slack the
+    RQ job already holds so no watchdog or lease needs widening."""
+    monkeypatch.delenv("DIAGNOSTIC_SOLVER_TIME_CAP_S", raising=False)
+    assert get_settings().diagnostic_solver_time_cap_s == 5.0
+
+
+def test_diagnostic_solver_time_cap_reads_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its own knob, independent of the main solver cap: raising one must not
+    move the other."""
+    monkeypatch.setenv("DIAGNOSTIC_SOLVER_TIME_CAP_S", "12.5")
+    monkeypatch.delenv("SOLVER_TIME_CAP_S", raising=False)
+    settings = get_settings()
+    assert settings.diagnostic_solver_time_cap_s == 12.5
+    assert settings.solver_time_cap_s == 10.0
+
+
 def test_get_settings_rereads_env_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1992,7 +1992,9 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
 # ephemeral preview job to reach a terminal state before it gives up and returns a
 # retryable ``ToolError``. Bounded well under a minute (ADR "MCP waits internally
 # with a bounded timeout") — a preview solve is cap-bounded to a few seconds
-# (``preview_solver_time_cap_s`` defaults to 5s) and the MCP path is not behind the
+# (``preview_solver_time_cap_s`` defaults to 5s, plus at most
+# ``diagnostic_solver_time_cap_s`` again when the preview comes back infeasible and
+# the conflict-core diagnostic runs) and the MCP path is not behind the
 # browser-facing nginx ~60s hop, so a generous-but-finite ceiling lets a preview
 # queued behind an in-flight real solve still return in one call, while a stuck
 # wait fails loud (retry) rather than hanging.

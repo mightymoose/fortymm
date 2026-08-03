@@ -78,6 +78,7 @@ from app.schedule_solves import (
 )
 from app.scheduling import (
     REST_MIN,
+    FixtureId,
     PlacedFixture,
     PlayerId,
     PlayerOverSubscribed,
@@ -87,6 +88,7 @@ from app.scheduling import (
     ScheduleSnapshot,
     SolveResult,
     SolveStats,
+    UnplaceableFixtures,
     Verdict,
 )
 from app.schemas.notification import NotificationJob
@@ -97,6 +99,7 @@ from app.schemas.schedule_solve import (
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     TableConflictRead,
+    UnplaceableFixturesRead,
     parse_infeasibility_reasons,
     parse_placement_conflicts,
 )
@@ -413,7 +416,7 @@ def _fanout_jobs(notifications_queue: Queue) -> list[NotificationJob]:
 
 def _slide_pin_later(
     target_fixture_id: uuid.UUID, extra_min: int
-) -> Callable[[ScheduleSnapshot, float, int], SolveResult]:
+) -> Callable[[ScheduleSnapshot, float, int, float], SolveResult]:
     """Interpose on the ``_solve`` seam: run the real solver, then push only
     the target pin's placement ``extra_min`` minutes later on its (unchanged)
     table — exactly the "predecessor overran" outcome 1a's solver produces
@@ -423,10 +426,16 @@ def _slide_pin_later(
     target_id = str(target_fixture_id)
 
     def wrapper(
-        snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        snapshot: ScheduleSnapshot,
+        time_cap_s: float,
+        num_search_workers: int,
+        diagnostic_time_cap_s: float,
     ) -> SolveResult:
         result = real(
-            snapshot, time_cap_s=time_cap_s, num_search_workers=num_search_workers
+            snapshot,
+            time_cap_s=time_cap_s,
+            num_search_workers=num_search_workers,
+            diagnostic_time_cap_s=diagnostic_time_cap_s,
         )
         placements = tuple(
             PlacedFixture(
@@ -1028,12 +1037,20 @@ class TestSolveJob:
         real = schedule_solves._solve
 
         def wrapper(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             seen.append(time_cap_s)
             # Don't actually run the real solver for the full budget — the
             # cap value reaching the seam is what's under test.
-            return real(snapshot, time_cap_s=1.0, num_search_workers=num_search_workers)
+            return real(
+                snapshot,
+                time_cap_s=1.0,
+                num_search_workers=num_search_workers,
+                diagnostic_time_cap_s=diagnostic_time_cap_s,
+            )
 
         monkeypatch.setattr(schedule_solves, "_solve", wrapper)
 
@@ -1202,7 +1219,10 @@ class TestSolveJob:
         await db_session.commit()
 
         def exhausted(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             return SolveResult(
                 verdict=Verdict.unknown,
@@ -1237,7 +1257,10 @@ class TestSolveJob:
         await db_session.commit()
 
         def broken(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             raise RuntimeError("the solver caught fire")
 
@@ -1312,7 +1335,10 @@ class TestSolveJob:
         pool_id = PoolId(f"{event_id}:pool-a")
 
         def infeasible(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             return SolveResult(
                 verdict=Verdict.infeasible,
@@ -1384,7 +1410,10 @@ class TestSolveJob:
         ).one()
 
         def infeasible(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             return SolveResult(
                 verdict=Verdict.infeasible,
@@ -1417,6 +1446,72 @@ class TestSolveJob:
         assert reason.match_count == 3
         assert reason.required_min == 95
         assert reason.window_span_min == 60
+
+    async def test_the_conflict_core_is_resolved_to_fixture_matchups(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The conflict core reaches the ledger as *named fixtures*, not raw
+        uuids: each is humanized at apply through the same ``fixture_matchups``
+        map — and the same ``ConflictFixtureRead`` shape — a placement conflict
+        names its colliding matches with, so a surface renders a named fixture
+        one way wherever it appears."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        core = fixtures[:2]
+        core_ids = [fixture.id for fixture in core]
+        expected_matchups = {}
+        for fixture in core:
+            assert fixture.entry_a_id is not None and fixture.entry_b_id is not None
+            expected_matchups[str(fixture.id)] = (
+                await _entry_username(db_session, fixture.entry_a_id),
+                await _entry_username(db_session, fixture.entry_b_id),
+            )
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        def infeasible(
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.infeasible,
+                placements=(),
+                stats=SolveStats(wall_time_ms=42, objective=None),
+                reasons=(
+                    UnplaceableFixtures(
+                        fixture_ids=tuple(
+                            FixtureId(str(fixture_id)) for fixture_id in core_ids
+                        )
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", infeasible)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+
+        (reason,) = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert isinstance(reason, UnplaceableFixturesRead)
+        assert [named.fixture_id for named in reason.fixtures] == [
+            str(fixture_id) for fixture_id in core_ids
+        ]
+        assert {
+            named.fixture_id: (named.player_a, named.player_b)
+            for named in reason.fixtures
+        } == expected_matchups
 
     async def test_succeeded_apply_leaves_infeasibility_reasons_null(
         self, db_session: AsyncSession, solver_queue: Queue
@@ -1455,7 +1550,10 @@ class TestSolveJob:
         await db_session.commit()
 
         def exhausted(
-            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+            snapshot: ScheduleSnapshot,
+            time_cap_s: float,
+            num_search_workers: int,
+            diagnostic_time_cap_s: float,
         ) -> SolveResult:
             return SolveResult(
                 verdict=Verdict.unknown,
@@ -1538,7 +1636,9 @@ class TestSolveJob:
         monkeypatch.setattr(
             schedule_solves,
             "_solve",
-            lambda snapshot, time_cap_s, num_search_workers: genuine,
+            lambda snapshot, time_cap_s, num_search_workers, diagnostic_time_cap_s: (
+                genuine
+            ),
         )
 
         row = await request_solve(
