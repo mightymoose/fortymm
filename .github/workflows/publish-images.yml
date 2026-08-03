@@ -12,12 +12,20 @@ name: publish-images
 # build is discovered after merge rather than before it.
 #
 # Also deliberately NOT path-filtered, but for a different reason than
-# `api.yml`'s (which is about required status checks). Here it is because
-# `redeploy-uat.sh` is being changed to look images up by the deploying commit's
-# SHA: every commit on `main` must therefore have images published under its own
-# SHA, including commits that touch only docs, or a path filter would leave holes
-# on `main` that are simply undeployable. That script still builds locally as of
-# this commit -- the consuming half lands separately.
+# `api.yml`'s (which is about required status checks). `redeploy-uat.sh` is
+# being changed to merge `origin/main` and deploy its TIP, looking the images up
+# by that commit's SHA -- so whatever commit is currently the tip must have
+# images, no matter what it touched. A path filter would skip docs-only commits,
+# and a docs-only commit is very often the tip, which would leave `main`
+# undeployable until something else landed on top of it. (That script still
+# builds locally as of this commit -- the consuming half lands separately.)
+#
+# Note what this does NOT promise: that *every* commit on `main` gets images.
+# The concurrency group below supersedes a PENDING run when a newer one queues,
+# so merging three times inside one ~25min build window skips the middle commit.
+# That is tolerable only because the tip is the sole thing ever deployed, and
+# the tip is always the run that survives. Do not read this workflow as
+# guaranteeing per-commit coverage.
 
 on:
   push:
@@ -25,8 +33,16 @@ on:
   workflow_dispatch:
 
 # One publish at a time per ref. Two overlapping runs would race the moving
-# `:main` tag and could leave it pointing at the older of the two commits.
-# Never cancel in progress: every commit on `main` needs its own images.
+# `:main` tag and could leave it pointing at the older of the two commits;
+# serializing them means `:main` always ends up on the newest.
+#
+# `cancel-in-progress: false` keeps a running publish from being killed by the
+# next merge, so a commit that has STARTED building always finishes. It does not
+# protect a run that is merely queued: GitHub cancels a pending run when a newer
+# one queues into the same group, so under rapid merges an intermediate commit
+# can end up with no images at all. Accepted deliberately -- only the tip is ever
+# deployed, and the newest queued run is the one that survives, so the tip always
+# publishes. See the header comment.
 concurrency:
   group: publish-images-${{ github.ref }}
   cancel-in-progress: false

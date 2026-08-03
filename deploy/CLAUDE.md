@@ -52,10 +52,20 @@ first job rejects on any ref but `main`, since a non-main run would move the
 `:main` tag onto an unreviewed commit). Deliberately **not** on `pull_request` —
 an image built from a PR head is not deployable, so it would burn ~25 minutes of
 runner to produce something nothing can consume. Also deliberately **not**
-path-filtered: every commit on `main`, docs-only ones included, must have images
-under its own SHA, because the deploy path this is groundwork for looks images up
-by the deploying commit's SHA and a path filter would leave undeployable holes.
-Runs are serialized per ref and never cancelled in progress.
+path-filtered: the deploy path this is groundwork for deploys **main's tip** and
+looks the images up by that commit's SHA, so whatever commit is currently the tip
+needs images no matter what it touched — and a docs-only commit is very often the
+tip.
+
+**It does not follow that every commit on `main` gets images, and nothing here
+promises that.** Runs are serialized per ref and a run already in progress is
+never cancelled, but GitHub *does* cancel a **pending** run when a newer one
+queues into the same concurrency group. Merge three times inside one ~25-minute
+build window and the middle commit publishes nothing. That is tolerable only
+because the tip is the sole thing ever deployed and the newest queued run is the
+one that survives — so the tip always publishes. If you ever need to deploy a
+specific historical commit rather than the tip, check that its tag actually
+exists before assuming it does.
 
 **Two tags per image per run:** `:<12-char sha>` (one per commit — nothing
 registry-side pins it, so a re-run for the same commit overwrites it) and
@@ -80,9 +90,10 @@ runner, and that machine's architecture is not something this repo pins or can
 check — an amd64-only image would either fail to run there or run under
 emulation, depending on whose machine it is. A later Hetzner box is amd64, so
 one manifest list per tag serves both. The arm64 leg is QEMU-emulated on the
-amd64 runner and dominates the run — **~25 min is normal** (the jobs allow 90). Provenance attestations are off, so each index holds exactly the two
-platform manifests it claims and nothing pinning it by digest sees an
-`unknown/unknown` entry.
+amd64 runner and dominates the run — **~25 min is normal** (the jobs allow 90).
+Provenance attestations are off, so each index holds exactly the two platform
+manifests it claims and nothing pinning it by digest sees an `unknown/unknown`
+entry.
 
 Nothing consumes these images yet: `mise run redeploy-uat` still builds locally
 and `k3d image import`s (see `## Topology`). This section documents the
