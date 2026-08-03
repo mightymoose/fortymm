@@ -65,6 +65,14 @@ const CLOSED_PHRASE: Record<Exclude<TournamentStatus, 'published'>, string> = {
  * slot serves them all. */
 const SLOT = { date: '2026-06-14', start: '09:00', end: '12:00' }
 
+/** A v4 uuid, which is what a pool id is on the wire (`Pool.id` is `format: uuid`) now
+ * that the server mints it (ADR 20260801) — and what the store's own mint has to answer
+ * with, on the create path and on the patch path alike. Spelled out rather than merely
+ * "is a string", because "the id is missing" and "the id is the empty string" are exactly
+ * the two shapes a mint that quietly did nothing would leave behind. */
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
 const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
 const CLOSED_STATUSES = ['draft', 'live', 'archived'] as const
 
@@ -608,23 +616,26 @@ describe('the rest of the event surface still holds', () => {
    * **The pool positions come from the array index, and nowhere else** — the store half
    * of the rule the editor and the draw panel both depend on.
    *
-   * `PoolWrite` has no `position` (it is `extra="forbid"`, so sending one is a 422), so
-   * the ORDER of the list is the only thing that says which pool is first. The server
-   * turns that order into numbers; if the mock did not, the app would look right in
-   * `npm run dev` while every pool came back tied for first — a mock/server disagreement
-   * about a rule the UI reads on every load.
+   * Neither write shape has a `position` (both are `extra="forbid"`, so sending one is a
+   * 422), so the ORDER of the list is the only thing that says which pool is first. The
+   * server turns that order into numbers; if the mock did not, the app would look right
+   * in `npm run dev` while every pool came back tied for first — a mock/server
+   * disagreement about a rule the UI reads on every load.
    *
-   * Ten pools, with ids whose lexicographic order is 1, 10, 2, 3 …, so a store that
-   * numbered them by id (or handed back a default `0`) cannot pass by coincidence.
+   * Ten of them, named `Pool 1`…`Pool 10` — a set whose lexicographic order is 1, 10, 2,
+   * 3 … — so a store that numbered them by name (or handed back a default `0`) cannot
+   * pass by coincidence. They carry **no id**: `PoolWrite` has none (ADR 20260801), and
+   * the ids the assertions below travel on are the ones the store minted.
    */
   const TEN_WRITE_POOLS = Array.from({ length: 10 }, (_, i) => ({
-    id: `p-${i + 1}-mkq1x`,
     name: `Pool ${i + 1}`,
     slot: SLOT,
     table_ids: [],
   }))
 
-  it('stamps a created event’s pools with the position of their index', () => {
+  /** Create the ten-pool event and hand back its pools **as read** — minted ids and
+   * all. */
+  function createTenPoolEvent() {
     const result = createEvent(TOURNAMENT, {
       name: 'Ten-pool Singles',
       format: 'singles',
@@ -636,25 +647,48 @@ describe('the rest of the event surface still holds', () => {
       pools: TEN_WRITE_POOLS,
     })
     if (!result.ok) throw new Error('create failed')
+    return result.event
+  }
 
-    expect(result.event.pools.map((p) => p.position)).toEqual([
+  it('stamps a created event’s pools with the position of their index', () => {
+    const event = createTenPoolEvent()
+
+    expect(event.pools.map((p) => p.position)).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
     ])
-    expect(result.event.pools.map((p) => p.name)).toEqual(
+    expect(event.pools.map((p) => p.name)).toEqual(
       TEN_WRITE_POOLS.map((p) => p.name),
     )
   })
 
-  // …and RE-stamps on every pools patch, because that is the whole reordering API:
-  // send them in the order you want and the positions follow.
+  // The create path has no id to send, so this is where the ids come from at all: the
+  // store mints one per pool (ADR 20260801), uuid-shaped and all different — the same
+  // thing `gen_random_uuid()` does on the server, and what every fixture drawn into a
+  // pool will hold.
+  it('mints a uuid id for every pool of a created event', () => {
+    const ids = createTenPoolEvent().pools.map((p) => p.id)
+
+    expect(new Set(ids).size).toBe(10)
+    for (const id of ids) expect(id).toMatch(UUID)
+  })
+
+  // …and RE-stamps on every pools patch, because that is the whole reordering API: send
+  // them in the order you want and the positions follow. The patch CITES the ids the
+  // create minted — that is what makes it a reorder of these ten pools rather than ten
+  // additions, and the ids travelling with the names is the proof.
   it('re-positions a patched event’s pools from the new order', () => {
-    const reversed = [...TEN_WRITE_POOLS].reverse()
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, { pools: reversed })
+    const created = createTenPoolEvent()
+    const reversed = [...created.pools]
+      .reverse()
+      .map((p) => ({ id: p.id, name: p.name, slot: p.slot, table_ids: p.table_ids }))
+
+    const result = updateEvent(TOURNAMENT, created.id, { pools: reversed })
     if (!result.ok) throw new Error('update failed')
 
     expect(result.event.pools.map((p) => p.name)).toEqual(
       reversed.map((p) => p.name),
     )
+    expect(result.event.pools.map((p) => p.id)).toEqual(reversed.map((p) => p.id))
     expect(result.event.pools.map((p) => p.position)).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
     ])
@@ -1055,9 +1089,10 @@ describe('cutting and un-cutting a draw', () => {
   const eventOf = (tournamentId: string, eventId: string) =>
     findTournament(tournamentId)!.events.find((e) => e.id === eventId)!
 
-  const poolNamed = (id: string) => ({
-    id,
-    name: id,
+  /** A pool to ADD, in a PATCH's own shape: no `id`, because a pool id is the server's
+   * to mint (ADR 20260801) and omitting one is how a payload says "add this pool". */
+  const poolNamed = (name: string) => ({
+    name,
     slot: SLOT,
     table_ids: [],
   })
@@ -1118,15 +1153,17 @@ describe('cutting and un-cutting a draw', () => {
     // pools of 5 + 4 (16 pairs) become one pool of 9 (36 pairs) — and the fixtures that
     // referred to the old pools are gone, not re-pointed.
     expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true) // the freeze lifts first
-    updateEvent(TOURNAMENT, ROUND_ROBIN, { pools: [poolNamed('p-single')] })
+    updateEvent(TOURNAMENT, ROUND_ROBIN, { pools: [poolNamed('Pool One')] })
+    // The one pool the event now has — a freshly MINTED id, not a name the test chose,
+    // because the two old pools were dropped and this one was added.
+    const single = eventOf(TOURNAMENT, ROUND_ROBIN).pools.map((p) => p.id)
+    expect(single).toHaveLength(1)
 
     const result = cutDraw(TOURNAMENT, ROUND_ROBIN)
 
     if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
     expect(result.fixtures).toHaveLength(36) // C(9,2)
-    expect(new Set(result.fixtures.map((f) => f.pool_id))).toEqual(
-      new Set(['p-single']),
-    )
+    expect(new Set(result.fixtures.map((f) => f.pool_id))).toEqual(new Set(single))
   })
 
   it('un-cutting empties the draw; un-cutting again is still a success (idempotent DELETE)', () => {
@@ -1154,7 +1191,7 @@ describe('cutting and un-cutting a draw', () => {
     // so the mock must: a pool of one is not a competition.
     updateEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'round-robin',
-      pools: [poolNamed('p-1'), poolNamed('p-2'), poolNamed('p-3')],
+      pools: [poolNamed('Pool A'), poolNamed('Pool B'), poolNamed('Pool C')],
     })
     enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
 
@@ -1383,7 +1420,9 @@ describe('cutting a round-robin-then-knockout draw', () => {
   const eventOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
-  const poolNamed = (id: string) => ({ id, name: id, slot: SLOT, table_ids: [] })
+  /** A pool to ADD: no `id`, which is how a PATCH says "add this one" now that the ids
+   * are the server's to mint (ADR 20260801). */
+  const poolNamed = (name: string) => ({ name, slot: SLOT, table_ids: [] })
 
   /** Re-type an event as two-stage, across `poolCount` pools, taking `qualifiers` out of
    * each. The draw type and the pool set both FREEZE while a draw stands (ADR-0786), so
@@ -1399,7 +1438,7 @@ describe('cutting a round-robin-then-knockout draw', () => {
     const patched = updateEvent(TOURNAMENT, eventId, {
       draw_type: 'rr-then-ko',
       qualifiers_per_pool: qualifiers,
-      pools: Array.from({ length: poolCount }, (_, i) => poolNamed(`p-${i + 1}`)),
+      pools: Array.from({ length: poolCount }, (_, i) => poolNamed(`Pool ${i + 1}`)),
     })
     if (!patched.ok) throw new Error(`could not re-type ${eventId}`)
   }
@@ -1692,10 +1731,15 @@ describe('the draw-type catalogue', () => {
 })
 
 // The pool-set FREEZE (ADR-0786): while a draw exists, an event's pools may change in
-// every way except identity. A fixture's `pool_id` is a string ref into this very JSONB
-// and there is no foreign key to stop a PATCH from orphaning it — "integrity is
-// procedural, not schematic" — so the procedure is here, in the mock, for the same
-// reason it is on the server.
+// every way except identity. A fixture names the pool it was dealt into, and removing
+// that pool leaves the fixture pointing at nothing — a refusal the composite foreign key
+// under `tournament_fixtures` would also make since ADR 20260801, but only at COMMIT and
+// only as a driver error, so the procedure is here (and there) to answer it as a 409 that
+// names the pools and the way out.
+//
+// **The freeze shrank when the ids were minted.** Re-identifying a pool is not one of the
+// things it refuses any more, because it is not a payload a client can send: an entry
+// either cites an id this event has or carries none at all.
 describe('the pool set freezes while a draw exists', () => {
   beforeEach(() => resetTournamentsStore())
 
@@ -1703,17 +1747,34 @@ describe('the pool set freezes while a draw exists', () => {
   const poolsOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!.pools
 
-  it('refuses a PATCH that removes a pool the draw was dealt across', () => {
-    const [poolA] = poolsOf(ROUND_ROBIN)
+  /** A stored pool as a PATCH cites it: the id it was minted, and the words. The read
+   * shape's `position` is deliberately dropped — `PoolUpsert` is `extra="forbid"`, so a
+   * payload carrying one is a 422 at the server's boundary. */
+  const citing = (pool: ReturnType<typeof poolsOf>[number]) => ({
+    id: pool.id,
+    name: pool.name,
+    slot: pool.slot,
+    table_ids: pool.table_ids,
+  })
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, { pools: [poolA] })
+  it('refuses a PATCH that removes a pool the draw was dealt across', () => {
+    const [poolA, poolB] = poolsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: [citing(poolA)],
+    })
 
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.status).toBe(409)
+    if (result.status !== 409) return
+    // The refusal NAMES the pool that would go, because a director looking at a page of
+    // named pools cannot act on "a pool".
+    expect(result.detail).toContain(`“${poolB.name}”`)
+    expect(result.detail).toContain('already has fixtures drawn into it')
     // The sentence ends with the way OUT — remove the draw, change the pools, cut again
     // — because a refusal a director cannot act on is just a wall.
-    expect(result.status === 409 && result.detail).toContain('remove the draw first')
+    expect(result.detail).toContain('remove the draw first')
     // …and the pools are untouched: a refused write writes nothing.
     expect(poolsOf(ROUND_ROBIN)).toHaveLength(2)
   })
@@ -1722,11 +1783,15 @@ describe('the pool set freezes while a draw exists', () => {
     const pools = poolsOf(ROUND_ROBIN)
 
     const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
-      pools: [...pools, { id: 'p-new', name: 'Pool C', slot: SLOT, table_ids: [] }],
+      // No `id`: that IS the addition, now that a client cannot author one.
+      pools: [...pools.map(citing), { name: 'Pool C', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.status).toBe(409)
+    if (result.ok || result.status !== 409) throw new Error('expected a 409')
+    expect(result.detail).toContain('“Pool C”')
+    expect(result.detail).toContain('would arrive with no fixtures in it')
+    expect(poolsOf(ROUND_ROBIN)).toHaveLength(2)
   })
 
   // Only IDENTITY is frozen. A pool's tables and its window stay editable with a draw
@@ -1738,7 +1803,7 @@ describe('the pool set freezes while a draw exists', () => {
 
     const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
       pools: pools.map((p) => ({
-        ...p,
+        ...citing(p),
         name: `${p.name} (moved)`,
         table_ids: ['t9'],
         slot: SLOT,
@@ -1747,25 +1812,99 @@ describe('the pool set freezes while a draw exists', () => {
 
     expect(result.ok).toBe(true)
     expect(poolsOf(ROUND_ROBIN)[0].table_ids).toEqual(['t9'])
+    // The ids — and therefore every fixture drawn into them — survived the edit.
+    expect(poolsOf(ROUND_ROBIN).map((p) => p.id)).toEqual(pools.map((p) => p.id))
+  })
+
+  // …and a REORDER of the same pools is the same thing: the set is unchanged, so the
+  // freeze has nothing to say, and the positions follow the payload's order.
+  it('ALLOWS a reorder of exactly the pools the draw was cut across', () => {
+    const [poolA, poolB] = poolsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: [citing(poolB), citing(poolA)],
+    })
+
+    expect(result.ok).toBe(true)
+    expect(poolsOf(ROUND_ROBIN).map((p) => p.id)).toEqual([poolB.id, poolA.id])
+    expect(poolsOf(ROUND_ROBIN).map((p) => p.position)).toEqual([0, 1])
   })
 
   it('leaves an UNDRAWN event’s pools wholesale-replaceable, as they have always been', () => {
     const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
-      pools: [{ id: 'p-anything', name: 'A', slot: SLOT, table_ids: [] }],
+      pools: [{ name: 'A', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The PATCH path mints too: an entry with no `id` is an addition, and the store hands
+    // it a uuid exactly as `gen_random_uuid()` would. Without this the pool would come
+    // back id-less — and every fixture later dealt into it would name nothing.
+    expect(result.event.pools).toHaveLength(1)
+    expect(result.event.pools[0].id).toMatch(UUID)
   })
 
   it('un-freezes the moment the draw is removed', () => {
+    const before = poolsOf(ROUND_ROBIN).map((p) => p.id)
     expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
 
     const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
-      pools: [{ id: 'p-fresh', name: 'Pool A', slot: SLOT, table_ids: [] }],
+      pools: [{ name: 'Pool A', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(true)
-    expect(poolsOf(ROUND_ROBIN).map((p) => p.id)).toEqual(['p-fresh'])
+    const after = poolsOf(ROUND_ROBIN)
+    expect(after).toHaveLength(1)
+    // A brand-new pool, with a brand-new id: the two the draw was cut across are gone,
+    // and this one was MINTED rather than named by the payload.
+    expect(before).not.toContain(after[0].id)
+  })
+})
+
+// The diff's own refusal (ADR 20260801), and the reason it exists: a pool id is minted
+// here, so an id the store never minted names nothing. Quietly minting a pool for it
+// would hand the client back a different id than it asked for while *removing* the pool
+// it meant to keep — the two failures a diff must never confuse.
+describe('a pools PATCH citing an id the event does not have', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const ROUND_ROBIN = 'ev-u1200' // seeded WITH a draw
+  const eventOf = (eventId: string) =>
+    findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
+
+  const UNKNOWN = '11111111-2222-4333-8444-555555555555'
+
+  it('is a 422 naming the entry, and writes nothing', () => {
+    const before = eventOf(EMPTY_SINGLES).pools
+
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      pools: [
+        { name: 'Pool A', slot: SLOT, table_ids: [] },
+        { id: UNKNOWN, name: 'Pool B', slot: SLOT, table_ids: [] },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || result.status !== 422) throw new Error('expected a 422')
+    // The index is what lets the handler build `loc: ["body","pools",1,"id"]` — the pools
+    // are a list, and a refusal a client cannot attribute to a row it cannot render.
+    expect(result.index).toBe(1)
+    expect(result.poolId).toBe(UNKNOWN)
+    expect(result.detail).toBe('This event has no pool with that id.')
+    // Judged BEFORE anything is assigned: the id-less first entry was not minted either.
+    expect(eventOf(EMPTY_SINGLES).pools).toEqual(before)
+  })
+
+  // The ordering the server states out loud: the freeze runs first, so a cut event
+  // answers the 409 that names its pools rather than this 422. A cited-but-unknown id is
+  // an addition as far as a standing draw is concerned.
+  it('loses to the pool-set freeze on an event whose draw is cut', () => {
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      pools: [{ id: UNKNOWN, name: 'Pool Z', slot: SLOT, table_ids: [] }],
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.status).toBe(409)
   })
 })
 

@@ -38,6 +38,11 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type Pool = components['schemas']['Pool']
+/** A pool as a **write** body carries it: no `position` on either verb, and an `id` only
+ * on the PATCH shape — where it *cites* a pool the event already has rather than
+ * authoring one (ADR 20260801, `api/app/tournament_pools.py`). Omitted means "add this
+ * pool", and the server mints its uuid. */
+type PoolUpsert = components['schemas']['PoolUpsert']
 /** One row of the served **draw-type catalogue** (ADR 20260726). Its `key` is the
  * generated schema's `DrawType`, so a spec cannot serve a slug the API's enum does not
  * hold — the catalogue and the enum are the same set by construction. */
@@ -1029,36 +1034,80 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
   )
 }
 
+/** The server's sentence for a pools payload that would change WHICH pools a cut event
+ * has (`_pool_set_frozen_detail`, `api/app/tournament_events.py`) — verbatim, because the
+ * editor shows it verbatim in its inline banner.
+ *
+ * Both halves are named, from whichever side of the change still knows the name: a pool
+ * being removed is only described by the row the event holds, one being added only by the
+ * payload. */
+function poolSetFrozenDetail(
+  event: TournamentEventRead,
+  submitted: { id?: string | null; name?: string }[],
+): string {
+  const existing = new Set(event.pools.map((p) => p.id))
+  const incoming = new Set(
+    submitted.map((p) => p.id).filter((id): id is string => id != null),
+  )
+  const clauses: string[] = []
+  const removed = event.pools.filter((p) => !incoming.has(p.id)).map((p) => p.name)
+  const added = submitted
+    .filter((p) => p.id == null || !existing.has(p.id))
+    .map((p) => p.name ?? '')
+  if (removed.length > 0) {
+    clauses.push(
+      `${namedList(removed)} already has fixtures drawn into it, ` +
+        'which this change would leave pointing at a pool that no longer exists',
+    )
+  }
+  if (added.length > 0) {
+    clauses.push(
+      `${namedList(added)} would arrive with no fixtures in it, ` +
+        'because the draw was cut across the pools this event had at the time',
+    )
+  }
+  return (
+    "This event's draw is already cut, so its set of pools is frozen: " +
+    clauses.join('; and ') +
+    ". A pool's tables, its time and its name can all still be changed. " +
+    'To add or remove a pool, remove the draw first, then cut it again.'
+  )
+}
+
 /** Why this event PATCH is refused by a standing draw — or `null` when it is not
  * (`_enforce_pool_set_frozen` / `_enforce_draw_type_frozen`, both a 409).
  *
  * Two facts are frozen while fixtures exist, and **only** these two:
- * - the **set of pool ids**, because a fixture names its pool by a string ref into that
- *   very list — remove one (or re-`id` it) and its fixtures point at nothing;
+ * - the **set of pool ids**, because a fixture names the pool it was dealt into — remove
+ *   one and its fixtures point at nothing, add one and it arrives with no fixtures;
  * - the **draw type**, because it is not a label on an event but the strategy that DEALT
  *   these fixtures.
  *
- * Everything else about a pool — its name, its tables, its window — stays editable, and
- * so does the rest of the event. */
+ * Everything else about a pool — its name, its tables, its window, its place in the order
+ * — stays editable, and so does the rest of the event.
+ *
+ * **Re-identifying a pool is no longer one of the refusals**, because it is no longer a
+ * payload a client can send (ADR 20260801): a pool id is minted by the server, so an
+ * entry either cites one this event has or carries none at all — and an entry with no id
+ * is an *addition*, which is why it counts towards the change rather than towards the
+ * incoming set. */
 function frozenDetail(event: TournamentEventRead, body: unknown): string | null {
   if (event.fixtures.length === 0) return null
   const patch = body as {
-    pools?: { id: string }[] | null
+    pools?: { id?: string | null }[] | null
     draw_type?: string | null
   } | null
 
   if (patch?.pools) {
     const before = new Set(event.pools.map((p) => p.id))
-    const after = new Set(patch.pools.map((p) => p.id))
+    const after = new Set(
+      patch.pools.map((p) => p.id).filter((id): id is string => id != null),
+    )
     const same =
-      before.size === after.size && [...before].every((id) => after.has(id))
-    if (!same) {
-      return (
-        "This event's draw is already cut, so its set of pools is frozen: " +
-        'a pool cannot be added, removed or re-identified while fixtures refer to it. ' +
-        'To add, remove or re-identify a pool, remove the draw first, then cut it again.'
-      )
-    }
+      before.size === after.size &&
+      after.size === patch.pools.length &&
+      [...before].every((id) => after.has(id))
+    if (!same) return poolSetFrozenDetail(event, patch.pools)
   }
 
   if (patch?.draw_type && patch.draw_type !== event.draw_type) {
@@ -1082,6 +1131,7 @@ export class TournamentsStore {
   private detail: TournamentDetailRead
   private entryCounter = 0
   private tableCounter = 0
+  private poolCounter = 0
   private gate: Promise<void> | null = null
   private refusingWrites = false
   private refusingTournamentCreate = false
@@ -2005,6 +2055,27 @@ export class TournamentsStore {
     }
   }
 
+  /** One pool of an event write after the diff: the cited pool, re-worded and
+   * re-positioned — or a brand-new one whose **uuid the server mints**
+   * (`gen_random_uuid()`; `Pool.id` is `format: uuid` on the wire, so the stub must not
+   * hand back a slug, and a client cannot author one at all: ADR 20260801).
+   *
+   * The twin of `upsertTable` above, one resource over. On the create path the `id` arm
+   * is unreachable by construction — `PoolWrite` has no id — which is exactly the point:
+   * a created event's pools are all new, and all minted here. */
+  private upsertPool(entry: PoolUpsert, position: number): Pool {
+    const id =
+      entry.id ??
+      mockUuid(`e2e-tournament-event-pool-${(this.poolCounter += 1)}`)
+    return {
+      id,
+      name: entry.name,
+      slot: entry.slot,
+      table_ids: entry.table_ids,
+      position,
+    }
+  }
+
   /** The catalogue as the SERVER now holds it — so a spec asserts what was stored
    * (and which id it was stored under), not what the DOM happens to show. */
   get tables(): TournamentTable[] {
@@ -2030,14 +2101,17 @@ export class TournamentsStore {
 
     // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
     // server owns — `entered` is derived, and a new event has no entrants.
-    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    const { pools: submitted, ...fields } = body as Partial<
+      Omit<TournamentEventRead, 'entered' | 'pools'>
+    > & { pools?: PoolUpsert[] }
     const created = buildTournamentEventRead({
       ...fields,
-      // Positions assigned from the array index, as the server assigns them — the create
-      // body carries none (`PoolWrite` forbids the key), so the order of the list is what
-      // says which pool is first. See the same stamp in `updateEvent` below.
-      ...(fields.pools
-        ? { pools: fields.pools.map((pool, index) => ({ ...pool, position: index })) }
+      // Every pool of a created event is a NEW pool: `PoolWrite` has no `id` at all
+      // (ADR 20260801), so the server mints one for each and assigns the position from
+      // the array index — the body carries neither, and the order of the list is what
+      // says which pool is first. See the same pair in `updateEvent` below.
+      ...(submitted
+        ? { pools: submitted.map((pool, index) => this.upsertPool(pool, index)) }
         : {}),
       id: `ev-created-${this.detail.events.length + 1}`,
       entrants: [],
@@ -2070,22 +2144,26 @@ export class TournamentsStore {
     const frozen = frozenDetail(event, body)
     if (frozen) return json(route, 409, { detail: frozen })
 
-    const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
+    const fields = body as Partial<Omit<TournamentEventRead, 'entered' | 'pools'>> & {
+      pools?: PoolUpsert[]
+    }
     // `entrants` and `entered` are the server's, not the editor's — the write body
     // does not carry them, and echoing the client's view back would clobber
     // registrations it never saw.
     //
-    // Each pool's `position` is the server's too, and in a sharper way: `PoolWrite`
-    // FORBIDS the key, so the body carries no positions at all and the **order of the
-    // array** is the only thing saying which pool comes first. The server re-derives the
-    // positions from that order on every pools patch, so this stub does the same —
-    // spreading the write shape straight through would strip a required read field and
-    // leave the editor (which seeds its cards from `position`) sorting by nothing.
+    // A pool's `id` and its `position` are the server's too, and in a sharper way: both
+    // write shapes FORBID `position` and the create shape has no `id` at all, so the body
+    // carries neither and the **order of the array** is the only thing saying which pool
+    // comes first. So this stub applies the pools as the server does — an entry citing an
+    // id keeps that pool, an entry with none is minted a fresh uuid (`upsertPool`), and
+    // every one of them takes the position of its index. Spreading the write shape
+    // straight through would strip two required read fields and leave the editor (which
+    // seeds its cards from `position`) sorting by nothing.
     this.mutateEvent(eventId, (e) => ({
       ...e,
       ...fields,
       pools: fields.pools
-        ? fields.pools.map((pool, index) => ({ ...pool, position: index }))
+        ? fields.pools.map((pool, index) => this.upsertPool(pool, index))
         : e.pools,
       entrants: e.entrants,
     }))
