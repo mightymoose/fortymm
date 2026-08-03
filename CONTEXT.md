@@ -241,6 +241,18 @@ opt-out, so an unrated entrant is *marked as such* in the entrants list: the dir
 is the one who can act on it, and they can only act on what they can see.
 _Avoid_: unranked, provisional (they hold no rating at all, not a soft one).
 
+**Refusal**:
+The server's answer that what was asked for cannot be done, in words a director
+can act on. A refusal is **a statement about a moment**: it is never wrong when
+it is produced, and it stops being true the instant the state it describes
+changes. So a refusal **expires** — once an event is added, an entrant arrives,
+or a **draw type** changes, the refusal that named the old state is withdrawn
+rather than left contradicting the page around it. It is not a **notification**
+(nobody is being told news) and not a form error (it answers an *action*, not a
+field).
+_Avoid_: error, warning (a refusal is a designed outcome, not a malfunction),
+banner (that is where it is shown, not what it is).
+
 **Refusal code**:
 The machine-readable reason something was refused — for an **entry**,
 `already_entered`, `registration_closed`, `event_full`, `rating_ineligible` —
