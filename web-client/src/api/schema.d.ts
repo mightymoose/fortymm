@@ -3665,20 +3665,19 @@ export interface components {
          * @description A pool as it is **read back**: everything a client wrote, plus the ``position``
          *     the server stamped on it.
          *
-         *     It is also the model every interior read of an event's ``pools`` JSONB parses
-         *     through — ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule
-         *     snapshots — so the column becomes typed values at the read boundary rather than
-         *     stringly-keyed dict lookups (api/CLAUDE.md — "parse, don't validate"). Deriving it
-         *     from :class:`PoolWrite` is what keeps the two shapes one shape plus a field: a
-         *     column added to the write side is readable without a second edit, and the two can
-         *     never disagree about what a pool *is*.
+         *     It is also the model every interior read of an event's pools arrives through —
+         *     ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
+         *     is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
+         *     nothing above ``app.tournament_pools.pool_read``: the projection composes this same
+         *     model out of typed columns where it used to validate it out of untyped dicts.
+         *     Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus a
+         *     field: a column added to the write side is readable without a second edit, and the
+         *     two can never disagree about what a pool *is*.
          *
-         *     ``position`` defaults to ``0`` so that pools stored before the field existed stay
-         *     *readable* — a read boundary must not turn a history it cannot change into a
-         *     ``ValidationError`` (the same asymmetry :data:`AddressComponent` is about). Every
-         *     pool written since goes through :func:`stored_pools` and carries a real one. The
-         *     default is a **read** concession only; it is not a way to write one, because there
-         *     is no way to write one.
+         *     ``position`` keeps its ``0`` default even though the column is NOT NULL and every
+         *     row carries a real one: the default is what lets a **literal** ``Pool`` be built in
+         *     a test or a REPL without spelling an order out, and a read boundary that
+         *     hard-required it would gain nothing — the projection always supplies it.
          */
         Pool: {
             /** Id */
@@ -3740,9 +3739,8 @@ export interface components {
          * @description One pool's standings: its rows in finishing order, and whether every one of its
          *     fixtures has been decided.
          *
-         *     ``pool_id`` names a ``Pool`` in this same event's ``pools`` — the string ref a
-         *     fixture also carries — so a client titles the table from the pool it already
-         *     holds.
+         *     ``pool_id`` names a pool of this same event — the id a fixture also carries — so a
+         *     client titles the table from the pool it already holds.
          */
         PoolStandingsRead: {
             /** Pool Id */
@@ -4942,8 +4940,9 @@ export interface components {
          *       live, not a copy frozen at go-live.
          *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
          *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
-         *       set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
-         *       JSONB, not a foreign key, because pools are value-objects with no table.
+         *       set, it names a pool of **this same event**, and it is guaranteed to: the column
+         *       is half of a composite foreign key onto ``tournament_event_pools (event_id, id)``,
+         *       so it is neither a dangling ref nor another event's pool (ADR 20260801).
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
          *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
          *       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
