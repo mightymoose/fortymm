@@ -1,3 +1,5 @@
+import { StrictMode } from 'react'
+
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
@@ -66,6 +68,15 @@ const scoped = (container: Container) => ({
     const notice = await container.findByRole('alert')
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
   },
+  /** The notice as one normalised string, **synchronously** — `''` when there is none.
+   * For the tests that assert a refusal is STILL on screen after fresh server data: a
+   * refusal already shown does not need waiting for, and an `await find…` there would red
+   * as a five-second timeout rather than as "the notice is gone"
+   * (`web-client/CLAUDE.md`: an undiscriminated red proves nothing). */
+  queryNoticeText() {
+    const notice = container.queryByRole('alert')
+    return (notice?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
 
   /** EVERY control in the panel. The sweep a "a non-owner is offered nothing" claim
    * actually needs: the named accessors above would miss a button that was renamed or
@@ -85,6 +96,16 @@ const scoped = (container: Container) => ({
   ...poolDrawPage.within(container),
 })
 
+/** The component under `StrictMode`, because its refusal is held by a hook that keeps the
+ * state-stamp in a ref written from an effect (`../../data/expiring-notice`): a mount →
+ * cleanup → remount must leave that ref correct, and only the double-invoke shows it
+ * (`web-client/CLAUDE.md`). */
+const mount = (props: DrawPanelProps) => (
+  <StrictMode>
+    <DrawPanel {...props} />
+  </StrictMode>
+)
+
 /**
  * Test page-object for `DrawPanel`.
  *
@@ -94,8 +115,17 @@ const scoped = (container: Container) => ({
  * Rendering alone fetches nothing: the fixtures ride the event it is handed.
  */
 export const drawPanelPage = {
+  /** Render, and hand back the one thing a caller may do afterwards: give the panel
+   * **fresh server data** — a new `event` — the way the detail page does when the
+   * tournament refetches. That is how a refusal's expiry is exercised; nobody clicks
+   * anything for it. */
   render(overrides: Partial<DrawPanelProps> = {}) {
-    render(<DrawPanel {...buildDrawPanelProps(overrides)} />)
+    const { rerender } = render(mount(buildDrawPanelProps(overrides)))
+    return {
+      rerender(next: Partial<DrawPanelProps> = {}) {
+        rerender(mount(buildDrawPanelProps(next)))
+      },
+    }
   },
 
   within(container: Container = screen) {

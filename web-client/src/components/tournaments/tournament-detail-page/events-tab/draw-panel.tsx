@@ -1,11 +1,16 @@
 import { Shuffle, Trash2 } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useId } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import { useCutDraw, useUncutDraw } from '../../data/api'
 import { drawRefusalNotice, drawState, type DrawNotice } from '../../data/draw'
+import {
+  noticeFingerprint,
+  useExpiringNotice,
+  type NoticeFingerprint,
+} from '../../data/expiring-notice'
 import type { TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
@@ -20,6 +25,61 @@ export interface DrawPanelProps {
    * (ADR-0015 — hidden, never disabled). Not a security boundary: the API 403s the
    * endpoints independently, and must continue to. */
   canEdit: boolean
+}
+
+/**
+ * The state a **draw refusal** turns on — the fingerprint this panel holds its notice
+ * against (`../../data/expiring-notice`), so a refusal is withdrawn the moment it stops
+ * being true rather than sitting there contradicting the card around it.
+ *
+ * It is the event's **draw configuration**: exactly the values the planner reads before
+ * it deals a single fixture (`plan_initial`, `api/app/draws.py`), which is the whole of
+ * what a 422 from this panel can be about.
+ *
+ * - **`format`** — a doubles or teams event cannot be given a draw at all
+ *   (`NonSinglesDraw`: "a fixture seats one entrant on each side"). Switch the event to
+ *   singles and that refusal is over.
+ * - **`drawType`** — it chooses the strategy, and therefore *which* of the refusals below
+ *   can even apply. #1123: a director reading "a single-elimination draw needs at least 2
+ *   entrants" who changes the type to round robin has made that sentence untrue, and it
+ *   went on being shown until they clicked Generate again.
+ * - **`pools.length`** — "A round-robin draw needs at least one pool."
+ * - **`entrants.length`** — with the pool count, the snake's floor: "0 entrants across 2
+ *   pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to
+ *   play." (#1049 Repro B: a player enters, and the sentence is about a field that no
+ *   longer exists.) It is also single-elim's own floor ("a bracket of one has nobody to
+ *   play").
+ * - **`qualifiersPerPool`** — K, for an `rr-then-ko` event: "Taking 3 qualifiers from
+ *   each pool is more than the 2 entrants in the smallest pool…". It is a refusal about a
+ *   number the director can go and change, so the change has to withdraw it.
+ *
+ * **Counts, not id sets** — the opposite of the choice the header's lifecycle refusal
+ * makes next door, for the opposite reason. Go-live compares the entrant *set* against
+ * the seated set, so a swap (one withdraws, one enters) flips its answer while every
+ * count holds still. The planner only ever *counts*: swap an entrant here, or replace one
+ * pool with another, and "5 entrants across 3 pool(s)…" is still true word for word — an
+ * id set would withdraw a refusal the director still has to act on, which is the
+ * expensive half of this mistake (the work list taken away mid-fix).
+ *
+ * ⚠️ **Nothing about the FIXTURES is in here, deliberately.** The panel's other refusal
+ * is the 409 play guard — "This event's draw is already under way — at least one fixture
+ * has a match or a recorded winner — so it can no longer be cut or removed" — and that
+ * refusal is *about* a state change (`CONTEXT.md`, "Refusal"). The click that earns it
+ * reconciles the tournament on settle, failure path included (`../../data/api`), so the
+ * very fixtures that make it true land in the same beat it appears. Fingerprint the
+ * fixtures — their count, their match ids, their winners — and the 409 deletes itself
+ * before the director can read why their Delete draw did nothing. It expires only if the
+ * event's *configuration* moves, and while a draw stands the pool set and the draw type
+ * are frozen anyway (`poolSetFreeze` / `drawTypeFreeze`, `../../data/draw`).
+ */
+function drawConfigFingerprint(event: TournamentEvent): NoticeFingerprint {
+  return noticeFingerprint(
+    event.format,
+    event.drawType,
+    event.pools.length,
+    event.entrants.length,
+    event.qualifiersPerPool,
+  )
 }
 
 /**
@@ -61,6 +121,11 @@ export interface DrawPanelProps {
  * Everything else (403, an expired session, a 5xx, a dead network) has designed words of
  * its own in `drawRefusalNotice` — there is no arm that fails silently.
  *
+ * A refusal shown here **expires with the state it describes** (`drawConfigFingerprint`
+ * above): the 422s are about this event's configuration, so changing that configuration
+ * withdraws them with no second click — while the 409, which is *about* a state change,
+ * is left standing.
+ *
  * The refused verb leaves the draw exactly as it was: the panel holds no optimistic
  * state, because there is no local edit to apply — only a new draw to read back. Both
  * mutations reconcile the tournament on settle, so the fixtures below rewrite themselves
@@ -71,8 +136,16 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   const cut = useCutDraw(tournamentId)
   const uncut = useUncutDraw(tournamentId)
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none.
-  const [notice, setNotice] = useState<DrawNotice | null>(null)
+  // click before last is worse than none — and **withdrawn on its own** once the
+  // configuration it was produced about moves (`drawConfigFingerprint` above): a refusal
+  // is a statement about a moment (`CONTEXT.md`, "Refusal"). Held in `useState`, it
+  // outlived its own subject: "a single-elimination draw needs at least 2 entrants"
+  // survived the director changing the draw type (#1123), and "0 entrants across 2
+  // pool(s)…" survived the entrant arriving (#1049 Repro B) — both until a second
+  // Generate click.
+  const [notice, setNotice] = useExpiringNotice<DrawNotice>(
+    drawConfigFingerprint(event),
+  )
 
   const state = drawState(event)
   // One in-flight draw verb at a time. A second click on Re-cut while the first is still
