@@ -4,12 +4,15 @@ import { fireEvent, render, screen, type Container } from '@/test/utilities'
 import { SolveStrip, type SolveStripProps } from './solve-strip'
 import { buildSolveStripProps } from './solve-strip.factory'
 
-/** The strip's five designed states, addressed by the testid each renders under. */
+/** The strip's six designed states, addressed by the testid each renders under.
+ * `timed-out` is kebab-cased here because the testid is (the `past-window`
+ * precedent); the state's own `kind` stays the wire's `timed_out`. */
 export type SolveStripStateId =
   | 'none'
   | 'solving'
   | 'succeeded'
   | 'infeasible'
+  | 'timed-out'
   | 'failed'
 
 const text = (el: HTMLElement) => (el.textContent ?? '').replace(/\s+/g, ' ').trim()

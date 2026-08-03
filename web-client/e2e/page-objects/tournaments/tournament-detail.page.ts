@@ -702,9 +702,17 @@ export class TournamentDetailPage {
     return this.page.getByTestId('solve-strip')
   }
 
-  /** One of the strip's five designed states — present iff the strip is in it. */
+  /** One of the strip's six designed states — present iff the strip is in it.
+   * `timed-out` is kebab-cased because the testid is; the wire status is
+   * `timed_out`. */
   solveStripState(
-    state: 'none' | 'solving' | 'succeeded' | 'infeasible' | 'failed',
+    state:
+      | 'none'
+      | 'solving'
+      | 'succeeded'
+      | 'infeasible'
+      | 'timed-out'
+      | 'failed',
   ): Locator {
     return this.page.getByTestId(`solve-strip-${state}`)
   }

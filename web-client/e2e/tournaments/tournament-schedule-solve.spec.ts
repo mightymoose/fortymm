@@ -203,6 +203,52 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expectAxeClean(page, 'schedule tab — infeasible solve on the strip')
   })
 
+  test('renders a timed-out run as its own outcome — the cap ran out, NOT the crash copy — across the real wire', async ({
+    page,
+  }) => {
+    // The fourth terminal status crosses the real wire (this suite runs with MSW
+    // off): the client Zod-parses `timed_out` in the queryFn and the strip
+    // renders its OWN arm (ADR "a time-capped solve is its own outcome, not a
+    // failure") rather than the `failed` one it used to wear.
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'timed_out',
+        // No verdict at all: the cap ran out before the solver reached one.
+        verdict: null,
+        trigger: 'manual',
+        wall_time_ms: 30_000,
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        error: 'time cap exhausted without a solution',
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('timed-out')
+    await expect(state).toBeVisible()
+    await expect(state).toContainText('The scheduler ran out of time')
+    await expect(state).toContainText('proved nothing')
+    await expect(state).toContainText('after 30.0s')
+    await expect(state).toContainText('make the problem smaller')
+    // NOT the crash arm, and NOT its advice — the whole point of the fourth arm.
+    await expect(pom.solveStripState('failed')).toHaveCount(0)
+    await expect(state).not.toContainText('The run broke')
+    await expect(state).not.toContainText('Run it again')
+    // NOT the infeasible claim either: nothing was proved about fitting.
+    await expect(pom.solveStripState('infeasible')).toHaveCount(0)
+    // Designed, not an error: nothing red rings, and neither the wire status nor
+    // the server's cap sentence reaches the UI.
+    await expect(pom.runSchedulerNotice).not.toBeVisible()
+    await expect(pom.toasts).toHaveCount(0)
+    await expect(state).not.toContainText('timed_out')
+    await expect(state).not.toContainText('time cap exhausted without a solution')
+    // The director can act on it immediately: the button is live again.
+    await expect(pom.runScheduler).toBeEnabled()
+
+    await expectAxeClean(page, 'schedule tab — timed-out solve on the strip')
+  })
+
   test('names a wholly-past window as its own dated reason arm — the `past_window` fact crosses the real wire', async ({
     page,
   }) => {

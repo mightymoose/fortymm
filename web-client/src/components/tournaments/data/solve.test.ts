@@ -54,6 +54,20 @@ describe('parseLatestScheduleSolve', () => {
     })
   })
 
+  it('accepts the timed_out status — the fourth terminal outcome the client now has words for', () => {
+    const parsed = parseLatestScheduleSolve(
+      buildScheduleSolveRead({
+        status: 'timed_out',
+        verdict: null,
+        wall_time_ms: 30_000,
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        error: 'time cap exhausted without a solution',
+      }),
+    )
+    expect(parsed).toMatchObject({ status: 'timed_out', verdict: null })
+  })
+
   it('refuses a status this client has no words for — it must fail in the queryFn, not blank the strip', () => {
     expect(() =>
       parseLatestScheduleSolve(
@@ -534,6 +548,27 @@ describe('solveStripState', () => {
     expect(state).toMatchObject({ kind: 'infeasible', reasons: [] })
   })
 
+  it('keeps timed_out its OWN arm — a run that proved nothing is not a run that broke', () => {
+    const state = solveStripState(
+      buildScheduleSolve({
+        status: 'timed_out',
+        verdict: null,
+        wallTimeMs: 30_000,
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        error: 'time cap exhausted without a solution',
+      }),
+    )
+    expect(state).toEqual({
+      kind: 'timed_out',
+      wallTimeMs: 30_000,
+      trigger: 'manual',
+    })
+    // The two arms it must NOT be folded into.
+    expect(state.kind).not.toBe('failed')
+    expect(state.kind).not.toBe('infeasible')
+  })
+
   it('maps failed to its arm, carrying the server error for the detail line', () => {
     expect(
       solveStripState(
@@ -548,7 +583,7 @@ describe('solveInFlight', () => {
     expect(solveInFlight(buildScheduleSolve({ status, verdict: null }))).toBe(true)
   })
 
-  it.each(['succeeded', 'infeasible', 'failed'] as const)(
+  it.each(['succeeded', 'infeasible', 'timed_out', 'failed'] as const)(
     'is false for the terminal %s',
     (status) => {
       expect(solveInFlight(buildScheduleSolve({ status }))).toBe(false)

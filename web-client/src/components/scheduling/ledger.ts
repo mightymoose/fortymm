@@ -60,6 +60,12 @@ export function solveChip(
       }
     case 'infeasible':
       return { label: "Doesn't fit", tone: 'warn', verdict: null }
+    case 'timed_out':
+      // Its own designed arm beside `infeasible`, never folded into `failed`
+      // (ADR "a time-capped solve is its own outcome, not a failure"): the run
+      // proved nothing, which is not the same fact as a broken job — so it takes
+      // the warn tone, not the crash's `loss`.
+      return { label: 'Timed out', tone: 'warn', verdict: null }
     case 'failed':
       return { label: 'Failed', tone: 'loss', verdict: null }
     default: {
@@ -69,22 +75,27 @@ export function solveChip(
   }
 }
 
-/** True for the rows that carry a story worth expanding — the two terminal
- * not-a-plan outcomes. The expansion holds the failure detail: the server's
- * `error` sentence (failed only) and the drift guard's `input_fingerprint`.
+/** True for the rows that carry a story worth expanding — the three terminal
+ * not-a-plan outcomes. The expansion holds that story: the server's `error`
+ * sentence (a `failed` run's crash, a `timed_out` one's cap) and the drift
+ * guard's `input_fingerprint`. Deliberately NOT called "failure": a timed-out
+ * run proved nothing and an infeasible one proved the day does not fit — neither
+ * is a failure (ADR "a time-capped solve is its own outcome, not a failure").
  * A type predicate, so a caller that passed the gate can index
- * `FAILURE_HEADLINE` without a cast. */
-export function hasFailureDetail(
+ * `OUTCOME_HEADLINE` without a cast. */
+export function hasOutcomeDetail(
   status: ScheduleSolveStatus,
-): status is 'failed' | 'infeasible' {
-  return status === 'failed' || status === 'infeasible'
+): status is 'failed' | 'infeasible' | 'timed_out' {
+  return status === 'failed' || status === 'infeasible' || status === 'timed_out'
 }
 
-/** The expansion's designed headline — the strip's language for the same two
- * states, so the admin page and the Schedule tab tell one story. */
-export const FAILURE_HEADLINE: Record<'failed' | 'infeasible', string> = {
+/** The expansion's designed headline — the strip's language for the same three
+ * states, so the admin page and the Schedule tab tell one story, and three
+ * outcomes read as three different things. */
+export const OUTCOME_HEADLINE: Record<'failed' | 'infeasible' | 'timed_out', string> = {
   failed: 'The scheduler hit a problem',
   infeasible: "The day doesn't fit",
+  timed_out: 'The scheduler ran out of time',
 }
 
 /** The apply counts, human-sized: `9 placed · 2 pinned`. `null` (a stage not

@@ -10,7 +10,9 @@ type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 export { buildAdminScheduleSolveRead, buildTableConflictRead, buildPlayerConflictRead }
 
 /**
- * The variety page: one row per designed outcome, newest first — the seed the
+ * The variety page: one row per designed outcome — including all THREE terminal
+ * not-a-plan outcomes, which read as three different things (ADR "a time-capped
+ * solve is its own outcome, not a failure") — newest first, the seed the
  * rendering tests read every column off. Two tournaments so the
  * link/filter cells have something to disagree about.
  */
@@ -83,6 +85,21 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
           available_min: 480,
         },
       ],
+    }),
+    buildAdminScheduleSolveRead({
+      id: 'sv-timed-out',
+      status: 'timed_out',
+      trigger: 'rerun',
+      // No verdict at all: the cap ran out before the solver reached one (ADR
+      // "a time-capped solve is its own outcome, not a failure"). The error is
+      // the cap's own sentence — detail for an operator, never a discriminator.
+      verdict: null,
+      requested_at: '2026-07-15T10:56:30Z',
+      wall_time_ms: 30_000,
+      fixtures_placed: null,
+      fixtures_pinned: null,
+      error: 'time cap exhausted without a solution',
+      input_fingerprint: 'cafebabe'.repeat(8),
     }),
     buildAdminScheduleSolveRead({
       id: 'sv-succeeded',

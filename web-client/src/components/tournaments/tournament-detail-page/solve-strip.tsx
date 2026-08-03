@@ -6,6 +6,7 @@ import {
   Clock,
   Loader2,
   Play,
+  TimerOff,
   TriangleAlert,
 } from 'lucide-react'
 
@@ -43,7 +44,7 @@ export interface SolveStripProps {
   onRun: () => Promise<void>
 }
 
-/** One visual grammar for the five states: an icon in the state's tint, a
+/** One visual grammar for the six states: an icon in the state's tint, a
  * headline, and a quieter line under it. */
 const Line = ({
   icon,
@@ -199,6 +200,30 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
         </div>
       )
     }
+    case 'timed_out': {
+      // NOT the failed arm: the run did not break, it ran out of time before it
+      // had anything to say (ADR "a time-capped solve is its own outcome, not a
+      // failure"). So it takes the warn tint of the other terminal not-a-plan
+      // outcome rather than the crash's `--loss`, and — the whole point — it
+      // does NOT advise running it again: the same model against the same cap
+      // does the same thing. The lever is a smaller problem, or a longer cap.
+      const wall = fmtWallTime(state.wallTimeMs)
+      return (
+        <div data-testid="solve-strip-timed-out">
+          <Line
+            icon={<TimerOff size={18} />}
+            tint="text-[color:var(--warn)]"
+            title="The scheduler ran out of time"
+          >
+            The run hit its time cap{wall ? ` after ${wall}` : ''} before it found
+            any plan, so it proved nothing — the schedule is unchanged. Solving the
+            same day again won't help on its own: make the problem smaller — trim a
+            field, give a match fewer candidate tables, or solve fewer events at
+            once — or give the solver longer.
+          </Line>
+        </div>
+      )
+    }
     case 'failed':
       return (
         <div data-testid="solve-strip-failed">
@@ -266,8 +291,11 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  * owner's **Run scheduler** button.
  *
  * Every status is a *designed* state of one sum type (`solveStripState`) —
- * including `infeasible`, which is the point of pre-live solves, and "no solve
- * yet", which is the state every tournament is born in. Raw wire strings never
+ * including `infeasible`, which is the point of pre-live solves, `timed_out`,
+ * which proved nothing and so earns neither of the other two terminal sentences,
+ * and "no solve yet", which is the state every tournament is born in. The three
+ * terminal not-a-success outcomes read as three different things on purpose (ADR
+ * "a time-capped solve is its own outcome, not a failure"). Raw wire strings never
  * reach this surface: triggers and verdicts render through the copy tables in
  * `../data/solve`, and a refused run renders through `runSchedulerNotice`. The one
  * exception is a `failed` run's `error` sentence, shown as detail under the

@@ -17,9 +17,9 @@ import {
 import { fmtDateTimeShort } from '@/lib/dates'
 
 import {
-  FAILURE_HEADLINE,
+  OUTCOME_HEADLINE,
   fmtFixtureCounts,
-  hasFailureDetail,
+  hasOutcomeDetail,
   solveChip,
   type SolveChipTone,
 } from './ledger'
@@ -268,15 +268,15 @@ function LedgerRow({
   const chip = solveChip(solve.status, solve.verdict)
   const wall = fmtWallTime(solve.wallTimeMs)
   const counts = fmtFixtureCounts(solve.fixturesPlaced, solve.fixturesPinned)
-  // A local, so `hasFailureDetail`'s type predicate narrows it for the
-  // `FAILURE_HEADLINE` lookup below (a property access won't stay narrowed).
+  // A local, so `hasOutcomeDetail`'s type predicate narrows it for the
+  // `OUTCOME_HEADLINE` lookup below (a property access won't stay narrowed).
   const status = solve.status
-  const hasFailure = hasFailureDetail(status)
+  const hasOutcome = hasOutcomeDetail(status)
   // A placed board can still carry a caution (ADR "overlapping-in-progress-
   // matches-are-tolerated-and-reported") — orthogonal to the verdict, so a
   // succeeded row with overlapping in-progress matches is expandable too.
   const hasConflicts = solve.placementConflicts.length > 0
-  const expandable = hasFailure || hasConflicts
+  const expandable = hasOutcome || hasConflicts
   const detailId = `solve-detail-${solve.id}`
 
   return (
@@ -349,17 +349,19 @@ function LedgerRow({
         <tr className="solve-ledger-detail-row">
           <td colSpan={COLUMN_COUNT}>
             <div id={detailId} data-testid={detailId} className="solve-ledger-detail">
-              {/* `hasFailure` is `hasFailureDetail`'s type predicate, so `status`
-                  is narrowed to the two headline keys here. A placed board with
-                  only a conflict caution has no failure headline. */}
-              {hasFailure && (
+              {/* `hasOutcome` is `hasOutcomeDetail`'s type predicate, so `status`
+                  is narrowed to the three headline keys here. A placed board with
+                  only a conflict caution has no outcome headline. */}
+              {hasOutcome && (
                 <div className="solve-ledger-detail-title">
-                  {FAILURE_HEADLINE[status]}
+                  {OUTCOME_HEADLINE[status]}
                 </div>
               )}
-              {/* The server's own account of why the job broke — the one wire
-                  sentence this page carries, because it is the actionable
-                  content (the solve strip's precedent). */}
+              {/* The server's own account of why this run has no plan — why a
+                  `failed` job broke, or the cap sentence on a `timed_out` one.
+                  The one wire sentence this page carries, because it is the
+                  actionable content for an operator (the solve strip's
+                  precedent); it is detail, never a discriminator. */}
               {solve.error && (
                 <div className="solve-ledger-detail-error mono">{solve.error}</div>
               )}

@@ -282,8 +282,9 @@ export function pageAdminScheduleSolves(
  * (small fixtures hide acceptance bugs), spread over the seeded tournaments so
  * the Tournament links land on detail pages that exist under `npm run dev`,
  * with every terminal shape visible on page 1: succeeded (optimal *and*
- * feasible), infeasible, failed (with the server's error sentence), a run
- * still `running` with a re-run already coalesced onto it, and one `queued`.
+ * feasible), infeasible, timed_out (the cap ran out — its own outcome, not a
+ * failure), failed (with the server's error sentence), a run still `running`
+ * with a re-run already coalesced onto it, and one `queued`.
  * Newest request first, exactly as the API orders it.
  */
 export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
@@ -345,6 +346,18 @@ export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
     fixtures_pinned: null,
   }
   runs[4] = { ...runs[4], verdict: 'feasible', wall_time_ms: 2400 }
+  runs[5] = {
+    ...runs[5],
+    // The fourth terminal outcome (ADR "a time-capped solve is its own outcome,
+    // not a failure"): no verdict at all — the cap ran out before the solver
+    // reached one — and the cap's sentence as operator detail only.
+    status: 'timed_out',
+    verdict: null,
+    wall_time_ms: 30_000,
+    fixtures_placed: null,
+    fixtures_pinned: null,
+    error: 'time cap exhausted without a solution',
+  }
   return runs
 }
 
