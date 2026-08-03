@@ -11,14 +11,49 @@ app.kubernetes.io/name: fortymm-uat
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
-{{/* Fully-qualified api image reference. */}}
+{{/*
+Image reference for one of the two app images. Pass the image's values dict
+(e.g. .Values.images.api), which carries `repository`, `tag` and `digest`.
+
+Renders `repository@sha256:…` whenever a digest is set, because a digest is
+content-addressed: every workload that includes this helper is then provably
+running the same bytes, instead of trusting that a tag still points where it
+did when the last replica pulled it. That guarantee is the whole point — see
+docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md and the
+"UAT redeploy lands stale code" incident in deploy/CLAUDE.md, where two
+web-client replicas resolved one mutable tag to two different images and half
+of all page loads 404'd their JS chunk.
+
+With no digest it falls back to `repository:tag` so the chart stays renderable
+on its own (`helm template deploy/uat`) — but a digest that is set and
+malformed is NOT tolerated: it would silently produce a reference that either
+fails to pull or, worse, resolves to something other than what the deployer
+meant. Values are input from outside the chart, so parse them here at the
+boundary and fail the render loudly instead.
+*/}}
+{{- define "fortymm-uat.imageRef" -}}
+{{- if .digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .digest) -}}
+{{- fail (printf "images digest for %s must be a full manifest digest of the form sha256:<64 hex chars>, got %q" .repository .digest) -}}
+{{- end -}}
+{{ .repository }}@{{ .digest }}
+{{- else -}}
+{{ .repository }}:{{ .tag }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Fully-qualified api image reference. Shared by the api Deployment, the worker
+Deployment, the migrate hook Job and the retirement-sweep CronJob — they must
+resolve through this one helper so they cannot end up on different artifacts.
+*/}}
 {{- define "fortymm-uat.apiImage" -}}
-{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}
+{{- include "fortymm-uat.imageRef" .Values.images.api -}}
 {{- end -}}
 
 {{/* Fully-qualified web image reference. */}}
 {{- define "fortymm-uat.webImage" -}}
-{{ .Values.images.web.repository }}:{{ .Values.images.web.tag }}
+{{- include "fortymm-uat.imageRef" .Values.images.web -}}
 {{- end -}}
 
 {{/*

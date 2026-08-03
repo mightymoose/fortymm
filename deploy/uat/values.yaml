@@ -1,19 +1,45 @@
 # Values for the fortymm-uat chart. Most knobs mirror the prod-like QA
 # compose stack (docker-compose.qa.yml).
-# Images are built locally and `k3d image import`-ed, so pullPolicy is
-# IfNotPresent and no registry/repository prefix is used.
 
+# The api and web images are the ones CI publishes to GHCR from
+# api/Dockerfile.dev and web-client/Dockerfile.uat on every push to `main`
+# (.github/workflows/publish-images.yml). UAT deploys what CI built; it no
+# longer builds its own. The package names are NOT the repo's internal
+# `fortymm/{api,web}` — they are what the workflow pushes.
+#
+# `digest` is empty here and filled in at deploy time
+# (`--set images.api.digest=sha256:…` from scripts/redeploy-uat.sh), which is
+# what a real deploy always does. Naming the manifest digest rather than the
+# tag makes "every replica runs the same code" structural instead of
+# conventional: a tag can be moved or resolved differently by two nodes, a
+# digest cannot. The blank-white-page incident in deploy/CLAUDE.md is what
+# that costs when it isn't true. See
+# docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
+#
+# The tag is only the fallback for rendering the chart without a deploy
+# (`helm template deploy/uat`), so it names the moving `:main` tag the same
+# workflow publishes — something that actually exists and is pullable, rather
+# than a label no registry would answer for.
 images:
   api:
-    repository: fortymm/api
-    tag: uat
+    repository: ghcr.io/mightymoose/fortymm-api
+    tag: main
+    digest: ""
   web:
-    repository: fortymm/web
-    tag: uat
+    repository: ghcr.io/mightymoose/fortymm-web-client
+    tag: main
+    digest: ""
   postgres: postgres:16-alpine
   redis: redis:7-alpine
   nginx: nginx:1.27-alpine
 
+# IfNotPresent stays correct now that images come from a registry, for a
+# different reason than before: it used to mean "never pull, the image was
+# `k3d image import`-ed and exists nowhere else", and it now means "a digest
+# already on the node is by definition the exact bytes requested, so re-pulling
+# it can only cost time". `Always` would buy nothing against a content-addressed
+# reference while making every pod start — including postgres/redis/nginx, which
+# share this value — depend on registry reachability.
 pullPolicy: IfNotPresent
 
 # Stateless request-serving tiers scale horizontally with a zero-downtime

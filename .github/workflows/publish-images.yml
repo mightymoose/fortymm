@@ -12,13 +12,12 @@ name: publish-images
 # build is discovered after merge rather than before it.
 #
 # Also deliberately NOT path-filtered, but for a different reason than
-# `api.yml`'s (which is about required status checks). `redeploy-uat.sh` is
-# being changed to merge `origin/main` and deploy its TIP, looking the images up
-# by that commit's SHA -- so whatever commit is currently the tip must have
-# images, no matter what it touched. A path filter would skip docs-only commits,
-# and a docs-only commit is very often the tip, which would leave `main`
-# undeployable until something else landed on top of it. (That script still
-# builds locally as of this commit -- the consuming half lands separately.)
+# `api.yml`'s (which is about required status checks). `redeploy-uat.sh` merges
+# `origin/main` and deploys its TIP, looking the images up by that commit's SHA
+# -- so whatever commit is currently the tip must have images, no matter what it
+# touched. A path filter would skip docs-only commits, and a docs-only commit is
+# very often the tip, which would leave `main` undeployable until something else
+# landed on top of it.
 #
 # Note what this does NOT promise: that *every* commit on `main` gets images.
 # The concurrency group below supersedes a PENDING run when a newer one queues,
