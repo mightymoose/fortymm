@@ -2906,6 +2906,8 @@ internal enum Components {
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PastWindowReasonRead`.
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
+                case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -2926,6 +2928,8 @@ internal enum Components {
                         self = .noSingleCause(try .init(from: decoder))
                     case "past_window":
                         self = .pastWindow(try .init(from: decoder))
+                    case "player_over_subscribed":
+                        self = .playerOverSubscribed(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -2945,6 +2949,8 @@ internal enum Components {
                     case let .noSingleCause(value):
                         try value.encode(to: encoder)
                     case let .pastWindow(value):
+                        try value.encode(to: encoder)
+                    case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
@@ -7383,6 +7389,77 @@ internal enum Components {
                 case ratingChange = "rating_change"
             }
         }
+        /// One human with more match-time in a pool than its window can hold: their
+        /// ``match_count`` matches plus the rest between them need ``required_min``
+        /// minutes of *their* time, against a window spanning only ``window_span_min``.
+        /// A pigeonhole over one person, so adding tables cannot fix it — the remedy is
+        /// fewer matches for them in this pool, or a longer window. Resolved: the
+        /// human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
+        /// the minutes stay integers for the client to format.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead`.
+        internal struct PlayerOverSubscribedRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case playerOverSubscribed = "player_over_subscribed"
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/kind`.
+            internal var kind: Components.Schemas.PlayerOverSubscribedRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/player_name`.
+            internal var playerName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/pool_name`.
+            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/window_start`.
+            internal var windowStart: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/window_end`.
+            internal var windowEnd: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/match_count`.
+            internal var matchCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/required_min`.
+            internal var requiredMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/window_span_min`.
+            internal var windowSpanMin: Swift.Int
+            /// Creates a new `PlayerOverSubscribedRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - playerName:
+            ///   - poolName:
+            ///   - windowStart:
+            ///   - windowEnd:
+            ///   - matchCount:
+            ///   - requiredMin:
+            ///   - windowSpanMin:
+            internal init(
+                kind: Components.Schemas.PlayerOverSubscribedRead.KindPayload? = nil,
+                playerName: Swift.String,
+                poolName: Swift.String,
+                windowStart: Swift.String,
+                windowEnd: Swift.String,
+                matchCount: Swift.Int,
+                requiredMin: Swift.Int,
+                windowSpanMin: Swift.Int
+            ) {
+                self.kind = kind
+                self.playerName = playerName
+                self.poolName = poolName
+                self.windowStart = windowStart
+                self.windowEnd = windowEnd
+                self.matchCount = matchCount
+                self.requiredMin = requiredMin
+                self.windowSpanMin = windowSpanMin
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case playerName = "player_name"
+                case poolName = "pool_name"
+                case windowStart = "window_start"
+                case windowEnd = "window_end"
+                case matchCount = "match_count"
+                case requiredMin = "required_min"
+                case windowSpanMin = "window_span_min"
+            }
+        }
         /// A user the current player can pick as a match opponent.
         ///
         /// Used by the typeahead/opponent picker. ``rating`` is the player's current
@@ -8200,6 +8277,8 @@ internal enum Components {
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PastWindowReasonRead`.
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
+                case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -8220,6 +8299,8 @@ internal enum Components {
                         self = .noSingleCause(try .init(from: decoder))
                     case "past_window":
                         self = .pastWindow(try .init(from: decoder))
+                    case "player_over_subscribed":
+                        self = .playerOverSubscribed(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -8239,6 +8320,8 @@ internal enum Components {
                     case let .noSingleCause(value):
                         try value.encode(to: encoder)
                     case let .pastWindow(value):
+                        try value.encode(to: encoder)
+                    case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
@@ -9002,6 +9085,8 @@ internal enum Components {
                 case noSingleCause(Components.Schemas.NoSingleCauseRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PastWindowReasonRead`.
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
+                case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
                 case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
@@ -9022,6 +9107,8 @@ internal enum Components {
                         self = .noSingleCause(try .init(from: decoder))
                     case "past_window":
                         self = .pastWindow(try .init(from: decoder))
+                    case "player_over_subscribed":
+                        self = .playerOverSubscribed(try .init(from: decoder))
                     case "pool_has_no_tables":
                         self = .poolHasNoTables(try .init(from: decoder))
                     case "pool_over_capacity":
@@ -9041,6 +9128,8 @@ internal enum Components {
                     case let .noSingleCause(value):
                         try value.encode(to: encoder)
                     case let .pastWindow(value):
+                        try value.encode(to: encoder)
+                    case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
                     case let .poolHasNoTables(value):
                         try value.encode(to: encoder)
