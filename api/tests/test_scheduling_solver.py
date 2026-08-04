@@ -757,6 +757,34 @@ class TestInfeasibility:
         assert result.verdict is Verdict.optimal
         assert result.reasons == ()
 
+    def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
+        """A pre-live pool whose ENTIRE window is already behind ``now`` is
+        infeasible with a specific, machine-readable ``past_window`` reason that
+        identifies the offending pool — the most specific pre-live cause, distinct
+        from a too-tight current window (ADR "a past day is named, not disguised",
+        #1101). The pure module is minute-only, so the reason carries only the
+        pool id; the DB-aware layer resolves it to a date."""
+        p1, p2 = _players(2)
+        # Window [0, 60) is wholly before now (minute 120): no grid start >= now
+        # can ever land inside it — a dated-in-the-past day, not too-tight.
+        snapshot = _one_pool_snapshot(
+            (_fixture(1, p1, p2),),
+            window=(0, 60),
+            now_min=120,
+        )
+        assert snapshot.is_live is False
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.placements == ()
+        assert result.overrunning is False
+        # Past window dominates: it is the only reason (the tight-window arm is
+        # suppressed for the same pool), and it names the offending pool.
+        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        (reason,) = result.reasons
+        assert isinstance(reason, PastWindow)
+        assert reason.kind == "past_window"
+
 
 class TestPlayerOverSubscribed:
     """The per-(pool, player) pigeonhole (ADR "the conflict core is a second,
@@ -816,19 +844,102 @@ class TestPlayerOverSubscribed:
         _assert_hard_constraints(snapshot, result)
         assert sorted(p.start_min for p in result.placements) == [0, 35]
 
+    def test_a_live_overrunning_day_does_not_accuse_its_busiest_player(self) -> None:
+        """THE falsification for this arm's *span*. Once the day is live the pool
+        window's end is advisory — the unplayed remainder overruns instead of
+        wedging (ADR "the solver stops wedging", #1067) — so the span this bound
+        is tested against must be the live-softened one, not the planned one.
+
+        P1 is in three 25-minute matches (95 minutes of P1's own day) in a pool
+        whose *planned* window is only 60 minutes long, and it is already minute
+        50 of a live day. Measured against the planned span this reads
+        95 > 60 — a *certain* reason naming an innocent human — yet the day
+        genuinely schedules, P1 playing back-to-back-with-rest into the overrun.
+        So no reason may be reported and every fixture must be placed.
+
+        Swap ``effective_end(pool)`` for ``pool.window.end_min`` in the span
+        :func:`_build_model` compares against and this test reds: infeasible,
+        placements gone, PlayerOverSubscribed(P1, required_min=95) reported."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
+        )
+        snapshot = dataclasses.replace(
+            _one_pool_snapshot(fixtures, tables=3, window=(0, 60), now_min=50),
+            is_live=True,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.reasons == ()
+        assert result.verdict is Verdict.optimal
+        # P1 plays all three, serialized with the rest floor between them, from
+        # the first grid start at/after now: [50, 75), [85, 110), [120, 145).
+        assert sorted(p.start_min for p in result.placements) == [50, 85, 120]
+        # It overruns the planned end, which is precisely the case the softened
+        # span exists to keep schedulable rather than blame someone for.
+        assert result.overrunning is True
+
+    def test_the_reported_span_is_the_planned_one_not_the_softened_one(self) -> None:
+        """The span reported and the span compared against deliberately differ
+        while live. The director's screen prints ``window_span_min`` beside the
+        pool's *planned* window clock, which is never softened, so reporting the
+        (wider) live-softened span would render a self-contradictory sentence:
+        "they need 1.6h, but the window is only 1.4h long" next to a 09:30–10:40
+        window. The planned span is reported — as WindowTooShortForMatch already
+        does — while the *bound* still uses the softened span, which is the
+        conservative direction (see the test above).
+
+        A live day at minute 0 whose pool window is [20, 100): planned span 80,
+        softened span 85 (now + the 105-minute overrun allowance clips the end to
+        105). P1's 95 minutes beat both, so the arm fires — and the sentence the
+        director reads stays true because planned <= softened < required."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
+        )
+        snapshot = dataclasses.replace(
+            _one_pool_snapshot(fixtures, tables=3, window=(20, 100), now_min=0),
+            is_live=True,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (
+            PlayerOverSubscribed(
+                pool_id=PoolId("A"),
+                player_id=p1,
+                match_count=3,
+                required_min=95,
+                window_span_min=80,  # 100 - 20, the PLANNED span (not 85)
+            ),
+        )
+        # The inequality the director is shown holds as printed.
+        (reason,) = result.reasons
+        assert isinstance(reason, PlayerOverSubscribed)
+        assert reason.required_min > reason.window_span_min
+
     def test_every_over_subscribed_player_is_reported(self) -> None:
         """Collected exhaustively, like every other certain cause: two humans are
         each in three matches of a 60-minute window, and both are named in one
         solve so the director fixes them together rather than re-running into the
-        next. Reported in player-id order for determinism."""
+        next. Reported in player-id order for determinism.
+
+        P2's fixtures are listed FIRST on purpose: snapshot order therefore
+        disagrees with player-id order, so the expected (P1, P2) tuple can only
+        hold if the arm really sorts. Listing P1 first would make insertion order
+        and sorted order identical, and dropping the ``sorted(...)`` would pass."""
         p1, p2, p3, p4, p5, p6, p7, p8 = _players(8)
         fixtures = (
-            _fixture(1, p1, p3),
-            _fixture(2, p1, p4),
-            _fixture(3, p1, p5),
-            _fixture(4, p2, p6),
-            _fixture(5, p2, p7),
-            _fixture(6, p2, p8),
+            _fixture(1, p2, p6),
+            _fixture(2, p2, p7),
+            _fixture(3, p2, p8),
+            _fixture(4, p1, p3),
+            _fixture(5, p1, p4),
+            _fixture(6, p1, p5),
         )
         # 4 tables: pool demand is 6 * 25 = 150 against 60 * 4 = 240, so the pool
         # is under capacity and only the per-player arm can fire.
@@ -928,33 +1039,56 @@ class TestPlayerOverSubscribed:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
 
-    def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
-        """A pre-live pool whose ENTIRE window is already behind ``now`` is
-        infeasible with a specific, machine-readable ``past_window`` reason that
-        identifies the offending pool — the most specific pre-live cause, distinct
-        from a too-tight current window (ADR "a past day is named, not disguised",
-        #1101). The pure module is minute-only, so the reason carries only the
-        pool id; the DB-aware layer resolves it to a date."""
-        p1, p2 = _players(2)
-        # Window [0, 60) is wholly before now (minute 120): no grid start >= now
-        # can ever land inside it — a dated-in-the-past day, not too-tight.
-        snapshot = _one_pool_snapshot(
-            (_fixture(1, p1, p2),),
-            window=(0, 60),
-            now_min=120,
+    def test_a_past_window_pool_reports_only_that(self) -> None:
+        """The second of the three domination guards this arm shares with the
+        pool-level pass (the no-tables one is above, the short-window one below):
+        a pre-live pool whose ENTIRE window is behind ``now`` is unschedulable
+        because of *when* it is, fixed by moving the date, so naming a human on
+        top of it is noise. P1 is in three matches of a 60-minute window that
+        ended an hour ago and only :class:`PastWindow` is reported.
+
+        Drop the ``pools_past_window`` ``continue`` from the per-pool loop and
+        this test reds with a PlayerOverSubscribed(P1) piled on."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
         )
+        # 3 tables, so the pool is nowhere near over capacity (75 vs 60 * 3) and
+        # the per-player arm is the only one the dropped guard could let through.
+        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 60), now_min=120)
         assert snapshot.is_live is False
         result = solve(snapshot, time_cap_s=CAP)
-
-        assert result.verdict is Verdict.infeasible
-        assert result.placements == ()
-        assert result.overrunning is False
-        # Past window dominates: it is the only reason (the tight-window arm is
-        # suppressed for the same pool), and it names the offending pool.
         assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
-        (reason,) = result.reasons
-        assert isinstance(reason, PastWindow)
-        assert reason.kind == "past_window"
+
+    def test_a_short_window_pool_reports_only_its_unfittable_matches(self) -> None:
+        """The third domination guard: a pool whose window cannot hold even one
+        match is already proven unplaceable per fixture, so the pool- and
+        player-level claims about it are suppressed. A 20-minute window against
+        25-minute matches, all three involving P1 — only the three
+        :class:`WindowTooShortForMatch` findings are reported.
+
+        Drop the ``pools_short_window`` ``continue`` and this test reds twice
+        over: a PoolOverCapacity (75 > 20 * 3) and a PlayerOverSubscribed(P1,
+        95 > 20) get piled onto a pool that already explained itself."""
+        p1, p2, p3, p4 = _players(4)
+        fixtures = (
+            _fixture(1, p1, p2),
+            _fixture(2, p1, p3),
+            _fixture(3, p1, p4),
+        )
+        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 20))
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.reasons == tuple(
+            WindowTooShortForMatch(
+                pool_id=PoolId("A"),
+                fixture_id=FixtureId(f"F{n}"),
+                needed_min=25,
+                window_span_min=20,
+            )
+            for n in (1, 2, 3)
+        )
 
 
 class TestSoftWindowOnceLive:

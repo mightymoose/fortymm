@@ -441,7 +441,7 @@ class PlayerOverSubscribed:
     person. A player plays one match at a time and their fixtures in a pool must
     all run inside that pool's window, so
 
-        ``Σ durations + (match_count − 1) × REST_MIN > window_span_min``
+        ``Σ durations + (match_count − 1) × REST_MIN > playable span``
 
     is a **necessary** condition for infeasibility — provable by arithmetic on
     the snapshot with no solver at all, which is why it joins the cheap pre-check
@@ -449,6 +449,16 @@ class PlayerOverSubscribed:
     max-placed solve"). ``required_min`` is that left-hand side: the player's own
     serial demand, table count irrelevant (extra tables let *other* people play in
     parallel, never this one).
+
+    ``window_span_min`` is the pool's **planned** span (``end − start``), the
+    same span :class:`WindowTooShortForMatch` reports — it is the window the
+    director sees on screen beside this number. The span the bound is *tested*
+    against is the live-softened one, which while live is wider; testing against
+    the planned span would falsely accuse a player on an overrunning live day
+    that genuinely schedules. Reporting the tested span instead would print a
+    span that contradicts the window clock rendered next to it. Both numbers are
+    honest because ``planned span ≤ tested span < required_min``, so the
+    inequality the reader is shown holds too.
 
     **The rest term is ``(N − 1)``, not ``N``.** :func:`_build_model` pads *every*
     player interval by :data:`REST_MIN`, which is right for ``AddNoOverlap`` (it
@@ -1028,10 +1038,11 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         table_count = len(pool.table_ids)
         # Effective end: pre-live this is the planned window; live it is softened
         # so an overrunning live day is never falsely flagged over-capacity. Bound
-        # once, here, because BOTH certain arms below measure against it — a pool's
+        # once, here, because BOTH certain arms below TEST against it — a pool's
         # capacity and one human's own day are different proofs about the same
-        # window, and computing the span twice would let them drift into reporting
-        # contradictory numbers for the same pool.
+        # window, and deriving the compared span twice would let the two proofs
+        # drift apart for the same pool. (What each arm *reports* is a separate
+        # question — see PlayerOverSubscribed's `window_span_min` below.)
         window_span = effective_end(pool) - pool.window.start_min
         capacity_min = window_span * table_count
         if required_min > capacity_min:
@@ -1083,7 +1094,15 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             player_minutes = minutes_by_player[player_id]
             match_count = len(player_minutes)
             if match_count < 2:
-                continue  # one match is a window question, not over-subscription
+                # Provably dead, kept as a cheap explicit statement of the
+                # arm's precondition. Every fixture in a pool that reached here
+                # cleared the window-too-short guard above (`lo <= hi`), which
+                # means some grid start `g` satisfies `g >= window.start` and
+                # `g + duration <= effective_end` — so `window_span >= duration`
+                # and a lone match can never exceed the span it is compared
+                # against. A single fixture that genuinely cannot fit is
+                # WindowTooShortForMatch's finding, and it already fired.
+                continue
             required = sum(player_minutes) + (match_count - 1) * REST_MIN
             if required > window_span:
                 reasons.append(
@@ -1092,7 +1111,26 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                         player_id=player_id,
                         match_count=match_count,
                         required_min=required,
-                        window_span_min=window_span,
+                        # The compared span and the REPORTED span deliberately
+                        # differ while live — do not "fix" this back to
+                        # `window_span`. We compare against the softened
+                        # effective span (above) because that is the
+                        # conservative direction: while live the window end is
+                        # advisory and the remainder overruns, so comparing
+                        # against the smaller *planned* span would falsely
+                        # accuse a player on an overrunning day that genuinely
+                        # schedules. But the director's screen prints this
+                        # number beside the pool's *planned* window clock
+                        # (window_start/window_end, never softened), so
+                        # reporting the effective span would render a
+                        # self-contradictory sentence — a "09:30–10:30 window"
+                        # described in the same breath as "only 2.5h long".
+                        # Report the planned span —
+                        # as WindowTooShortForMatch already does, for the same
+                        # reason. The sentence stays true either way:
+                        # planned_span <= effective_span < required, so
+                        # `required > planned_span` too.
+                        window_span_min=pool.window.end_min - pool.window.start_min,
                     )
                 )
 
