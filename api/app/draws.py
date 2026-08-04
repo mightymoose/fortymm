@@ -334,12 +334,16 @@ class FixtureState:
     #:
     #: ``None`` means "no pool order to sort on", which is true of an **un-pooled**
     #: fixture (``pool_id is None``) and of a caller that did not resolve the event's
-    #: pools — a strategy test built from literals, or a pool stored before the field
-    #: existed. It is deliberately not defaulted to ``0``: a real position of ``0`` is
-    #: the *first* pool, and "unknown" collapsing onto "first" would silently promote
-    #: every unresolved fixture to the head of the draw. Unknown sorts after every known
-    #: pool instead, where the id tie-break decides it — which is exactly the order
-    #: :func:`ready_fixtures` had before positions existed.
+    #: pools at all — a strategy test built straight from :class:`FixtureState`
+    #: literals, or :func:`~app.tournament_draws.fixture_state` called with no
+    #: ``pool_positions`` map. A pool stored before the field existed still resolves to
+    #: a real int here — :func:`~app.tournament_draws.pool_order`'s stable sort leaves
+    #: it at its array index. It is deliberately not defaulted to ``0``: a real
+    #: position of ``0`` is the *first* pool, and "unknown" collapsing onto "first"
+    #: would silently promote every unresolved fixture to the head of the draw.
+    #: Unknown sorts after every known pool instead, where the id tie-break decides it
+    #: — which is exactly the order :func:`ready_fixtures` had before positions
+    #: existed.
     pool_position: int | None = None
     #: Set when the fixture's match completed — the fixture is then **decided**.
     winner_entry_id: EntryId | None = None

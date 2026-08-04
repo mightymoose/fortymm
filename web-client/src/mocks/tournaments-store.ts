@@ -1848,8 +1848,8 @@ export function deleteTournament(id: string): DeleteResult {
 
 /**
  * Stamp each pool with the **position of its index in the list the client sent** — the
- * server's rule (`_write_pools`, `api/app/…/tournament.py`), reproduced here because a
- * mock that is more permissive than the server it stands in for is a trap.
+ * server's rule (`stored_pools`, `api/app/schemas/tournament.py`), reproduced here
+ * because a mock that is more permissive than the server it stands in for is a trap.
  *
  * The write schema (`PoolWrite`) has no `position`: it is `extra="forbid"`, so sending
  * one is a 422 naming the field, and **the order of the array is the only thing that
