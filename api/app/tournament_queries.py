@@ -15,8 +15,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import ColumnElement, and_, column, func, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import ScalarSelect
 
@@ -30,6 +29,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -237,29 +237,33 @@ def _pool_position() -> ScalarSelect[int | None]:
     """The ``position`` of a fixture's pool within its own event — the correlated
     subquery the draw order below sorts on.
 
-    A fixture holds a **string ref** into its event's ``pools`` JSONB, not an FK, so
-    "where does this fixture's pool sit in the director's order?" is a lookup into that
-    array: find the element whose ``id`` matches ``tournament_fixtures.pool_id``, and
-    read its ``position`` (:data:`app.schemas.tournament.PoolPosition` — 0-based,
-    stamped by the server from the order the pools were sent in).
-    ``jsonb_array_elements`` unnests the array; the pool ids of one event are unique
-    (``_pool_ids_are_unique`` at the write boundary), so the subquery is scalar by
-    construction rather than by a ``LIMIT`` papering over duplicates.
+    A fixture holds its pool's **id**, not its index, so "where does this fixture's pool
+    sit in the director's order?" is a join: find the ``tournament_event_pools`` row
+    this fixture's ``(event_id, pool_id)`` names — the same pair the composite foreign
+    key matches on (ADR 20260801) — and read its ``position``
+    (:data:`app.schemas.tournament.PoolPosition` — 0-based, stamped by the server from
+    the order the pools were sent in). Scalar by construction, since ``(event_id, id)``
+    is unique, rather than by a ``LIMIT`` papering over duplicates.
 
-    It is ``NULL`` in exactly two cases, and both want to sort at the end of the pooled
-    group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim, or the KO stage
-    of an rr-then-ko draw) matches no element, and a pool stored **before** ``position``
-    existed carries no such key. The second is why the id remains a secondary sort key
-    below: a whole event of position-less pools degrades to exactly the id order this
-    used to have, rather than to no order at all.
+    It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
+    the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim, or
+    the KO stage of an rr-then-ko draw) matches no row. It used to have a second — a
+    pool stored before ``position`` existed — which the ``NOT NULL`` column has closed;
+    the id stays on as a secondary sort key below because the *order* still has to be
+    total when this is NULL for every row of an un-pooled draw.
+
+    Correlated on ``TournamentFixture`` alone. The ``event_id`` comes off the fixture
+    rather than off the joined ``TournamentEvent`` — the same column either way, and
+    taking it from the fixture keeps the subquery independent of which of the two tables
+    the enclosing statement happens to have in scope.
     """
-    pool = func.jsonb_array_elements(TournamentEvent.pools).table_valued(
-        column("value", JSONB)
-    )
     return (
-        select(pool.c.value["position"].as_integer())
-        .where(pool.c.value["id"].as_string() == TournamentFixture.pool_id)
-        .correlate(TournamentEvent, TournamentFixture)
+        select(TournamentEventPool.position)
+        .where(
+            TournamentEventPool.event_id == TournamentFixture.event_id,
+            TournamentEventPool.id == TournamentFixture.pool_id,
+        )
+        .correlate(TournamentFixture)
         .scalar_subquery()
     )
 
@@ -294,23 +298,22 @@ async def fixtures_by_event(
     NULL there, so round and position decide it alone).
 
     "Pool" here means the pool's **position in the event's own pool order**
-    (:func:`_pool_position`), not its id. The id is a client-minted string —
-    ``p-1-…``, ``p-2-…``, ``p-10-…`` — and *lexicographically* ``p-10-`` falls between
+    (:func:`_pool_position`), not its id. The id used to be a client-minted string —
+    ``p-1-…``, ``p-2-…``, ``p-10-…`` — and *lexicographically* ``p-10-`` fell between
     ``p-1-`` and ``p-2-``, so a ten-pool event rendered its draw as pool 1, pool 10,
     pool 2. Sorting on the stored ``position`` (ADR 20260801, "Pools carry an explicit
     ``position``") is also the only key that survives pools becoming rows with random
     UUID primary keys, under which an id sort is not merely wrong but *arbitrary*.
     The id stays on as a secondary key so the order is still total when the positions
-    cannot decide it — an event whose pools predate the field carries no ``position``
-    at all, and degrades to precisely the id order this used to have.
+    cannot decide it — every fixture of an un-pooled draw resolves a ``NULL`` position.
 
     Sorted in Postgres rather than in Python because a NULL is not comparable to an
     ``int`` (nor, before it, to a string): ``sorted(key=lambda f: (f.pool_position,
     ...))`` is a ``TypeError`` the moment an un-pooled fixture meets a pooled one, and
     the defensive coalesce that usually follows (``f.pool_position or 0``) would
     quietly sort the KO stage FIRST — in front of the pools that feed it. The position
-    is also not a column on the fixture at all: it lives in the event's ``pools``
-    JSONB, so resolving it in Python would mean parsing every event's pools per read.
+    is also not a column on the fixture at all: it lives on the fixture's *pool* row, so
+    resolving it in Python would mean loading every event's pools per read.
 
     A materialized fixture carries its match's **live status** (``match_status``), read
     by LEFT-joining ``matches`` on ``fixture.match_id`` (#788) — still ONE statement,

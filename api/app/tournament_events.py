@@ -42,7 +42,6 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventUpdate,
     named_list,
-    stored_pools,
 )
 from app.tournament_draws import event_has_draw, event_pools
 from app.tournament_edit import _load_owned_tournament_for_update
@@ -51,6 +50,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     PoolSetFrozenError,
 )
+from app.tournament_pools import apply_event_pools, stored_pools
 
 
 async def _load_event(
@@ -99,8 +99,9 @@ async def create_event(
 
     Then it writes the event exactly as the HTTP handler did inline — the nested
     value-objects (``slot``, ``match_settings``, ``predicates``) persist as plain JSONB
-    via ``model_dump``, and ``pools`` through :func:`stored_pools`, which is the same
-    dump plus the server-assigned ``position`` the write shape has no field for. Commits
+    via ``model_dump``, and the ``pools`` as child **rows** through
+    :func:`app.tournament_pools.stored_pools`, which composes them and stamps the
+    server-assigned ``position`` the write shape has no field for. Commits
     and refreshes before returning. Never raises ``HTTPException`` — the caller adapts
     each domain exception to its transport and shapes the read (a just-created event has
     no entrants, draw or results, so those are all empty without a query).
@@ -134,12 +135,12 @@ async def create_event(
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],
-        # The one nested value-object that is not a straight ``model_dump``: what the
-        # client sent is the WRITE shape, which carries no ``position``, and the column
-        # holds the stored shape, which does. ``stored_pools`` is that conversion, and
-        # the only place a position is assigned — from each pool's index in the list
-        # this payload sent (ADR 20260801, "Pools carry an explicit ``position``").
-        pools=stored_pools(payload.pools),
+        # The one thing here that is not a column at all: the event's pools are ROWS
+        # (ADR 20260801), created with the event and flushed after it by the
+        # relationship. ``stored_pools`` composes them — turning the WRITE shape, which
+        # carries no ``position``, into rows that do, from each pool's index in the list
+        # this payload sent.
+        pools=stored_pools(tournament, payload.pools),
     )
     db.add(event)
     await db.commit()
@@ -191,14 +192,17 @@ def _pool_set_frozen_detail(removed: list[str], added: list[str]) -> str:
     has — composed exactly as the router's ``_pool_set_refusal`` used to compose it
     inline, so :class:`PoolSetFrozenError` carries the byte-identical body.
 
-    Both halves are named, because a re-**id**'d pool is exactly one removal plus one
-    addition and the director has to be told which of their pools went missing: a
-    **removed** pool leaves its fixtures pointing at a pool that no longer exists (the
-    dangling ref no foreign key is there to catch, ADR-0786), and an **added** pool
+    Both halves are named, because a payload can move both at once and the director has
+    to be told which of their pools went missing: a **removed** pool leaves its fixtures
+    pointing at a pool that no longer exists (which the composite foreign key would
+    refuse too, but only at COMMIT and only as a driver error), and an **added** pool
     arrives with **no fixtures**, because the draw was dealt across the pools the event
     had at the cut. The sentence ends with the way out (remove the draw, change the
     pools, cut again) and with what is still allowed, so a director who has to move a
     broken table is never left with nowhere to go.
+
+    It no longer offers "re-identify" as a third thing to do: a pool id is minted by the
+    server (ADR 20260801), so re-identifying one is not a payload a client can send.
     """
     clauses = []
     if removed:
@@ -215,8 +219,7 @@ def _pool_set_frozen_detail(removed: list[str], added: list[str]) -> str:
         "This event's draw is already cut, so its set of pools is frozen: "
         + "; and ".join(clauses)
         + ". A pool's tables, its time and its name can all still be changed. "
-        "To add, remove or re-identify a pool, remove the draw first, then cut it "
-        "again."
+        "To add or remove a pool, remove the draw first, then cut it again."
     )
 
 
@@ -275,13 +278,27 @@ async def _enforce_pool_set_frozen(
     """Raise :class:`PoolSetFrozenError` once a ``pools`` payload would change *which
     pools* an event with a cut draw has (ADR-0786).
 
-    A fixture names its pool by a **string ref** into this same event's ``pools`` JSONB,
-    and there is no pools table for it to foreign-key. So the database cannot refuse the
-    edit that orphans it, and the integrity of that reference is procedural — it is this
-    function, and nothing else. Remove a pool (or change its ``id``, which is a removal
-    with an addition standing where it was) and every fixture drawn into it refers to
-    nothing; add one and it arrives with no fixtures, because the draw was dealt across
-    the pools that existed at the cut.
+    Remove a pool and every fixture drawn into it refers to nothing; add one and it
+    arrives with no fixtures, because the draw was dealt across the pools that existed
+    at the cut.
+
+    **What this guard is left saying, now that the ids are minted.** Three categories
+    used to reach it; only two still can, and neither is one a foreign key could answer.
+
+    * **Re-identifying** a pool — the case that used to be a removal and an addition at
+      once, and the loudest reason this guard was written — is **no longer
+      expressible**.
+      A pool id is a server-minted uuid, so a client cannot author one; it either cites
+      an id the event has (which keeps that row) or omits one (which adds a pool). That
+      whole category left with the minting, not with this function.
+    * **Removing** a pool: the composite foreign key does refuse it, but *deferred*, at
+      COMMIT, as an ``IntegrityError`` — a 500 the director cannot act on, where this is
+      a 409 naming the pools and the way out. So the ordering matters and is deliberate:
+      this runs before anything is written, and the constraint underneath is the
+      backstop for every path that does not come through this verb.
+    * **Adding** a pool: no constraint says anything at all. A pool arriving into a cut
+      draw with no fixtures in it is perfectly legal SQL and still an incoherent draw,
+      so this is the only thing standing between a director and one.
 
     What is frozen is the **id set**, and only the id set. A pool's ``table_ids``, its
     ``slot`` and its ``name`` stay editable with a draw standing, on purpose — this is
@@ -289,8 +306,10 @@ async def _enforce_pool_set_frozen(
 
     Asked **before** anything is written (and, like every judge-then-write guard, under
     the tournament's row lock the verb holds), so a refusal leaves both the pools and
-    the fixtures exactly as they were — never written, not merely rolled back. With
-    **no draw cut** this is a no-op and ``pools`` replaces wholesale, as it always has.
+    the fixtures exactly as they were — never written, not merely rolled back. It is
+    also asked before :func:`~app.tournament_pools.apply_event_pools`'s own 422 for an
+    id this event does not have, so a cut event answers the 409 that names its pools.
+    With **no draw cut** this is a no-op and the diff applies as it always has.
     """
     # An absent ``pools`` key is the only way this is ``None`` — an explicit ``null`` is
     # a 422 at the schema (the column is NOT NULL) — so "not sent" is the whole meaning
@@ -302,19 +321,28 @@ async def _enforce_pool_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    # Parsed ONCE, and kept: the id set decides *whether* to refuse, and the pools
-    # themselves say *which* — a refusal names them (``named_list``), and re-parsing the
-    # JSONB to recover the names would be the same validation run twice per pool.
+    # Projected ONCE, and kept: the id set decides *whether* to refuse, and the pools
+    # themselves say *which* — a refusal names them (``named_list``), and re-projecting
+    # the rows to recover the names would be the same work run twice per pool.
     current = event_pools(event)
     existing = {PoolId(pool.id) for pool in current}
-    incoming = {PoolId(pool.id) for pool in updates.pools}
-    if existing == incoming:
+    # An entry with no ``id`` is an addition and contributes nothing to the incoming
+    # SET — which is what makes ``existing == incoming`` "you cited exactly the pools
+    # you have" rather than "you sent the same number of them".
+    incoming = {PoolId(pool.id) for pool in updates.pools if pool.id is not None}
+    if existing == incoming and len(updates.pools) == len(incoming):
         return
     # Named by their names, from whichever side of the change still knows them: a pool
     # being removed is only described by the row we hold, and one being added only by
-    # the payload.
+    # the payload. An entry citing an id this event does not have counts as an addition
+    # here — it is one in effect, and past this guard it is the 422
+    # ``apply_event_pools`` raises.
     removed = [pool.name for pool in current if PoolId(pool.id) not in incoming]
-    added = [pool.name for pool in updates.pools if pool.id not in existing]
+    added = [
+        pool.name
+        for pool in updates.pools
+        if pool.id is None or PoolId(pool.id) not in existing
+    ]
     raise PoolSetFrozenError(
         _pool_set_frozen_detail(removed, added), removed=removed, added=added
     )
@@ -385,7 +413,7 @@ async def _enforce_draw_settings_frozen(
 
 def _event_scheduling_facts(
     event: TournamentEvent,
-) -> tuple[tuple[tuple[str, Slot, tuple[str, ...]], ...], int, str]:
+) -> tuple[tuple[tuple[uuid.UUID, Slot, tuple[str, ...]], ...], int, str]:
     """The slice of an event the schedule solver actually reads (ADR "the schedule is
     solved; the call is pinned"), in a comparable shape — what the update verb compares
     before/after its write to decide whether a re-solve is owed.
@@ -503,9 +531,10 @@ async def update_event(
 
     Then the partial apply (``model_dump(exclude_unset=True)`` serializes the nested
     value-objects to plain dicts/lists, so one ``setattr`` loop covers the JSONB and
-    scalar columns alike — with ``pools`` recomposed through :func:`stored_pools` first,
-    since the write shape carries no ``position`` and the column does), with three side
-    effects — the first new, the other two preserved exactly from the router:
+    scalar columns alike — with ``pools`` taken out of it and applied as an id-keyed
+    diff over the event's pool **rows**,
+    :func:`app.tournament_pools.apply_event_pools`), with three side effects — the first
+    new, the other two preserved exactly from the router:
 
     * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
       qualifier count) is applied to the event's ``draw_settings`` row, the only place
@@ -557,24 +586,28 @@ async def update_event(
     # them leaves the loop below touching mapped columns only.
     changes.pop("draw_type", None)
     changes.pop("qualifiers_per_pool", None)
-    if updates.pools is not None:
-        # Recomposed rather than dumped, and on this verb as much as on create: the
-        # dump above is of the WRITE shape, which has no ``position``, so leaving it
-        # alone would store a pool set with no order at all — an event born positioned
-        # and then patched flat, which is the "the patch path is the hole" bug this
-        # repo keeps rediscovering. ``stored_pools`` stamps the order the patch sent,
-        # which is also how a director re-orders pools: send them re-ordered.
-        #
-        # ``is not None`` is exactly "the key was sent": an explicit ``null`` is already
-        # a 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot be
-        # mistaking a clear for an absence.
-        changes["pools"] = stored_pools(updates.pools)
+    # Pools are rows, so they are taken OUT of the generic setattr loop entirely and
+    # applied as a diff (:func:`app.tournament_pools.apply_event_pools`) — assigning the
+    # dumped payload would put dicts where the relationship expects
+    # ``TournamentEventPool``s, and a wholesale replace would delete and recreate the
+    # very rows this event's fixtures foreign-key. The diff also stamps the order the
+    # patch sent, on this verb as much as on create: an event born positioned and then
+    # patched flat is the "the patch path is the hole" bug this repo keeps
+    # rediscovering.
+    #
+    # ``is not None`` is exactly "the key was sent": an explicit ``null`` is already a
+    # 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot be mistaking
+    # a clear for an absence. The applying happens after the loop below, with the other
+    # writes, so a payload that touches nothing else still reaches it.
+    changes.pop("pools", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
     # one the settings table's ``CHECK`` accepts (ADR 20260727).
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
+    if updates.pools is not None:
+        apply_event_pools(tournament, event, updates.pools)
     if draw_settings is not None:
         # The one place an event's draw configuration moves after create (the freeze
         # above has already refused this on a cut draw). Assigned through the settings
@@ -595,6 +628,14 @@ async def update_event(
         await _reanchor_placements_for_timezone_change(
             db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
         )
+    # Flushed before the facts are re-read, because one of them is a pool's ``id`` and a
+    # pool this payload ADDED does not have one until the INSERT runs: the id is the
+    # database's (``gen_random_uuid()``), not the client's, so an unflushed row would
+    # project as ``id=None`` and the read boundary (``Pool``) would refuse it. Flushing
+    # is safe here for the same reason the diff is: both position constraints and the
+    # fixture's composite foreign key are DEFERRABLE INITIALLY DEFERRED, so an
+    # intermediate state is nobody's business until COMMIT.
+    await db.flush()
     if facts_before != _event_scheduling_facts(event) and await event_has_draw(
         db, event.id
     ):

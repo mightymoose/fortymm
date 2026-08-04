@@ -145,7 +145,6 @@ async def _make_tournament(
                 tournament,
                 [
                     {
-                        "id": "pool-a",
                         "name": "Pool A",
                         "slot": {
                             "date": "2030-01-01",

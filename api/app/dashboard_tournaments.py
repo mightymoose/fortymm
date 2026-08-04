@@ -62,13 +62,13 @@ from app.schemas.dashboard import (
 from app.schemas.tournament import (
     Address,
     MatchSettings,
-    Pool,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
     TournamentEntrantRead,
     TournamentFixtureRead,
     TournamentTable,
 )
+from app.tournament_draws import event_pools
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -279,9 +279,7 @@ def _build_event(
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
-    pools = {
-        pool.id: pool for pool in (Pool.model_validate(raw) for raw in event.pools)
-    }
+    pools = {pool.id: pool for pool in event_pools(event)}
     settings = MatchSettings.model_validate(event.match_settings)
     # The draw type off the event's ``draw_settings`` row — its one home (ADR "an
     # event's draw configuration is a row, not a column"). Read once here and passed
@@ -589,7 +587,9 @@ def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
             assert_never(status)
 
 
-def _round_label(draw_type: DrawType, pool_id: str | None, round_number: int) -> str:
+def _round_label(
+    draw_type: DrawType, pool_id: uuid.UUID | None, round_number: int
+) -> str:
     """A round number in its draw type's own vocabulary, composed here so no client
     maps an integer to a word.
 

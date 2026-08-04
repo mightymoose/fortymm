@@ -72,9 +72,32 @@ def _seed_of(entry_id: EntryId | None) -> int:
     return entry_id.int
 
 
+#: The base a test pool id is minted from. A pool id is a ``uuid`` (ADR 20260801) — the
+#: ``tournament_event_pools`` primary key the server mints — so the ``"A"``/``"B"`` the
+#: snake matrix below is written in are **labels**, not ids, and :func:`_pool` is the
+#: one place they become the ids the domain actually carries. Derived from the letter
+#: rather than random so the same matrix entry names the same pool on every run and a
+#: failure is readable.
+_POOL_ID_BASE = 0xB00_10000
+
+
+def _pool(letter: str) -> PoolId:
+    """The pool id the matrix's ``letter`` stands for."""
+    return PoolId(uuid.UUID(int=_POOL_ID_BASE + (ord(letter) - ord("A"))))
+
+
 def _pool_ids(count: int) -> tuple[PoolId, ...]:
-    """``('A', 'B', …)`` — pool ids are string refs into the event's JSONB pools."""
-    return tuple(PoolId(chr(ord("A") + i)) for i in range(count))
+    """The first ``count`` pools' ids, in the event's own pool order."""
+    return tuple(_pool(chr(ord("A") + i)) for i in range(count))
+
+
+def _ordered_pool_id(rank: int) -> PoolId:
+    """A pool id whose place in the ids' OWN sort order is ``rank`` (1 sorts first).
+
+    The sort tie-break in ``ready_fixtures`` compares ids, and a random uuid's order is
+    not something a test can state — so the handful of tests that are about that
+    tie-break mint ids whose order is known, and say so."""
+    return PoolId(uuid.UUID(int=_POOL_ID_BASE + 0x1000 + rank))
 
 
 def _config(pool_count: int) -> DrawConfig:
@@ -338,7 +361,12 @@ class TestRoundRobinCut:
         fixtures = RoundRobinStrategy().plan_initial(_config(pools), _ordered(entrants))
 
         members = _members_by_pool(fixtures)
-        assert {str(k): sorted(v) for k, v in members.items()} == expected
+        # Keyed back onto the matrix's letters: the pool ids are uuids
+        # (ADR 20260801), and ``_pool`` is the one place a letter becomes one.
+        assert {
+            letter: sorted(members[_pool(letter)]) for letter in expected
+        } == expected
+        assert set(members) == {_pool(letter) for letter in expected}
 
     @pytest.mark.parametrize(
         ("entrants", "pools", "expected"), SNAKE_MATRIX, ids=MATRIX_IDS
@@ -362,10 +390,10 @@ class TestRoundRobinCut:
         fixtures = RoundRobinStrategy().plan_initial(_config(pools), _ordered(entrants))
 
         pairs_by_pool = _pairs_by_pool(fixtures)
-        assert set(pairs_by_pool) == {PoolId(p) for p in expected}
+        assert set(pairs_by_pool) == {_pool(p) for p in expected}
 
         for pool_id, seeds in expected.items():
-            pairs = pairs_by_pool[PoolId(pool_id)]
+            pairs = pairs_by_pool[_pool(pool_id)]
             n = len(seeds)
             # All-play-all: exactly n(n-1)/2 fixtures...
             assert len(pairs) == n * (n - 1) // 2
@@ -405,7 +433,7 @@ class TestRoundRobinCut:
         fixtures = RoundRobinStrategy().plan_initial(_config(pools), _ordered(entrants))
 
         for pool_id, seeds in expected.items():
-            pool_fixtures = [f for f in fixtures if f.pool_id == PoolId(pool_id)]
+            pool_fixtures = [f for f in fixtures if f.pool_id == _pool(pool_id)]
             n = len(seeds)
             # An even pool plays n-1 rounds; an odd one needs n (each entrant sits out
             # exactly once), which is the whole reason a bye exists.
@@ -441,7 +469,7 @@ class TestRoundRobinCut:
             # An odd pool sits one entrant out per round: (n-1)/2 fixtures, not n/2
             # rounded up, and certainly not a phantom row.
             per_round = Counter(
-                f.round for f in fixtures if f.pool_id == PoolId(pool_id)
+                f.round for f in fixtures if f.pool_id == _pool(pool_id)
             )
             assert set(per_round.values()) == {(n - 1) // 2}
 
@@ -467,7 +495,7 @@ class TestRoundRobinCut:
 
         assert fixtures == [
             PlannedFixture(
-                pool_id=PoolId("A"),
+                pool_id=_pool("A"),
                 round=1,
                 position=1,
                 entry_a_id=_entry_id(1),
@@ -548,16 +576,15 @@ class TestRoundRobinCut:
         assert str(excinfo.value) == "A round-robin draw needs at least one pool."
 
     def test_pools_are_named_by_the_events_own_pool_ids(self) -> None:
-        # A pool id is a string ref into the event's JSONB pools, not an index we mint.
-        config = DrawConfig(
-            pool_ids=(PoolId("pool-morning"), PoolId("pool-evening")),
-        )
+        # A pool id is the event's own pool row's uuid, not an index we mint.
+        morning, evening = PoolId(uuid.uuid4()), PoolId(uuid.uuid4())
+        config = DrawConfig(pool_ids=(morning, evening))
 
         fixtures = RoundRobinStrategy().plan_initial(config, _ordered(6))
 
         assert {f.pool_id for f in fixtures} == {
-            PoolId("pool-morning"),
-            PoolId("pool-evening"),
+            morning,
+            evening,
         }
 
 
@@ -632,7 +659,7 @@ class TestRoundRobinAdvance:
         # It must not rise from the dead and be played a second time.
         decided = FixtureState(
             fixture_id=FixtureId(uuid.UUID(int=1)),
-            pool_id=PoolId("A"),
+            pool_id=_pool("A"),
             round=1,
             position=1,
             entry_a_id=_entry_id(1),
@@ -694,16 +721,19 @@ class TestReadyFixtures:
         (``pool_position``, ADR 20260801) — the same order the read path renders and the
         same one the snake dealt against.
 
-        The ids are handed in *deliberately mismatched* to the positions: pool 1 is
-        ``p-10-…`` and pool 10 is ``p-1-…``. So the two rules do not merely differ,
-        they are opposites — an implementation that fell back to the id could not
-        accidentally agree with this assertion on any prefix of it.
+        The ids are handed in *deliberately mismatched* to the positions: the pool at
+        position 0 carries the id that sorts LAST and the pool at position 9 the id that
+        sorts first. So the two rules do not merely differ, they are opposites — an
+        implementation that fell back to the id could not accidentally agree with this
+        assertion on any prefix of it. (Under the old client-minted ids this was spelled
+        ``p-10-…``/``p-1-…``; a pool id is a uuid now, so the mismatch is constructed
+        from ids whose numeric order is known.)
         """
-        pools = [(f"p-{10 - index}-x", index) for index in range(10)]
+        pools = [(_ordered_pool_id(10 - index), index) for index in range(10)]
         states = [
             self._state(
                 index + 1,
-                pool_id=PoolId(pool_id),
+                pool_id=pool_id,
                 round=1,
                 position=1,
                 pool_position=position,
@@ -736,10 +766,10 @@ class TestReadyFixtures:
         (no id sorts before ``""``), landing in front of the pools that feed it.
         """
         placed = self._state(
-            1, pool_id=PoolId("z"), round=1, position=1, pool_position=0
+            1, pool_id=_ordered_pool_id(9), round=1, position=1, pool_position=0
         )
-        unplaced_b = self._state(2, pool_id=PoolId("b"), round=1, position=1)
-        unplaced_a = self._state(3, pool_id=PoolId("a"), round=1, position=1)
+        unplaced_b = self._state(2, pool_id=_ordered_pool_id(2), round=1, position=1)
+        unplaced_a = self._state(3, pool_id=_ordered_pool_id(1), round=1, position=1)
         ko = self._state(4, pool_id=None, round=1, position=1)
 
         ready = ready_fixtures([ko, unplaced_b, unplaced_a, placed])
@@ -758,10 +788,10 @@ class TestReadyFixtures:
         # un-pooled sit rather than fall over — and where they sit has to be a fact, not
         # whatever order the rows came back in.
         ko = self._state(1, pool_id=None, round=1, position=1)
-        b1 = self._state(2, pool_id=PoolId("B"), round=1, position=1)
-        a2 = self._state(3, pool_id=PoolId("A"), round=1, position=2)
-        a1 = self._state(4, pool_id=PoolId("A"), round=1, position=1)
-        a_round2 = self._state(5, pool_id=PoolId("A"), round=2, position=1)
+        b1 = self._state(2, pool_id=_pool("B"), round=1, position=1)
+        a2 = self._state(3, pool_id=_pool("A"), round=1, position=2)
+        a1 = self._state(4, pool_id=_pool("A"), round=1, position=1)
+        a_round2 = self._state(5, pool_id=_pool("A"), round=2, position=1)
 
         # Fed in scrambled — and it is the *stated* order that is asserted, not merely
         # that the output is self-consistently sorted (which a reversed rule would also
@@ -779,10 +809,10 @@ class TestReadyFixtures:
     def test_readiness_ignores_the_draw_type_that_planned_the_fixture(self) -> None:
         # Same three states, asked of the shared helper and of the strategy: a fixture
         # that is ready is ready, and a strategy cannot make it less so.
-        ready = self._state(1, pool_id=PoolId("A"), round=1, position=1)
+        ready = self._state(1, pool_id=_pool("A"), round=1, position=1)
         materialized = FixtureState(
             fixture_id=FixtureId(uuid.UUID(int=2)),
-            pool_id=PoolId("A"),
+            pool_id=_pool("A"),
             round=1,
             position=2,
             entry_a_id=_entry_id(3),
@@ -1593,7 +1623,7 @@ class TestRrThenKoCut:
         # the format working as intended, not a refusal.
         cut = _rr_then_ko(2).plan_initial(_config(1), _ordered(5))
 
-        assert {f.pool_id for f in _pooled(cut)} == {PoolId("A")}
+        assert {f.pool_id for f in _pooled(cut)} == {_pool("A")}
         assert len(_knockout(cut)) == 1  # a two-qualifier final
 
     def test_rr_then_ko_refuses_to_take_more_qualifiers_than_the_smallest_pool_holds(

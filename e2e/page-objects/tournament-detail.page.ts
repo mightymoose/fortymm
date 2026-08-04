@@ -170,13 +170,22 @@ export class TournamentDetailPage {
     return this.drawPanel(eventId).getByTestId('fixture-match-status')
   }
 
-  /** **Every pool section** of a cut draw, so a spec can count them. Addressed by the
-   * testid *pattern* rather than by pool id on purpose: the rr-then-ko spec authors its
-   * pools in the browser, where the ids are minted client-side and never handed back to
-   * the test. What the test knows — and what the format is about — is how MANY pools
-   * the draw was dealt across. */
+  /** **Every pool section** of a cut draw, so a spec can count them and read their order.
+   * Addressed by the testid *pattern* rather than by pool id, because "how many pools the
+   * draw was dealt across, in what order" is a fact about the draw that holds whatever the
+   * pools are called or keyed by. Use `poolDraw` when the point is the key itself. */
   poolDraws(eventId: string): Locator {
     return this.drawPanel(eventId).getByTestId(/^pool-draw-/)
+  }
+
+  /** One pool section **by the pool's own id** — the uuid the server minted for it (ADR
+   * 20260801), never a name.
+   *
+   * The seam that says the section on screen is keyed by the *server's* pool and not by
+   * something the client re-derived: a spec reads the ids off the create response and
+   * asks for them here, so a stack that keyed its sections any other way finds nothing. */
+  poolDraw(eventId: string, poolId: string): Locator {
+    return this.drawPanel(eventId).getByTestId(`pool-draw-${poolId}`)
   }
 
   /** One pool section of a cut draw, by the pool's displayed name ("Pool A").
@@ -202,8 +211,9 @@ export class TournamentDetailPage {
    *
    * Asserted with `toHaveText([...])`, which pins the count AND the order in one
    * statement — the only shape that can catch a draw rendering `Pool 1, Pool 10,
-   * Pool 2 …` (ADR 20260801: pool ids are client-minted `p-1-…`, `p-10-…`, and `p-10-`
-   * sorts between `p-1-` and `p-2-`). */
+   * Pool 2 …`, the bug that pool ids being client-minted `p-1-…`, `p-10-…` used to
+   * cause (`p-10-` sorts between `p-1-` and `p-2-`), and that ADR 20260801 ended by
+   * making pool ids server-minted UUIDs sorted by an explicit `position`. */
   poolDrawHeadings(eventId: string): Locator {
     return this.poolDraws(eventId).getByRole('heading', { level: 4 })
   }
@@ -259,5 +269,17 @@ export class TournamentDetailPage {
    * the first data row is rank 1. */
   poolStandings(poolId: string): Locator {
     return this.page.getByTestId(`pool-standings-${poolId}`)
+  }
+
+  /** The **two-stage** champion callout — the one a round-robin-then-knockout event
+   * crowns (ADR 20260727).
+   *
+   * A different callout from `standingsChampion`, and deliberately so: that one belongs to
+   * a complete **single-pool** round-robin and never renders for this format, while this
+   * one names the **knockout final's** winner and never a pool leader. Reading the wrong
+   * one would be a spec that could not tell "the bracket was played out" from "somebody
+   * topped a pool". It appears only once BOTH stages are decided. */
+  twoStageChampion(eventId: string): Locator {
+    return this.page.getByTestId(`two-stage-champion-${eventId}`)
   }
 }

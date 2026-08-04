@@ -38,6 +38,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventPool,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -53,9 +54,11 @@ from tests._helpers import (
 
 RR_THEN_KO = DrawType.rr_then_ko.value
 
+#: Three pools, sent with **no ``id``** — a pool id is a server-minted uuid
+#: (ADR 20260801) and the create shape has no field for one. The tests that need to name
+#: a pool look its id up by name (:func:`_pool_id`).
 POOLS: list[dict[str, Any]] = [
     {
-        "id": f"p-{letter}",
         "name": f"Pool {letter.upper()}",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
         "table_ids": ["t1"],
@@ -110,6 +113,35 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     return payload
+
+
+async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
+    """The id of the event's pool **named** ``name`` — the lookup every assertion about
+    a fixture's ``pool_id`` goes through, since the id is the server's
+    (ADR 20260801)."""
+    return (
+        await db_session.execute(
+            select(TournamentEventPool.id).where(
+                TournamentEventPool.event_id == uuid.UUID(event_id),
+                TournamentEventPool.name == name,
+            )
+        )
+    ).scalar_one()
+
+
+async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
+    """The event's pool ids in its own pool order."""
+    return list(
+        (
+            await db_session.execute(
+                select(TournamentEventPool.id)
+                .where(TournamentEventPool.event_id == uuid.UUID(event_id))
+                .order_by(TournamentEventPool.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 async def _tournament(client: AsyncClient) -> str:
@@ -666,8 +698,8 @@ async def test_the_cut_emits_the_pools_and_the_whole_bracket(
     pooled = [f for f in fixtures if f.pool_id is not None]
     bracket = [f for f in fixtures if f.pool_id is None]
     # Three pools of four: every pairing within a pool, six per pool.
-    assert sorted(p.pool_id for p in pooled) == sorted(
-        [pool["id"] for pool in POOLS] * 6
+    assert sorted(str(p.pool_id) for p in pooled) == sorted(
+        [str(pool_id) for pool_id in await _pool_ids(db_session, event_id)] * 6
     )
     assert all(f.entry_a_id is not None and f.entry_b_id is not None for f in pooled), (
         "every pool pairing is known at the cut"
@@ -810,13 +842,15 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         )
         assert live.status_code == 201, live.text
 
+        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
         pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
         ]
         assert len(pool_a) == 6, "a pool of four is six pairings"
         await _call(db_session, tournament_id, pool_a)
+        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
         pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
         ]
 
         clients = {
@@ -939,12 +973,14 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
             )
         ).status_code == 201
 
+        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
         pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
         ]
         await _call(db_session, tournament_id, pool_a)
+        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
         pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == "p-a"
+            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
         ]
         clients = {
             entries[1].id: client,
@@ -1003,7 +1039,11 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
     # And the two layers agree, which is the whole point: the pool the bracket treated
     # as over is the pool the director's table calls ``complete``, and the qualifiers
     # are its top two rows.
-    (pool_a_read,) = [pool for pool in results["pools"] if pool["pool_id"] == "p-a"]
+    (pool_a_read,) = [
+        pool
+        for pool in results["pools"]
+        if pool["pool_id"] == str(await _pool_id(db_session, event_id, "Pool A"))
+    ]
     assert pool_a_read["complete"] is True
     assert [row["entry_id"] for row in pool_a_read["rows"][:2]] == [
         str(entries[1].id),
@@ -1060,9 +1100,15 @@ async def test_the_results_read_out_as_both_stages(
     assert results["kind"] == "standings_then_finishes"
     assert results["complete"] is False
     assert results["champion"] is None
-    assert [pool["pool_id"] for pool in results["pools"]] == ["p-a", "p-b", "p-c"]
+    assert [pool["pool_id"] for pool in results["pools"]] == [
+        str(pool_id) for pool_id in await _pool_ids(db_session, event_id)
+    ]
     assert all(pool["complete"] is False for pool in results["pools"])
-    (pool_a,) = [pool for pool in results["pools"] if pool["pool_id"] == "p-a"]
+    (pool_a,) = [
+        pool
+        for pool in results["pools"]
+        if pool["pool_id"] == str(await _pool_id(db_session, event_id, "Pool A"))
+    ]
     leader = pool_a["rows"][0]
     assert leader["entry_id"] == str(entries[1].id)
     assert (leader["wins"], leader["games_won"], leader["games_lost"]) == (1, 2, 1)

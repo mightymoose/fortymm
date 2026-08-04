@@ -54,7 +54,6 @@ def _one_pool(table_ids: list[str]) -> dict[str, object]:
     """A single pool over ``table_ids`` — one pool keeps the round-robin fixture
     count exactly ``C(N, 2)`` so a test can assert it precisely."""
     return {
-        "id": "p-a",
         "name": "Pool A",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": table_ids,
@@ -200,13 +199,11 @@ async def test_preview_snapshot_base_is_the_earliest_window_start(
         timezone="America/Los_Angeles",
         pools=[
             {
-                "id": "p-a",
                 "name": "Pool A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
                 "table_ids": ["t1"],
             },
             {
-                "id": "p-b",
                 "name": "Pool B",
                 "slot": {"date": "2026-06-13", "start": "08:15", "end": "18:00"},
                 "table_ids": ["t2"],
@@ -457,8 +454,12 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
     preview = build_preview_snapshot(loaded)
 
     assert len(preview.snapshot.fixtures) == 15
+    # The solver's key is still ``{event}:{pool}`` (see
+    # ``app.schedule_preview.preview_pool_key`` for why the namespace stayed once the
+    # pool ids became globally unique uuids); the pool half is looked up, not spelled.
+    (pool,) = loaded.events[0].pools
     assert {f.pool_id for f in preview.snapshot.fixtures} == {
-        scheduling.PoolId(f"{loaded.events[0].id}:p-a")
+        scheduling.PoolId(f"{loaded.events[0].id}:{pool.id}")
     }
     assert preview.field_summaries[0].field_size == 6
     # What was dropped is *counted*, not silently discarded: the top 2 of the single

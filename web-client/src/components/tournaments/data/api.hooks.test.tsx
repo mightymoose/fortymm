@@ -38,12 +38,14 @@ import type { CodedErrorBody } from '@/mocks/endpoints/error-body'
 import { server } from '@/mocks/server'
 import {
   cutDraw,
+  findTournament,
   markFixturePlayed,
   resetTournamentsStore,
 } from '@/mocks/tournaments-store'
-import { ApiError } from '@/api/client'
+import { ApiError, validationFields } from '@/api/client'
 import type { components } from '@/api/schema'
-import { buildEvent, buildTenPools } from './seed.factory'
+import { addedPool, keepPools } from './pool-entries'
+import { buildEditedEvent, buildTenPools } from './seed.factory'
 import {
   apiToEvent,
   eventToUpdateBody,
@@ -369,7 +371,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     result.current.mutate({
       eventId: 'ev-1',
       body: eventToUpdateBody(
-        buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
       ),
     })
 
@@ -390,7 +392,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
     result.current.mutate({
       eventId: 'ev-1',
-      body: eventToUpdateBody(buildEvent({ drawType: 'round-robin' })),
+      body: eventToUpdateBody(buildEditedEvent({ drawType: 'round-robin' })),
     })
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
@@ -408,7 +410,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     result.current.mutate({
       eventId: 'ev-1',
       body: eventToUpdateBody(
-        buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
       ),
     })
 
@@ -423,7 +425,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
    * refused.
    *
    * Asserted on the bytes rather than on `eventToUpdateBody`'s return value for the same
-   * reason the qualifier count is: the domain `Pool` the editor holds *does* carry a
+   * reason the qualifier count is: the `Pool` these entries were built from *does* carry a
    * position, so a spread anywhere between the mapper and `openapi-fetch` would put it
    * back, and nothing else in the suite would notice.
    */
@@ -435,7 +437,9 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     result.current.mutate({
       eventId: 'ev-1',
       // Ten pools, so a dropped position could not hide behind a single `0`.
-      body: eventToUpdateBody(buildEvent({ pools: buildTenPools() })),
+      body: eventToUpdateBody(
+        buildEditedEvent({ pools: keepPools(buildTenPools()) }),
+      ),
     })
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
@@ -449,6 +453,89 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
         'table_ids',
       ])
     }
+  })
+})
+
+/**
+ * **A pool's id, round trip** (ADR 20260801) — the client's write judged by the store
+ * that stands in for the server, rather than by an assertion about itself.
+ *
+ * This is the one claim of the chore that no mapper test can make: the mock applies the
+ * same id-keyed diff the route does (`applyEventPools`, `mocks/tournaments-store`), so a
+ * body that minted its own pool id is a **422 naming that entry** here exactly as it is
+ * in production — while every assertion about `eventToUpdateBody`'s return value would go
+ * on passing. The seeded tournament is used rather than a stubbed handler for that very
+ * reason: a stub would answer whatever it was told to.
+ */
+describe('an added pool, through the mock’s id-keyed diff', () => {
+  // The seed's owned, published tournament and its two-pool event.
+  const TOURNAMENT = 'bay-area-open-2026'
+  const EVENT = 'ev-open-singles'
+
+  beforeEach(() => resetTournamentsStore())
+
+  it('sends no id and reads the server’s minted uuid back', async () => {
+    const { wrapper } = setupClient()
+    const stored = apiToEvent(findTournament(TOURNAMENT)!.events[0])
+    expect(stored.id).toBe(EVENT)
+
+    const { result } = renderHookRaw(() => useUpdateEvent(TOURNAMENT), { wrapper })
+    result.current.mutate({
+      eventId: EVENT,
+      body: eventToUpdateBody({
+        ...stored,
+        pools: [
+          ...keepPools(stored.pools),
+          addedPool({
+            name: 'Pool Z',
+            slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+            tableIds: ['t7'],
+          }),
+        ],
+      }),
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+    const saved = apiToEvent(result.current.data!)
+    // The pools it already had kept their ids — which is what keeps the fixtures dealt
+    // into them — and the new one came back with an id this client never authored.
+    expect(saved.pools.map((p) => p.id).slice(0, 2)).toEqual(
+      stored.pools.map((p) => p.id),
+    )
+    const added = saved.pools[2]
+    expect(added.name).toBe('Pool Z')
+    expect(added.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    // …and the server, not the array, decided where it sits.
+    expect(saved.pools.map((p) => p.position)).toEqual([0, 1, 2])
+  })
+
+  /** The other half of the diff, and the reason a client may never mint: an id the event
+   * does not hold is refused ON THAT ENTRY (`['body','pools',i,'id']`) rather than
+   * quietly minted — which would hand back a different id than was asked for while
+   * removing the pool the director meant to keep. */
+  it('refuses a body that cites an id this event does not have', async () => {
+    const { wrapper } = setupClient()
+    const stored = apiToEvent(findTournament(TOURNAMENT)!.events[0])
+
+    const { result } = renderHookRaw(() => useUpdateEvent(TOURNAMENT), { wrapper })
+    result.current.mutate({
+      eventId: EVENT,
+      body: eventToUpdateBody({
+        ...stored,
+        pools: keepPools([{ ...stored.pools[0], id: 'p-invented' }]),
+      }),
+    })
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+    const error = result.current.error as ApiError
+    expect(error.status).toBe(422)
+    // A per-field Pydantic body, not a sentence — so `saveFailure` classifies it as
+    // `invalid` and the editor says so in its own words rather than reading a
+    // validator's prose out to the director. The entry's index is in the `loc`
+    // (`['body','pools',0,'id']`), which is what a surface would blame the card by.
+    expect(validationFields(error)).toEqual(['pools'])
   })
 })
 

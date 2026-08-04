@@ -67,6 +67,9 @@
 
 import { z } from 'zod'
 
+import { poolEntryKey } from './pool-entries'
+import type { PoolEntry } from './types'
+
 /** `tournament_events.name` is `VARCHAR(255)`, `NOT NULL` — the same column
  * constraint `NewTournamentModal` mirrors for the tournament's own name, and the
  * same copy, because it is the same field to the person typing it. */
@@ -117,7 +120,7 @@ export const nameSchema = z
  * same words as the event's own name — because to the organizer clearing a box it is
  * the same news, and a second wording for one fact is a second thing to drift.
  *
- * The pools editor *mints* a pool's id and its default name ("Pool A"), so the happy
+ * The pools editor *mints* a pool's default name ("Pool A"), so the happy
  * path could never author a blank one — but the name **box is live**, and an emptied
  * box was a save the form allowed and the server refused, with Pydantic's own prose
  * ("String should have at least 1 character") arriving in the editor's banner. That is
@@ -130,10 +133,12 @@ export const nameSchema = z
  * overflow). Mirroring a bound the API does not have would be inventing one, and a save
  * refused here is a save nothing on the server would ever have refused.
  *
- * A pool's **id** is not mirrored, though the server floors that too (`ValueObjectId`):
- * it is minted (`genId('p')`, `data/helpers`) and there is no box for it, so an error
- * about it is one no organizer could ever act on or even *see* — an unfixable red is
- * worse than the impossible 422 it guards. The same goes for a table's id.
+ * A pool's **id** is not mirrored at all, and since ADR 20260801 there is nothing left
+ * to mirror: the id is the SERVER's uuid, a new pool is sent with none, and this form
+ * cannot author one (`PoolEntry`, `./types`). Even when the client did mint them, an
+ * error about an id was one no organizer could act on or even *see* — there is no box —
+ * and an unfixable red is worse than the impossible 422 it guards. The same goes for a
+ * table's id.
  */
 export const poolNameSchema = z
   .string()
@@ -141,8 +146,14 @@ export const poolNameSchema = z
   .min(1, { error: 'Name is required.' })
 
 /**
- * What is wrong with each pool's **name**, keyed by pool id — `poolNameSchema` read a
- * second way, for the second reader.
+ * What is wrong with each pool's **name**, keyed by `poolEntryKey` — `poolNameSchema`
+ * read a second way, for the second reader.
+ *
+ * Keyed off the ENTRY rather than off an id, because half the pools in a live edit have
+ * no id: one the director added a moment ago is waiting for the server to mint it
+ * (ADR 20260801), and it still has a name box that can still be emptied. `poolEntryKey`
+ * is the same key the cards are keyed on, so the red lands under the box it is about
+ * whichever arm the entry is.
  *
  * The resolver's verdict on the array (`eventSchema`) is what refuses the *save*; this
  * is what puts the red under the *box*, and the two are the same rule and the same
@@ -160,12 +171,14 @@ export const poolNameSchema = z
  * by which mechanism.
  */
 export function poolNameIssues(
-  pools: readonly { id: string; name: string }[],
+  pools: readonly PoolEntry[],
 ): Record<string, string> {
   const issues: Record<string, string> = {}
   for (const pool of pools) {
     const result = poolNameSchema.safeParse(pool.name)
-    if (!result.success) issues[pool.id] = result.error.issues[0].message
+    if (!result.success) {
+      issues[poolEntryKey(pool)] = result.error.issues[0].message
+    }
   }
   return issues
 }

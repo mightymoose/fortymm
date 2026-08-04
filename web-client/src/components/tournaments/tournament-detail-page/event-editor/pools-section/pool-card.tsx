@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 import { fmtDate } from '../../../data/helpers'
-import type { Pool, TournamentTable } from '../../../data/types'
+import type { PoolDraft, TournamentTable } from '../../../data/types'
 import { Field } from '../../../field'
 import { ReadOnlyValue } from '../../../read-only-value'
 
@@ -30,7 +30,12 @@ export type PoolRemoval =
   | { kind: 'frozen'; reasonId: string }
 
 export interface PoolCardProps {
-  pool: Pool
+  /** The three fields this card can edit — a `PoolDraft`, never a whole `Pool`
+   * (`data/types`). The identity is deliberately out of reach: an id is the server's to
+   * mint (ADR 20260801) and a `position` is the server's to assign, so a card that could
+   * not see either is a card that cannot author either. Its owner re-attaches the entry's
+   * arm around what comes back through `onChange`. */
+  pool: PoolDraft
   /** The tables available to this tournament. */
   tables: TournamentTable[]
   /** The event's IANA timezone (ADR 20260719) — the frame this pool's wall-clock
@@ -54,7 +59,7 @@ export interface PoolCardProps {
    * because the sentence is the schema's: one rule, one wording, said wherever it is
    * shown. A viewer never sees it — a read-only card has no box to clear. */
   nameError?: string
-  onChange: (pool: Pool) => void
+  onChange: (pool: PoolDraft) => void
   onRemove: () => void
 }
 
@@ -103,7 +108,10 @@ const TableCount = ({ count }: { count: number }) => (
  *
  * An empty string is what `ReadOnlyValue` treats as unset — a pool that reserves
  * nothing renders as an em-dash, not as a blank. */
-const reservedTableLabels = (pool: Pool, tables: TournamentTable[]): string =>
+const reservedTableLabels = (
+  pool: PoolDraft,
+  tables: TournamentTable[],
+): string =>
   tables
     .filter((t) => pool.tableIds.includes(t.id))
     .map((t) => t.label)
@@ -128,12 +136,23 @@ export const PoolCard = ({
   // screen reader.
   const nameErrorId = useId()
 
-  const setSlot = (patch: Partial<Pool['slot']>) =>
-    onChange({ ...pool, slot: { ...pool.slot, ...patch } })
+  /** Hand back the three fields this card owns, with one of them changed — rebuilt by
+   * name rather than spread from `pool`, so nothing the *caller* happened to pass in
+   * (the arm and id of a `PoolEntry`, say) can make the return trip through here. The
+   * card edits a pool's words; who that pool is stays with the section. */
+  const change = (patch: Partial<PoolDraft>) =>
+    onChange({
+      name: pool.name,
+      slot: pool.slot,
+      tableIds: pool.tableIds,
+      ...patch,
+    })
+
+  const setSlot = (patch: Partial<PoolDraft['slot']>) =>
+    change({ slot: { ...pool.slot, ...patch } })
 
   const toggleTable = (id: string) =>
-    onChange({
-      ...pool,
+    change({
       tableIds: pool.tableIds.includes(id)
         ? pool.tableIds.filter((x) => x !== id)
         : [...pool.tableIds, id],
@@ -194,7 +213,7 @@ export const PoolCard = ({
           <Input
             aria-label="Pool name"
             value={pool.name}
-            onChange={(e) => onChange({ ...pool, name: e.target.value })}
+            onChange={(e) => change({ name: e.target.value })}
             aria-invalid={!!nameError}
             aria-describedby={nameError ? nameErrorId : undefined}
             className={cn(

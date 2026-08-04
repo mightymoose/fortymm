@@ -30,6 +30,18 @@ def _eid(n: int) -> EntryId:
     return EntryId(uuid.UUID(int=n))
 
 
+def _pid(n: int) -> PoolId:
+    """A stable pool id. A pool id is a ``uuid`` (ADR 20260801) — the
+    ``tournament_event_pools`` primary key the server mints — so these stand in for it,
+    minted from a fixed integer so a failure names the same pool every run."""
+    return PoolId(uuid.UUID(int=0xB0000 + n))
+
+
+#: The pools these tests deal in, by the letters their comments call them.
+_POOL_A, _POOL_B = _pid(1), _pid(2)
+_POOL_P_ID, _POOL_Q_ID = _pid(3), _pid(4)
+
+
 A, B, C, D, E, F = (_eid(n) for n in range(1, 7))
 
 
@@ -53,7 +65,7 @@ def _single_pool(
     outcomes: list[MatchOutcome],
 ) -> PoolInput:
     return PoolInput(
-        pool_id=PoolId("p-a"),
+        pool_id=_POOL_A,
         entrants=entrants,
         fixture_count=fixture_count,
         outcomes=tuple(outcomes),
@@ -229,13 +241,13 @@ def test_a_complete_multi_pool_event_crowns_no_single_champion() -> None:
     has no single champion (that needs a knockout stage to join the pool winners), so
     ``champion`` is ``None`` while each pool still has its own leader."""
     pool_a = PoolInput(
-        pool_id=PoolId("p-a"),
+        pool_id=_POOL_A,
         entrants=(A, B),
         fixture_count=1,
         outcomes=(_outcome(A, B, 2, 0),),
     )
     pool_b = PoolInput(
-        pool_id=PoolId("p-b"),
+        pool_id=_POOL_B,
         entrants=(C, D),
         fixture_count=1,
         outcomes=(_outcome(C, D, 2, 0),),
@@ -426,7 +438,7 @@ def test_a_corrected_final_re_crowns_the_champion() -> None:
 # (or nobody, since a multi-pool round-robin crowns none), never B.
 
 _POOL_P = PoolInput(
-    pool_id=PoolId("p-p"),
+    pool_id=_POOL_P_ID,
     entrants=(A, B, C),
     fixture_count=3,
     outcomes=(
@@ -436,7 +448,7 @@ _POOL_P = PoolInput(
     ),
 )
 _POOL_Q = PoolInput(
-    pool_id=PoolId("p-q"),
+    pool_id=_POOL_Q_ID,
     entrants=(D, E, F),
     fixture_count=3,
     outcomes=(
@@ -476,7 +488,7 @@ def test_rr_then_ko_reads_out_both_stages_in_one_tabulation() -> None:
     about the event's field."""
     results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
 
-    assert [pool.pool_id for pool in results.pools] == [PoolId("p-p"), PoolId("p-q")]
+    assert [pool.pool_id for pool in results.pools] == [_POOL_P_ID, _POOL_Q_ID]
     assert [[row.entry_id for row in pool.rows] for pool in results.pools] == [
         [A, B, C],
         [D, E, F],

@@ -8,6 +8,8 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import date, time
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Request
@@ -26,6 +28,8 @@ from app.models import (
     Role,
     RolePermission,
     Tournament,
+    TournamentEventPool,
+    TournamentEventPoolTable,
     User,
     UserLeagueRating,
     UserRole,
@@ -144,29 +148,114 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
     ]
 
 
-def with_table_aliases(
-    tournament: Tournament, pools: Sequence[Mapping[str, object]]
-) -> list[dict[str, object]]:
-    """Rewrite each pool's ``table_ids`` from the positional aliases a test writes
-    (``"t1"``, ``"t2"``, …) into the real ids of ``tournament``'s catalogue rows.
+def event_pools(
+    pools: Sequence[Mapping[str, Any]], *, tournament: Tournament | None = None
+) -> list[TournamentEventPool]:
+    """``TournamentEventPool`` rows for an event a test seeds straight through the ORM,
+    written from the ``{id, name, slot, table_ids}`` dict shape the pools JSONB used to
+    hold and positioned in the order given.
 
-    A pool reserves a slice of the venue by naming table ids, and those ids are UUIDs
-    the server minted (ADR 20260801) — so a seeded pool cannot spell one as a literal.
-    The alias is 1-based and positional: ``"t1"`` is the tournament's first table, in
-    its own catalogue order. It exists so a test can go on saying which tables a pool
-    holds in the terms the test is about, instead of threading a UUID through every
-    helper it passes a pool to.
+    Pools are rows now (ADR 20260801), so ``TournamentEvent(pools=[{...}])`` is a
+    ``TypeError`` waiting to happen; this is the one translation from the shape the
+    tests already say a pool in, so a seed reads as the pool it is about rather than as
+    five keyword arguments. The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are
+    parsed into the row's ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly
+    as the write boundary parses them, so a seeded pool and a POSTed one are the same
+    row.
+
+    The ``id`` is a ``uuid.UUID`` and is **optional**: pass one when the test needs to
+    name the pool from somewhere else (a fixture's ``pool_id``, an assertion), and leave
+    it out when it does not care. A minted ``uuid4`` per call, never a module constant —
+    the id is a primary key, so two events in one test cannot share one. Minted *here*,
+    up front, rather than left to the column's ``gen_random_uuid()`` default, for the
+    reason :func:`venue_tables` mints table ids: a seed that names the pool needs the id
+    before the row is flushed. Through the API the ids are the *server's* and there is
+    no ``id`` on the create shape at all (ADR 20260801); this is the direct-to-database
+    seam, which no HTTP caller can reach.
+
+    A pool's ``table_ids`` become ``TournamentEventPoolTable`` **rows** (ADR 20260801),
+    so naming any table needs the ``tournament`` — twice over. It supplies the alias
+    map, rewriting the positional aliases a test writes (``"t1"``, ``"t2"``, …) into the
+    real ids of that tournament's catalogue rows (1-based, in catalogue order), because
+    a table id is a server-minted UUID a seed cannot spell as a literal. And it supplies
+    the ``tournament_id`` every reservation row carries — the denormalized column the
+    composite foreign keys compare, without which the row is not one Postgres accepts.
+    It must already be flushed, since that id is the database's to mint.
+
+    Naming a table with no ``tournament`` is a ``ValueError`` rather than a silently
+    empty reservation list: a seed that means "this pool runs on two tables" and gets a
+    pool running on none would go on passing while testing something else. (A pool with
+    no ``table_ids`` at all needs no tournament, which is most of the suite.)
     """
-    by_alias = {
-        f"t{position}": str(table.id)
-        for position, table in enumerate(tournament.tables, start=1)
-    }
-    resolved: list[dict[str, object]] = []
-    for pool in pools:
-        aliases = pool["table_ids"]
-        assert isinstance(aliases, list)
-        resolved.append({**pool, "table_ids": [by_alias[alias] for alias in aliases]})
-    return resolved
+    by_alias = (
+        {
+            f"t{position}": str(table.id)
+            for position, table in enumerate(tournament.tables, start=1)
+        }
+        if tournament is not None
+        else {}
+    )
+    rows: list[TournamentEventPool] = []
+    for position, pool in enumerate(pools):
+        slot = pool.get("slot") or {}
+        table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
+        name = pool.get("name", f"Pool {position + 1}")
+        if table_ids and tournament is None:
+            raise ValueError(
+                f"pool {name!r} reserves {table_ids} but no tournament was "
+                "given: a reservation is a row carrying the tournament's id, so the "
+                "seed has to say which tournament's tables these are — pass "
+                "tournament=… (or with_table_aliases(tournament, pools))"
+            )
+        rows.append(
+            TournamentEventPool(
+                id=pool.get("id") or uuid.uuid4(),
+                name=name,
+                position=pool.get("position", position),
+                slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
+                slot_start=time.fromisoformat(slot.get("start", "09:00")),
+                slot_end=time.fromisoformat(slot.get("end", "18:00")),
+                tables=_reservations(tournament, table_ids, by_alias),
+            )
+        )
+    return rows
+
+
+def _reservations(
+    tournament: Tournament | None, table_ids: Sequence[str], by_alias: Mapping[str, str]
+) -> list[TournamentEventPoolTable]:
+    """The reservation rows one seeded pool's ``table_ids`` become, aliases resolved and
+    positioned in the order given.
+
+    Unlike the write path (``app.tournament_pools._reservations``), an id that no
+    catalogue row holds is **not** dropped — it is passed through to the database, which
+    refuses it. This is the direct-to-database seam, and a seed that names a table this
+    tournament does not have is a mistake in the seed; swallowing it here would hide the
+    very foreign keys these rows exist to have.
+    """
+    if tournament is None:
+        return []
+    return [
+        TournamentEventPoolTable(
+            tournament_id=tournament.id,
+            table_id=by_alias.get(table_id, table_id),
+            position=position,
+        )
+        for position, table_id in enumerate(table_ids)
+    ]
+
+
+def with_table_aliases(
+    tournament: Tournament, pools: Sequence[Mapping[str, Any]]
+) -> list[TournamentEventPool]:
+    """:func:`event_pools` with the tournament bound — the spelling the seeds that name
+    tables already use.
+
+    Kept as its own name because it is what the call sites are *about*: "these pools
+    reserve this tournament's first two tables", said without threading a UUID through
+    every helper the pools are passed to.
+    """
+    return event_pools(pools, tournament=tournament)
 
 
 async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:

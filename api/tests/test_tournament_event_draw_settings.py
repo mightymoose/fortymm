@@ -87,7 +87,6 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "predicates": [],
         "pools": [
             {
-                "id": "p-os-1",
                 "name": "Pool A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],

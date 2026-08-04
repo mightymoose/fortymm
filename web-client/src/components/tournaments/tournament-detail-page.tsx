@@ -16,6 +16,7 @@ import {
 } from './data/helpers'
 import { lifecycleEdgeFor } from './data/lifecycle'
 import type {
+  EditedEvent,
   Tournament,
   TournamentEvent,
   TournamentTable,
@@ -48,9 +49,9 @@ export interface TournamentDetailPageProps {
    * awaits it, closes itself only when it RESOLVES, and stays open over a rejection —
    * so a refused create is reported instead of quietly binning everything the
    * organizer typed (#933, #934). */
-  onCreateEvent: (event: TournamentEvent) => Promise<void>
+  onCreateEvent: (event: EditedEvent) => Promise<void>
   /** Persist an edited event — same contract as `onCreateEvent`. */
-  onUpdateEvent: (event: TournamentEvent) => Promise<void>
+  onUpdateEvent: (event: EditedEvent) => Promise<void>
   onDeleteEvent: (eventId: string) => void
   /** Whether the create/update event mutation is still in flight — passed straight to
    * the `EventEditor`, which disables its one submit control on it. Owned by the route,
@@ -144,7 +145,7 @@ export const TournamentDetailPage = ({
    * and the work that must survive. Firing the mutation and closing regardless (what
    * this used to do) is how a 422 became an event that was never created, reported
    * nowhere (#933, #934). */
-  const saveEvent = (ev: TournamentEvent) =>
+  const saveEvent = (ev: EditedEvent) =>
     ev.id.startsWith('new')
       ? onCreateEvent({ ...ev, id: genId('ev') })
       : onUpdateEvent(ev)

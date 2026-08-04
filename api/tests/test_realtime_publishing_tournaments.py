@@ -64,6 +64,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_lifecycle import transition_tournament
 from app.tournament_placement import place_fixture
 from tests._helpers import (
+    event_pools,
     make_user,
     table_ids_of,
     venue_tables,
@@ -191,14 +192,16 @@ async def _seed_field(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[
-            {
-                "id": "pool-a",
-                "name": "Pool A",
-                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": [str(row.id) for row in catalogue],
-            }
-        ],
+        pools=event_pools(
+            [
+                {
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": [str(row.id) for row in catalogue],
+                }
+            ],
+            tournament=tournament,
+        ),
     )
     db.add(event)
     await db.flush()

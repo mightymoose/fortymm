@@ -20,6 +20,8 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import { blankAddress } from './helpers'
+import { addedPool, keepPools } from './pool-entries'
+import { asEditedEvent } from './seed.factory'
 import { addTable, keepTables } from './table-catalogue'
 import type { Tournament, TournamentEvent } from './types'
 
@@ -841,8 +843,9 @@ const event: TournamentEvent = {
       slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
       tableIds: ['t1', 't2'],
       // The server's number, held on the read model. The write bodies below must NOT
-      // carry it — `PoolWrite` forbids the key — which is what the create/update
-      // assertions pin.
+      // carry it — both write shapes forbid the key — which is what the create/update
+      // assertions pin. The `id` above is the server's too, and only a PATCH may cite
+      // it: a create body carrying one is a 422 (ADR 20260801).
       position: 0,
     },
   ],
@@ -853,9 +856,15 @@ const event: TournamentEvent = {
   results: null,
 }
 
+/** The event as the **editor** hands it back with its pools untouched: each one cited by
+ * the id the server minted (`asEditedEvent` → `keepPools`). This is what the write
+ * mappers take — a read event no longer is one, which is the compile-time half of ADR
+ * 20260801. */
+const edited = asEditedEvent(event)
+
 describe('eventToCreateBody', () => {
   it('maps the event to a snake_case create body, excluding server-managed entered', () => {
-    const body = eventToCreateBody(event)
+    const body = eventToCreateBody(edited)
 
     expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
@@ -864,9 +873,11 @@ describe('eventToCreateBody', () => {
     // body, `NOT NULL` on the server.
     expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
+    // NO `id` — a created event's pools are all new, and a pool's id is the server's to
+    // mint (`PoolWrite` has no such field, and `extra="forbid"` makes a supplied one a
+    // 422 on `body.pools[0].id`).
     expect(body.pools).toEqual([
       {
-        id: 'p-1',
         name: 'Pool A',
         slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
         table_ids: ['t1', 't2'],
@@ -874,26 +885,55 @@ describe('eventToCreateBody', () => {
     ])
   })
 
+  /** ⚠️ The discriminating one. `toEqual` above would pass a body whose pool carried an
+   * `id: undefined` key — and JSON.stringify would drop it, so even the bytes would look
+   * right — but it would NOT pass one carrying a real id, which is what the editor used
+   * to send. Asked as a key question so the claim is about the shape, not about a value
+   * that happens to be absent. */
+  it('sends each pool with NO id key at all — the server mints it', () => {
+    const body = eventToCreateBody(
+      asEditedEvent(event, [
+        ...keepPools(event.pools),
+        addedPool({
+          name: 'Pool B',
+          slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
+          tableIds: ['t3'],
+        }),
+      ]),
+    )
+
+    expect(body.pools).toHaveLength(2)
+    for (const pool of body.pools ?? []) {
+      expect('id' in pool).toBe(false)
+      expect('position' in pool).toBe(false)
+    }
+  })
+
   // A blank player limit is "no cap" (ADR-0935): it must reach the wire as an
   // explicit `null`, never `0` and never omitted.
   it('carries max_players: null for an uncapped event', () => {
-    const body = eventToCreateBody({ ...event, maxPlayers: null })
+    const body = eventToCreateBody(asEditedEvent({ ...event, maxPlayers: null }))
     expect(body.max_players).toBeNull()
   })
 
   it('round-trips through apiToEvent back to the prototype shape', () => {
-    const wire = eventToCreateBody(event)
+    const wire = eventToCreateBody(edited)
     const roundTripped = apiToEvent({
       ...wire,
       // eventToCreateBody always populates these, but they're typed optional on
       // the *create* body — coalesce so the value satisfies the *read* shape.
       predicates: wire.predicates ?? [],
-      // The create body carries NO `position` (`PoolWrite` forbids it), and the read
-      // shape requires one — so the round trip has to close the gap the way the SERVER
-      // closes it: each pool takes the position of its index in the list that was sent.
-      // A `0` typed in here instead would make the round trip pass while the app and the
-      // API disagreed about which pool is first.
-      pools: (wire.pools ?? []).map((pool, index) => ({ ...pool, position: index })),
+      // The create body carries neither an `id` nor a `position` (`PoolWrite` forbids
+      // both), and the read shape requires both — so the round trip has to close the gap
+      // the way the SERVER closes it: the id is MINTED, and the position is the pool's
+      // index in the list that was sent. Carrying either through from the write body
+      // instead would make the round trip pass while the app and the API disagreed about
+      // who owns a pool's identity — and on the position, about which pool is first.
+      pools: (wire.pools ?? []).map((pool, index) => ({
+        ...pool,
+        id: event.pools[index].id,
+        position: index,
+      })),
       // `max_players` is optional on the create body (`null`/absent = no cap,
       // ADR-0935); the read shape is `number | null`.
       max_players: wire.max_players ?? null,
@@ -944,7 +984,7 @@ describe('eventToCreateBody', () => {
   })
 
   it('sends NO fixtures — a draw is cut by POST …/draw, never authored in an event body', () => {
-    const body = eventToCreateBody(event)
+    const body = eventToCreateBody(edited)
 
     expect('fixtures' in body).toBe(false)
   })
@@ -952,13 +992,16 @@ describe('eventToCreateBody', () => {
 
 describe('eventToUpdateBody', () => {
   it('maps the same snake_case fields as create', () => {
-    const body = eventToUpdateBody(event)
+    const body = eventToUpdateBody(edited)
 
     expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
     expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
+    // A PATCH is the id-keyed diff (ADR 20260801), so a pool the event already has is
+    // CITED — that is what keeps its id, and every fixture drawn into it. Unlike the
+    // create body one describe up, which carries no id at all.
     expect(body.pools).toEqual([
       {
         id: 'p-1',
@@ -969,11 +1012,57 @@ describe('eventToUpdateBody', () => {
     ])
   })
 
+  /**
+   * The three statements a pools diff can make, in one body: keep this one, add that one,
+   * and — by saying nothing about it — remove the third.
+   *
+   * The renamed `kept` entry is the load-bearing half: it proves a re-worded pool still
+   * cites its id, rather than arriving as an add (which would mint a second pool and
+   * delete the one holding the fixtures).
+   */
+  it('expresses a pools edit as the id-keyed diff: cite, add, and omit', () => {
+    const stored = [
+      event.pools[0],
+      { ...event.pools[0], id: 'p-2', name: 'Pool B', position: 1 },
+    ]
+    const body = eventToUpdateBody(
+      asEditedEvent({ ...event, pools: stored }, [
+        // Pool A, renamed — still cited, so it keeps its id.
+        { ...keepPools([stored[0]])[0], name: 'Morning Pool' },
+        // …a brand-new one, with no id for the server to mint against.
+        addedPool({
+          name: 'Pool C',
+          slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
+          tableIds: ['t3'],
+        }),
+        // …and Pool B is simply not here. An uncited stored pool is a removal.
+      ]),
+    )
+
+    expect(body.pools).toEqual([
+      {
+        id: 'p-1',
+        name: 'Morning Pool',
+        slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+        table_ids: ['t1', 't2'],
+      },
+      {
+        name: 'Pool C',
+        slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
+        table_ids: ['t3'],
+      },
+    ])
+    // The added entry omits the KEY rather than sending `id: null`: both are accepted,
+    // but a payload a reader can eyeball and see "this entry cites nothing, so it is an
+    // insert" is the whole readability of a diff.
+    expect('id' in (body.pools ?? [])[1]).toBe(false)
+  })
+
   // Clearing the cap sends an explicit `null` — the PATCH handler distinguishes
   // "clear the cap" (null present) from "leave it alone" (key absent), so this
   // must not be omitted (ADR-0935).
   it('carries max_players: null when the cap is cleared', () => {
-    const body = eventToUpdateBody({ ...event, maxPlayers: null })
+    const body = eventToUpdateBody(asEditedEvent({ ...event, maxPlayers: null }))
     expect('max_players' in body).toBe(true)
     expect(body.max_players).toBeNull()
   })
@@ -990,15 +1079,17 @@ describe('eventToUpdateBody', () => {
     }
 
     it('SENDS the qualifier count for rr-then-ko, on both verbs', () => {
-      expect(eventToCreateBody(twoStage).qualifiers_per_pool).toBe(2)
-      expect(eventToUpdateBody(twoStage).qualifiers_per_pool).toBe(2)
+      expect(eventToCreateBody(asEditedEvent(twoStage)).qualifiers_per_pool).toBe(2)
+      expect(eventToUpdateBody(asEditedEvent(twoStage)).qualifiers_per_pool).toBe(2)
     })
 
     it('sends the DIRECTOR’s count, never a default', () => {
       // `1` is what the planner falls back to when nobody says otherwise, so a fixture
       // of 1 could not tell "threaded through" from "fell back". Three is neither the
       // fallback nor the convention.
-      const body = eventToUpdateBody({ ...twoStage, qualifiersPerPool: 3 })
+      const body = eventToUpdateBody(
+        asEditedEvent({ ...twoStage, qualifiersPerPool: 3 }),
+      )
       expect(body.qualifiers_per_pool).toBe(3)
     })
 
@@ -1009,8 +1100,8 @@ describe('eventToUpdateBody', () => {
     it.each(['round-robin', 'single-elim'] as const)(
       'OMITS the key entirely for %s — where sending it is a 422, not a no-op',
       (drawType) => {
-        const create = eventToCreateBody({ ...event, drawType })
-        const update = eventToUpdateBody({ ...event, drawType })
+        const create = eventToCreateBody(asEditedEvent({ ...event, drawType }))
+        const update = eventToUpdateBody(asEditedEvent({ ...event, drawType }))
 
         expect('qualifiers_per_pool' in create).toBe(false)
         expect('qualifiers_per_pool' in update).toBe(false)
@@ -1034,7 +1125,7 @@ describe('eventToUpdateBody', () => {
     })
 
     it('round-trips a two-stage event: configure 2, send 2, read 2 back', () => {
-      const sent = eventToUpdateBody(twoStage)
+      const sent = eventToUpdateBody(asEditedEvent(twoStage))
       const stored = buildTournamentEventRead({
         draw_type: 'rr-then-ko',
         qualifiers_per_pool: sent.qualifiers_per_pool,
@@ -1045,12 +1136,12 @@ describe('eventToUpdateBody', () => {
   })
 
   it('omits the server-owned entered count so a PATCH never clobbers it', () => {
-    const body = eventToUpdateBody(event)
+    const body = eventToUpdateBody(edited)
     expect('entered' in body).toBe(false)
   })
 
   it('omits the entrants too — registrations are written through the entries endpoints, never an event PATCH', () => {
-    const body = eventToUpdateBody(event)
+    const body = eventToUpdateBody(edited)
     expect('entrants' in body).toBe(false)
   })
 
@@ -1060,7 +1151,7 @@ describe('eventToUpdateBody', () => {
   // a re-cut. A draw moves only through `POST …/draw` and `DELETE …/draw` (ADR-0786).
   it('omits the draw — an event PATCH can neither cut, keep, nor clobber fixtures', () => {
     const body = eventToUpdateBody({
-      ...event,
+      ...edited,
       fixtures: [
         {
           id: 'fx-1',

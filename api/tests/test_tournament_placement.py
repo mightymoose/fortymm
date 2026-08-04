@@ -124,7 +124,6 @@ async def _seed_placeable_fixture(
             tournament,
             [
                 {
-                    "id": "p-os-1",
                     "name": "Pool A",
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1"],
@@ -149,7 +148,7 @@ async def _seed_placeable_fixture(
     await db.commit()
     fixture = TournamentFixture(
         event_id=event.id,
-        pool_id="p-os-1",
+        pool_id=event.pools[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
