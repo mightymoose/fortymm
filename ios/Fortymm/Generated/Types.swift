@@ -652,18 +652,26 @@ internal protocol APIProtocol: Sendable {
     func createEventV1TournamentsTournamentIdEventsPost(_ input: Operations.CreateEventV1TournamentsTournamentIdEventsPost.Input) async throws -> Operations.CreateEventV1TournamentsTournamentIdEventsPost.Output
     /// Update Event
     ///
-    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
-    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
-    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
+    /// sent.
+    ///
+    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
+    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
+    /// Send back the pools you read, edited: the ids came from the read, and naming an id
+    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
+    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
+    /// pool by it.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
-    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
-    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
-    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
-    ///   the cut.
+    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
+    ///   already has, or it is refused with a `409`: a removed pool would leave the
+    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
+    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
+    ///   Re-ordering them, and editing each one, are still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
@@ -2098,18 +2106,26 @@ extension APIProtocol {
     }
     /// Update Event
     ///
-    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
-    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
-    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
+    /// sent.
+    ///
+    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
+    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
+    /// Send back the pools you read, edited: the ids came from the read, and naming an id
+    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
+    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
+    /// pool by it.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
-    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
-    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
-    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
-    ///   the cut.
+    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
+    ///   already has, or it is refused with a `409`: a removed pool would leave the
+    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
+    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
+    ///   Re-ordering them, and editing each one, are still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
@@ -7660,34 +7676,35 @@ internal enum Components {
                 case rank
             }
         }
-        /// A pool as it is **read back**: everything a client wrote, plus the ``position``
-        /// the server stamped on it.
+        /// A pool as it is **read back**: everything a client wrote, plus the ``id`` the
+        /// server minted for it and the ``position`` it stamped on it.
         ///
-        /// It is also the model every interior read of an event's ``pools`` JSONB parses
-        /// through — ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule
-        /// snapshots — so the column becomes typed values at the read boundary rather than
-        /// stringly-keyed dict lookups (api/CLAUDE.md — "parse, don't validate"). Deriving it
-        /// from :class:`PoolWrite` is what keeps the two shapes one shape plus a field: a
-        /// column added to the write side is readable without a second edit, and the two can
-        /// never disagree about what a pool *is*.
+        /// It is also the model every interior read of an event's pools arrives through —
+        /// ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
+        /// is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
+        /// nothing above ``app.tournament_pools.pool_read``: the projection composes this same
+        /// model out of typed columns where it used to validate it out of untyped dicts.
+        /// Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus two
+        /// fields, exactly as :class:`TournamentTable` derives from
+        /// :class:`TournamentTableWrite`: a column added to the write side is readable without
+        /// a second edit, and the two can never disagree about what a pool *is*.
         ///
-        /// ``position`` defaults to ``0`` so that pools stored before the field existed stay
-        /// *readable* — a read boundary must not turn a history it cannot change into a
-        /// ``ValidationError`` (the same asymmetry :data:`AddressComponent` is about). Every
-        /// pool written since goes through :func:`stored_pools` and carries a real one. The
-        /// default is a **read** concession only; it is not a way to write one, because there
-        /// is no way to write one.
+        /// ``position`` keeps its ``0`` default even though the column is NOT NULL and every
+        /// row carries a real one: the default is what lets a **literal** ``Pool`` be built in
+        /// a test or a REPL without spelling an order out, and a read boundary that
+        /// hard-required it would gain nothing — the projection always supplies it. ``id`` has
+        /// no default, because there is no id a literal pool could sensibly default to.
         ///
         /// - Remark: Generated from `#/components/schemas/Pool`.
         internal struct Pool: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/Pool/id`.
-            internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/Pool/name`.
             internal var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/Pool/slot`.
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/Pool/table_ids`.
             internal var tableIds: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/Pool/id`.
+            internal var id: Swift.String
             /// Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
             ///
             /// - Remark: Generated from `#/components/schemas/Pool/position`.
@@ -7695,37 +7712,33 @@ internal enum Components {
             /// Creates a new `Pool`.
             ///
             /// - Parameters:
-            ///   - id:
             ///   - name:
             ///   - slot:
             ///   - tableIds:
+            ///   - id:
             ///   - position: Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
             internal init(
-                id: Swift.String,
                 name: Swift.String,
                 slot: Components.Schemas.Slot,
                 tableIds: [Swift.String],
+                id: Swift.String,
                 position: Swift.Int? = nil
             ) {
-                self.id = id
                 self.name = name
                 self.slot = slot
                 self.tableIds = tableIds
+                self.id = id
                 self.position = position
             }
             internal enum CodingKeys: String, CodingKey {
-                case id
                 case name
                 case slot
                 case tableIds = "table_ids"
+                case id
                 case position
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
                 self.name = try container.decode(
                     Swift.String.self,
                     forKey: .name
@@ -7738,15 +7751,19 @@ internal enum Components {
                     [Swift.String].self,
                     forKey: .tableIds
                 )
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
                 self.position = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .position
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
                     "name",
                     "slot",
                     "table_ids",
+                    "id",
                     "position"
                 ])
             }
@@ -7846,9 +7863,8 @@ internal enum Components {
         /// One pool's standings: its rows in finishing order, and whether every one of its
         /// fixtures has been decided.
         ///
-        /// ``pool_id`` names a ``Pool`` in this same event's ``pools`` — the string ref a
-        /// fixture also carries — so a client titles the table from the pool it already
-        /// holds.
+        /// ``pool_id`` names a pool of this same event — the id a fixture also carries — so a
+        /// client titles the table from the pool it already holds.
         ///
         /// - Remark: Generated from `#/components/schemas/PoolStandingsRead`.
         internal struct PoolStandingsRead: Codable, Hashable, Sendable {
@@ -7879,23 +7895,111 @@ internal enum Components {
                 case complete
             }
         }
+        /// One pool of an event a client **edits** (``PATCH …/events/{id}``): everything
+        /// :class:`PoolWrite` carries, plus an **optional** ``id`` naming a pool the event
+        /// already has.
+        ///
+        /// The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
+        /// cases are exhaustive:
+        ///
+        /// * ``id`` **present** — "this is the pool you already have, with these words". The
+        ///   row keeps its id, and therefore every fixture drawn into it and every table it
+        ///   reserves, and takes the new ``name``/``slot``/``table_ids``; its place in the list
+        ///   is its new place in the event's pool order.
+        /// * ``id`` **omitted** (or ``null``) — "add a pool". The server mints its id, exactly
+        ///   as on create.
+        /// * a stored pool **no entry names** — "remove it".
+        ///
+        /// ``X | None = None`` and never a non-null default: an optional field on a *write*
+        /// schema whose default is not ``None`` generates as **required** in the TypeScript
+        /// client, which would make "omit the id to add a pool" unsayable there.
+        ///
+        /// An id that names no pool of *this* event is a 422 on the field
+        /// (:class:`~app.tournament_errors.PoolNotInEventError`), not a quietly minted new
+        /// pool. Until this chore that arm was an *addition*, because the id was the client's
+        /// and an id the server had never seen still named the pool the client meant. It is the
+        /// server's now, so an id it did not mint names nothing — and minting a fresh one would
+        /// hand the client back a different id than it asked for while *removing* the pool it
+        /// meant to keep, which is the pair of failures a diff must never confuse.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PoolUpsert`.
+        internal struct PoolUpsert: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PoolUpsert/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolUpsert/slot`.
+            internal var slot: Components.Schemas.Slot
+            /// - Remark: Generated from `#/components/schemas/PoolUpsert/table_ids`.
+            internal var tableIds: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/PoolUpsert/id`.
+            internal var id: Swift.String?
+            /// Creates a new `PoolUpsert`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - slot:
+            ///   - tableIds:
+            ///   - id:
+            internal init(
+                name: Swift.String,
+                slot: Components.Schemas.Slot,
+                tableIds: [Swift.String],
+                id: Swift.String? = nil
+            ) {
+                self.name = name
+                self.slot = slot
+                self.tableIds = tableIds
+                self.id = id
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case name
+                case slot
+                case tableIds = "table_ids"
+                case id
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.slot = try container.decode(
+                    Components.Schemas.Slot.self,
+                    forKey: .slot
+                )
+                self.tableIds = try container.decode(
+                    [Swift.String].self,
+                    forKey: .tableIds
+                )
+                self.id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "slot",
+                    "table_ids",
+                    "id"
+                ])
+            }
+        }
         /// A slice of tables reserved for a window of time within an event, as a client
-        /// **sends** it.
+        /// **creates** it.
         ///
-        /// Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
-        /// by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
-        /// these ids. Which is only a coherent thing to say if an id names one pool — see
-        /// ``EventPools``, the type the event's list of them actually has — and if an id is a
-        /// thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
-        /// a fixture drawn into it is pooled by one rule and un-pooled by another.
+        /// It has **no** ``id``, and that absence is the whole content of the chore that minted
+        /// them: a pool's id is a uuid the database mints (ADR 20260801's ``id uuid PRIMARY
+        /// KEY``), so it is not the client's to author and there is nothing here for it to
+        /// author. Sending one is a 422 for an unknown field — the same treatment
+        /// :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
+        /// client that *cites* an id it was given is patching, not creating, and the shape for
+        /// that is :class:`PoolUpsert`.
         ///
-        /// Its ``name`` has the same floor for the plainer reason: a pool is *called*
-        /// something — it is what the director clicks, what the conflict warnings quote, and
-        /// what a player reads off a wall. ``""`` is not a name, and an event whose pools list
-        /// is three blank rows is not a thing anyone could act on.
+        /// Its ``name`` has a floor for the plainer reason: a pool is *called* something — it
+        /// is what the director clicks, what the conflict warnings quote, and what a player
+        /// reads off a wall. ``""`` is not a name, and an event whose pools list is three blank
+        /// rows is not a thing anyone could act on.
         ///
-        /// What is **absent** is as deliberate as what is here: ``position`` is the server's to
-        /// assign (:data:`PoolPosition`), so it is simply not a field of this model, and
+        /// ``position`` is absent for the same reason the id is: it is the server's to assign
+        /// (:data:`PoolPosition`), so it is simply not a field of this model, and
         /// ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
         /// the treatment ``entered`` already gets on the event schemas — a server-managed value
         /// is kept **off** the write shape rather than accepted and then ignored. Accepting it
@@ -7906,8 +8010,6 @@ internal enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/PoolWrite`.
         internal struct PoolWrite: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolWrite/id`.
-            internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/PoolWrite/name`.
             internal var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/PoolWrite/slot`.
@@ -7917,33 +8019,25 @@ internal enum Components {
             /// Creates a new `PoolWrite`.
             ///
             /// - Parameters:
-            ///   - id:
             ///   - name:
             ///   - slot:
             ///   - tableIds:
             internal init(
-                id: Swift.String,
                 name: Swift.String,
                 slot: Components.Schemas.Slot,
                 tableIds: [Swift.String]
             ) {
-                self.id = id
                 self.name = name
                 self.slot = slot
                 self.tableIds = tableIds
             }
             internal enum CodingKeys: String, CodingKey {
-                case id
                 case name
                 case slot
                 case tableIds = "table_ids"
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
                 self.name = try container.decode(
                     Swift.String.self,
                     forKey: .name
@@ -7957,7 +8051,6 @@ internal enum Components {
                     forKey: .tableIds
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
                     "name",
                     "slot",
                     "table_ids"
@@ -10792,7 +10885,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/predicates`.
             internal var predicates: [Components.Schemas.Predicate]?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/pools`.
-            internal var pools: [Components.Schemas.PoolWrite]?
+            internal var pools: [Components.Schemas.PoolUpsert]?
             /// Creates a new `TournamentEventUpdate`.
             ///
             /// - Parameters:
@@ -10818,7 +10911,7 @@ internal enum Components {
                 slot: Components.Schemas.TournamentEventUpdate.SlotPayload? = nil,
                 matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload? = nil,
                 predicates: [Components.Schemas.Predicate]? = nil,
-                pools: [Components.Schemas.PoolWrite]? = nil
+                pools: [Components.Schemas.PoolUpsert]? = nil
             ) {
                 self.name = name
                 self.format = format
@@ -10888,7 +10981,7 @@ internal enum Components {
                     forKey: .predicates
                 )
                 self.pools = try container.decodeIfPresent(
-                    [Components.Schemas.PoolWrite].self,
+                    [Components.Schemas.PoolUpsert].self,
                     forKey: .pools
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -11010,8 +11103,9 @@ internal enum Components {
         ///   live, not a copy frozen at go-live.
         /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
         ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
-        ///   set, it names a ``Pool`` in this same event's ``pools`` — a string ref into
-        ///   JSONB, not a foreign key, because pools are value-objects with no table.
+        ///   set, it names a pool of **this same event**, and it is guaranteed to: the column
+        ///   is half of a composite foreign key onto ``tournament_event_pools (event_id, id)``,
+        ///   so it is neither a dangling ref nor another event's pool (ADR 20260801).
         /// * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
         ///   **unassigned to a table**. When set, it names a ``TournamentTable`` in the
         ///   tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
@@ -23386,18 +23480,26 @@ internal enum Operations {
     }
     /// Update Event
     ///
-    /// Edit an event. Absent fields are left alone; `predicates` and `pools` replace
-    /// wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
-    /// id identifies one pool, and the fixtures of a draw name their pool by it.
+    /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
+    /// sent.
+    ///
+    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
+    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
+    /// Send back the pools you read, edited: the ids came from the read, and naming an id
+    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
+    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
+    /// pool by it.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
-    ///   event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
-    ///   would leave the fixtures drawn into it pointing at nothing, and an added one would
-    ///   arrive with no fixtures, since the draw was dealt across the pools that existed at
-    ///   the cut.
+    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
+    ///   already has, or it is refused with a `409`: a removed pool would leave the
+    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
+    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
+    ///   Re-ordering them, and editing each one, are still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
