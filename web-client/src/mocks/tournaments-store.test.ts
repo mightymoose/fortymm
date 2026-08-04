@@ -2361,6 +2361,51 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   const fixtureIn = (tournamentId: string, fixtureId: string) =>
     fixturesOf(tournamentId).find((f) => f.id === fixtureId)!
 
+  // ----- the one hard rule about a placement (ADR 20260801) -------------------
+  //
+  // Everything else about a placement is soft (ADR-0790, undisturbed): an
+  // out-of-window time, a table outside the fixture's pool, a double-booking all
+  // still save. Only "does `table_id` name a real table of THIS tournament" is an
+  // invariant, mirroring the server's `_enforce_table_exists`
+  // (`api/app/tournament_placement.py`) — without this, a component tested against
+  // the mock could place a fixture at a garbage id and never see the 422 the real
+  // API would answer with.
+
+  it('REFUSES a placement whose table_id names no table of this tournament', () => {
+    const fixtureId = fixturesOf(SLAM)[0].id
+    const before = fixtureIn(SLAM, fixtureId)
+
+    const result = placeFixture(SLAM, fixtureId, {
+      table_id: 'not-a-real-table-id',
+      scheduled_start: '2026-08-22T09:00:00',
+    })
+
+    if (result.ok || result.status !== 422) {
+      throw new Error(`expected a 422, got ${JSON.stringify(result)}`)
+    }
+    expect(result.detail).toBe(
+      "This tournament's venue catalogue has no table with that id.",
+    )
+    // NOTHING was written — a refused placement leaves the fixture exactly as it was.
+    expect(fixtureIn(SLAM, fixtureId)).toEqual(before)
+  })
+
+  it('ACCEPTS a placement naming a real table, and unplacing with table_id: null always passes', () => {
+    const { fixtureId, tableId } = placeAFixtureOnT1()
+    expect(fixtureIn(SLAM, fixtureId).table_id).toBe(tableId)
+
+    // `null` is not a miss — it is the unplace case, and the one value that always
+    // passes the check regardless of what the catalogue holds.
+    const cleared = placeFixture(SLAM, fixtureId, {
+      table_id: null,
+      scheduled_start: null,
+    })
+
+    expect(cleared.ok).toBe(true)
+    if (!cleared.ok) throw new Error('expected the unplace to succeed')
+    expect(cleared.fixture.table_id).toBeNull()
+  })
+
   // ----- who mints an id ------------------------------------------------------
 
   it('MINTS an id for every table on a create — the client sends none', () => {

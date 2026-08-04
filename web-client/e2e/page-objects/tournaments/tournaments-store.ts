@@ -1732,7 +1732,10 @@ export class TournamentsStore {
    *
    * Refused in the API's order: 403 (not the owner — the tab never offers the
    * control), 404 (no such fixture), 409 (the match is `completed`/`voided`, so
-   * its placement is history).
+   * its placement is history), 422 (`table_id` names no table of THIS tournament
+   * — `_enforce_table_exists`, `api/app/tournament_placement.py`, ADR 20260801,
+   * the one invariant about an otherwise-soft placement). `null` is not a miss;
+   * it is the unplace case, and always passes.
    */
   private async placeFixture(route: Route, fixtureId: string, body: unknown) {
     if (!this.detail.can_edit) {
@@ -1754,6 +1757,22 @@ export class TournamentsStore {
     } | null
     const table_id = patch?.table_id ?? null
     const scheduled_start = patch?.scheduled_start ?? null
+
+    if (
+      table_id !== null &&
+      !this.detail.table_catalogue.some((table) => table.id === table_id)
+    ) {
+      return json(route, 422, {
+        detail: [
+          {
+            type: 'value_error',
+            loc: ['body', 'table_id'],
+            msg: "This tournament's venue catalogue has no table with that id.",
+            input: table_id,
+          },
+        ],
+      })
+    }
 
     const updated: TournamentFixtureRead = {
       ...found,

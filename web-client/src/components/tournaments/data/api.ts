@@ -1127,12 +1127,16 @@ export function useUncutDraw(tournamentId: string) {
  * with the table and predicted start in full (ADR-0790). Owner-only.
  *
  * The body is the placement whole — `table_id` + `scheduled_start`, both required, and
- * **`null` on either clears that half** (`(null, null)` unassigns the fixture). The
- * server stores it soft: an out-of-window time or a `table_id` that names no catalogue
- * table is saved, not refused (those are flags-on-read, a later scheduler slice). The one
- * refusal is a **409** on a fixture whose match is `completed`/`voided` — its placement is
- * history. The Schedule tab does not offer the control for a finished match, so the 409
- * only surfaces on a lost race; the toast carries the server's word for it.
+ * **`null` on either clears that half** (`(null, null)` unassigns the fixture). Only one
+ * rule about it is hard: `table_id` must name a table in this tournament's own catalogue
+ * (ADR 20260801, "a placement names a real table, and only that is an invariant") — a
+ * **422 on `table_id`**. `null` is not a miss; it is the unplace case, and always passes.
+ * Everything else about a placement stays soft — an out-of-window time, a table outside
+ * the fixture's pool, a double-booking — saved, not refused (flags derived on read,
+ * ADR-0790 undisturbed). The other refusal is a **409** on a fixture whose match is
+ * `completed`/`voided` — its placement is history. The Schedule tab does not offer the
+ * control for a finished match, so the 409 only surfaces on a lost race; the toast
+ * carries the server's word for it.
  *
  * Reconciles **`onSettled`** — the placement re-renders from the refetched tournament,
  * never from an optimistic local write, so what the grid shows is always the server's. */

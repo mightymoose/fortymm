@@ -2424,6 +2424,7 @@ export type PlaceFixtureResult =
   | { ok: true; fixture: TournamentFixtureRead }
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 422; detail: string }
 
 /** The server's sentence for a placement that can no longer be changed, verbatim in
  * spirit (`api/app/tournaments.py`): a `completed`/`voided` match's table and time are
@@ -2435,10 +2436,15 @@ const PLACEMENT_FROZEN_DETAIL =
  * fixture's placement (ADR-0790). Creator-only (403), 404 for a fixture that is not on
  * any of the tournament's events.
  *
- * **Soft, deliberately**: an out-of-window time or a `table_id` that names no catalogue
- * table is *stored*, not refused — those are flags-on-read, a later scheduler slice. The
- * one refusal is a **409** on a fixture whose match is `completed`/`voided`; everything
- * else — no match yet, or `in_progress` — is freely (re)placeable.
+ * **One hard rule, everything else soft.** An out-of-window time, a table outside the
+ * fixture's pool, and a double-booking are all *stored*, not refused — those stay
+ * flags-on-read (ADR-0790, undisturbed). The **one** invariant is that `table_id` must
+ * name a table in this tournament's own catalogue (`_enforce_table_exists`,
+ * `api/app/tournament_placement.py`, ADR 20260801) — a **422 on `table_id`**, judged
+ * before the freeze check ever runs, so this mock cannot accept a placement the real API
+ * would refuse. `null` is not a miss: it is "unplace", and always passes. The other
+ * refusal is a **409** on a fixture whose match is `completed`/`voided`; everything else
+ * — no match yet, or `in_progress` — is freely (re)placeable.
  *
  * The **pin consequences** mirror the server's transition table
  * (`apply_manual_placement`, `api/app/match_calls.py`) via the shared
@@ -2459,6 +2465,12 @@ export function placeFixture(
   const fixture = event.fixtures.find((f) => f.id === fixtureId)!
   if (fixture.match_status === 'completed' || fixture.match_status === 'voided') {
     return { ok: false, status: 409, detail: PLACEMENT_FROZEN_DETAIL }
+  }
+  if (
+    body.table_id !== null &&
+    !existing.table_catalogue.some((table) => table.id === body.table_id)
+  ) {
+    return { ok: false, status: 422, detail: TABLE_NOT_IN_CATALOGUE }
   }
 
   // The pin consequences — the server's transition table, via the shared sim
