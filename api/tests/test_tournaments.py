@@ -673,10 +673,13 @@ async def test_create_event_round_trips_jsonb(
     assert body["predicates"] == [
         {"id": "pr-1", "field": "rating", "op": "<", "value": 1500}
     ]
+    # The pool round-trips with one field it was not sent: ``position``, stamped by the
+    # write boundary from its index in the ``pools`` list (ADR 20260801).
     assert body["pools"] == [
         {
             "id": "p-os-1",
             "name": "Pool A",
+            "position": 0,
             "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
             "table_ids": ["t1", "t2"],
         }
@@ -1231,7 +1234,7 @@ async def test_patch_event_by_creator_updates_jsonb(
     assert response.status_code == 200
     body = response.json()
     assert body["draw_type"] == "single-elim"
-    assert body["pools"] == new_pools
+    assert body["pools"] == _positioned(*new_pools)
     assert body["predicates"] == new_predicates
     # Untouched fields survive.
     assert body["name"] == "Open Singles"
@@ -4790,6 +4793,23 @@ POOL_B: dict[str, Any] = {
 }
 
 
+def _positioned(*pools: dict[str, Any]) -> list[dict[str, Any]]:
+    """The pools as the server **stores and returns** them: the payload's own dicts,
+    each carrying the ``position`` the server stamped on it from its index in the list
+    that was sent (ADR 20260801, "Pools carry an explicit ``position``").
+
+    A pool goes in *without* a position — it cannot be sent one; the write shape has no
+    such field — and comes back *with* one, so an expectation written as the request
+    payload verbatim is off by exactly this field. Deriving it here, from the same order
+    the payload states, keeps these assertions about *what was sent* — write
+    ``_positioned(POOL_B, POOL_A)`` and it says pool B is first, which is the claim —
+    rather than hard-coding a number into each of the literals below.
+
+    Which also makes it the ``pools`` payload a client must **not** send: the two
+    refusal tests below post exactly this, and get a 422 naming ``position``."""
+    return [{**pool, "position": index} for index, pool in enumerate(pools)]
+
+
 def _rr_payload(*pools: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     """A **round-robin** event over ``pools`` — the pooled draw type (ADR-0786). The
     shared ``_event_payload`` is deliberately a ``single-elim``, which is un-pooled, so
@@ -5854,6 +5874,100 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
     return list(pools)
 
 
+async def test_an_events_pools_are_read_back_in_the_order_they_were_posted(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The wire round trip of a pool's ``position``: **POST** an event whose pools are
+    sent C, A, B and **GET** it back carrying 0, 1, 2 — in the order sent, not in
+    alphabetical order (ADR 20260801, "Pools carry an explicit ``position``").
+
+    Every other position test drives the verb directly (``test_tournament_events.py``);
+    this one is the claim a client can actually see, over HTTP, through the read that
+    the tournament page uses. Sorted by name or by id — which is how a pool's place in
+    the order used to be recovered, and what is about to become an arbitrary UUID sort —
+    the answer would be A, B, C, so the three named pools here are what makes this
+    assertion able to fail.
+    """
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(
+        client, _rr_payload(POOL_C, POOL_A, POOL_B)
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert [(pool["name"], pool["position"]) for pool in event["pools"]] == [
+        ("Pool C", 0),
+        ("Pool A", 1),
+        ("Pool B", 2),
+    ]
+    # And no two of one event's pools share a position.
+    positions = [pool["position"] for pool in event["pools"]]
+    assert sorted(positions) == list(range(len(positions)))
+
+
+async def test_posting_an_event_whose_pools_carry_a_position_is_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The other half of the round trip above, over the wire: a ``pools`` payload
+    carrying the field the server assigns is a **422 naming it**, and creates no event.
+
+    A read field and a write field are different fields here, and this is the request
+    that tells them apart. The read above hands the client a ``position``; sending one
+    back is refused rather than ignored, so a client that mistakes "what I read" for
+    "what I may write" is told exactly which key to drop — at the boundary, in the same
+    request — instead of being handed a 201 for a number that decided nothing.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_rr_payload(*_positioned(POOL_C, POOL_A, POOL_B)),
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_locs(response) == [
+        ["body", "pools", 0, "position"],
+        ["body", "pools", 1, "position"],
+        ["body", "pools", 2, "position"],
+    ]
+    # Refused, not half-written: the tournament has no events at all.
+    assert await _events_of(client, created["id"]) == []
+
+
+async def test_patching_pools_that_carry_a_position_is_refused_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The patch path is the one that would actually carry an echoed ``position`` — the
+    event editor PATCHes the whole form back, pools included — so it is refused there
+    too, and the stored pools are untouched.
+
+    Written as a **re-send of what the GET handed back** (``_positioned``), because that
+    is the exact round trip a client makes: read the event, edit a pool's name, PATCH it
+    all back. The stored assertion is what makes this more than a schema test — a guard
+    that refused *after* writing would still 422, and would still have moved the pools.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(POOL_A, POOL_B)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"pools": _positioned(POOL_B, POOL_A)},
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_locs(response) == [
+        ["body", "pools", 0, "position"],
+        ["body", "pools", 1, "position"],
+    ]
+    # The order the event was created with, unmoved: nothing about this request was
+    # applied, not even the re-ordering the payload also asked for.
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
+
+
 async def test_a_draw_of_one_fixture_still_freezes_the_pool_set(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -5888,7 +6002,7 @@ async def test_a_draw_of_one_fixture_still_freezes_the_pool_set(
     )
 
     assert response.status_code == 409, response.text
-    assert await _pools_of(db_session, event["id"]) == [POOL_A]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A)
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
 
 
@@ -5953,8 +6067,8 @@ async def test_a_cut_draw_still_lets_a_pools_venue_attributes_be_edited(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["pools"] == edited
-    assert await _pools_of(db_session, event["id"]) == edited
+    assert response.json()["pools"] == _positioned(*edited)
+    assert await _pools_of(db_session, event["id"]) == _positioned(*edited)
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
 
 
@@ -6006,7 +6120,7 @@ async def test_a_cut_draw_refuses_a_pools_patch_that_changes_which_pools_exist(
     tournament_id, event = await _cut_two_pool_event(client, db_session)
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
     pools_before = await _pools_of(db_session, event["id"])
-    assert pools_before == [POOL_A, POOL_B]
+    assert pools_before == _positioned(POOL_A, POOL_B)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
@@ -6056,7 +6170,7 @@ async def test_a_refused_pools_patch_writes_none_of_the_rest_of_the_payload_eith
         .all()
     )
     assert name == event["name"]
-    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
 
 
 async def test_an_event_with_no_draw_replaces_its_pools_wholesale(
@@ -6082,7 +6196,7 @@ async def test_an_event_with_no_draw_replaces_its_pools_wholesale(
     )
 
     assert response.status_code == 200, response.text
-    assert await _pools_of(db_session, event["id"]) == [POOL_C]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_C)
 
 
 async def test_removing_the_draw_un_freezes_the_pool_set(
@@ -6111,7 +6225,7 @@ async def test_removing_the_draw_un_freezes_the_pool_set(
     accepted = await client.patch(url, json={"pools": repooled})
 
     assert accepted.status_code == 200, accepted.text
-    assert await _pools_of(db_session, event["id"]) == repooled
+    assert await _pools_of(db_session, event["id"]) == _positioned(*repooled)
     assert await _fixture_rows(db_session, event["id"]) == []
 
 
@@ -6137,7 +6251,7 @@ async def test_a_patch_that_does_not_send_pools_is_untouched_by_the_freeze(
 
     assert response.status_code == 200, response.text
     assert response.json()["name"] == "Open Singles (redrawn)"
-    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
 
 
@@ -6173,7 +6287,7 @@ async def test_the_pool_freeze_is_scoped_to_the_event_being_patched(
         json={"pools": [POOL_C]},
     )
     assert free.status_code == 200, free.text
-    assert await _pools_of(db_session, undrawn["id"]) == [POOL_C]
+    assert await _pools_of(db_session, undrawn["id"]) == _positioned(POOL_C)
 
 
 async def test_the_event_patch_takes_the_tournaments_row_lock(
@@ -6327,7 +6441,7 @@ async def test_a_pools_patch_that_duplicates_an_id_never_reaches_the_cut_draw(
     assert "“p-a”" in _pools_error(response)
     # Nothing written: the pools are the two they were, and the fixtures are the same
     # rows, column for column.
-    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
     # And the cut the duplicate would have detonated still works.
     re_cut = await client.post(_draw_url(tournament_id, event["id"]))
@@ -6359,7 +6473,7 @@ async def test_an_undrawn_event_also_refuses_a_pools_patch_that_duplicates_an_id
 
     assert response.status_code == 422, response.text
     assert "“p-c”" in _pools_error(response)
-    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
 
 
 # ----- an id is not the empty string (422) -----------------------------------
@@ -6465,7 +6579,7 @@ async def test_a_pools_patch_that_empties_a_pool_id_or_name_is_refused(
 
     assert response.status_code == 422, response.text
     assert ["body", "pools", 0, field] in _error_locs(response), response.text
-    assert await _pools_of(db_session, event["id"]) == [POOL_A, POOL_B]
+    assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
 
 
 async def test_creating_a_tournament_with_an_empty_table_id_is_refused(
@@ -6674,7 +6788,7 @@ async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
     assert response.status_code == 200, response.text
     assert response.json()["draw_type"] == "round-robin"
     assert await _draw_type_of(db_session, event["id"]) is DrawType.round_robin
-    assert await _pools_of(db_session, event["id"]) == moved
+    assert await _pools_of(db_session, event["id"]) == _positioned(*moved)
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
 
 

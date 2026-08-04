@@ -7,6 +7,9 @@ import {
   buildEvent,
   buildFixture,
   buildPool,
+  buildTenPools,
+  TEN_POOLS_BY_ID,
+  TEN_POOLS_BY_POSITION,
 } from '../../data/seed.factory'
 import { poolsSectionPage } from './pools-section.page'
 
@@ -27,12 +30,14 @@ const twoPools = () => [
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
     tableIds: ['t1', 't2'],
+    position: 0,
   }),
   buildPool({
     id: 'p-2',
     name: 'Pool B',
     slot: { date: '2026-06-13', start: '13:00', end: '17:00' },
     tableIds: ['t3'],
+    position: 1,
   }),
 ]
 
@@ -44,12 +49,14 @@ const conflictingPools = () => [
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:00' },
     tableIds: ['t1'],
+    position: 0,
   }),
   buildPool({
     id: 'b',
     name: 'Pool B',
     slot: { date: '2026-06-13', start: '11:00', end: '14:00' },
     tableIds: ['t1'],
+    position: 1,
   }),
 ]
 
@@ -85,15 +92,111 @@ describe('PoolsSection', () => {
     })
   })
 
+  /**
+   * **Ten pools read 1 … 10** — the claim `Pool.position` was added to make.
+   *
+   * The fixture (`buildTenPools`) hands the section its pools in the order a sort by ID
+   * would produce, because a sorted fixture cannot falsify anything: it would pass just
+   * as happily against a section that trusted the array it was given, and against one
+   * that sorted by id. Here both of those render `Pool 1, Pool 10, Pool 2 …`, which is
+   * the real ten-pool bug, spelled out in the guard below.
+   */
+  describe('ten pools, in position order', () => {
+    // The fixture's own shape, asserted rather than assumed — if this ever stops being
+    // the id order, every claim below quietly stops discriminating.
+    it('is built from a fixture whose id order is the WRONG order', () => {
+      expect(TEN_POOLS_BY_ID).toEqual([
+        'Pool 1',
+        'Pool 10',
+        'Pool 2',
+        'Pool 3',
+        'Pool 4',
+        'Pool 5',
+        'Pool 6',
+        'Pool 7',
+        'Pool 8',
+        'Pool 9',
+      ])
+      expect(TEN_POOLS_BY_ID).not.toEqual(TEN_POOLS_BY_POSITION)
+    })
+
+    it('renders the cards in position order, not in id order', () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
+
+      expect(poolsSectionPage.getPoolNames()).toEqual(TEN_POOLS_BY_POSITION)
+    })
+
+    // …and the same for a reader, whose cards are text rather than boxes (ADR-0015).
+    it('reads back in position order for a viewer too', () => {
+      poolsSectionPage.render({
+        event: buildEvent({ pools: buildTenPools() }),
+        canEdit: false,
+      })
+
+      expect(poolsSectionPage.getPoolNames()).toEqual(TEN_POOLS_BY_POSITION)
+    })
+
+    /**
+     * The order the cards are in is the order the FORM is in — which matters because the
+     * form array is what a save serializes, and the server re-derives each position from
+     * that array's index. A section that sorted only its render would round-trip the
+     * director's pools into a different order than the one they were looking at.
+     */
+    it('seeds the form array in position order, so the save sends that order', () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
+
+      expect(poolsSectionPage.getPools().map((p) => p.name)).toEqual(
+        TEN_POOLS_BY_POSITION,
+      )
+      expect(poolsSectionPage.getPools().map((p) => p.position)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+      ])
+    })
+
+    it('gives a pool added at the end the NEXT position, never a reused one', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
+
+      await userEvent.click(poolsSectionPage.getAddPoolButton())
+
+      const positions = poolsSectionPage.getPools().map((p) => p.position)
+      expect(positions).toHaveLength(11)
+      // 10 — one past the highest, and NOT a duplicate of any pool already there. (It is
+      // also the count here, which is why the interesting case is the one below.)
+      expect(positions.at(-1)).toBe(10)
+      expect(new Set(positions).size).toBe(11)
+    })
+
+    /**
+     * The case the count and the next position part company: remove a pool from the
+     * MIDDLE, then add one. Ten pools minus one is nine, so `fields.length` would hand
+     * the newcomer position 9 — which pool 10 already holds. Two pools tied for last is
+     * an order that is no order, and it would show up as a pair of cards swapping places
+     * on the next read.
+     */
+    it('does not reuse a position freed by removing a pool from the middle', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: buildTenPools() }) })
+
+      // The third card is Pool 3 (position 2).
+      await userEvent.click(poolsSectionPage.getRemovePoolButtons()[2])
+      await userEvent.click(poolsSectionPage.getAddPoolButton())
+
+      const positions = poolsSectionPage.getPools().map((p) => p.position)
+      expect(positions).toEqual([0, 1, 3, 4, 5, 6, 7, 8, 9, 10])
+      // Nine pools were left, so the default name is the tenth letter — the naming and
+      // the positioning are independent, and only the positioning is load-bearing.
+      expect(poolsSectionPage.getPoolNames().at(-1)).toBe('Pool J')
+    })
+  })
+
   it('counts distinct double-booked tables, not conflict pairs', () => {
     // One table (t1) shared across three mutually-overlapping pools yields
     // three conflict pairs but is still a single double-booked table.
     poolsSectionPage.render({
       event: buildEvent({
         pools: [
-          buildPool({ id: 'a', name: 'A', slot: { date: '2026-06-13', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
-          buildPool({ id: 'b', name: 'B', slot: { date: '2026-06-13', start: '10:00', end: '13:00' }, tableIds: ['t1'] }),
-          buildPool({ id: 'c', name: 'C', slot: { date: '2026-06-13', start: '11:00', end: '14:00' }, tableIds: ['t1'] }),
+          buildPool({ id: 'a', name: 'A', slot: { date: '2026-06-13', start: '09:00', end: '12:00' }, tableIds: ['t1'], position: 0 }),
+          buildPool({ id: 'b', name: 'B', slot: { date: '2026-06-13', start: '10:00', end: '13:00' }, tableIds: ['t1'], position: 1 }),
+          buildPool({ id: 'c', name: 'C', slot: { date: '2026-06-13', start: '11:00', end: '14:00' }, tableIds: ['t1'], position: 2 }),
         ],
       }),
     })

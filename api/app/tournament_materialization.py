@@ -35,7 +35,7 @@ from app.models import (
     TournamentFixture,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
-from app.tournament_draws import fixture_state, strategy_for_event
+from app.tournament_draws import fixture_state, pool_order, strategy_for_event
 from app.tournament_queries import game_counts_by_match
 
 
@@ -129,8 +129,12 @@ async def materialize_event(
         if reads_fixture_games(event.draw_settings.draw_type)
         else {}
     )
+    # The event's pool order, resolved once and handed to every projection: it is what
+    # fills ``FixtureState.pool_position``, and so what makes an ``advance()`` plan's
+    # ready list run pool 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
+    pools = pool_order(event)
     plan = strategy.advance(
-        [fixture_state(f, game_counts, voided_match_ids) for f in fixtures]
+        [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures]
     )
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
     # fixture made whole by them seats its match in this same transaction. A fill only
@@ -149,7 +153,7 @@ async def materialize_event(
     # plan's and needs no second side-fill pass beyond the loop above.
     ready = set(
         ready_fixtures(
-            [fixture_state(f, game_counts, voided_match_ids) for f in fixtures]
+            [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures]
         )
     )
     ready_fixture_rows = [f for f in fixtures if f.id in ready]

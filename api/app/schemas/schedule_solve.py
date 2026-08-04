@@ -62,6 +62,25 @@ class PoolOverCapacityRead(BaseModel):
     table_count: int
 
 
+class PlayerOverSubscribedRead(BaseModel):
+    """One human with more match-time in a pool than its window can hold: their
+    ``match_count`` matches plus the rest between them need ``required_min``
+    minutes of *their* time, against a window spanning only ``window_span_min``.
+    A pigeonhole over one person, so adding tables cannot fix it — the remedy is
+    fewer matches for them in this pool, or a longer window. Resolved: the
+    human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
+    the minutes stay integers for the client to format."""
+
+    kind: Literal["player_over_subscribed"] = "player_over_subscribed"
+    player_name: str
+    pool_name: str
+    window_start: str
+    window_end: str
+    match_count: int
+    required_min: int
+    window_span_min: int
+
+
 class NoSingleCauseRead(BaseModel):
     """CP-SAT proved the day infeasible yet no structural arm explains it — the
     whole-day residual. No pool: it carries only the day aggregate,
@@ -95,6 +114,7 @@ ResolvedReason = Annotated[
     PoolHasNoTablesRead
     | WindowTooShortForMatchRead
     | PoolOverCapacityRead
+    | PlayerOverSubscribedRead
     | NoSingleCauseRead
     | PastWindowReasonRead,
     Field(discriminator="kind"),

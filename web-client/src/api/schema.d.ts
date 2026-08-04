@@ -1801,7 +1801,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
@@ -3526,6 +3526,37 @@ export interface components {
             rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /**
+         * PlayerOverSubscribedRead
+         * @description One human with more match-time in a pool than its window can hold: their
+         *     ``match_count`` matches plus the rest between them need ``required_min``
+         *     minutes of *their* time, against a window spanning only ``window_span_min``.
+         *     A pigeonhole over one person, so adding tables cannot fix it — the remedy is
+         *     fewer matches for them in this pool, or a longer window. Resolved: the
+         *     human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
+         *     the minutes stay integers for the client to format.
+         */
+        PlayerOverSubscribedRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "player_over_subscribed";
+            /** Player Name */
+            player_name: string;
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Match Count */
+            match_count: number;
+            /** Required Min */
+            required_min: number;
+            /** Window Span Min */
+            window_span_min: number;
+        };
+        /**
          * PlayerRead
          * @description A user the current player can pick as a match opponent.
          *
@@ -3603,19 +3634,23 @@ export interface components {
         };
         /**
          * Pool
-         * @description A slice of tables reserved for a window of time within an event.
+         * @description A pool as it is **read back**: everything a client wrote, plus the ``position``
+         *     the server stamped on it.
          *
-         *     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
-         *     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
-         *     these ids. Which is only a coherent thing to say if an id names one pool — see
-         *     ``EventPools``, the type the event's list of them actually has — and if an id is a
-         *     thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
-         *     a fixture drawn into it is pooled by one rule and un-pooled by another.
+         *     It is also the model every interior read of an event's ``pools`` JSONB parses
+         *     through — ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule
+         *     snapshots — so the column becomes typed values at the read boundary rather than
+         *     stringly-keyed dict lookups (api/CLAUDE.md — "parse, don't validate"). Deriving it
+         *     from :class:`PoolWrite` is what keeps the two shapes one shape plus a field: a
+         *     column added to the write side is readable without a second edit, and the two can
+         *     never disagree about what a pool *is*.
          *
-         *     Its ``name`` has the same floor for the plainer reason: a pool is *called*
-         *     something — it is what the director clicks, what the conflict warnings quote, and
-         *     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
-         *     is three blank rows is not a thing anyone could act on.
+         *     ``position`` defaults to ``0`` so that pools stored before the field existed stay
+         *     *readable* — a read boundary must not turn a history it cannot change into a
+         *     ``ValidationError`` (the same asymmetry :data:`AddressComponent` is about). Every
+         *     pool written since goes through :func:`stored_pools` and carries a real one. The
+         *     default is a **read** concession only; it is not a way to write one, because there
+         *     is no way to write one.
          */
         Pool: {
             /** Id */
@@ -3625,6 +3660,12 @@ export interface components {
             slot: components["schemas"]["Slot"];
             /** Table Ids */
             table_ids: string[];
+            /**
+             * Position
+             * @description Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
+             * @default 0
+             */
+            position: number;
         };
         /**
          * PoolHasNoTablesRead
@@ -3682,6 +3723,42 @@ export interface components {
             rows: components["schemas"]["StandingRowRead"][];
             /** Complete */
             complete: boolean;
+        };
+        /**
+         * PoolWrite
+         * @description A slice of tables reserved for a window of time within an event, as a client
+         *     **sends** it.
+         *
+         *     Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
+         *     by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
+         *     these ids. Which is only a coherent thing to say if an id names one pool — see
+         *     ``EventPools``, the type the event's list of them actually has — and if an id is a
+         *     thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
+         *     a fixture drawn into it is pooled by one rule and un-pooled by another.
+         *
+         *     Its ``name`` has the same floor for the plainer reason: a pool is *called*
+         *     something — it is what the director clicks, what the conflict warnings quote, and
+         *     what a player reads off a wall. ``""`` is not a name, and an event whose pools list
+         *     is three blank rows is not a thing anyone could act on.
+         *
+         *     What is **absent** is as deliberate as what is here: ``position`` is the server's to
+         *     assign (:data:`PoolPosition`), so it is simply not a field of this model, and
+         *     ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
+         *     the treatment ``entered`` already gets on the event schemas — a server-managed value
+         *     is kept **off** the write shape rather than accepted and then ignored. Accepting it
+         *     would be worse than useless in both directions: a client cannot tell from the schema
+         *     that the number it sent decided nothing, and a boundary that silently discards half
+         *     of a payload has to be documented to be understood. The order a client *does*
+         *     control is the order of the list itself.
+         */
+        PoolWrite: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
         };
         /**
          * Predicate
@@ -3889,7 +3966,7 @@ export interface components {
             /** Events */
             events: components["schemas"]["PreviewEventBreakdown"][];
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Notes */
             notes: string[];
             /**
@@ -4267,7 +4344,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
@@ -4698,7 +4775,7 @@ export interface components {
             /** Predicates */
             predicates?: components["schemas"]["Predicate"][];
             /** Pools */
-            pools?: components["schemas"]["Pool"][];
+            pools?: components["schemas"]["PoolWrite"][];
         };
         /** TournamentEventRead */
         TournamentEventRead: {
@@ -4798,7 +4875,7 @@ export interface components {
             /** Predicates */
             predicates?: components["schemas"]["Predicate"][] | null;
             /** Pools */
-            pools?: components["schemas"]["Pool"][] | null;
+            pools?: components["schemas"]["PoolWrite"][] | null;
         };
         /**
          * TournamentFixturePlacementUpdate

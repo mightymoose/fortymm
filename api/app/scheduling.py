@@ -435,6 +435,56 @@ class PoolOverCapacity:
 
 
 @dataclass(frozen=True, slots=True)
+class PlayerOverSubscribed:
+    """One human with more *unpinned* match-time in a pool than that pool's
+    window can hold, however the tables are arranged: a pigeonhole over a single
+    person. A player plays one match at a time and their fixtures in a pool must
+    all run inside that pool's window, so
+
+        ``Σ durations + (match_count − 1) × REST_MIN > playable span``
+
+    is a **necessary** condition for infeasibility — provable by arithmetic on
+    the snapshot with no solver at all, which is why it joins the cheap pre-check
+    pass rather than waiting on CP-SAT (ADR "the conflict core is a second,
+    max-placed solve"). ``required_min`` is that left-hand side: the player's own
+    serial demand, table count irrelevant (extra tables let *other* people play in
+    parallel, never this one).
+
+    ``window_span_min`` is the pool's **planned** span (``end − start``), the
+    same span :class:`WindowTooShortForMatch` reports — it is the window the
+    director sees on screen beside this number. The span the bound is *tested*
+    against is the live-softened one, which while live is wider; testing against
+    the planned span would falsely accuse a player on an overrunning live day
+    that genuinely schedules. Reporting the tested span instead would print a
+    span that contradicts the window clock rendered next to it. Both numbers are
+    honest because ``planned span ≤ tested span < required_min``, so the
+    inequality the reader is shown holds too.
+
+    **The rest term is ``(N − 1)``, not ``N``.** :func:`_build_model` pads *every*
+    player interval by :data:`REST_MIN`, which is right for ``AddNoOverlap`` (it
+    enforces a gap in either direction) and wrong as a pigeonhole bound: the last
+    match of the day owes no trailing rest *inside* the window. Charging ``N ×
+    REST_MIN`` would overcount demand and could **falsely accuse a player** — fatal
+    for an arm whose whole claim is certainty. Like every certain arm here it is
+    deliberately conservative: it may miss a real infeasibility, it may never
+    invent one. Same conservatism drives the other two scopings — only *unpinned*
+    fixtures count (a pin is bound to neither this pool's tables nor its window,
+    ADR-0790), and only a player with ≥2 of them can be *over*-subscribed (a lone
+    fixture that cannot fit is :class:`WindowTooShortForMatch`'s finding, not
+    this one's).
+
+    Id-only, like every value this pure module emits: naming the human is the
+    DB-aware caller's job."""
+
+    pool_id: PoolId
+    player_id: PlayerId
+    match_count: int
+    required_min: int
+    window_span_min: int
+    kind: Literal["player_over_subscribed"] = "player_over_subscribed"
+
+
+@dataclass(frozen=True, slots=True)
 class NoSingleCause:
     """The honest residual: CP-SAT *proved* the day infeasible, yet no certain
     structural cause (arms above) explains it — the infeasibility lives in the
@@ -476,10 +526,12 @@ class PastWindow:
 
 
 #: The closed set of reasons an infeasible solve can carry. A discriminated
-#: union over ``kind``: the first three arms are *certain* structural causes a
+#: union over ``kind``: the first four arms are *certain* structural causes a
 #: guard proves without the solver (and are collected exhaustively — every one
-#: that holds, not just the first), ``PastWindow`` is the equally-certain
-#: pre-live "the day is dated in the past" cause (ADR "a past day is named, not
+#: that holds, not just the first) — three about a *pool* and
+#: ``PlayerOverSubscribed`` about a single *human* (ADR "the conflict core is a
+#: second, max-placed solve") — ``PastWindow`` is the equally-certain pre-live
+#: "the day is dated in the past" cause (ADR "a past day is named, not
 #: disguised", #1101), and ``NoSingleCause`` is the best-effort residual when
 #: CP-SAT refuses but no structure does. Frozen dataclasses + a ``kind``
 #: discriminator so a downstream humanizer can ``match`` exhaustively with no
@@ -489,6 +541,7 @@ InfeasibilityReason = (
     PoolHasNoTables
     | WindowTooShortForMatch
     | PoolOverCapacity
+    | PlayerOverSubscribed
     | NoSingleCause
     | PastWindow
 )
@@ -878,8 +931,8 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
 
     # Structural feasibility first — but gathered *exhaustively*, not first-fail.
     # A day that cannot possibly be placed should explain every certain cause at
-    # once (the director fixes them together), not just the first one hit. Four
-    # certain, per-structure causes need no solver to prove:
+    # once (the director fixes them together), not just the first one hit. Five
+    # certain causes need no solver to prove — four about a pool's structure:
     #   * PastWindow — a pool whose ENTIRE planned window is already past (pre-
     #     live only): unschedulable because of *when* it is, not how much fits,
     #     fixed by "move the date" (ADR "a past day is named, not disguised",
@@ -887,7 +940,10 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     #     window / over-capacity arms for the same pool.
     #   * PoolHasNoTables — a pool with unpinned fixtures but no tables to use,
     #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
-    #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables.
+    #   * PoolOverCapacity — a pool's unpinned demand exceeds window × tables,
+    # and one about a single human:
+    #   * PlayerOverSubscribed — one player's own serial demand (their matches
+    #     plus the rest between them) exceeds the pool's window span.
     # We dedupe to the *most specific* cause per pool: a past-window, no-tables,
     # or window-too-short pool is already unplaceable, so we don't also pile on
     # over-capacity for it. Bucket bounds for the pools that *do* fit are recorded
@@ -981,8 +1037,14 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         required_min = sum(duration_of(f) for f in pool_unpinned)
         table_count = len(pool.table_ids)
         # Effective end: pre-live this is the planned window; live it is softened
-        # so an overrunning live day is never falsely flagged over-capacity.
-        capacity_min = (effective_end(pool) - pool.window.start_min) * table_count
+        # so an overrunning live day is never falsely flagged over-capacity. Bound
+        # once, here, because BOTH certain arms below TEST against it — a pool's
+        # capacity and one human's own day are different proofs about the same
+        # window, and deriving the compared span twice would let the two proofs
+        # drift apart for the same pool. (What each arm *reports* is a separate
+        # question — see PlayerOverSubscribed's `window_span_min` below.)
+        window_span = effective_end(pool) - pool.window.start_min
+        capacity_min = window_span * table_count
         if required_min > capacity_min:
             reasons.append(
                 PoolOverCapacity(
@@ -992,6 +1054,85 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                     table_count=table_count,
                 )
             )
+
+        # Per (pool, human): a pigeonhole over ONE person, run in the same cheap
+        # pre-check pass (ADR "the conflict core is a second, max-placed solve" —
+        # certain per-player over-subscription is a pre-check, not a residual). A
+        # player plays one match at a time and their unpinned fixtures in a pool
+        # must all run inside that pool's window, so
+        #     Σ durations + (N − 1) × REST_MIN > window span
+        # proves the day cannot fit no matter how many tables the pool owns.
+        #
+        # The (N − 1) is load-bearing: the model pads EVERY player interval by
+        # REST_MIN (correct for AddNoOverlap, which needs the gap in either
+        # direction), but the last match of the day owes no trailing rest inside
+        # the window — charging N × REST_MIN would overcount and could falsely
+        # accuse a player, unacceptable for an arm whose whole claim is certainty.
+        #
+        # Reported ALONGSIDE PoolOverCapacity rather than dominated by it: they
+        # are proofs about different subjects with different remedies (add tables
+        # vs. this human is in too many matches), so both are actionable and both
+        # are certain. It shares this loop's guards rather than re-deriving them,
+        # so the "a pool already proven unplaceable dominates every finer claim
+        # about it" rule is stated once — a sixth arm cannot drop a clause and
+        # start piling per-player noise onto a pool that cannot run at all.
+        #
+        # Only each match's LENGTH is accumulated, never the fixture: the bound
+        # reads a count and a sum, and nothing else about the match matters to it.
+        minutes_by_player: defaultdict[PlayerId, list[int]] = defaultdict(list)
+        for fixture in pool_unpinned:
+            minutes = duration_of(fixture)
+            for player in (fixture.player_a_id, fixture.player_b_id):
+                minutes_by_player[player].append(minutes)
+        # Sorted by player id (the keys alone — sorting `.items()` would make the
+        # report's order depend on ScheduleFixture being orderable, which it is
+        # neither meant nor guaranteed to be).
+        for player_id in sorted(minutes_by_player):
+            # NOT `match_minutes` — that is this module's own function, and a
+            # local of that name shadows it for the whole of `_build_model`,
+            # breaking the `duration_of` closure that calls it.
+            player_minutes = minutes_by_player[player_id]
+            match_count = len(player_minutes)
+            if match_count < 2:
+                # Provably dead, kept as a cheap explicit statement of the
+                # arm's precondition. Every fixture in a pool that reached here
+                # cleared the window-too-short guard above (`lo <= hi`), which
+                # means some grid start `g` satisfies `g >= window.start` and
+                # `g + duration <= effective_end` — so `window_span >= duration`
+                # and a lone match can never exceed the span it is compared
+                # against. A single fixture that genuinely cannot fit is
+                # WindowTooShortForMatch's finding, and it already fired.
+                continue
+            required = sum(player_minutes) + (match_count - 1) * REST_MIN
+            if required > window_span:
+                reasons.append(
+                    PlayerOverSubscribed(
+                        pool_id=pool.id,
+                        player_id=player_id,
+                        match_count=match_count,
+                        required_min=required,
+                        # The compared span and the REPORTED span deliberately
+                        # differ while live — do not "fix" this back to
+                        # `window_span`. We compare against the softened
+                        # effective span (above) because that is the
+                        # conservative direction: while live the window end is
+                        # advisory and the remainder overruns, so comparing
+                        # against the smaller *planned* span would falsely
+                        # accuse a player on an overrunning day that genuinely
+                        # schedules. But the director's screen prints this
+                        # number beside the pool's *planned* window clock
+                        # (window_start/window_end, never softened), so
+                        # reporting the effective span would render a
+                        # self-contradictory sentence — a "09:30–10:30 window"
+                        # described in the same breath as "only 2.5h long".
+                        # Report the planned span —
+                        # as WindowTooShortForMatch already does, for the same
+                        # reason. The sentence stays true either way:
+                        # planned_span <= effective_span < required, so
+                        # `required > planned_span` too.
+                        window_span_min=pool.window.end_min - pool.window.start_min,
+                    )
+                )
 
     if reasons:
         # A certain structural infeasibility: refuse without building or running

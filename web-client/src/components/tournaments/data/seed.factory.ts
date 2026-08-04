@@ -71,13 +71,20 @@ export function buildPredicate(overrides: Partial<Predicate> = {}): Predicate {
   return { id: 'pr-1', field: 'rating', op: '<', value: 1500, ...overrides }
 }
 
-/** A four-table morning pool. */
+/** A four-table morning pool, **first** in its event (`position: 0`).
+ *
+ * `position` is 0-based and server-assigned from the pool's index in the list a write
+ * sent, so a fixture with several pools must number them 0, 1, 2 … in the order it means
+ * them — and must NOT let them collide. Nothing orders by id (`poolsInOrder`,
+ * `data/helpers`), so a second pool left on the default `0` is not "second", it is tied
+ * for first and lands wherever a stable sort leaves it. */
 export function buildPool(overrides: Partial<Pool> = {}): Pool {
   return {
     id: 'p-1',
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
     tableIds: ['t1', 't2', 't3', 't4'],
+    position: 0,
     ...overrides,
   }
 }
@@ -245,6 +252,10 @@ export function buildRrThenKoEvent(
         id: 'p-b',
         name: 'Pool B',
         slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
+        // SECOND, said out loud. Pool B does not follow Pool A because it is written
+        // second or because `p-b` sorts after `p-a` — nothing reads either (`poolsInOrder`,
+        // `data/helpers`). Left on the factory's default `0` it would tie with Pool A.
+        position: 1,
       }),
     ],
     ...overrides,
@@ -487,6 +498,10 @@ export function buildDrawnEvent(
         id: 'p-b',
         name: 'Pool B',
         slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
+        // SECOND, said out loud. Pool B does not follow Pool A because it is written
+        // second or because `p-b` sorts after `p-a` — nothing reads either (`poolsInOrder`,
+        // `data/helpers`). Left on the factory's default `0` it would tie with Pool A.
+        position: 1,
       }),
     ],
     fixtures: [
@@ -526,6 +541,99 @@ export function buildDrawnEvent(
         entryBId: 'entry-3',
       }),
     ],
+    ...overrides,
+  })
+}
+
+/** How many pools `buildTenPools` builds — ten, because ten is the smallest count at
+ * which a client-minted id (`p-10-…`) sorts into the middle of the single digits. Nine
+ * pools would order identically by id and by position, and prove nothing. */
+const TEN = 10
+
+/**
+ * **Ten pools whose ids sort differently from their positions** — the fixture the whole
+ * ordering rule is about, and the only pool fixture that can falsify it.
+ *
+ * The ids are minted the way the editor mints them (`genId('p')` — `p-1-<ts>`,
+ * `p-2-<ts>` … `p-10-<ts>`, one timestamp for the burst), and as strings `p-10-` falls
+ * between `p-1-` and `p-2-`. So anything that sorted these by id renders **1, 10, 2, 3 …
+ * 9** — which is not a hypothetical: it is exactly what a ten-pool event's draw did
+ * before pools carried a position.
+ *
+ * They are returned **in that wrong order on purpose**, positions 0–9 telling the truth
+ * underneath. A fixture handed over already sorted cannot tell "orders by position" from
+ * "inherited the order it was given", so it would keep passing after the sort was
+ * deleted. This one reds for both.
+ *
+ * Each pool gets its own table and its own half-hour window, so ten pools raise no
+ * double-booking diagnostic — the claim under test is the order, and a warning banner
+ * would be noise inside it.
+ */
+export function buildTenPools(): Pool[] {
+  const inPositionOrder = Array.from({ length: TEN }, (_, i) => {
+    const n = i + 1
+    return buildPool({
+      // The `genId('p')` shape: index, then the shared base-36 timestamp.
+      id: `p-${n}-mkq1x`,
+      name: `Pool ${n}`,
+      position: i,
+      tableIds: [`t${n}`],
+      slot: {
+        date: '2026-06-13',
+        start: `${String(9 + i).padStart(2, '0')}:00`,
+        end: `${String(9 + i).padStart(2, '0')}:30`,
+      },
+    })
+  })
+  // Sorted by **id**, by codepoint (not `localeCompare`, which collates digits and
+  // punctuation by locale rules and would quietly stop reproducing the bug).
+  return [...inPositionOrder].sort((a, b) => (a.id < b.id ? -1 : 1))
+}
+
+/** The ten pools' names in **position** order — `Pool 1` … `Pool 10`. What every surface
+ * that lays them out must show. */
+export const TEN_POOLS_BY_POSITION = Array.from(
+  { length: TEN },
+  (_, i) => `Pool ${i + 1}`,
+)
+
+/** The same ten names in **id** order — `Pool 1`, `Pool 10`, `Pool 2` … The wrong answer,
+ * named, so a test can assert it is not the one being given. */
+export const TEN_POOLS_BY_ID = buildTenPools().map((p) => p.name)
+
+/**
+ * A **drawn** ten-pool event: `buildTenPools`, each pool holding one fixture between two
+ * entrants of its own (20 entrants, `player.1`…`player.20`).
+ *
+ * One fixture per pool because `drawState` renders only the pools the draw actually used
+ * — a pool with no fixtures is not part of the draw and would simply vanish, taking the
+ * ordering claim with it. Two players a pool is the smallest thing that makes a fixture.
+ */
+export function buildTenPoolDrawnEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  const pools = buildTenPools()
+  return buildEvent({
+    id: 'ev-ten-pools',
+    name: 'Ten-pool Singles',
+    drawType: 'round-robin',
+    maxPlayers: 32,
+    entrants: buildEntrants(TEN * 2),
+    pools,
+    // Built off the pools **in position order**, so the fixture list is in the server's
+    // own order (pool → round → position) and the panel is never handed a hint.
+    fixtures: [...pools]
+      .sort((a, b) => a.position - b.position)
+      .map((pool, i) =>
+        buildFixture({
+          id: `fx-${pool.id}`,
+          poolId: pool.id,
+          round: 1,
+          position: 1,
+          entryAId: `entry-${i * 2 + 1}`,
+          entryBId: `entry-${i * 2 + 2}`,
+        }),
+      ),
     ...overrides,
   })
 }

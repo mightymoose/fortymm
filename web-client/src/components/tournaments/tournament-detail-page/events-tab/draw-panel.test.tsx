@@ -15,6 +15,9 @@ import {
   buildEvent,
   buildFixture,
   buildPool,
+  buildTenPoolDrawnEvent,
+  TEN_POOLS_BY_ID,
+  TEN_POOLS_BY_POSITION,
 } from '../../data/seed.factory'
 import {
   buildCrowdedPoolsEvent,
@@ -74,6 +77,26 @@ describe('DrawPanel', () => {
       expect(page.getPoolHeading('Pool A')).toBeInTheDocument()
       expect(page.getPoolHeading('Pool B')).toBeInTheDocument()
       expect(page.queryEmptyState()).toBeNull()
+    })
+
+    /**
+     * **Ten pools read 1 … 10, top to bottom** — the bug `Pool.position` was added to
+     * kill, at the surface it was actually seen on.
+     *
+     * Pool ids are minted client-side (`genId('p')`), so a ten-pool event holds
+     * `p-1-…` … `p-10-…`; sorted as strings `p-10-` lands between `p-1-` and `p-2-` and
+     * the draw rendered **1, 10, 2, 3 …**. The fixture hands the panel its pools in that
+     * very order (`buildTenPools`), so the assertion reds for a panel that sorts by id
+     * AND for one that merely renders whatever order it was handed. A nine-pool event
+     * could not tell any of these apart — the two orders coincide below ten.
+     */
+    it('renders ten pools 1 … 10 — by position, not by id', () => {
+      page.render({ event: buildTenPoolDrawnEvent() })
+
+      expect(page.getPoolNames()).toEqual(TEN_POOLS_BY_POSITION)
+      // Said the other way round too, because "not this" is the actual regression: the
+      // wrong answer is a specific, recognisable sequence, not just "some other order".
+      expect(page.getPoolNames()).not.toEqual(TEN_POOLS_BY_ID)
     })
 
     it('lists each pool’s entrants by name — the membership its fixtures imply', () => {

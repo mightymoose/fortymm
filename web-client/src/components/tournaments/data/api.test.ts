@@ -112,7 +112,7 @@ describe('apiToEvent', () => {
     expect(event.entered).toBe(0)
   })
 
-  it('maps a pool, renaming table_ids to tableIds', () => {
+  it('maps a pool, renaming table_ids to tableIds and carrying its position', () => {
     const event = apiToEvent(
       buildTournamentEventRead({
         pools: [
@@ -121,6 +121,10 @@ describe('apiToEvent', () => {
             name: 'Pool A',
             slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
             table_ids: ['t1', 't2'],
+            // Not 0: the server's number, carried across as sent. A mapper that
+            // recomputed it from the array index would look right on a first pool and be
+            // wrong on every event whose pools arrived in any other order.
+            position: 3,
           },
         ],
       }),
@@ -132,6 +136,7 @@ describe('apiToEvent', () => {
         name: 'Pool A',
         slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
         tableIds: ['t1', 't2'],
+        position: 3,
       },
     ])
   })
@@ -770,6 +775,10 @@ const event: TournamentEvent = {
       name: 'Pool A',
       slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
       tableIds: ['t1', 't2'],
+      // The server's number, held on the read model. The write bodies below must NOT
+      // carry it — `PoolWrite` forbids the key — which is what the create/update
+      // assertions pin.
+      position: 0,
     },
   ],
   // No draw cut (ADR-0786). The write bodies below must not carry one either — a draw
@@ -814,7 +823,12 @@ describe('eventToCreateBody', () => {
       // eventToCreateBody always populates these, but they're typed optional on
       // the *create* body — coalesce so the value satisfies the *read* shape.
       predicates: wire.predicates ?? [],
-      pools: wire.pools ?? [],
+      // The create body carries NO `position` (`PoolWrite` forbids it), and the read
+      // shape requires one — so the round trip has to close the gap the way the SERVER
+      // closes it: each pool takes the position of its index in the list that was sent.
+      // A `0` typed in here instead would make the round trip pass while the app and the
+      // API disagreed about which pool is first.
+      pools: (wire.pools ?? []).map((pool, index) => ({ ...pool, position: index })),
       // `max_players` is optional on the create body (`null`/absent = no cap,
       // ADR-0935); the read shape is `number | null`.
       max_players: wire.max_players ?? null,

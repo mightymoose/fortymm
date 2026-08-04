@@ -24,6 +24,16 @@ const windowReasonCopy = infeasibilityReasonCopy({
   neededMin: 75,
   windowSpanMin: 60,
 })
+const overSubscribedCopy = infeasibilityReasonCopy({
+  kind: 'player_over_subscribed',
+  playerName: 'spiked-frigatebird',
+  poolName: 'Pool A',
+  windowStart: '09:00',
+  windowEnd: '10:30',
+  matchCount: 4,
+  requiredMin: 150,
+  windowSpanMin: 90,
+})
 const noSingleCauseCopy = infeasibilityReasonCopy({
   kind: 'no_single_cause',
   requiredMin: 420,
@@ -126,11 +136,17 @@ describe('SolveLedgerPage', () => {
     expect(detail).toHaveTextContent("The day doesn't fit")
     expect(detail).toHaveTextContent('Input fingerprint')
 
-    // Both resolved reasons render their sentence AND remedy — the SAME copy the
+    // Every resolved reason renders its sentence AND remedy — the SAME copy the
     // Schedule-tab strip shows (reused from `infeasibilityReasonCopy`, so the two
     // surfaces cannot drift).
     expect(detail).toHaveTextContent(windowReasonCopy.sentence)
     expect(detail).toHaveTextContent(windowReasonCopy.remedy)
+    // The arm that names a HUMAN: who, in how many matches, in which window —
+    // and a remedy that never suggests tables (one person plays one at a time).
+    expect(detail).toHaveTextContent('spiked-frigatebird is in 4 matches')
+    expect(detail).toHaveTextContent(overSubscribedCopy.sentence)
+    expect(detail).toHaveTextContent(overSubscribedCopy.remedy)
+    expect(overSubscribedCopy.remedy).not.toMatch(/add (a |another |more )?tables?/i)
     expect(detail).toHaveTextContent(noSingleCauseCopy.sentence)
     expect(detail).toHaveTextContent(noSingleCauseCopy.remedy)
     // An infeasible run carries no failed `error` sentence.

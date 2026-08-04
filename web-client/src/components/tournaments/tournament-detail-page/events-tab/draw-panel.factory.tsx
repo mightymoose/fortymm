@@ -73,10 +73,14 @@ export function buildCrowdedPoolsEvent(
     name: 'U1500 Singles',
     drawType: 'round-robin',
     entrants: buildEntrants(5),
+    // Positions stamped explicitly, carried over from the inline fixture this factory
+    // replaced (#1238): `buildPool` defaults every pool to `position: 0`, and the draw
+    // now ORDERS by position — three pools sharing one would render in an order nothing
+    // pins. A, B, C is the order this refusal's sentence counts.
     pools: [
-      buildPool({ id: 'p-1', name: 'Pool A' }),
-      buildPool({ id: 'p-2', name: 'Pool B' }),
-      buildPool({ id: 'p-3', name: 'Pool C' }),
+      buildPool({ id: 'p-1', name: 'Pool A', position: 0 }),
+      buildPool({ id: 'p-2', name: 'Pool B', position: 1 }),
+      buildPool({ id: 'p-3', name: 'Pool C', position: 2 }),
     ],
     ...overrides,
   })

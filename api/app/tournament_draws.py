@@ -92,10 +92,46 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
+def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
+    """Each of this event's pool ids mapped to its **0-based place in the event's pool
+    order** — the lookup :func:`fixture_state` resolves a fixture's ``pool_id`` through.
+
+    Computed once per event rather than per fixture: a fixture carries a string ref into
+    the event's ``pools`` JSONB, not an index, so somebody has to do the join and a
+    200-fixture round-robin should not re-parse the pools 200 times.
+
+    The rank is the pool's index *after* sorting on ``Pool.position`` (ADR 20260801),
+    not the stored ``position`` read straight off: it is then the same sequence
+    :func:`draw_config` hands the snake, by construction and not by two functions
+    agreeing — including on an event whose pools predate the field, where every stored
+    position is ``0`` and the stable sort leaves the array order standing.
+    """
+    return {PoolId(pool.id): index for index, pool in enumerate(_ordered_pools(event))}
+
+
+def _ordered_pools(event: TournamentEvent) -> list[Pool]:
+    """This event's pools, parsed, in the director's order — ascending ``position``.
+
+    One definition of "the event's pool order", shared by :func:`draw_config` (which
+    seeds the snake against it) and :func:`pool_order` (which the read of a persisted
+    fixture resolves through), so a draw is cut in the same order it is advanced in.
+
+    Parsed through :class:`Pool` rather than indexed as ``p["position"]`` on an untyped
+    JSONB dict (api/CLAUDE.md — "parse, don't validate"), which is also where a pool
+    stored before ``position`` existed picks up its ``0`` default. ``sorted`` is stable,
+    so a whole event of those keeps the array order it has always had.
+    """
+    return sorted(
+        (Pool.model_validate(pool) for pool in event.pools),
+        key=lambda pool: pool.position,
+    )
+
+
 def fixture_state(
     fixture: TournamentFixture,
     game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
     voided_match_ids: frozenset[uuid.UUID] = frozenset(),
+    pool_positions: Mapping[PoolId, int] | None = None,
 ) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
@@ -132,6 +168,16 @@ def fixture_state(
     strategy a mirrored scoreline that still looks like a plausible result, which is
     what ``tests/test_tournament_draws.py`` asserts with an asymmetric one.
 
+    ``pool_positions`` maps this event's pool ids to their places in the event's pool
+    order (:func:`pool_order`), and is what fills
+    :attr:`~app.draws.FixtureState.pool_position` — the key ``ready_fixtures`` groups a
+    plan by. It rides in from the caller for the same reason the games do: it is one
+    fact about the *event*, and resolving it here would mean re-parsing the pools JSONB
+    once per fixture. Passing nothing means "the pool order was not resolved", which
+    projects a ``None`` position — the fixture is then ordered by its pool *id*, the
+    order this had before positions existed. Un-pooled fixtures resolve to ``None``
+    whatever is passed: there is no pool to place.
+
     It is the caller — not this function — that loads the counts, because
     ``advance()``'s current caller
     (:func:`app.tournament_materialization.materialize_event`) loads fixtures and
@@ -143,11 +189,17 @@ def fixture_state(
         if game_counts is not None and fixture.match_id is not None
         else None
     )
+    pool_id = PoolId(fixture.pool_id) if fixture.pool_id is not None else None
     return FixtureState(
         fixture_id=FixtureId(fixture.id),
-        pool_id=PoolId(fixture.pool_id) if fixture.pool_id is not None else None,
+        pool_id=pool_id,
         round=fixture.round,
         position=fixture.position,
+        pool_position=(
+            pool_positions.get(pool_id)
+            if pool_positions is not None and pool_id is not None
+            else None
+        ),
         entry_a_id=(
             EntryId(fixture.entry_a_id) if fixture.entry_a_id is not None else None
         ),
@@ -192,10 +244,17 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     (single-elim, #785) ignores them and writes ``NULL`` pool refs; a pooled one deals
     the field across exactly these ids — which is what makes a fixture's ``pool_id`` a
     string ref that resolves against the event the client is already holding.
+
+    The order is read off each pool's ``position`` (ADR 20260801, "Pools carry an
+    explicit ``position``") rather than taken from the JSONB array's incidental
+    sequence. Both say the same thing today — the position *is* stamped from the array
+    index at the write boundary — and saying it out loud is the point: this order is
+    what the snake seeds against, so once pools become rows the order has to come from
+    the column that carries it, not from whatever sequence a query happened to return
+    them in. A ``sorted`` is stable, so pools stored before the field existed (every
+    ``position`` defaulting to ``0``) keep the array order they have always had.
     """
-    return DrawConfig(
-        pool_ids=tuple(PoolId(Pool.model_validate(pool).id) for pool in event.pools),
-    )
+    return DrawConfig(pool_ids=tuple(PoolId(pool.id) for pool in _ordered_pools(event)))
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:

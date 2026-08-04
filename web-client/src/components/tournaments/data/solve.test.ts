@@ -147,6 +147,30 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
     })
   })
 
+  it('parses player_over_subscribed — the one arm that names a human', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'player_over_subscribed',
+        player_name: 'spiked-frigatebird',
+        pool_name: 'Pool A',
+        window_start: '09:00',
+        window_end: '10:30',
+        match_count: 4,
+        required_min: 150,
+        window_span_min: 90,
+      }),
+    ).toEqual({
+      kind: 'player_over_subscribed',
+      playerName: 'spiked-frigatebird',
+      poolName: 'Pool A',
+      windowStart: '09:00',
+      windowEnd: '10:30',
+      matchCount: 4,
+      requiredMin: 150,
+      windowSpanMin: 90,
+    })
+  })
+
   it('parses no_single_cause (the residual, no pool)', () => {
     expect(
       infeasibilityReasonSchema.parse({
@@ -383,6 +407,49 @@ describe('infeasibilityReasonCopy', () => {
     ).toContain('on 1 table only')
   })
 
+  it('words player_over_subscribed by naming the human, the pool, its window and the match count', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'player_over_subscribed',
+        playerName: 'spiked-frigatebird',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '10:30',
+        matchCount: 4,
+        requiredMin: 150,
+        windowSpanMin: 90,
+      }),
+    ).toEqual({
+      sentence:
+        "spiked-frigatebird is in 4 matches inside Pool A's 09:00–10:30 window — playing one at a time, with a rest between, they need about 2.5h, but the window is only 1.5h long.",
+      remedy:
+        "Give spiked-frigatebird fewer matches in Pool A — a smaller pool, or a shorter match format — or widen its window; adding tables won't help one player.",
+    })
+  })
+
+  it('never offers "add a table" as the remedy for an over-subscribed player — a table is parallelism, and one human plays one match at a time', () => {
+    // THE regression this arm exists to avoid: extra tables let *other* people
+    // play at once, and do nothing for one over-subscribed human. The remedies are
+    // fewer matches for them in that pool, or a longer window.
+    const copy = infeasibilityReasonCopy({
+      kind: 'player_over_subscribed',
+      playerName: 'spiked-frigatebird',
+      poolName: 'Pool A',
+      windowStart: '09:00',
+      windowEnd: '10:30',
+      matchCount: 4,
+      requiredMin: 150,
+      windowSpanMin: 90,
+    })
+    // Not the `pool_over_capacity` remedy's advice, in any casing…
+    expect(copy.remedy).not.toMatch(/add (a |another |more )?tables?/i)
+    // …and the trap is called out explicitly, so a director cannot infer it.
+    expect(copy.remedy).toContain("adding tables won't help one player")
+    // The remedies that DO work.
+    expect(copy.remedy).toContain('fewer matches in Pool A')
+    expect(copy.remedy).toContain('widen its window')
+  })
+
   it('words no_single_cause as a timing conflict that steers away from adding tables', () => {
     const copy = infeasibilityReasonCopy({
       kind: 'no_single_cause',
@@ -432,6 +499,16 @@ describe('infeasibilityReasonCopy', () => {
         requiredMin: 480,
         capacityMin: 450,
         tableCount: 5,
+      },
+      {
+        kind: 'player_over_subscribed',
+        playerName: 'spiked-frigatebird',
+        poolName: 'Pool A',
+        windowStart: '09:00',
+        windowEnd: '10:30',
+        matchCount: 4,
+        requiredMin: 150,
+        windowSpanMin: 90,
       },
       { kind: 'no_single_cause', requiredMin: 360, availableMin: 480 },
       { kind: 'past_window', date: '2026-07-18' },

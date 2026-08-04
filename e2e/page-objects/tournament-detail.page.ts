@@ -167,11 +167,45 @@ export class TournamentDetailPage {
     return this.drawPanel(eventId).getByTestId(/^pool-draw-/)
   }
 
-  /** One pool section of a cut draw, by the pool's displayed name ("Pool A"). */
+  /** One pool section of a cut draw, by the pool's displayed name ("Pool A").
+   *
+   * **`exact`** is load-bearing, not tidiness: `getByRole`'s name match is a substring
+   * match by default, so "Pool 1" also selects "Pool 10" — and a ten-pool event is
+   * precisely where this accessor gets used (`tournament-pool-order.spec.ts`). Without
+   * it the locator quietly resolves to two sections and every assertion scoped through
+   * it is measuring both. */
   poolDrawNamed(eventId: string, poolName: string): Locator {
     return this.poolDraws(eventId).filter({
-      has: this.page.getByRole('heading', { name: poolName, level: 4 }),
+      has: this.page.getByRole('heading', { name: poolName, level: 4, exact: true }),
     })
+  }
+
+  /** **Every pool's heading, in the order the page lays them out** — the draw's pool
+   * order as a director reads it, top to bottom.
+   *
+   * Scoped *inside* the pool sections rather than to the panel's `h4`s at large, so the
+   * bracket's own "Bracket" heading (a sibling `h4`, present for any draw with a
+   * knockout stage) can never join the list and turn an ordering assertion into a
+   * position-of-the-bracket assertion.
+   *
+   * Asserted with `toHaveText([...])`, which pins the count AND the order in one
+   * statement — the only shape that can catch a draw rendering `Pool 1, Pool 10,
+   * Pool 2 …` (ADR 20260801: pool ids are client-minted `p-1-…`, `p-10-…`, and `p-10-`
+   * sorts between `p-1-` and `p-2-`). */
+  poolDrawHeadings(eventId: string): Locator {
+    return this.poolDraws(eventId).getByRole('heading', { level: 4 })
+  }
+
+  /** One pool's entrant chips — the pool's *membership*, derived from its own fixtures
+   * (ADR-0786) and listed in draw order. What the deal put in this pool, which is a
+   * different fact from where the pool sits on the page: a draw dealt against the wrong
+   * pool order renders the right headings over the wrong fields. */
+  poolEntrants(eventId: string, poolName: string): Locator {
+    return this.poolDrawNamed(eventId, poolName)
+      // `exact` for the same reason as `poolDrawNamed`: "Entrants in Pool 1" is a
+      // substring of "Entrants in Pool 10".
+      .getByRole('list', { name: `Entrants in ${poolName}`, exact: true })
+      .getByRole('listitem')
   }
 
   /** The **knockout bracket** — the fixtures belonging to no pool, rendered as

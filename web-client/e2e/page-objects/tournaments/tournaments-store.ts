@@ -281,6 +281,7 @@ const JOURNEY_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
 ]
 
@@ -295,12 +296,14 @@ const PLAY_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
   {
     id: 'p-play-b',
     name: 'Pool B',
     slot: { date: '2026-06-13', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
+    position: 1,
   },
 ]
 
@@ -361,12 +364,14 @@ const CUP_POOLS: Pool[] = [
     name: 'Pool A',
     slot: { date: '2026-06-13', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
+    position: 0,
   },
   {
     id: 'p-b',
     name: 'Pool B',
     slot: { date: '2026-06-13', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
+    position: 1,
   },
 ]
 
@@ -1817,6 +1822,12 @@ export class TournamentsStore {
     const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
     const created = buildTournamentEventRead({
       ...fields,
+      // Positions assigned from the array index, as the server assigns them — the create
+      // body carries none (`PoolWrite` forbids the key), so the order of the list is what
+      // says which pool is first. See the same stamp in `updateEvent` below.
+      ...(fields.pools
+        ? { pools: fields.pools.map((pool, index) => ({ ...pool, position: index })) }
+        : {}),
       id: `ev-created-${this.detail.events.length + 1}`,
       entrants: [],
     })
@@ -1852,7 +1863,21 @@ export class TournamentsStore {
     // `entrants` and `entered` are the server's, not the editor's — the write body
     // does not carry them, and echoing the client's view back would clobber
     // registrations it never saw.
-    this.mutateEvent(eventId, (e) => ({ ...e, ...fields, entrants: e.entrants }))
+    //
+    // Each pool's `position` is the server's too, and in a sharper way: `PoolWrite`
+    // FORBIDS the key, so the body carries no positions at all and the **order of the
+    // array** is the only thing saying which pool comes first. The server re-derives the
+    // positions from that order on every pools patch, so this stub does the same —
+    // spreading the write shape straight through would strip a required read field and
+    // leave the editor (which seeds its cards from `position`) sorting by nothing.
+    this.mutateEvent(eventId, (e) => ({
+      ...e,
+      ...fields,
+      pools: fields.pools
+        ? fields.pools.map((pool, index) => ({ ...pool, position: index }))
+        : e.pools,
+      entrants: e.entrants,
+    }))
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
   }
 

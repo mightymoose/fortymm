@@ -101,6 +101,25 @@ from app.venue_time import anchor_wallclock
 DEFAULT_UNCAPPED_FIELD = 16
 
 
+#: The prefix every synthetic entrant's ``PlayerId`` carries — ``placeholder-{k}``
+#: for the global ordinal ``k``. Minted by :func:`_schedule_fixture` and read back
+#: by :func:`placeholder_label`, so the spelling lives in one place.
+PLACEHOLDER_PREFIX = "placeholder-"
+
+
+def placeholder_label(player_id: str) -> str:
+    """``placeholder-7`` → ``Placeholder 7`` — the *display* name of a synthetic
+    entrant, the way the preview surface already shows one to the director (ADR
+    "the synthetic ids are shown as ``Placeholder N``").
+
+    A preview's players are stand-ins, not humans, so there is nothing to look up:
+    the label is derived from the id itself, with no DB read. This is how a
+    DB-blind preview resolves the one infeasibility reason that names a *player*
+    (:class:`~app.scheduling.PlayerOverSubscribed`) into the same resolved read
+    form a real solve records."""
+    return f"Placeholder {player_id.removeprefix(PLACEHOLDER_PREFIX)}"
+
+
 def preview_pool_key(event_id: uuid.UUID, pool_id: str) -> str:
     """The one namespaced ``event:pool`` spelling every preview site keys a pool by
     — the ``SchedulePool`` id, a fixture's ``pool_id`` ref, and the enqueue verb's
@@ -438,6 +457,6 @@ def _schedule_fixture(
         id=FixtureId(f"{pool_ref}:{fixture.round}:{fixture.position}"),
         event_id=event_id,
         pool_id=PoolId(pool_ref),
-        player_a_id=PlayerId(f"placeholder-{fixture.entry_a_id.int}"),
-        player_b_id=PlayerId(f"placeholder-{fixture.entry_b_id.int}"),
+        player_a_id=PlayerId(f"{PLACEHOLDER_PREFIX}{fixture.entry_a_id.int}"),
+        player_b_id=PlayerId(f"{PLACEHOLDER_PREFIX}{fixture.entry_b_id.int}"),
     )
