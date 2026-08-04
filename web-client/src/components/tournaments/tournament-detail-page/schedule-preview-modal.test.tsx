@@ -260,6 +260,43 @@ describe('SchedulePreviewModal', () => {
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
   })
 
+  // FastAPI's own request-validation 422, which is shaped nothing like a refusal: a
+  // `detail` ARRAY of Pydantic errors. `extractDetail` would happily return
+  // `errors[0].msg` from it — that is how "Input should be a valid integer, got a
+  // number with a fractional part" once reached a director, under a heading promising
+  // to talk about their schedule. A malformed request is not a refusal, and Pydantic's
+  // phrasing is machinery, so this must take the generic and say nothing about ints.
+  it('never shows validation machinery for a malformed request', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: [
+            {
+              type: 'int_from_float',
+              loc: ['body', 'overrides', 'ev-1'],
+              msg: 'Input should be a valid integer, got a number with a fractional part',
+              input: 2.5,
+            },
+          ],
+        },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('valid integer')
+    expect(error).not.toHaveTextContent('fractional')
+    // The echoed input must not surface either — it is the director's own value, but
+    // through a channel nobody designed for it.
+    expect(error).not.toHaveTextContent('2.5')
+  })
+
   // A slug this build has no word for (an empty catalogue stands in for "the
   // payload withheld it" / "a draw type seeded after this build"). Naming it
   // "single-elim" would be exactly the raw-slug leak `labelFor` exists to prevent,
@@ -354,7 +391,7 @@ describe('SchedulePreviewModal', () => {
 
     // The user SEES which field is wrong and why — the load-bearing assertion.
     const error = await schedulePreviewModalPage.findOverrideError('ev-1')
-    expect(error).toHaveTextContent('Enter a number of at least 2')
+    expect(error).toHaveTextContent('Enter a whole number of at least 2')
     // …and the input is flagged and points at that message.
     expect(input).toHaveAttribute('aria-invalid', 'true')
     expect(input).toHaveAttribute(
@@ -365,7 +402,17 @@ describe('SchedulePreviewModal', () => {
     // what makes the disabled state legible).
     expect(schedulePreviewModalPage.getRerunButton()).toBeDisabled()
 
+    // A FRACTIONAL field size is caught here too, and this is the one that matters
+    // most: the server takes `dict[uuid.UUID, int]`, so 2.5 used to sail past this
+    // guard, 422 from FastAPI's own validator, and come back as Pydantic prose under
+    // a heading about the schedule. Refused at the field, in words about the field.
+    await userEvent.type(input, '2.5')
+    const fractional = await schedulePreviewModalPage.findOverrideError('ev-1')
+    expect(fractional).toHaveTextContent('Enter a whole number of at least 2')
+    expect(schedulePreviewModalPage.getRerunButton()).toBeDisabled()
+
     // Typing a valid count clears both the message and the flag.
+    await userEvent.clear(input)
     await userEvent.type(input, '6')
     await waitFor(() =>
       expect(schedulePreviewModalPage.queryOverrideError('ev-1')).toBeNull(),

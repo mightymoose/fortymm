@@ -3,7 +3,7 @@ import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { ApiError, extractDetail } from '@/api/client'
+import { ApiError } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -54,8 +54,16 @@ export interface SchedulePreviewModalProps {
   /** The **served** draw-type catalogue (ADR 20260726) — the one place a draw
    * type's words live. Used to name the offending draw type when the enqueue is
    * refused with `unsupported_draw_type`, so the notice reads "Single
-   * elimination" and not the wire slug `single-elim`. Pass `[]` where the
-   * catalogue was not sent; the notice degrades rather than leaking a slug. */
+   * elimination" and not the wire slug `single-elim`.
+   *
+   * Pass `[]` where the catalogue was not sent. The notice then falls back to the
+   * server's own sentence, which today reads "A single-elim draw cannot be scheduled
+   * yet…" — so **the slug can still appear**, in the server's words rather than as a
+   * value this client failed to map. That is a deliberate second-best: a sentence
+   * naming the real blocker beats generic copy naming nothing, and the two are
+   * different failures — an unmapped enum leaking out of the client is a bug, an API
+   * sentence written for a director is copy we do not own. Improving it means
+   * rewording the server's `message`, not adding a client-side scrub. */
   drawTypes: DrawTypeOption[]
 }
 
@@ -142,6 +150,35 @@ const UNPREVIEWABLE_GENERIC =
   'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.'
 
 /**
+ * The server's own sentence for this refusal, when it authored one — a plain-string
+ * `detail`, or a coded refusal's `message`.
+ *
+ * Deliberately **narrower than `extractDetail`** (`@/api/client`), which has a third arm
+ * this surface must not take: it falls through to FastAPI's request-validation array and
+ * returns Pydantic's `msg`. That is machinery, not copy. A float typed into a field-size
+ * override posts against `dict[uuid.UUID, int]` and would put *"Input should be a valid
+ * integer, got a number with a fractional part"* under the heading "This schedule can't
+ * be previewed yet" — a raw API string reaching the UI, which the repo forbids
+ * (ADR-0968, and `DEFINITION_OF_COMPLETE.md`'s "raw API detail strings never reach the
+ * UI" as quoted by that ADR).
+ *
+ * The distinction is not fussiness about wording: a validation 422 means **the request
+ * was malformed**, not that the schedule was refused, so it is not a refusal sentence at
+ * all and there is nothing here worth showing. It takes the generic.
+ */
+function serverSentence(body: unknown): string | null {
+  const parsed = z
+    .union([
+      z.object({ detail: z.string().trim().min(1) }).transform((b) => b.detail),
+      z
+        .object({ detail: z.object({ message: z.string().trim().min(1) }) })
+        .transform((b) => b.detail.message),
+    ])
+    .safeParse(body)
+  return parsed.success ? parsed.data : null
+}
+
+/**
  * The sentence under "This schedule can't be previewed yet" — the #1221 fix.
  *
  * The server sends the offending draw type **structurally** (`detail.draw_type`, the
@@ -154,12 +191,14 @@ const UNPREVIEWABLE_GENERIC =
  * Three fallbacks, in descending order of what we know:
  *
  * 1. A recognised code + a slug this build knows + a catalogue row for it → name it.
- *    Never the raw slug: "…uses a “single-elim” draw" is the leak `labelFor` exists to
- *    prevent (`drawTypeFreeze`, `data/draw.ts`).
+ *    This client never renders an enum value it failed to map: "…uses a “single-elim”
+ *    draw" is the leak `labelFor` exists to prevent (`drawTypeFreeze`, `data/draw.ts`).
+ *    (The server's *own* sentence in arm 2 may still spell the slug — that is its copy
+ *    to fix, not a value escaping this mapping. See the `drawTypes` prop doc.)
  * 2. **Any other refusal we have no better words for → the server's own sentence**,
- *    read through `extractDetail`, which is the one reader for "what did the server
- *    say?" and already handles both wire shapes (a plain-string `detail` and a coded
- *    `detail.message`). This arm is deliberately *not* limited to coded refusals: the
+ *    via `serverSentence` above — narrower than `extractDetail`, on purpose, so
+ *    FastAPI's validation prose cannot arrive here. This arm is deliberately *not*
+ *    limited to coded refusals: the
  *    draw-refusal mapper still answers with prose for `DegenerateDraw`, which genuinely
  *    reaches this route (an `rr-then-ko` event whose qualifiers exceed its smallest
  *    pool — `app/schedule_preview.py` plans the full draw and lets that refusal
@@ -180,7 +219,7 @@ function unpreviewableDrawTypeCopy(
       return `A preview runs over a round-robin draw. This tournament has a “${label}” event, which the preview does not support yet.`
     }
   }
-  return extractDetail(body) ?? UNPREVIEWABLE_GENERIC
+  return serverSentence(body) ?? UNPREVIEWABLE_GENERIC
 }
 
 /** Map an enqueue refusal to its inline notice. `422` — the draw type can't be
@@ -307,13 +346,20 @@ function useElapsedSeconds(running: boolean): number {
  * (`overrides[id] ?? fieldSize`), so an *untouched* field is never "invalid" — only
  * a value they actually typed is (`undefined` means untouched). */
 function isInvalidOverride(typed: number | undefined): boolean {
-  return typed !== undefined && (!Number.isFinite(typed) || typed < 2)
+  return (
+    typed !== undefined &&
+    // `Number.isInteger` and not just `isFinite`: the server takes
+    // `dict[uuid.UUID, int]`, so a fractional field size is a 422 from FastAPI's own
+    // validator rather than a refusal anyone wrote for a director. Caught here, where
+    // the guard can say which field and why, instead of coming back as Pydantic prose.
+    (!Number.isInteger(typed) || typed < 2)
+  )
 }
 
 /** The inline message shown in red beneath an override input that can't drive a
  * re-run — so the guard is legible ("which field, and why") instead of a silently
  * dead Re-run button (`web-client/CLAUDE.md`, `## Forms`). */
-const OVERRIDE_ERROR = 'Enter a number of at least 2'
+const OVERRIDE_ERROR = 'Enter a whole number of at least 2'
 
 /** True when *any* per-event override is invalid — gates the Re-run button. */
 function hasInvalidOverride(
@@ -520,6 +566,10 @@ const PreviewBody = ({
               <Input
                 type="number"
                 min={2}
+                // A field size is a count of players, so the spinner steps in whole
+                // numbers; without it the control invites the fractional value the
+                // server has no representation for.
+                step={1}
                 aria-label={`Field size for ${eventName(s.eventId)}`}
                 // The guard is spoken, not silent: an invalid value flags the input
                 // (`aria-invalid`) and points at its own red message below
