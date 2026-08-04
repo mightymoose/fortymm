@@ -124,12 +124,32 @@ describe('TablesTab', () => {
     expect(document.body).not.toHaveTextContent('Court Court A')
   })
 
-  it('keeps the add button disabled until a label is entered', async () => {
-    tablesTabPage.render({ catalogue: buildTables(2) })
+  // web-client/CLAUDE.md: "Don't gate the submit button on `formState.isValid`" — a
+  // disabled button with no explanation leaves the organizer staring at a dead end.
+  // `handleSubmit` blocks the empty submit itself and shows the reason inline.
+  it('blocks an empty label client-side, inline, without ever calling onChangeCatalogue', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(2), ...spy })
 
-    expect(tablesTabPage.getAddButton()).toBeDisabled()
-    await userEvent.type(tablesTabPage.getLabelInput(), 'T9')
     expect(tablesTabPage.getAddButton()).toBeEnabled()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(tablesTabPage.getLabelInput()).toHaveAttribute('aria-invalid', 'true')
+    expect(spy.calls).toHaveLength(0)
+  })
+
+  // Whitespace-only is not a label either — the schema trims before checking length,
+  // so a box holding only spaces is as empty as one holding nothing.
+  it('blocks a whitespace-only label the same way', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(2), ...spy })
+
+    await userEvent.type(tablesTabPage.getLabelInput(), '   ')
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(spy.calls).toHaveLength(0)
   })
 
   // A modal/form that clears itself over a rejected write has silently thrown the
@@ -143,7 +163,11 @@ describe('TablesTab', () => {
     await userEvent.type(tablesTabPage.getCourtInput(), '9')
     await userEvent.click(tablesTabPage.getAddButton())
 
-    await waitFor(() => expect(tablesTabPage.queryError()).not.toBeNull())
+    // The add form's OWN root error, not the shared remove/confirm banner: `label`
+    // and `court` carry no server-mirrored field constraint to pin a 422 to, so
+    // every submit failure here is root-level — same shape as `NewTournamentModal`'s
+    // non-field-attributable case.
+    await waitFor(() => expect(tablesTabPage.queryAddTableError()).not.toBeNull())
     expect(tablesTabPage.getLabelInput()).toHaveValue('T9')
     expect(tablesTabPage.getCourtInput()).toHaveValue('9')
   })
@@ -266,6 +290,7 @@ describe('TablesTab against the API', () => {
     // optimistic local echo.
     await screen.findByLabelText('Remove T13')
     expect(tablesTabPage.queryError()).toBeNull()
+    expect(tablesTabPage.queryAddTableError()).toBeNull()
 
     const stored = catalogueOf(SLAM)
     expect(stored).toHaveLength(before.length + 1)

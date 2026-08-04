@@ -1,4 +1,7 @@
 import { useRef, useState } from 'react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { z } from 'zod'
 import { Plus, Trash2 } from 'lucide-react'
 
 import {
@@ -29,6 +32,24 @@ import type {
   TournamentTableEntry,
 } from '../data/types'
 import { SectionHeader } from './section-header'
+
+/** Mirrors the server's boundary: `TournamentTableWrite.label`/`.court` are bare,
+ * unconstrained `str` (no `min_length`/`max_length` — the schema drops them
+ * entirely, same situation `NewTournamentModal`'s `addressComponent` comment is
+ * about), so there is no length bound to mirror. `label` still has to be
+ * non-empty — that's a client-only rule the server never states, because an
+ * empty key is a well-formed request the server would happily store. `court` is
+ * genuinely optional in this UI: the card already renders `Court {court}` with
+ * an empty string same as any other, and requiring it here would invent a
+ * constraint neither the schema nor the prior `useState` version had. */
+const addTableSchema = z.object({
+  label: z.string().trim().min(1, { message: 'Label is required.' }),
+  court: z.string(),
+})
+
+type AddTableValues = z.infer<typeof addTableSchema>
+
+const ADD_TABLE_DEFAULTS: AddTableValues = { label: '', court: '' }
 
 /** The edit a 409 refused, held so the confirm can re-send it **byte for byte** plus
  * the opt-in — which is safe precisely because the refusal wrote nothing (the server
@@ -74,8 +95,6 @@ export const TablesTab = ({
   canEdit,
   onChangeCatalogue,
 }: TablesTabProps) => {
-  const [label, setLabel] = useState('')
-  const [court, setCourt] = useState('')
   const [saving, setSaving] = useState(false)
   const [refused, setRefused] = useState<RefusedEdit | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -85,6 +104,11 @@ export const TablesTab = ({
   // (unlike a cleanup-only mounted ref, which StrictMode latches — see
   // `web-client/CLAUDE.md`).
   const confirmed = useRef(false)
+
+  const addTableForm = useForm<AddTableValues>({
+    resolver: zodResolver(addTableSchema),
+    defaultValues: ADD_TABLE_DEFAULTS,
+  })
 
   const usage = catalogue.map((table) => {
     const usingEvents = tournament.events
@@ -101,10 +125,16 @@ export const TablesTab = ({
    * refusal that survives the opt-in is not a question worth re-asking, so it falls
    * through to the inline failure rather than re-opening the dialog the director just
    * answered.
+   *
+   * `reportFailure` defaults to the tab's own page-level banner (remove-table and the
+   * confirm dialog are button-triggered actions, not a form with a field to blame), but
+   * the add-table form overrides it with `form.setError('root', ...)` — CLAUDE.md's
+   * Forms convention is about a `<form>` with fields, and remove/confirm have none.
    */
   const save = async (
     entries: TournamentTableEntry[],
     unplaceFixturesOnRemovedTables: boolean,
+    reportFailure: (message: string) => void = setError,
   ): Promise<boolean> => {
     setError(null)
     setSaving(true)
@@ -123,7 +153,7 @@ export const TablesTab = ({
       // raw `detail` (a 422's message is Pydantic's). The one server sentence this tab
       // shows verbatim is the 409 above, which `saveFailure` also routes through its
       // `refused` arm.
-      setError(saveFailureMessage(saveFailure(failure), TOURNAMENT_SAVE_TARGET))
+      reportFailure(saveFailureMessage(saveFailure(failure), TOURNAMENT_SAVE_TARGET))
       return false
     } finally {
       setSaving(false)
@@ -135,22 +165,24 @@ export const TablesTab = ({
   const removeTable = (id: string) =>
     void save(keepTables(catalogue.filter((t) => t.id !== id)), false)
 
-  const trimmedLabel = label.trim()
-  const canAdd = trimmedLabel.length > 0
-
   /** Add one table: the whole stored catalogue, cited, plus one entry carrying **no
-   * id** — the server mints it (ADR 20260801). The form clears only when the write
-   * landed, so a refused add leaves the words the organizer typed on screen. */
-  const submitTable = async () => {
-    if (!canAdd) return
+   * id** — the server mints it (ADR 20260801). The form resets only when the write
+   * landed, so a refused add leaves the words the organizer typed on screen.
+   *
+   * `label`/`court` carry no server-mirrored constraint beyond "present" (both are
+   * bare, unconstrained `str` on the write schema — see `addTableSchema`), so there is
+   * no field this tab could plausibly pin a 422 to: every failure here is a root-level
+   * banner, same as `NewTournamentModal`'s non-field-attributable case. */
+  const submitTable = addTableForm.handleSubmit(async (values) => {
+    addTableForm.clearErrors('root')
     const saved = await save(
-      [...keepTables(catalogue), addTable(trimmedLabel, court.trim())],
+      [...keepTables(catalogue), addTable(values.label.trim(), values.court.trim())],
       false,
+      (message) => addTableForm.setError('root', { type: 'server', message }),
     )
     if (!saved) return
-    setLabel('')
-    setCourt('')
-  }
+    addTableForm.reset(ADD_TABLE_DEFAULTS)
+  })
 
   return (
     <div data-testid="tables-tab">
@@ -231,19 +263,24 @@ export const TablesTab = ({
             Add a table
           </div>
           <form
-            className="flex flex-wrap items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void submitTable()
-            }}
+            className="flex flex-wrap items-start gap-2"
+            onSubmit={submitTable}
+            noValidate
           >
-            <Input
-              aria-label="Table label"
-              placeholder="Label (e.g. T9)"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              className="w-36"
-            />
+            <div>
+              <Input
+                aria-label="Table label"
+                aria-invalid={!!addTableForm.formState.errors.label}
+                placeholder="Label (e.g. T9)"
+                className="w-36"
+                {...addTableForm.register('label')}
+              />
+              {addTableForm.formState.errors.label && (
+                <p className="mt-1.5 text-xs text-[color:var(--loss)]">
+                  {addTableForm.formState.errors.label.message}
+                </p>
+              )}
+            </div>
             <Input
               // The card renders "Court {court}", so the field is already
               // labeled "Court" (aria-label) — the value is a bare identifier.
@@ -252,15 +289,29 @@ export const TablesTab = ({
               // "Court Court A" a "Court" placeholder would nudge them into.
               aria-label="Court"
               placeholder="e.g. A"
-              value={court}
-              onChange={(e) => setCourt(e.target.value)}
               className="w-28"
+              {...addTableForm.register('court')}
             />
-            <Button type="submit" disabled={!canAdd || saving}>
+            {/* Not gated on form validity: `handleSubmit` already blocks an empty
+                label and renders the inline error, so a dead disabled button never
+                stands between the organizer and finding out why (web-client/CLAUDE.md,
+                "Don't gate the submit button on `formState.isValid`"). */}
+            <Button type="submit" disabled={saving}>
               <Plus size={14} />
               Add table
             </Button>
           </form>
+          {addTableForm.formState.errors.root && (
+            <Alert
+              variant="destructive"
+              data-testid="add-table-error"
+              className="mt-3 max-w-2xl"
+            >
+              <AlertDescription>
+                {addTableForm.formState.errors.root.message}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
       )}
 
