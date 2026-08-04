@@ -12,9 +12,10 @@ import {
 } from '../data/event-validation'
 import { browserTimezone, poolsInOrder } from '../data/helpers'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
+import { keepPools } from '../data/pool-entries'
 import { eligibilityIssues } from '../data/predicate-validation'
 import type {
-  Pool,
+  PoolEntry,
   Predicate,
   PredicateValue,
   TournamentEvent,
@@ -73,27 +74,43 @@ const predicateSchema: z.ZodType<Predicate, Predicate> = z.object({
   value: predicateValueSchema,
 })
 
-/** A table pool — its name, its window, and the tables it reserves. Typed as the
- * domain's `Pool` for the same reason `predicateSchema` is: the pool cards hand a
- * form field back as a `Pool`, and a mirror that is merely *similar* would need a
- * cast to cross that seam.
+/** The three fields of a pool a director actually types — the `PoolDraft` both arms of
+ * `poolEntrySchema` carry, spelled once so the two arms cannot drift into disagreeing
+ * about what a pool *is*.
  *
  * `name` carries the server's floor (`poolNameSchema`, `data/event-validation`) — the
- * one field of a pool the organizer can *clear*. Its `id` is minted and boxless, so it
- * is left alone: see the note on `poolNameSchema`.
- *
- * `position` is here because it is part of a `Pool` and the form holds whole pools, not
- * because there is anything to check: it has no box either, it is the SERVER's to assign
- * (`eventPoolsToApi`, `data/api` — a `position` on a write body is a 422), and the value
- * the form carries is only what keeps the cards in the order the director left them in
- * until the next read. So the rule is a shape, not a floor. */
-const poolSchema: z.ZodType<Pool, Pool> = z.object({
-  id: z.string(),
+ * one field of a pool the organizer can *clear*, and a `min_length=1` 422 if they do. */
+const POOL_DRAFT_FIELDS = {
   name: poolNameSchema,
   slot: slotSchema,
   tableIds: z.array(z.string()),
-  position: z.number().int().nonnegative(),
-})
+}
+
+/**
+ * One pool of the edited event — the domain's `PoolEntry` (`data/types`), which is a
+ * **tagged union and not a pool with an optional id**, because the editor is building an
+ * id-keyed diff (ADR 20260801):
+ *
+ * - `kept` cites the uuid the server minted, so the pool keeps its identity and the
+ *   fixtures dealt into it;
+ * - `added` has no `id` field at all, so a client-minted one is not a value this form can
+ *   hold. That absence is the whole chore: `PoolWrite` is `extra="forbid"`, so an `id` on
+ *   a new pool is a 422 naming it.
+ *
+ * There is no `position` on either arm, for the same reason there is no id on one of
+ * them: it is the SERVER's to assign, from the index of each entry in the list that is
+ * sent (`poolEntriesToApi`, `data/api` — a `position` on a write body is a 422). **The
+ * order of the field array IS the ordering**, which is why `eventToFormValues` seeds it
+ * in position order below.
+ *
+ * Typed as `PoolEntry` for the same reason `predicateSchema` is typed as `Predicate`:
+ * the pools section hands a form field straight back as one, and a mirror that were
+ * merely *similar* would need a cast to cross that seam.
+ */
+const poolEntrySchema: z.ZodType<PoolEntry, PoolEntry> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('kept'), id: z.string(), ...POOL_DRAFT_FIELDS }),
+  z.object({ kind: z.literal('added'), key: z.string(), ...POOL_DRAFT_FIELDS }),
+])
 
 /**
  * The one schema the editor's `zodResolver` runs — the whole event, scalars and
@@ -113,8 +130,9 @@ const poolSchema: z.ZodType<Pool, Pool> = z.object({
  *   half-written rule than the product is (it accepts `Rating < ?`, a restriction on
  *   nobody, and renders it on the card as though it were real).
  * - `pools` carries the newest of the server's floors: a pool's `name` may not be
- *   blank (`poolNameSchema`). The pools editor mints the id and the default name, so
- *   only the *box* could ever author one — and it did.
+ *   blank (`poolNameSchema`). The pools editor mints the default name, so only the *box*
+ *   could ever author a blank one — and it did. (The id it no longer mints at all; see
+ *   `poolEntrySchema`.)
  */
 export const eventSchema = z.object({
   name: nameSchema,
@@ -166,7 +184,7 @@ export const eventSchema = z.object({
       message: 'Every rule needs a value the server can evaluate.',
     })
   }),
-  pools: z.array(poolSchema),
+  pools: z.array(poolEntrySchema),
 })
   // The **draw configuration** is judged as a pair, because that is what it is: the
   // server parses `(draw_type, qualifiers_per_pool)` into a union tagged by the draw
@@ -194,9 +212,9 @@ export const eventSchema = z.object({
     })
   })
 
-// The schema mirrors the domain types (`Predicate`, `Pool`) so the nested-array
+// The schema mirrors the domain types (`Predicate`, `PoolEntry`) so the nested-array
 // sub-forms are validated by this one resolver; the section code that rebuilds a
-// clean `Predicate`/`Pool` from each `useFieldArray` field is the compile-time
+// clean `Predicate`/`PoolEntry` from each `useFieldArray` field is the compile-time
 // check that the mirror holds.
 export type EventFormValues = z.infer<typeof eventSchema>
 
@@ -243,16 +261,24 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     slot: event.slot,
     match: event.match,
     predicates: event.predicates,
-    // **In POSITION order** (`poolsInOrder`, `data/helpers`), and this is the ONE place
+    // Every stored pool, **cited by the id the server minted** (`keepPools`,
+    // `data/pool-entries`) — the "change nothing about the set" diff the organizer then
+    // edits by adding to it, removing from it, or re-wording it. Seeding it any other way
+    // would be seeding a removal: under an id-keyed diff, a stored pool no entry cites is
+    // deleted, and its fixtures with it.
+    //
+    // …and **in POSITION order** (`poolsInOrder`, `data/helpers`), which is the ONE place
     // the pools editor's order is decided. From here on the field array's order IS the
     // order: the cards render in it, `addPool` appends to the end of it, and — the reason
     // it has to be settled here rather than at render time — a save serializes it, from
-    // which the server re-derives each pool's position (`eventPoolsToApi`, `data/api`).
+    // which the server re-derives each pool's position (`poolEntriesToApi`, `data/api`).
+    // The sort is the last thing that reads `position`; an entry does not carry one,
+    // because a client does not assign one.
     //
     // So sorting for *display* alone would be a bug with a delay on it: the director
     // would see A, B, C, save, and get back whatever order the array was really in. The
     // list they were looking at has to be the list that goes on the wire.
-    pools: poolsInOrder(event.pools),
+    pools: keepPools(poolsInOrder(event.pools)),
   }
 }
 

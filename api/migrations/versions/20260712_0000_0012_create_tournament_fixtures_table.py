@@ -36,12 +36,12 @@ def upgrade() -> None:
             sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        # A *string ref* into the event's ``pools`` JSONB value-objects, deliberately
-        # NOT a foreign key — pools are value-objects on the event, not rows, so there
-        # is nothing to point at (ADR-0786). Integrity is procedural: the event's pool
-        # id set freezes while a draw exists. NULL = the draw is un-pooled
-        # (single-elim), or this is the KO stage of an rr-then-ko event.
-        sa.Column("pool_id", sa.Text(), nullable=True),
+        # Half of the composite foreign key declared at the bottom of this table: a
+        # fixture's pool is one of its OWN event's pools (ADR 20260801). NULL = the draw
+        # is un-pooled (single-elim), or this is the KO stage of an rr-then-ko event —
+        # and a composite FK with a NULL member is satisfied vacuously under MATCH
+        # SIMPLE, which is exactly what an un-pooled fixture wants.
+        sa.Column("pool_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("round", sa.Integer(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
         # NULL means exactly one thing: TBD — ``advance()`` fills it when the feeding
@@ -145,6 +145,26 @@ def upgrade() -> None:
             "position",
             name="uq_tournament_fixtures_event_id_pool_id_round_position",
             postgresql_nulls_not_distinct=True,
+        ),
+        # "A fixture's pool belongs to that fixture's own event", as one line of DDL
+        # (ADR 20260801). It references ``tournament_event_pools (event_id, id)`` — a
+        # unique constraint that exists purely to be this FK's target, since a plain FK
+        # to the pool's ``id`` alone could not say the event part, which is the whole
+        # claim. Added here in place per the pre-deploy convention; the pools table is
+        # created by 0010, so it exists by the time this runs.
+        #
+        # DEFERRABLE INITIALLY DEFERRED, with the default NO ACTION delete rule rather
+        # than RESTRICT: deleting an event removes its pools through the ORM and its
+        # fixtures through ``ON DELETE CASCADE``, in two separate statements, so an
+        # immediately-checked constraint would fire between them on fixtures that are
+        # about to be deleted anyway. Deferring checks the same pair, in full, before
+        # COMMIT.
+        sa.ForeignKeyConstraint(
+            ["event_id", "pool_id"],
+            ["tournament_event_pools.event_id", "tournament_event_pools.id"],
+            name="fk_tournament_fixtures_event_id_pool_id",
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
     # Every read of a draw is "the fixtures of this event".

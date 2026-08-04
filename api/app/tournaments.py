@@ -80,6 +80,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
+    PoolNotInEventError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
     TableInUseError,
@@ -737,6 +738,35 @@ async def create_event(
     )
 
 
+def _pool_not_in_event(exc: PoolNotInEventError) -> RequestValidationError:
+    """The 422 for a ``pools`` entry citing an id this event does not have
+    (ADR 20260801) — as a **validation error on that entry's field**, not a hand-rolled
+    body.
+
+    The exact sibling of :func:`_table_not_in_catalogue`, one resource over, and the
+    same argument: the body's ``id`` did not validate, the only reason the schema could
+    not judge it is that the answer lives in the database, and a client should not need
+    a second parser to tell "your id is malformed" (a schema 422) from "your id names
+    nothing" (this one). Raising the exception the schema raises puts it through the
+    app's own handler, so the body is byte-shape-identical to every other 422 this route
+    can produce and no new response schema reaches the generated clients.
+
+    The ``loc`` carries the entry's **index** — ``["body", "pools", i, "id"]`` — because
+    the pools are a list and a client renders a validation error under the input that
+    caused it.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "pools", exc.index, "id"),
+                "msg": str(exc),
+                "input": exc.pool_id,
+            }
+        ]
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -748,18 +778,26 @@ async def update_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    """Edit an event. Absent fields are left alone; `predicates` and `pools` replace
-    wholesale when sent. No two pools may share an `id`, in any state (`422`) — a pool
-    id identifies one pool, and the fixtures of a draw name their pool by it.
+    """Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
+    sent.
+
+    **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
+    carries the `id` of a pool this event already has — keeping that pool, with the
+    `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
+    to add a new pool, whose id the server mints. **A pool no entry names is removed.**
+    Send back the pools you read, edited: the ids came from the read, and naming an id
+    this event does not have is a `422` on that entry. Citing the same pool twice is a
+    `422` too — a pool id identifies one pool, and the fixtures of a draw name their
+    pool by it.
 
     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     fixtures were derived from:
 
-    * **its set of pools.** A `pools` payload must carry exactly the pool `id`s the
-      event already has, or it is refused with a `409`: a removed (or re-`id`'d) pool
-      would leave the fixtures drawn into it pointing at nothing, and an added one would
-      arrive with no fixtures, since the draw was dealt across the pools that existed at
-      the cut.
+    * **its set of pools.** A `pools` payload must cite exactly the pools the event
+      already has, or it is refused with a `409`: a removed pool would leave the
+      fixtures drawn into it pointing at nothing, and an added one would arrive with no
+      fixtures, since the draw was dealt across the pools that existed at the cut.
+      Re-ordering them, and editing each one, are still allowed.
     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
       so changing it under a standing draw is a `409` too: the event would claim a shape
       its draw does not have. Re-sending the draw type the event already has is not a
@@ -798,6 +836,10 @@ async def update_event(
         # Both freezes carry the exact 409 sentence the handler used to compose inline —
         # rebuilt verbatim with ``str(exc)``.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PoolNotInEventError as exc:
+        # A pools entry cited an id this event does not have: a field refusal, shaped
+        # like every other 422 on this route (see ``_pool_not_in_event``).
+        raise _pool_not_in_event(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's

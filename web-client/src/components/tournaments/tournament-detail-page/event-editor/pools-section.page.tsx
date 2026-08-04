@@ -1,7 +1,7 @@
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, within, type Container } from '@/test/utilities'
 
-import type { Pool } from '../../data/types'
+import type { PoolEntry } from '../../data/types'
 import {
   buildPoolsSectionProps,
   type PoolsHarnessInputs,
@@ -70,10 +70,16 @@ const scoped = (container: Container) => ({
     return container.queryByTestId('pools-frozen-notice')
   },
   /** The live `pools` array in form state (via the probe), so a test can assert
-   * that an add / edit / remove flowed through `useFieldArray`. */
-  getPools(): Pool[] {
+   * that an add / edit / remove flowed through `useFieldArray`.
+   *
+   * `PoolEntry[]`, not `Pool[]`: what the form holds is the **diff** the save
+   * serializes (ADR 20260801) — entries that either cite the id the server minted
+   * (`kind: 'kept'`) or carry none at all (`kind: 'added'`). Read off the probe's JSON,
+   * so `'id' in entry` is a real question about the payload rather than about a
+   * TypeScript type. */
+  getPools(): PoolEntry[] {
     const el = container.queryByTestId('pools-probe')
-    return el ? (JSON.parse(el.textContent || '[]') as Pool[]) : []
+    return el ? (JSON.parse(el.textContent || '[]') as PoolEntry[]) : []
   },
   /** The double-booking warning. Addressed by testid rather than by `role="alert"`:
    * the freeze notice is an `Alert` too, and an event can be both frozen and

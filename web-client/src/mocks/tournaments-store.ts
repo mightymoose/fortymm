@@ -63,13 +63,17 @@ type TournamentTableWrite = components['schemas']['TournamentTableWrite']
  * means "this existing one". A stored table no entry names is removed. */
 type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
-/** The **read** pool — it carries `position`. Its write twin below deliberately does
- * not; see `positionPools`. */
+/** The **read** pool — it carries the `id` the server minted and the `position` it
+ * stamped. Its two write twins below deliberately carry neither; see `mintPool`. */
 type Pool = components['schemas']['Pool']
-/** A pool as a create/update body carries it: no `position`, because the server assigns
- * it from the pool's index in the list. `extra="forbid"`, so a `position` key on the way
- * in is a 422 that names the field. */
+/** A pool as a **create** body carries it: no `id` (the server mints it, ADR 20260801)
+ * and no `position` (the server assigns it from the pool's index in the list).
+ * `extra="forbid"`, so either key on the way in is a 422 that names the field. */
 type PoolWrite = components['schemas']['PoolWrite']
+/** A pool as a **PATCH** body carries it: the write shape plus an *optional* `id` naming
+ * a pool the event already has. Omitted means "add this one"; supplied means "this
+ * existing one". A stored pool no entry names is removed. */
+type PoolUpsert = components['schemas']['PoolUpsert']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 
 /** What the store actually holds for an event: everything the wire shape has
@@ -170,22 +174,36 @@ function otherEntrants(eventId: string, count: number): TournamentEntrantRead[] 
   }))
 }
 
+/** A seeded pool's id — a **uuid**, because that is what the wire says a pool id is
+ * (`Pool.id` is `format: uuid`, minted by the server: ADR 20260801), derived from a
+ * readable label so the seed stays greppable and the same tournament comes back the same
+ * on every reset.
+ *
+ * Not the mint below (`mintPool`): these rows are not created through a write verb, and
+ * routing them through the counter would make a seeded pool's id depend on how many
+ * pools the *previous* test happened to create. Distinct labels keep the two id spaces
+ * from ever colliding. */
+function seedPoolId(label: string): string {
+  return mockUuid(`tournament-event-pool:${label}`)
+}
+
 /** The two pools the seed's ONE drawn event is cut across (`ev-u1200` below). Pulled
  * out of the seed so the fixtures it is seeded with can be planned across the very same
- * pool ids: a fixture's `pool_id` is a string ref into its event's own `pools`
- * (ADR-0786 — not a foreign key, because pools are JSONB value-objects), so a seed that
- * spelled the ids twice could spell them differently, and every fixture would point at
- * a pool that does not exist. */
+ * pool ids: a fixture's `pool_id` names a pool of its own event (ADR-0786; a foreign key
+ * into `tournament_event_pools` since ADR 20260801), so a seed that spelled the ids
+ * twice could spell them differently, and every fixture would point at a pool that does
+ * not exist. Every reference below reads the id off this list rather than restating it,
+ * which is what makes that impossible rather than merely unlikely. */
 const U1200_POOLS: Pool[] = [
   {
-    id: 'p-u1200-a',
+    id: seedPoolId('u1200-a'),
     name: 'Pool A',
     slot: { date: '2026-06-14', start: '09:00', end: '10:30' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: 'p-u1200-b',
+    id: seedPoolId('u1200-b'),
     name: 'Pool B',
     slot: { date: '2026-06-14', start: '10:30', end: '12:00' },
     table_ids: ['t3', 't4'],
@@ -198,14 +216,14 @@ const U1200_POOLS: Pool[] = [
  * against these very ids, so they cannot be spelled twice and spelled differently. */
 const SLAM_POOLS: Pool[] = [
   {
-    id: 'p-slam-a',
+    id: seedPoolId('slam-a'),
     name: 'Pool A',
     slot: { date: '2026-08-22', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: 'p-slam-b',
+    id: seedPoolId('slam-b'),
     name: 'Pool B',
     slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
@@ -267,14 +285,14 @@ const shield = (n: number): string => SHIELD_ENTRY_IDS[n - 1]
  * spelled differently. */
 const CUP_POOLS: Pool[] = [
   {
-    id: 'p-cup-a',
+    id: seedPoolId('cup-a'),
     name: 'Pool A',
     slot: { date: '2026-06-06', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: 'p-cup-b',
+    id: seedPoolId('cup-b'),
     name: 'Pool B',
     slot: { date: '2026-06-06', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
@@ -286,14 +304,14 @@ const CUP_POOLS: Pool[] = [
  * raises no double-booking diagnostic (`findPoolConflicts`). */
 const SHIELD_POOLS: Pool[] = [
   {
-    id: 'p-shield-a',
+    id: seedPoolId('shield-a'),
     name: 'Pool A',
     slot: { date: '2026-06-07', start: '09:00', end: '10:30' },
     table_ids: ['t5', 't6'],
     position: 0,
   },
   {
-    id: 'p-shield-b',
+    id: seedPoolId('shield-b'),
     name: 'Pool B',
     slot: { date: '2026-06-07', start: '10:30', end: '12:00' },
     table_ids: ['t7', 't8'],
@@ -674,16 +692,16 @@ function seed(): StoredTournament[] {
           // A still being played (`complete: false` — the table fills in as matches land),
           // Pool B decided. Multi-pool, so there is no single champion without a knockout
           // stage (a later slice) — `champion: null` even where a pool is done. The entry
-          // ids match this event's entrants (`entry-ev-u1200-N`) and its pool ids
-          // (`p-u1200-a/b`), so the name and pool joins land; the rows are in finishing
-          // order, which the client renders untouched.
+          // ids match this event's entrants (`entry-ev-u1200-N`) and its pool ids (read
+          // off `U1200_POOLS`, never respelled), so the name and pool joins land; the
+          // rows are in finishing order, which the client renders untouched.
           results: {
             kind: 'standings',
             complete: false,
             champion: null,
             pools: [
               {
-                pool_id: 'p-u1200-a',
+                pool_id: U1200_POOLS[0].id,
                 complete: false,
                 rows: [
                   { entry_id: 'entry-ev-u1200-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
@@ -694,7 +712,7 @@ function seed(): StoredTournament[] {
                 ],
               },
               {
-                pool_id: 'p-u1200-b',
+                pool_id: U1200_POOLS[1].id,
                 complete: true,
                 rows: [
                   { entry_id: 'entry-ev-u1200-2', rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 2, game_difference: 4 },
@@ -1044,7 +1062,7 @@ function seed(): StoredTournament[] {
             champion: cup(2),
             pools: [
               {
-                pool_id: 'p-cup-a',
+                pool_id: CUP_POOLS[0].id,
                 complete: true,
                 rows: [
                   { entry_id: cup(5), rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 1, game_difference: 5 },
@@ -1057,7 +1075,7 @@ function seed(): StoredTournament[] {
                 // Both of this pool's ties are broken by two-way head-to-head, so the
                 // rank column is NOT a re-reading of the wins column: `player.3` and
                 // `player.2` both went 2–1, and `player.3` won the match between them.
-                pool_id: 'p-cup-b',
+                pool_id: CUP_POOLS[1].id,
                 complete: true,
                 rows: [
                   { entry_id: cup(3), rank: 1, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 3, game_difference: 2 },
@@ -1126,7 +1144,7 @@ function seed(): StoredTournament[] {
               {
                 // A THREE-way tie — everyone 1–1 — which two-way head-to-head cannot
                 // break, so the order is game difference: +1, 0, −1.
-                pool_id: 'p-shield-a',
+                pool_id: SHIELD_POOLS[0].id,
                 complete: true,
                 rows: [
                   { entry_id: shield(1), rank: 1, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 2, game_difference: 1 },
@@ -1135,7 +1153,7 @@ function seed(): StoredTournament[] {
                 ],
               },
               {
-                pool_id: 'p-shield-b',
+                pool_id: SHIELD_POOLS[1].id,
                 complete: true,
                 rows: [
                   { entry_id: shield(2), rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
@@ -1672,13 +1690,20 @@ export type StoreResult =
   | { ok: false; status: 422; index: number; tableId: string; detail: string }
 
 /** An event write fails four ways: 404 (no such tournament/event), 403 (not the
- * creator), and — on a PATCH that would move the pools out from under a cut draw — a
- * **409** carrying the server's sentence (ADR-0786's pool-set freeze; see
- * `poolSetFrozenDetail`). A create can never hit that 409: a new event has no draw. */
+ * creator), a **409** on a PATCH that would move the pools out from under a cut draw
+ * (ADR-0786's pool-set freeze; see `poolSetFrozenDetail`), and a **422** naming the
+ * `pools` entry that cited an id this event does not have (ADR 20260801's minted ids;
+ * see `applyEventPools`). A create can hit neither: a new event has no draw, and
+ * `PoolWrite` has no id to cite.
+ *
+ * The 422 carries the offending entry's `index` so the handler can build the `loc`
+ * (`["body", "pools", i, "id"]`) the real route sends — the pools are a list, and a
+ * refusal a client cannot attribute to a row is a refusal it cannot render. */
 export type EventResult =
   | { ok: true; event: TournamentEventRead }
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 422; index: number; poolId: string; detail: string }
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
@@ -1871,7 +1896,7 @@ const NOTHING_TO_START =
 
 /** The things a refusal is about, as a human would say them: `“Pool B”`, or
  * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
-function namedList(names: string[]): string {
+export function namedList(names: string[]): string {
   return conjoinWithAnd(names.map((name) => `“${name}”`))
 }
 
@@ -2052,23 +2077,117 @@ export function deleteTournament(id: string): DeleteResult {
   return { ok: true }
 }
 
+// ----- an event's pools: server-minted ids, and an id-keyed diff ------------------
+//
+// A pool is a ROW now (ADR 20260801, `api/app/tournament_pools.py`) and its id is **the
+// server's to mint** — `PoolWrite` (create) has no `id` at all, and `PoolUpsert` (patch)
+// has an optional one that *cites* a pool rather than authoring it. So this store mints
+// too, exactly as it does for the venue catalogue one resource over (`mintTable`): a pool
+// that arrives without an id is a new pool and gets one here.
+//
+// And the patch is a **diff**, not an assignment: an entry citing an id keeps that pool
+// (re-named, re-timed, re-tabled, re-positioned), an entry with no id adds one, and a
+// stored pool no entry cites is REMOVED. Keying on the id is what makes a reorder move
+// pools instead of swapping labels between ids — and what keeps a fixture's `pool_id`
+// pointing at the pool it was dealt into.
+
+let poolCounter = 0
+
 /**
- * Stamp each pool with the **position of its index in the list the client sent** — the
- * server's rule (`stored_pools`, `api/app/schemas/tournament.py`), reproduced here
- * because a mock that is more permissive than the server it stands in for is a trap.
+ * A brand-new pool for an entry that carries no `id` — the mock's `gen_random_uuid()`,
+ * stamped with the **position of its index in the list the client sent**.
  *
- * The write schema (`PoolWrite`) has no `position`: it is `extra="forbid"`, so sending
- * one is a 422 naming the field, and **the order of the array is the only thing that
- * says which pool comes first**. The read schema (`Pool`) has it, so this is the seam
- * where the order the client expressed becomes the number the client reads back.
+ * UUID-shaped (`mockUuid`) because the wire says so (`Pool.id` is `format: uuid`), and
+ * counter-derived rather than name-derived because two pools may legitimately share a
+ * name (every event has a “Pool A”) — and two rows sharing an id is the one thing an
+ * id-keyed diff cannot survive. The counter deliberately does NOT reset with the store:
+ * a fresh seed re-creates the seeded rows, and an id minted for a *previous* test's pool
+ * must never be handed out again.
  *
- * Defaulting to `0`, or casting the write shape through, would make the mock disagree
- * with the API about a rule the app depends on — the pools editor seeds its cards from
- * `position` and the draw renders in it, so every pool would come back tied for first and
- * `npm run dev` would order them by nothing at all.
+ * The `position` is the server's rule (`stored_pools`/`apply_event_pools`,
+ * `api/app/tournament_pools.py`), reproduced because a mock that is more permissive than
+ * the server it stands in for is a trap. Neither write shape has a `position` — both are
+ * `extra="forbid"`, so sending one is a 422 naming the field — and **the order of the
+ * array is the only thing that says which pool comes first**. Defaulting to `0`, or
+ * casting a write shape through, would make the mock disagree with the API about a rule
+ * the app reads on every load: the pools editor seeds its cards from `position` and the
+ * draw renders in it, so every pool would come back tied for first.
+ *
+ * The fields are named rather than spread for the same reason `mintTable` names them: a
+ * payload carrying a key the write shape forbids must not leak into the stored row.
  */
-function positionPools(pools: PoolWrite[]): Pool[] {
-  return pools.map((pool, index) => ({ ...pool, position: index }))
+function mintPool(entry: PoolWrite, position: number): Pool {
+  poolCounter += 1
+  return {
+    id: mockUuid(`tournament-event-pool-${poolCounter}`),
+    name: entry.name,
+    slot: entry.slot,
+    table_ids: entry.table_ids,
+    position,
+  }
+}
+
+/** Every pool of a **created** event: all new, all minted, positioned by index
+ * (`stored_pools`). `TournamentEventCreate.pools` is `PoolWrite[]` — an event being born
+ * has no pools to cite, so there is no id arm here at all. */
+function mintPools(submitted: PoolWrite[]): Pool[] {
+  return submitted.map((entry, index) => mintPool(entry, index))
+}
+
+/** The server's message for an entry citing an id this **event** does not hold
+ * (`PoolNotInEventError`, `api/app/tournament_errors.py`) — a **422 on that entry's
+ * `id`**, never a silently minted pool: quietly minting one would hand the client back a
+ * different id than it asked for while *removing* the pool it meant to keep, which are
+ * the two failures a diff must never confuse. */
+const POOL_NOT_IN_EVENT = 'This event has no pool with that id.'
+
+/** What the pools diff produced, or the refusal that stopped it before anything was
+ * assigned. */
+type PoolsResult =
+  | { ok: true; pools: Pool[] }
+  | { ok: false; status: 422; index: number; poolId: string; detail: string }
+
+/** Apply a submitted pool list to `stored` as an id-keyed diff (`apply_event_pools`),
+ * judging the unknown-id refusal **before** anything is assigned so a refused write
+ * leaves the event byte-identical.
+ *
+ * Judged first and over the whole payload, for the reason the catalogue's twin is: a pool
+ * list naming a pool this event does not have is not a pool list, and every subsequent
+ * question (what is kept, and therefore what is removed) would be answered against a list
+ * the client did not mean. */
+function applyEventPools(
+  stored: Pool[],
+  submitted: PoolUpsert[],
+): PoolsResult {
+  const byId = new Map(stored.map((pool) => [pool.id, pool]))
+  for (const [index, entry] of submitted.entries()) {
+    if (entry.id != null && !byId.has(entry.id)) {
+      return {
+        ok: false,
+        status: 422,
+        index,
+        poolId: entry.id,
+        detail: POOL_NOT_IN_EVENT,
+      }
+    }
+  }
+  return {
+    ok: true,
+    // The list's ORDER is the event's pool order — a cited pool keeps its id (and every
+    // fixture drawn into it) while taking this payload's words and place; an entry with
+    // no id is an insert.
+    pools: submitted.map((entry, position) =>
+      entry.id == null
+        ? mintPool(entry, position)
+        : {
+            id: entry.id,
+            name: entry.name,
+            slot: entry.slot,
+            table_ids: entry.table_ids,
+            position,
+          },
+    ),
+  }
 }
 
 let eventCounter = 0
@@ -2108,10 +2227,11 @@ export function createEvent(
     slot: body.slot,
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],
-    // The write body carries no positions, so the store assigns them here — from the
-    // index, exactly as the server does (`positionPools`). The order the editor sent its
-    // pools in IS the order, and this is where that becomes a number.
-    pools: positionPools(body.pools ?? []),
+    // Every pool on a create body is a NEW pool — `PoolWrite` has no `id` at all — so the
+    // store mints one for each and stamps the position of its index, exactly as the
+    // server does (`mintPools`). The order the editor sent its pools in IS the order, and
+    // this is where that becomes an id and a number.
+    pools: mintPools(body.pools ?? []),
     // A brand-new event has NO DRAW (ADR-0786). Cutting one is an explicit act against
     // a field that does not exist yet — there is nobody entered to draw.
     fixtures: [],
@@ -2126,14 +2246,23 @@ export function createEvent(
 
 /** Patch an event (full replace of the provided fields). Creator-only.
  *
- * **The pool SET freezes while a draw exists** (ADR-0786): a `pools` payload that would
- * add, remove or re-`id` a pool on an event whose draw is cut is refused with a 409,
- * because a fixture's `pool_id` is a string ref into this very JSONB and nothing in the
- * database stops the edit from orphaning it. Everything ELSE about a pool — its tables,
- * its window, its name — stays editable with a draw standing, because venues change
- * under running tournaments and recording that must not cost a director their draw.
+ * The `pools` payload is an **id-keyed diff** (`applyEventPools`), and it is judged
+ * twice:
  *
- * The mock enforces it because a mock that is more permissive than the server it stands
+ * **The pool SET freezes while a draw exists** (ADR-0786): a payload that would add or
+ * remove a pool on an event whose draw is cut is refused with a 409, because a fixture
+ * names the pool it was dealt into and the edit would orphan it. Everything ELSE about a
+ * pool — its tables, its window, its name — stays editable with a draw standing, because
+ * venues change under running tournaments and recording that must not cost a director
+ * their draw. (Re-*identifying* a pool is no longer one of the things this refuses,
+ * because it is no longer a payload a client can send: a pool id is minted here, so an
+ * entry either cites one this event has or carries none at all.)
+ *
+ * **An entry citing an id this event does not have is a 422** on that entry (ADR
+ * 20260801), judged *after* the freeze so a cut event answers the 409 that names its
+ * pools.
+ *
+ * The mock enforces both because a mock that is more permissive than the server it stands
  * in for is a trap: a pools editor that silently orphans a draw would look perfect in
  * `npm run dev` and 409 in production. */
 export function updateEvent(
@@ -2147,10 +2276,16 @@ export function updateEvent(
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
   // 404 → 403 → 409, the server's ordering: the state of an event's draw is never the
-  // reason a stranger's request is refused. (The 422s come before all of it — they are
-  // the schema's, and the handler asks them at the boundary; see `validateEventBody`.)
+  // reason a stranger's request is refused. (The *schema's* 422s come before all of it —
+  // the handler asks them at the boundary; see `validateEventBody`. The diff's own 422,
+  // below, comes after, so a cut event answers the freeze.)
   const frozen = poolSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
   if (frozen !== null) return { ok: false, status: 409, detail: frozen }
+  // The diff runs BEFORE anything is written, so an entry citing an unknown id leaves the
+  // event exactly as it was — never written, not merely rolled back.
+  const pools =
+    patch.pools == null ? null : applyEventPools(event.pools, patch.pools)
+  if (pools !== null && !pools.ok) return pools
   const next: StoredEvent = {
     ...event,
     name: patch.name ?? event.name,
@@ -2182,11 +2317,12 @@ export function updateEvent(
     slot: patch.slot ?? event.slot,
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,
-    // RE-POSITIONED on every pools patch, from the array index (`positionPools`) — the
-    // server re-derives them the same way, which is what makes "send them in the order
-    // you want" the whole reordering API. An absent `pools` is not touching them at all,
-    // and the stored positions stand.
-    pools: patch.pools ? positionPools(patch.pools) : event.pools,
+    // The diff's answer: cited pools kept (with their ids, and therefore their fixtures),
+    // id-less entries minted, stored pools no entry cited dropped — and every one of them
+    // RE-POSITIONED from the array index, which is what makes "send them in the order you
+    // want" the whole reordering API. An absent `pools` is not touching them at all, and
+    // the stored positions stand.
+    pools: pools === null ? event.pools : pools.pools,
     // The DRAW survives an edit (ADR-0786): a PATCH is not a re-cut. `fixtures` is not
     // in the write body at all, and answering `[]` here would tell the director their
     // draw had just been thrown away by a rename.
@@ -2251,23 +2387,64 @@ function drawHasPlay(event: StoredEvent): boolean {
  * (a draw cut, nothing played yet) is exactly when a blunt play-guard would wave through
  * an edit that orphans every fixture.
  *
- * Identity is all that is frozen. A `pools` payload carrying the same ids in a different
- * order, with different tables, different windows or different names, is fine. */
+ * **The freeze shrank when the ids were minted** (ADR 20260801). Two categories still
+ * reach it — *removing* a pool the draw was dealt across, and *adding* one that would
+ * arrive with no fixtures — and the third, *re-identifying* a pool, is no longer
+ * expressible at all: a client cannot author a pool id, so an entry either cites one this
+ * event has (which keeps that pool) or carries none (which adds one).
+ *
+ * Identity is all that is frozen. A `pools` payload citing exactly the pools the event
+ * has, in a different order, with different tables, different windows or different names,
+ * is fine — that is the case this guard exists to *permit*.
+ *
+ * The sentence is the server's, verbatim (`_pool_set_frozen_detail`,
+ * `api/app/tournament_events.py`), because the client shows it verbatim: it names the
+ * pools on both sides and it names the way out. */
 function poolSetFrozenDetail(
   event: StoredEvent,
   patch: TournamentEventUpdate,
 ): string | null {
   if (patch.pools === undefined || patch.pools === null) return null
   if (event.fixtures.length === 0) return null
-  const before = new Set(event.pools.map((p) => p.id))
-  const after = new Set(patch.pools.map((p) => p.id))
+  const existing = new Set(event.pools.map((p) => p.id))
+  // An entry with no `id` is an addition and contributes nothing to the incoming SET —
+  // which is what makes the comparison below "you cited exactly the pools you have"
+  // rather than "you sent the same number of them".
+  const incoming = new Set(
+    patch.pools.map((p) => p.id).filter((id): id is string => id != null),
+  )
+  const cites = patch.pools.length === incoming.size
   const same =
-    before.size === after.size && [...before].every((id) => after.has(id))
-  if (same) return null
+    existing.size === incoming.size && [...existing].every((id) => incoming.has(id))
+  if (same && cites) return null
+  // Named from whichever side of the change still knows the name: a pool being removed is
+  // only described by the row we hold, one being added only by the payload. An entry
+  // citing an id this event does not have counts as an addition here — it is one in
+  // effect, and past this guard it is the 422 `applyEventPools` answers.
+  const removed = event.pools
+    .filter((p) => !incoming.has(p.id))
+    .map((p) => p.name)
+  const added = patch.pools
+    .filter((p) => p.id == null || !existing.has(p.id))
+    .map((p) => p.name)
+  const clauses: string[] = []
+  if (removed.length > 0) {
+    clauses.push(
+      `${namedList(removed)} already has fixtures drawn into it, ` +
+        'which this change would leave pointing at a pool that no longer exists',
+    )
+  }
+  if (added.length > 0) {
+    clauses.push(
+      `${namedList(added)} would arrive with no fixtures in it, ` +
+        'because the draw was cut across the pools this event had at the time',
+    )
+  }
   return (
     "This event's draw is already cut, so its set of pools is frozen: " +
-    'a pool cannot be added, removed or re-identified while fixtures refer to it. ' +
-    'To add, remove or re-identify a pool, remove the draw first, then cut it again.'
+    clauses.join('; and ') +
+    ". A pool's tables, its time and its name can all still be changed. " +
+    'To add or remove a pool, remove the draw first, then cut it again.'
   )
 }
 

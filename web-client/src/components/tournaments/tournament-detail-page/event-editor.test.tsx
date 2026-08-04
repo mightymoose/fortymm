@@ -6,7 +6,7 @@ import { ApiError } from '@/api/client'
 import { screen, waitFor } from '@/test/utilities'
 
 import { emptyEvent } from '../data/helpers'
-import { eventToUpdateBody } from '../data/api'
+import { eventToCreateBody, eventToUpdateBody } from '../data/api'
 import {
   buildEvent,
   buildFixture,
@@ -699,11 +699,17 @@ describe('EventEditor', () => {
     // which are never shown). This test is what stops a future tidy-up from collapsing
     // the two.
     it('surfaces a pool-set 409 with the server’s own sentence — the cut-draw race', async () => {
+      // The server's sentence, byte for byte (`_pool_set_frozen_detail`,
+      // `api/app/tournament_events.py`), because that is what this test is standing in
+      // for. It stopped offering "re-identify" as a third thing to do when the pool ids
+      // moved server-side (ADR 20260801): re-identifying a pool is no longer a payload a
+      // client can send, so it is no longer a refusal a client can meet.
       const refusal =
-        'This event’s draw is already cut, so its set of pools is frozen: “Pool B” ' +
-        'already has fixtures drawn into it. A pool’s tables, its time and its name ' +
-        'can all still be changed. To add, remove or re-identify a pool, remove the ' +
-        'draw first, then cut it again.'
+        "This event's draw is already cut, so its set of pools is frozen: “Pool B” " +
+        'already has fixtures drawn into it, which this change would leave pointing at ' +
+        "a pool that no longer exists. A pool's tables, its time and its name can all " +
+        'still be changed. To add or remove a pool, remove the draw first, then cut it ' +
+        'again.'
       const onSave = rejectWith(
         new ApiError(409, refusal, 'update event', { detail: refusal }),
       )
@@ -726,6 +732,96 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
         'your changes are still here',
       )
+    })
+  })
+
+  /**
+   * **Who owns a pool id, from the card to the request body** (ADR 20260801).
+   *
+   * The section's own tests prove the form holds the right *entries*; these prove the
+   * thing only the editor can, and the thing that 422s if it is wrong: what
+   * `eventToCreateBody` / `eventToUpdateBody` make of them. `onSave` receives exactly the
+   * object the page maps, so mapping it here is what the client would really put on the
+   * wire — and a test that stopped at form state would pass just as happily against a
+   * mapper that put the ids back.
+   *
+   * The two failures are opposite and both silent. An id on a NEW pool is a 422
+   * (`extra_forbidden` on `body.pools[i].id`) — the whole save refused, for a key the
+   * director never typed. A missing id on a STORED pool is worse than a refusal: the
+   * PATCH is an id-keyed diff, so an uncited pool is REMOVED, and the fixtures dealt into
+   * it go with it.
+   */
+  describe('the pools a save puts on the wire', () => {
+    const addAPool = async () => {
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.click(screen.getByRole('button', { name: 'Add pool' }))
+    }
+
+    it('sends an added pool with NO id, and still cites the stored one', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-1' })] }),
+        onSave,
+      })
+
+      await addAPool()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      const pools = eventToUpdateBody(onSave.mock.calls[0][0]).pools ?? []
+      expect(pools).toHaveLength(2)
+      // The pool the event already has, cited — which is what keeps it (and its draw).
+      expect(pools[0]).toMatchObject({ id: 'p-1', name: 'Pool A' })
+      // …and the new one, with no id key at all for the server to trip over.
+      expect('id' in pools[1]).toBe(false)
+      expect(pools[1].name).toBe('Pool B')
+    })
+
+    // A rename is the case a mapper is most likely to get wrong, because it is the one
+    // where the pool's words all change: it must still cite the id, or the director's
+    // "Pool A → Morning Pool" arrives as one removal and one insertion.
+    it('keeps citing a stored pool the director has just renamed', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-1' })] }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      fireEvent.change(screen.getByLabelText('Pool name'), {
+        target: { value: 'Morning Pool' },
+      })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).pools).toEqual([
+        expect.objectContaining({ id: 'p-1', name: 'Morning Pool' }),
+      ])
+    })
+
+    // The create verb has no id arm at ALL (`PoolWrite`), so a brand-new event's pools
+    // carry none — the server mints one apiece and hands them back on the response the
+    // page then renders.
+    it('creates an event whose pools carry no ids whatsoever', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      // Named, because a blank name is refused in the form and nothing would be sent —
+      // the resolver is doing its job, and this test is about a different one.
+      eventEditorPage.render({
+        event: { ...emptyEvent(buildTournament()), name: 'New Event' },
+        onSave,
+      })
+
+      await addAPool()
+      await addAPool()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      const pools = eventToCreateBody(onSave.mock.calls[0][0]).pools ?? []
+      expect(pools).toHaveLength(2)
+      for (const pool of pools) {
+        expect('id' in pool).toBe(false)
+        expect('position' in pool).toBe(false)
+      }
     })
   })
 

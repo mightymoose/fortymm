@@ -120,11 +120,23 @@ def placeholder_label(player_id: str) -> str:
     return f"Placeholder {player_id.removeprefix(PLACEHOLDER_PREFIX)}"
 
 
-def preview_pool_key(event_id: uuid.UUID, pool_id: str) -> str:
+def preview_pool_key(event_id: uuid.UUID, pool_id: uuid.UUID) -> str:
     """The one namespaced ``event:pool`` spelling every preview site keys a pool by
     — the ``SchedulePool`` id, a fixture's ``pool_id`` ref, and the enqueue verb's
     infeasibility-resolution map all pass through here, so the string contract lives
-    in exactly one place and cannot drift between them."""
+    in exactly one place and cannot drift between them.
+
+    **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
+    minted because a pool id was a per-event string and two events of one tournament
+    could each hold a "pool-a"; a pool id is a globally unique uuid now (ADR 20260801),
+    so the ``event:`` prefix disambiguates nothing. It stays because the *key* is a wire
+    value, not an implementation detail: it is what
+    :class:`~app.schemas.schedule_preview.SchedulePreviewFixtureRead.pool_id` carries,
+    what a stored solve's plan is keyed by, and what an infeasibility reason names — so
+    dropping it would be a wire change with client follow-ups, and it would leave every
+    solve row already in a database keyed in a space nothing computes any more. It also
+    still earns its keep as a *label*: a solver pool id that says which event it belongs
+    to is one a human reading a plan or a reason can place."""
     return f"{event_id}:{pool_id}"
 
 

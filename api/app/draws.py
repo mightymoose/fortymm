@@ -51,9 +51,12 @@ from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
 EntryId = NewType("EntryId", uuid.UUID)
 FixtureId = NewType("FixtureId", uuid.UUID)
 MatchId = NewType("MatchId", uuid.UUID)
-#: A pool is a JSONB value-object on the event, not a row — its id is a *string ref*
-#: into ``TournamentEvent.pools``, which is why this is a ``str`` and not a UUID FK.
-PoolId = NewType("PoolId", str)
+#: A pool is a row (``tournament_event_pools``, ADR 20260801) with a server-minted uuid
+#: primary key, and a fixture's ``pool_id`` is a real composite foreign key onto it — so
+#: this is a ``uuid.UUID``, exactly like the ids above. It was a ``str``, a dangling ref
+#: into ``TournamentEvent.pools`` JSONB, for as long as there was no pools table to
+#: point at and no server to mint one.
+PoolId = NewType("PoolId", uuid.UUID)
 
 
 class DrawError(Exception):
@@ -252,18 +255,13 @@ class DrawConfig:
     order** — ascending ``Pool.position``, which is what the caller
     (:func:`app.tournament_draws.draw_config`) sorts them by, and which this tuple then
     carries *as* its sequence. That order is what the snake seeds against, so nothing
-    downstream may re-sort it: an ``sorted(config.pool_ids)`` anywhere below here would
-    seed the draw against the ids' lexicographic order, which is not the director's
-    (``p-10-`` sorts between ``p-1-`` and ``p-2-``) and, once pools are rows with random
-    UUID ids, is not anybody's.
+    downstream may re-sort it: a ``sorted(config.pool_ids)`` anywhere below here would
+    seed the draw against the ids' own order, which under a random uuid is nobody's.
 
     Empty for an un-pooled draw type (single-elim), where every fixture's ``pool_id``
-    is ``NULL``. The pool *id set* freezes while a draw exists, which is what lets a
-    fixture's string ref stay valid without a foreign key. No id among them is ever the
-    empty string — ``Pool.id`` is a ``ValueObjectId`` (``min_length=1``) at the write
-    boundary, which is what keeps ``ready_fixtures``' "pooled?" test (``pool_id is
-    None``) and its id tie-break (``pool_id or ""``) answering the same question the
-    same way.
+    is ``NULL``. The pool *id set* freezes while a draw exists
+    (``app.tournament_events`` refuses a payload that moves it), and underneath that a
+    composite foreign key holds the reference itself.
     """
 
     pool_ids: tuple[PoolId, ...] = ()
@@ -970,28 +968,16 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     twice. Ordered by ``(pool, round, position)`` so the plan itself is deterministic.
 
     **"Pool" is the pool's** :attr:`~FixtureState.pool_position` — its place in the
-    event's own pool order — **not its id.** The ids are client-minted strings
-    (``p-1-…``, ``p-2-…``, ``p-10-…``) whose lexicographic order is not the director's:
-    ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a ten-pool draw's plan ran pool 1,
-    pool 10, pool 2. For a pool that **has** a position it is the same key the read
-    path's ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.pool_ids`
-    is ordered by, so the sequence a director sees, the sequence the snake dealt
-    against, and the sequence matches are created in are one order rather than three
-    that agree by luck.
-
-    **The exception is a pool written before positions existed**, and it is worth
-    stating because the two fallbacks are not the same one. ``pools`` is JSONB and no
-    migration backfilled it, so rows predating this field survive in any long-lived
-    database (UAT's ``fortymm-uat_postgres-data`` volume, a standing QA stack). For
-    those, the read path's SQL reads a missing key as ``NULL``, every pool ties, and it
-    falls through to ``pool_id`` — **id order**; while this sort and
-    :attr:`DrawConfig.pool_ids` parse through :class:`~app.schemas.tournament.Pool`,
-    where ``position`` defaults to ``0``, so every pool ties there too and a stable sort
-    leaves them in **array order**. Two different fallbacks for the same absent field.
-    It bites only an event with ten or more pre-field pools, and it changes the order
-    matches are *created* in rather than which fixtures exist or who plays whom — but
-    it is a real disagreement, not a documented equivalence. It stops existing when
-    pools become rows with a ``NOT NULL`` position, where the column cannot be absent.
+    event's own pool order — **not its id.** It was the id once, back when ids were
+    client-minted strings (``p-1-…``, ``p-2-…``, ``p-10-…``) whose lexicographic order
+    was not the director's: ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a ten-pool
+    draw's plan ran pool 1, pool 10, pool 2. A minted uuid is worse still — its order is
+    nobody's at all — which is exactly why the explicit ``position`` column had to land
+    (ADR 20260801) before the ids could move. It is the same key the read path's
+    ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.pool_ids` is
+    ordered by, so the sequence a director sees, the sequence the snake dealt against,
+    and the sequence matches are created in are one order rather than three that agree
+    by luck.
 
     The sort key asks three questions, in this order:
 
@@ -999,22 +985,18 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
        an rr-then-ko draw's KO stage) LAST, behind the pools that feed them.
     2. "Where in the event's order is its pool?" — ``pool_position``, with a ``None``
        (an unresolved pool order; see the field) sorting after every pool that has one.
-    3. "Which pool?" — ``pool_id or ""``, the tie-break that keeps the order **total**
-       when the positions cannot decide it, and which is exactly the order this had
-       before positions existed.
+    3. "Which pool?" — the id as text, the tie-break that keeps the order **total** when
+       the positions cannot decide it. A ``uuid`` is not comparable with the ``""`` the
+       un-pooled group collapses to, so this is spelled as a ``str`` rather than left to
+       ``or``; both halves are unobservable anyway, because the first key element has
+       already partitioned the un-pooled off. The ``or 0`` beside it is unobservable for
+       the same reason and by the same argument.
 
-    (1) and (3) agree only because an id is never ``""``. It was: ``Pool.id`` was a bare
-    ``str``, and a fixture drawn into an empty-id pool answered *pooled* to the first
-    question while colliding with the un-pooled group's ``""`` in the third. The floor
-    that closes it is at the write boundary (``ValueObjectId``, ``min_length=1``), not
-    here — an ``if not pool_id`` in this sort would be a runtime check standing in for a
-    state that should not exist. Which is why the ``""`` fallback is *unobservable*:
-    it is reached only by the ``None`` group, which the first key element has already
-    partitioned off, so its value cannot change an order. (Mutation testing agrees —
-    replacing it with any other string survives, and after this it is *supposed* to.)
-    The ``or 0`` beside it is unobservable for the same reason and by the same argument:
-    the element before it has already partitioned the ``None`` positions off, so what
-    the ``None`` group collapses to cannot change an order.
+    (1) and (3) can no longer disagree. They could: ``Pool.id`` was a bare ``str``, and
+    a fixture drawn into an *empty-id* pool answered "pooled" to the first question
+    while colliding with the un-pooled group's ``""`` in the third — one fixture, pooled
+    by one rule and un-pooled by the other. A ``min_length=1`` at the write boundary
+    held that off; a ``uuid`` cannot express it at all, which is the better kind of fix.
     """
     ready = [
         f
@@ -1026,7 +1008,7 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
             f.pool_id is None,
             f.pool_position is None,
             f.pool_position or 0,
-            f.pool_id or "",
+            "" if f.pool_id is None else str(f.pool_id),
             f.round,
             f.position,
         )

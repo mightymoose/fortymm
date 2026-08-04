@@ -81,7 +81,6 @@ def _pool(
     table_ids: list[str], *, start: str = "09:00", end: str = "18:00"
 ) -> dict[str, object]:
     return {
-        "id": "p-a",
         "name": "Pool A",
         "slot": {"date": "2026-06-13", "start": start, "end": end},
         "table_ids": table_ids,
@@ -295,7 +294,6 @@ async def test_preview_solve_finish_anchors_on_the_earliest_window_start(
         pools=[
             _pool(["t1"], start="09:00", end="18:00"),
             {
-                "id": "p-b",
                 "name": "Pool B",
                 "slot": {"date": "2026-06-13", "start": "08:30", "end": "18:00"},
                 "table_ids": ["t2"],
@@ -347,13 +345,11 @@ async def test_preview_solve_reports_byes_for_an_odd_field(
 #: ``_pool`` helper's id is fixed, and two pools of one event may not collide).
 _TWO_POOLS: list[dict[str, object]] = [
     {
-        "id": "p-a",
         "name": "Pool A",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": ["t1"],
     },
     {
-        "id": "p-b",
         "name": "Pool B",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": ["t2"],

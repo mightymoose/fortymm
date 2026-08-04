@@ -56,6 +56,7 @@ from app.models import (
     TournamentFixture,
 )
 from app.schemas.tournament import Pool
+from app.tournament_pools import pool_read
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -96,9 +97,9 @@ def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
     """Each of this event's pool ids mapped to its **0-based place in the event's pool
     order** — the lookup :func:`fixture_state` resolves a fixture's ``pool_id`` through.
 
-    Computed once per event rather than per fixture: a fixture carries a string ref into
-    the event's ``pools`` JSONB, not an index, so somebody has to do the join and a
-    200-fixture round-robin should not re-parse the pools 200 times.
+    Computed once per event rather than per fixture: a fixture carries its pool's *id*,
+    not its index, so somebody has to do the join and a 200-fixture round-robin should
+    not project the pools 200 times.
 
     The rank is the pool's index *after* sorting on ``Pool.position`` (ADR 20260801),
     not the stored ``position`` read straight off: it is then the same sequence
@@ -110,21 +111,20 @@ def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
 
 
 def _ordered_pools(event: TournamentEvent) -> list[Pool]:
-    """This event's pools, parsed, in the director's order — ascending ``position``.
+    """This event's pools, projected, in the director's order — ascending ``position``.
 
     One definition of "the event's pool order", shared by :func:`draw_config` (which
     seeds the snake against it) and :func:`pool_order` (which the read of a persisted
     fixture resolves through), so a draw is cut in the same order it is advanced in.
 
-    Parsed through :class:`Pool` rather than indexed as ``p["position"]`` on an untyped
-    JSONB dict (api/CLAUDE.md — "parse, don't validate"), which is also where a pool
-    stored before ``position`` existed picks up its ``0`` default. ``sorted`` is stable,
-    so a whole event of those keeps the array order it has always had.
+    The ``sorted`` is belt-and-braces rather than the mechanism: the ``pools``
+    relationship carries ``order_by=TournamentEventPool.position``, so the rows arrive
+    in this order already, and ``UNIQUE (event_id, position)`` makes it a total one. It
+    is kept because this function is *the* statement of what "the event's pool order"
+    means, and a caller who builds a ``TournamentEvent`` in memory (a test, a REPL)
+    never went through that ``ORDER BY``.
     """
-    return sorted(
-        (Pool.model_validate(pool) for pool in event.pools),
-        key=lambda pool: pool.position,
-    )
+    return sorted(event_pools(event), key=lambda pool: pool.position)
 
 
 def fixture_state(
@@ -234,11 +234,10 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
-    The pools are *parsed*, not indexed: ``TournamentEvent.pools`` is JSONB, and
-    ``p["id"]`` on an untyped dict is a ``KeyError`` waiting for the one malformed row
-    (api/CLAUDE.md — "parse, don't validate"). ``Pool`` is the same model the write
-    boundary validated them with, so a pool that could be *stored* can be read here —
-    and its ``min_length=1`` id is why a ``PoolId`` reaching the domain is never ``""``.
+    The pools arrive as typed :class:`Pool` values, never as raw rows or dicts
+    (:func:`app.tournament_pools.pool_read`) — the same model the write boundary
+    validated them with, whose ``min_length=1`` id is why a ``PoolId`` reaching the
+    domain is never ``""``.
 
     Every configured pool is passed, whatever the draw type. An un-pooled strategy
     (single-elim, #785) ignores them and writes ``NULL`` pool refs; a pooled one deals
@@ -281,12 +280,12 @@ def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
     """Whether this event has a draw at all — whether the cut has happened.
 
-    The question the **pool-set freeze** turns on (ADR-0786). A fixture's ``pool_id`` is
-    a string ref into the event's own ``pools`` JSONB and *not* a foreign key — there is
-    no pools table for it to point at — so nothing in the database stops a ``PATCH``
-    from replacing the pools out from under a cut draw and leaving every fixture in the
-    event referring to a pool that no longer exists. "Integrity is procedural, not
-    schematic": this is the read that procedure is built on.
+    The question the **pool-set freeze** turns on (ADR-0786). Nothing in the database
+    stops a ``PATCH`` from *adding* a pool to an event whose draw was dealt across the
+    pools it had at the cut — the removal half is a foreign-key violation now
+    (ADR 20260801), but an empty new pool breaks no constraint, and the removal's
+    violation is a deferred 500 rather than something a director can act on. This is the
+    read both halves of that refusal are built on.
 
     Deliberately **not** ``draw_has_play``. Play is the gate on *destroying* a draw
     (re-cutting, un-cutting); the mere *existence* of one is the gate on moving the
@@ -310,13 +309,13 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
 
 
 def event_pools(event: TournamentEvent) -> list[Pool]:
-    """The pools this event *currently* has, parsed — the ones the freeze protects.
+    """The pools this event *currently* has, projected — the ones the freeze protects.
 
-    Parsed through :class:`Pool`, exactly as ``draw_config`` parses them, rather than
-    indexed as ``p["id"]`` on an untyped JSONB dict (api/CLAUDE.md — "parse, don't
-    validate"). It is the same model the write boundary validated these rows with, so
-    a pool that could be *stored* can be read back here; a malformed one fails loudly
-    at the boundary instead of raising a ``KeyError`` somewhere downstream.
+    Every reader of an event's pools comes through here (or through
+    :func:`_ordered_pools`, which is this plus the order), which is why moving pools out
+    of a JSONB column and into ``tournament_event_pools`` rows was invisible above this
+    line: :func:`app.tournament_pools.pool_read` composes the same :class:`Pool` out of
+    typed columns that this used to validate out of untyped dicts.
 
     Returns the **pools**, not just their ids, though identity is all the freeze
     compares: a refusal has to *name* the pools it is about (``named_list``), and a
@@ -329,7 +328,7 @@ def event_pools(event: TournamentEvent) -> list[Pool]:
     the ORDER of the list (read only at the cut, where it seeds the snake) — is free to
     change under a standing draw.
     """
-    return [Pool.model_validate(pool) for pool in event.pools]
+    return [pool_read(pool) for pool in event.pools]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:

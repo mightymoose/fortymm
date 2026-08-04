@@ -53,6 +53,7 @@ import {
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
+  namedList,
   type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
@@ -1076,30 +1077,41 @@ function validateEventBody(
       return detail('Entry fee can’t be negative.', 422)
     }
   }
-  // A pool id IDENTIFIES a pool, and a fixture names its pool by that string (ADR-0786).
-  // Two pools sharing one id is a payload the interior cannot hold: the cut deals onto
-  // the same `(event_id, pool_id, round, position)` twice and the fixture table's unique
-  // index fires — a **500** (`_pool_ids_are_unique`, `api/app/schemas/tournament.py`).
+  // A pool id IDENTIFIES a pool, and a fixture names the pool it was dealt into
+  // (ADR-0786). Two ENTRIES citing one id is a payload the interior cannot hold: the
+  // write is an id-keyed diff (`applyEventPools`), so both entries resolve onto the one
+  // stored pool and the payload is accepted as a single-pool event rather than refused as
+  // the two-pool one it claims to be (`_pool_ids_are_unique`,
+  // `api/app/schemas/tournament.py`).
   //
   // It lives HERE, at the mock's boundary rather than in the store's freeze, for the two
   // reasons the server's validator does:
   //  • it is a 422 in *every* state the event could be in — an event with no draw at all
-  //    still cannot have two pools called `p-a`;
-  //  • and the PATCH path is the worse of the two, because the pool-set freeze compares
-  //    SETS: `[A, A, B]` against a cut event holding `{A, B}` is the same set, so the
-  //    freeze waves it through and the next cut dies. The guard that protects the draw
-  //    was admitting the payload that poisons it.
-  if (body.pools !== undefined && body.pools !== null) {
+  //    still cannot cite one pool twice;
+  //  • and it is the PATCH path's rule, because the pool-set freeze compares SETS:
+  //    `[A, A, B]` against a cut event holding `{A, B}` is the same set, so the freeze
+  //    waves it through and the next cut dies. The guard that protects the draw was
+  //    admitting the payload that poisons it.
+  //
+  // **Entries with no `id` are ignored**: those are additions, and any number of pools may
+  // be added at once. The rule has no create-path twin and needs none — `PoolWrite` has no
+  // `id` at all (ADR 20260801), so "the patch path is the hole" is not a hole a create can
+  // have here.
+  if (body.pools != null) {
     const seen = new Set<string>()
     const duplicated = body.pools
-      .map((pool) => pool.id)
+      // `'id' in pool` is the narrowing, not a cast: the create shape declares no such
+      // key, so this is also where a `PoolWrite[]` body drops out of the rule entirely.
+      .map((pool) => ('id' in pool ? pool.id : null))
+      .filter((id): id is string => id != null)
       .filter((id) => (seen.has(id) ? true : (seen.add(id), false)))
     if (duplicated.length > 0) {
+      const ids = [...new Set(duplicated)]
       return detail(
-        `A pool id identifies one pool: ${[...new Set(duplicated)]
-          .map((id) => `“${id}”`)
-          .join(', ')} is used by more than one pool of this event. Give each pool an ` +
-          'id of its own.',
+        `A pool id identifies one pool: ${namedList(ids)} ` +
+          `${ids.length === 1 ? 'is' : 'are'} cited by more than one entry of this ` +
+          "event's pools. Cite each pool you are keeping exactly once, and omit the id " +
+          'of a pool you are adding.',
         422,
       )
     }
@@ -2158,10 +2170,29 @@ export const handlers = [
         body ?? {},
       )
       if (!result.ok) {
-        // The pool-set freeze (ADR-0786): this PATCH would add, remove or re-`id` a pool
-        // on an event whose draw is cut, orphaning the fixtures drawn into it. The
-        // store's sentence says so — and says how to get out of it.
+        // The pool-set freeze (ADR-0786): this PATCH would add or remove a pool on an
+        // event whose draw is cut, orphaning the fixtures drawn into it. The store's
+        // sentence says so — naming the pools — and says how to get out of it.
         if (result.status === 409) return detail(result.detail, 409)
+        // An entry citing an id this event does not have (ADR 20260801). Shaped as a
+        // **field** refusal — FastAPI's per-field array, `loc` naming the entry's index —
+        // because that is what the route really sends and what `validationFields`
+        // (`src/api/client.ts`) reads to blame the pool card.
+        if (result.status === 422) {
+          return HttpResponse.json(
+            {
+              detail: [
+                {
+                  type: 'value_error',
+                  loc: ['body', 'pools', result.index, 'id'],
+                  msg: result.detail,
+                  input: result.poolId,
+                },
+              ],
+            },
+            { status: 422 },
+          )
+        }
         return detail(
           result.status === 403
             ? 'Only the creator can edit this event.'

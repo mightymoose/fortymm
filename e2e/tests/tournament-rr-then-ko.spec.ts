@@ -7,9 +7,12 @@ import { grantBetaTester } from '../support/rbac-grant'
 import {
   createTournament,
   findEventByName,
+  getEventPools,
+  getScheduleDetail,
   seedEntrants,
   type TableSpec,
 } from '../support/tournament-api'
+import { playEvent } from '../support/tournament-play'
 
 /** The event the director authors in the browser, and the handle the spec finds it by
  * afterwards — its id is minted server-side and never crosses back through the UI. */
@@ -31,6 +34,11 @@ const QUALIFIERS_PER_POOL = 2
  * enough that each pool is a real round-robin rather than a single pairing. */
 const ENTRANT_COUNT = 9
 
+/** The names the editor's pool section mints, in the order it adds them — the director's
+ * order, and therefore the `position` order the server stamps and the draw must read in.
+ * Written down here because it is what every ordering assertion below compares against. */
+const POOL_NAMES = ['Pool A', 'Pool B', 'Pool C']
+
 /** `B` — the bracket the cut must derive: the smallest power of two that holds the
  * `P × K` = 6 qualifiers. **Eight, not sixteen** — the bracket is sized from the
  * qualifier count, never from the entrant count (ADR 20260727: "derived, never
@@ -41,8 +49,53 @@ const BRACKET_ROUNDS = 3
  * fixture** (ADR-0786) — so round one holds two fixtures, not four. */
 const ROUND_ONE_FIXTURES = 2
 
-/** Three tables, one per pool, so the seeded catalogue can furnish the pools the
- * director adds in the editor. */
+/** How many matches each stage is: three pools of three is `3 × C(3,2)` = **nine**, and
+ * an eight-slot bracket holding six qualifiers is 2 + 2 + 1 = **five** (the two byes cost
+ * no fixture). Asserted against what `playEvent` actually decided, so a stage that
+ * quietly materialized fewer matches than it owes is a red here — the "N passed against
+ * N collected" check, one layer down. */
+const POOL_MATCHES = 9
+const KNOCKOUT_MATCHES = 5
+
+/**
+ * **Who the snake deals into each pool**, by registration index (`_snake`, ADR-0786):
+ * nine entrants across three pools is one pass out, one back, one out again, so Pool A
+ * takes registrations 0, 5 and 6; Pool B 1, 4 and 7; Pool C 2, 3 and 8.
+ *
+ * Written down rather than read back off the draw, because the qualifier set below is
+ * *derived* from it: who advances is "the top `K` of each pool", and that is only a
+ * statement a test can make in advance if it knows who is in each pool. Asserting it on
+ * the page is a bonus — the deal following the pool order is `tournament-pool-order`'s
+ * subject at ten pools, and this is not a second copy of that proof.
+ */
+const POOL_MEMBERS: ReadonlyArray<ReadonlyArray<number>> = [
+  [0, 5, 6],
+  [1, 4, 7],
+  [2, 3, 8],
+]
+
+/** The six who **qualify**, by registration index, and the three who do not.
+ *
+ * `playEvent`'s winner rule is "the earlier-registered entrant wins", so a pool's
+ * finishing order is its members in registration order and its qualifiers are the first
+ * `K` of them. Flattened out of `POOL_MEMBERS`, never retyped: a hand-written list could
+ * drift from the deal it is supposed to follow, and would then be asserting a coincidence.
+ */
+const QUALIFIERS = POOL_MEMBERS.flatMap((members) =>
+  members.slice(0, QUALIFIERS_PER_POOL),
+)
+const ELIMINATED = POOL_MEMBERS.flatMap((members) =>
+  members.slice(QUALIFIERS_PER_POOL),
+)
+
+/** A uuid — what a pool id is now that a pool is a real row with a `gen_random_uuid()`
+ * primary key (ADR 20260801). Asserted on the seed so that "the pool ids are the
+ * server's" is established before the spec starts leaning on it. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Three tables, one per pool, so the tournament has a venue catalogue of a realistic
+ * shape. The editor's pool section reserves none of them (a draw is cut without regard to
+ * tables — placement is the scheduler's job), so they are scenery here, not scaffolding. */
 const TABLES: ReadonlyArray<TableSpec> = [
   { label: 'Table 1', court: 'A' },
   { label: 'Table 2', court: 'B' },
@@ -51,11 +104,14 @@ const TABLES: ReadonlyArray<TableSpec> = [
 
 /**
  * **Round-robin then knockout, through the whole composed stack** (#1227, ADR
- * "rr-then-ko cuts both stages upfront and seeds qualifiers rematch-free").
+ * "rr-then-ko cuts both stages upfront and seeds qualifiers rematch-free"; #1226, ADR
+ * 20260801 "a pool belongs to its event").
  *
  * A director creates a tournament, authors an `rr-then-ko` event **in the browser** with
  * a qualifiers-per-pool count and three pools, publishes, has nine players entered, cuts
- * the draw, and the page shows **three pools AND a knockout bracket**.
+ * the draw across three **server-minted** pools, takes the tournament live, and the event
+ * is played out to a champion — the pool stage seating its six qualifiers into a bracket
+ * that was cut before anyone played, and the bracket crowning one of them.
  *
  * ## Why this spec is the one that matters for this format
  *
@@ -77,20 +133,48 @@ const TABLES: ReadonlyArray<TableSpec> = [
  *
  * ## And the bracket must exist at cut time
  *
- * The other half of the ADR is that **both stages are cut in one stroke**: `plan_initial`
+ * The other half of that ADR is that **both stages are cut in one stroke**: `plan_initial`
  * emits the pool fixtures *and* the whole bracket, every side of it TBD. That is not an
  * optimization — an `advance()` can only ever fill a side of an *existing* fixture
  * (`SideFill`), so a bracket that did not exist at the cut could never come into being
  * at all. Pools without a bracket is therefore a real product failure and not a
  * selector miss: the second stage would be unreachable for the life of the event.
  *
+ * ## The pools are the SERVER's now, and the draw is dealt across them in ITS order
+ *
+ * A pool used to be a client-minted string inside a JSONB column; it is a row with a
+ * `gen_random_uuid()` primary key and an explicit `position` (ADR 20260801). Every claim
+ * this spec makes about the pooled stage therefore has to be keyed on ids the *server*
+ * chose, and the order has to be the one the director typed rather than any order those
+ * ids happen to sort in. Three readings say so, at three different depths:
+ *
+ * * **stored** — the three pools read back off the create response are uuids at positions
+ *   0, 1, 2, named `Pool A`, `Pool B`, `Pool C` in the order the editor added them;
+ * * **on the wire** — the detail's fixtures come back grouped by pool in position order,
+ *   so the pool ids' first appearances read as those three ids, in that order;
+ * * **on the page** — each pool section is keyed by its uuid, the headings read top to
+ *   bottom in the director's order, and the entrants under each are the ones the snake
+ *   dealt there.
+ *
+ * ## …and the qualifiers reach the bracket
+ *
+ * The claim no unit test makes. The api tests prove `advance()` seats a finished pool's
+ * qualifiers into their predetermined slots; the web-client tests prove a bracket renders
+ * the sides it is handed. Only here does a real pool, decided by real matches through the
+ * real completion hook, put a real name into a real bracket slot — so the spec plays the
+ * pool stage out and then asserts the bracket names **exactly** the six who qualified and
+ * **none** of the three who did not, on a bracket that named nobody at all an hour before.
+ * Then the knockout is played too, and the card crowns the champion the bracket produced.
+ *
  * ## Seed vs UI split
  *
- * Inert scaffolding over the API (`support/tournament-api.ts`): the tournament shell,
- * its table catalogue, and the nine entrants — director-entry, which has no web UI, and
- * nine browser sign-ins to test a *draw* would be nine chances to fail for an unrelated
- * reason. Load-bearing steps in the browser: authoring the event and its draw
- * configuration, publishing, and cutting the draw.
+ * Inert scaffolding over the API (`support/tournament-api.ts`, `support/tournament-play.ts`):
+ * the tournament shell, its table catalogue, the nine entrants — director-entry, which has
+ * no web UI, and nine browser sign-ins to test a *draw* would be nine chances to fail for
+ * an unrelated reason — and the fourteen matches, which `tournament-lifecycle.spec.ts`
+ * already drives through the score-entry UI once, deliberately. Load-bearing steps in the
+ * browser: authoring the event and its draw configuration, publishing, cutting the draw,
+ * going live, and every reading of the draw, the bracket and the champion.
  *
  * ## RBAC
  *
@@ -100,13 +184,14 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * external `E2E_BASE_URL` stack, where the caller owns provisioning.
  */
 test.describe('Tournament — rr-then-ko draw', () => {
-  test('a director cuts an rr-then-ko draw and the page shows three pools and a bracket', async ({
+  test('a director cuts an rr-then-ko draw across three pools, and it is played to a champion', async ({
     page,
     baseURL,
   }) => {
-    // Nine minted guests, nine director-entries and a real CP-SAT-free draw cut, on top
-    // of the ordinary page work — comfortably past the 30s default.
-    test.setTimeout(120_000)
+    // Nine minted guests, nine director-entries, a real draw cut and fourteen real
+    // matches through the completion hook (each one advancing the draw and re-solving the
+    // schedule on the stack's own worker), on top of the ordinary page work.
+    test.setTimeout(600_000)
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
 
     // The director IS the browser's own session, so page navigations run as them.
@@ -142,7 +227,9 @@ test.describe('Tournament — rr-then-ko draw', () => {
 
     // THE 422 GATE. The create body is the client's own, and its status is asserted
     // directly: a body missing `qualifiers_per_pool` is refused at the request boundary,
-    // and this is the assertion that says so in those terms.
+    // and this is the assertion that says so in those terms. It is also the gate the pool
+    // ids cross — the editor mints none, so a client that still did would be refused here
+    // for `body.pools[0].id` instead.
     const createPost = page.waitForResponse(
       (r) => r.url().endsWith('/events') && r.request().method() === 'POST',
     )
@@ -162,6 +249,16 @@ test.describe('Tournament — rr-then-ko draw', () => {
     expect(event.draw_type).toBe('rr-then-ko')
     expect(event.qualifiers_per_pool).toBe(QUALIFIERS_PER_POOL)
     const eventId = event.id
+
+    // ----- …and three pools the SERVER minted, in the order they were added ---
+    // Positions 0, 1, 2 against the editor's own `Pool A`, `Pool B`, `Pool C`. The client
+    // sent neither an id nor a position (`PoolWrite` has a field for neither), so both
+    // columns here are the server's own work — and the ids being uuids is what makes
+    // every "by pool id" assertion below a statement about the server's pools.
+    const pools = await getEventPools(director, tournamentId, eventId)
+    expect(pools.map((pool) => pool.name)).toEqual(POOL_NAMES)
+    expect(pools.map((pool) => pool.position)).toEqual([0, 1, 2])
+    for (const pool of pools) expect(pool.id).toMatch(UUID)
 
     // ----- publish, then fill the field --------------------------------------
     await detail.publishButton.click()
@@ -195,18 +292,41 @@ test.describe('Tournament — rr-then-ko draw', () => {
       `cutting the draw was refused: ${await drawResponse.text()}`,
     ).toBe(201)
 
-    // ----- stage one: three pools, three players each ------------------------
+    // ----- stage one: three pools, keyed and ordered by the server -----------
     await expect(detail.poolDraws(eventId)).toHaveCount(POOL_COUNT)
-    for (const poolName of ['Pool A', 'Pool B', 'Pool C']) {
-      const pool = detail.poolDrawNamed(eventId, poolName)
-      await expect(pool).toBeVisible()
+    // Top to bottom in the director's order. One statement pinning both the count and the
+    // order — a draw whose sections came back in any other order reds here. (What that
+    // order is *derived from* — `position`, and never the pool ids — is
+    // `tournament-pool-order.spec.ts`'s subject, at the ten pools it takes to tell the two
+    // apart reliably.)
+    await expect(detail.poolDrawHeadings(eventId)).toHaveText(POOL_NAMES)
+    for (const [index, pool] of pools.entries()) {
+      // The section is keyed by the pool's uuid, so this asks for the server's pool by the
+      // server's id and would find nothing if the page keyed its sections any other way.
+      await expect(detail.poolDraw(eventId, pool.id)).toBeVisible()
       // Nine entrants snake-dealt across three pools is three apiece — the pool
       // membership is derived from the pool's own fixtures (ADR-0786), so this is also
-      // the statement that each pool really got a round-robin of its own.
+      // the statement that each pool really got a round-robin of its own, and that the
+      // deal followed the same pool order the headings above are in.
       await expect(
-        pool.getByRole('list', { name: `Entrants in ${poolName}` }).getByRole('listitem'),
-      ).toHaveCount(ENTRANT_COUNT / POOL_COUNT)
+        detail.poolEntrants(eventId, pool.name),
+        `${pool.name} holds the wrong entrants — the draw was dealt in the wrong pool order`,
+      ).toHaveText(POOL_MEMBERS[index].map((i) => entrants[i].username))
     }
+
+    // ----- …and the WIRE carried that order to get here -----------------------
+    // The detail's fixtures come back ordered by their pool's position, so the pool ids in
+    // first-appearance order are the server's own statement of the event's pool order —
+    // the one the page above rendered, read straight off the payload that fed it.
+    const schedule = await getScheduleDetail(director, tournamentId)
+    const fixtures = schedule.events.find((e) => e.id === eventId)?.fixtures ?? []
+    expect([
+      ...new Set(
+        fixtures.flatMap((fixture) =>
+          fixture.pool_id === null ? [] : [fixture.pool_id],
+        ),
+      ),
+    ]).toEqual(pools.map((pool) => pool.id))
 
     // ----- stage two: the bracket, present already, and entirely unknown -----
     await expect(detail.bracket(eventId)).toBeVisible()
@@ -220,13 +340,58 @@ test.describe('Tournament — rr-then-ko draw', () => {
     )
     // The final exists and both its sides are unknown: nobody has played, so every
     // knockout side is TBD and the bracket names NO entrant yet. `SideFill` seats them
-    // later, pool by pool, into slots that already exist.
+    // below, pool by pool, into slots that already exist.
     const final = detail.bracketRound(eventId, BRACKET_ROUNDS).getByRole('listitem')
     await expect(final).toHaveCount(1)
     await expect(final).toHaveText(/TBD\s*vs\s*TBD/)
     for (const entrant of entrants) {
       await expect(detail.bracket(eventId)).not.toContainText(entrant.username)
     }
+
+    // ----- go live: the pool fixtures become real matches --------------------
+    await detail.startButton.click()
+    await expect(detail.endButton).toBeVisible()
+
+    // ----- play the POOL STAGE, and only it, over the API --------------------
+    // Stopping here is the whole point of the `'pools'` stage: the moment worth looking
+    // at — pools decided, qualifiers seated, nobody knocked out — does not exist if the
+    // helper plays on. The earlier-registered entrant always wins, so each pool's
+    // qualifiers are exactly `POOL_MEMBERS`' first two.
+    expect(
+      await playEvent(director, tournamentId, eventId, entrants, 'pools'),
+      'the pool stage must materialize one match per pairing',
+    ).toBe(POOL_MATCHES)
+
+    // ----- the qualifiers are SEATED in the bracket that named nobody --------
+    await detail.reload(tournamentId)
+    for (const index of QUALIFIERS) {
+      await expect(
+        detail.bracket(eventId),
+        `${entrants[index].username} qualified but is not in the bracket`,
+      ).toContainText(entrants[index].username)
+    }
+    // The half that makes it an assertion about *seeding* rather than about names
+    // appearing: the three who did not qualify are still absent, so the bracket was
+    // filled from each pool's top K and not from the pool.
+    for (const index of ELIMINATED) {
+      await expect(
+        detail.bracket(eventId),
+        `${entrants[index].username} did not qualify but is in the bracket`,
+      ).not.toContainText(entrants[index].username)
+    }
+
+    // ----- play the KNOCKOUT out, and the card crowns its champion -----------
+    expect(
+      await playEvent(director, tournamentId, eventId, entrants, 'all'),
+      'the bracket must be five matches: two byes cost no fixture',
+    ).toBe(KNOCKOUT_MATCHES)
+
+    await detail.reload(tournamentId)
+    // The two-stage callout, never the round-robin one: in this format leading a pool
+    // wins nothing, so the name here is the knockout FINAL's winner. Under the winner
+    // rule that is the first entrant to register, who won every match they played.
+    await expect(detail.twoStageChampion(eventId)).toBeVisible()
+    await expect(detail.twoStageChampion(eventId)).toContainText(entrants[0].username)
 
     await Promise.all(entrants.map((entrant) => entrant.ctx.dispose()))
   })

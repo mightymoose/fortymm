@@ -229,6 +229,35 @@ class PoolSetFrozenError(Exception):
         self.added = added
 
 
+class PoolNotInEventError(Exception):
+    """Raised by the update-event verb when an entry of a submitted ``pools`` list cites
+    an ``id`` that names no pool of **this** event (ADR 20260801).
+
+    The exact twin of :class:`TableNotInCatalogueError`, one resource over. It could not
+    exist while a pool id was the client's to author — an id the server had never seen
+    still named the pool the client meant, so a new id was an *addition*. The id is a
+    server-minted uuid now, so one the server did not mint names nothing, and minting a
+    fresh pool for it would hand the client back a different id than it asked for while
+    quietly *removing* the pool it meant to keep: the two failures a diff must never
+    confuse.
+
+    It is judged **after** the pool-set freeze, so an event whose draw is cut answers
+    the 409 that names its pools rather than this 422 — the freeze is the refusal a
+    director
+    can act on, and a cited-but-unknown id is an addition as far as a standing draw is
+    concerned.
+
+    Carries the ``index`` of the offending entry as well as the id, because the pools
+    are a list and a refusal a client cannot attribute to a row is a refusal it cannot
+    render: the HTTP adapter names ``loc: ["body", "pools", index, "id"]``, the same
+    shape the schema's own 422s on this field have. Never an ``HTTPException``."""
+
+    def __init__(self, index: int, pool_id: str) -> None:
+        super().__init__("This event has no pool with that id.")
+        self.index = index
+        self.pool_id = pool_id
+
+
 class TableNotInCatalogueError(Exception):
     """Raised by the edit verb when an entry of a submitted ``table_catalogue`` cites an
     ``id`` that names no table of **this** tournament's catalogue (ADR 20260801).

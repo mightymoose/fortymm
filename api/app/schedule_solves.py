@@ -1019,7 +1019,10 @@ async def _load_solver_inputs(
                 "length_games": settings.length_games,
                 "pools": [
                     {
-                        "id": pool.id,
+                        # ``str``, because the fingerprint is canonical JSON and a
+                        # ``uuid.UUID`` is not JSON-serializable — the id became one
+                        # when the server started minting them (ADR 20260801).
+                        "id": str(pool.id),
                         "date": pool.slot.date,
                         "start": pool.slot.start,
                         "end": pool.slot.end,
@@ -1040,7 +1043,7 @@ async def _load_solver_inputs(
             {
                 "id": str(fixture.id),
                 "event_id": str(fixture.event_id),
-                "pool_id": fixture.pool_id,
+                "pool_id": _opt(fixture.pool_id),
                 "entry_a": _opt(fixture.entry_a_id),
                 "entry_b": _opt(fixture.entry_b_id),
                 "winner": _opt(fixture.winner_entry_id),

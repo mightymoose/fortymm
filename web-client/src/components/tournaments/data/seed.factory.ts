@@ -7,9 +7,11 @@ import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.fa
 
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
+import { keepPools } from './pool-entries'
 import type {
   Address,
   DrawTypeOption,
+  EditedEvent,
   Entrant,
   EventEntryState,
   FinishesResults,
@@ -17,6 +19,7 @@ import type {
   Fixture,
   FixtureTime,
   Pool,
+  PoolEntry,
   PoolStandings,
   Predicate,
   StandingRow,
@@ -189,6 +192,40 @@ export function buildEvent(
       ? { state: 'event_full' }
       : { state: 'open' })
   return { ...event, entryState, entered: event.entrants.length }
+}
+
+/**
+ * The same event as the **editor** would hand it back with nothing about its pools
+ * changed: every stored pool cited by the id the server minted (`keepPools`,
+ * `data/pool-entries`).
+ *
+ * This is the shape the write mappers take (`EditedEvent`), and building it through the
+ * production constructor is the point: a test that hand-wrote `kind: 'kept'` entries
+ * could keep passing after `keepPools` stopped citing ids, which is the exact regression
+ * — a no-op diff read as "remove every pool" — that shape exists to prevent.
+ *
+ * Pass `pools` to state a real edit: `[...keepPools(event.pools), addedPool({…})]` adds
+ * one, a shorter list removes one.
+ */
+export function buildEditedEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered' | 'pools'>> & {
+    pools?: PoolEntry[]
+  } = {},
+): EditedEvent {
+  const { pools, ...eventOverrides } = overrides
+  // `pools: undefined` still triggers `asEditedEvent`'s own default (`keepPools`)
+  // — passing it through rather than repeating the default here is what keeps the
+  // no-op-diff default in the one place `asEditedEvent` already states it.
+  return asEditedEvent(buildEvent(eventOverrides), pools)
+}
+
+/** One read event, re-expressed as the editor's no-op diff — `buildEditedEvent` for a
+ * test that already holds the event it means. */
+export function asEditedEvent(
+  event: TournamentEvent,
+  pools: PoolEntry[] = keepPools(event.pools),
+): EditedEvent {
+  return { ...event, pools }
 }
 
 /** An event with **no entrant cap** (`max_players: null`, ADR-0935): open to
@@ -546,19 +583,20 @@ export function buildDrawnEvent(
 }
 
 /** How many pools `buildTenPools` builds — ten, because ten is the smallest count at
- * which a client-minted id (`p-10-…`) sorts into the middle of the single digits. Nine
- * pools would order identically by id and by position, and prove nothing. */
+ * which a legacy client-minted id (`p-10-…`) sorts into the middle of the single digits.
+ * Nine pools would order identically by id and by position, and prove nothing. */
 const TEN = 10
 
 /**
  * **Ten pools whose ids sort differently from their positions** — the fixture the whole
  * ordering rule is about, and the only pool fixture that can falsify it.
  *
- * The ids are minted the way the editor mints them (`genId('p')` — `p-1-<ts>`,
- * `p-2-<ts>` … `p-10-<ts>`, one timestamp for the burst), and as strings `p-10-` falls
- * between `p-1-` and `p-2-`. So anything that sorted these by id renders **1, 10, 2, 3 …
- * 9** — which is not a hypothetical: it is exactly what a ten-pool event's draw did
- * before pools carried a position.
+ * The ids reproduce the legacy shape the editor used to mint before pool ids became
+ * server-minted UUIDs (`genId('p')` — `p-1-<ts>`, `p-2-<ts>` … `p-10-<ts>`, one
+ * timestamp for the burst), and as strings `p-10-` falls between `p-1-` and `p-2-`. So
+ * anything that sorted these by id renders **1, 10, 2, 3 … 9** — which is not a
+ * hypothetical: it is exactly what a ten-pool event's draw did before pools carried a
+ * position.
  *
  * They are returned **in that wrong order on purpose**, positions 0–9 telling the truth
  * underneath. A fixture handed over already sorted cannot tell "orders by position" from
@@ -573,7 +611,7 @@ export function buildTenPools(): Pool[] {
   const inPositionOrder = Array.from({ length: TEN }, (_, i) => {
     const n = i + 1
     return buildPool({
-      // The `genId('p')` shape: index, then the shared base-36 timestamp.
+      // The legacy `genId('p')` shape: index, then the shared base-36 timestamp.
       id: `p-${n}-mkq1x`,
       name: `Pool ${n}`,
       position: i,

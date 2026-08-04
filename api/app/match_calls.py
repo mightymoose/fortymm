@@ -982,9 +982,10 @@ class CopyIngredients:
     users: dict[uuid.UUID, User]
     events: dict[uuid.UUID, TournamentEvent]
     table_labels: dict[str, str]
-    #: Per event, its pools' id → display name (``pool_id`` is a string ref
-    #: into the event's own ``pools`` JSONB).
-    pool_names: dict[uuid.UUID, dict[str, str]]
+    #: Per event, its pools' id → display name. Both keys are uuids: the outer one is
+    #: the event's, the inner one the pool's own ``tournament_event_pools`` primary key
+    #: (ADR 20260801), which is exactly what a fixture's ``pool_id`` holds.
+    pool_names: dict[uuid.UUID, dict[uuid.UUID, str]]
 
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
         if entry_id is None:
@@ -993,7 +994,10 @@ class CopyIngredients:
         return self.users.get(user_id) if user_id is not None else None
 
     def context_for(
-        self, tournament: Tournament, event: TournamentEvent, pool_id: str | None
+        self,
+        tournament: Tournament,
+        event: TournamentEvent,
+        pool_id: uuid.UUID | None,
     ) -> MatchCallContext:
         """The fixture's whereabouts in the player's terms."""
         pool_name: str | None = None

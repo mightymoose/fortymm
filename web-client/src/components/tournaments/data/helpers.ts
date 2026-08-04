@@ -9,7 +9,7 @@ import type {
   Address,
   Entrant,
   Predicate,
-  Pool,
+  PoolDraft,
   Tournament,
   TournamentEvent,
 } from './types'
@@ -377,9 +377,10 @@ export function predicateSentence(p: Predicate): string {
  *
  * It exists because the two plausible alternatives are both wrong:
  *
- * - **By id** is the bug this field was added to kill. Ids are minted client-side
- *   (`genId('p')`), so a ten-pool event holds `p-1-…` … `p-10-…`, and sorted as strings
- *   `p-10-` lands between `p-1-` and `p-2-`: the draw rendered 1, 10, 2, 3 …
+ * - **By id** is the bug this field was added to kill. The ids were minted client-side
+ *   then (`p-1-…` … `p-10-…`, so as strings `p-10-` landed between `p-1-` and `p-2-`:
+ *   the draw rendered 1, 10, 2, 3 …) and are server-minted uuids now, which sort by
+ *   nothing whatsoever — the same wrong answer, arrived at faster.
  * - **Whatever order the array is in** is not an answer at all, only a coincidence. The
  *   server does send its pools in position order, but a client that merely *inherited*
  *   that order would state no rule, so nothing would fail when the order stopped holding.
@@ -395,16 +396,6 @@ export function poolsInOrder<T extends { position: number }>(
   return [...pools].sort((a, b) => a.position - b.position)
 }
 
-/** The position a pool appended to `pools` takes: **one past the highest**, never the
- * count. The two differ the moment a pool is removed from the middle — nine pools
- * numbered 0…4, 6…9 would hand a tenth the position `9`, a duplicate, and the two would
- * then order by nothing. (The server renumbers from the array index on the next write,
- * so this only has to hold until the save; "only until the save" is still long enough for
- * a director to add a pool and watch it jump.) */
-export function nextPoolPosition(pools: readonly { position: number }[]): number {
-  return pools.reduce((max, p) => Math.max(max, p.position + 1), 0)
-}
-
 export interface PoolConflict {
   table: string
   poolA: string
@@ -412,8 +403,13 @@ export interface PoolConflict {
 }
 
 /** Tables double-booked across two pools whose time windows overlap on the
- * same day — surfaced as a warning in the event editor's Table pools tab. */
-export function findPoolConflicts(pools: Pool[]): PoolConflict[] {
+ * same day — surfaced as a warning in the event editor's Table pools tab.
+ *
+ * Takes `PoolDraft`s — the three fields a director types — so it reads a pool the editor
+ * has just added (which has no id and no position yet) exactly as it reads a stored one.
+ * A double-booking is a fact about windows and tables; identity has nothing to do with
+ * it. */
+export function findPoolConflicts(pools: readonly PoolDraft[]): PoolConflict[] {
   const conflicts: PoolConflict[] = []
   for (let i = 0; i < pools.length; i++) {
     for (let j = i + 1; j < pools.length; j++) {

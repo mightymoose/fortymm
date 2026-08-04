@@ -33,10 +33,12 @@ import {
 import type { LifecycleEdge } from './lifecycle'
 import type {
   Address,
+  EditedEvent,
   Entrant,
   EventEntryState,
   Fixture,
   Pool,
+  PoolEntry,
   Predicate,
   PredicateValue,
   Tournament,
@@ -177,7 +179,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
 
 /** Map an API pool to the prototype's `Pool`. `position` is carried across as the server
  * assigned it — it is the *read* shape's field and appears on no write body (see
- * `eventPoolsToApi`). The order of `e.pools` is NOT relied on here: whoever lays pools out
+ * `poolEntriesToApi`). The order of `e.pools` is NOT relied on here: whoever lays pools out
  * sorts by `position` itself (`poolsInOrder`, `./helpers`). */
 function apiToPool(p: ApiPool): Pool {
   return {
@@ -372,13 +374,52 @@ export function catalogueToUpdateBody(
 }
 
 /**
- * The pools as a write body takes them (`PoolWrite`) — **without `position`**.
+ * The words of a pool, as **both** write shapes take them — **without `id` and without
+ * `position`**.
  *
- * Same category of field as `entered` one function down: server-managed, and echoing the
- * client's copy back is at best noise and at worst a lie. It is stronger here, though.
- * `entered` is merely *ignored* by the write schema; `PoolWrite` is `extra="forbid"` and
- * declares no `position` at all, so sending it is a **422 naming the field** — the whole
- * save refused, for a key the director never typed.
+ * Same category of field as `entered` two functions down: server-managed, and echoing
+ * the client's copy back is at best noise and at worst a lie. It is stronger here,
+ * though. `entered` is merely *ignored* by the write schema; `PoolWrite` is
+ * `extra="forbid"` and declares neither of these, so sending one is a **422 naming the
+ * field** — the whole save refused, for a key the director never typed.
+ */
+function poolDraftToApi(entry: PoolEntry) {
+  return { name: entry.name, slot: entry.slot, table_ids: entry.tableIds }
+}
+
+/**
+ * The pools as a **create** body takes them (`PoolWrite[]`): the words, and nothing
+ * else.
+ *
+ * An event being born has no pools to cite — every pool on it is new, and the server
+ * mints an id for each (ADR 20260801) — so there is no id arm here at all. A `kept` entry
+ * cannot arise on a create in practice, and if one did its id would name a pool of some
+ * *other* event: dropping it is the only honest reading, and it is also the only one the
+ * schema permits.
+ */
+function poolEntriesToWrite(pools: readonly PoolEntry[]) {
+  return pools.map(poolDraftToApi)
+}
+
+/**
+ * The pools as a **patch** body takes them (`PoolUpsert[]`) — the server's **id-keyed
+ * diff** (ADR 20260801), which is three statements in one array:
+ *
+ * - an entry **citing an id** keeps that pool, and therefore every fixture drawn into it,
+ *   while taking this payload's words and place;
+ * - an entry with **no id** adds a pool, whose id the server mints;
+ * - a stored pool **no entry cites** is removed.
+ *
+ * The `added` arm omits the `id` **key** rather than sending `null`. Both are accepted
+ * (`PoolUpsert.id` is `string | null` and optional), so this is not a correctness fix on
+ * today's schema — it is the discipline `tableEntryToApi` and `drawSettingsToApi` already
+ * follow: send the field only when there is a pool to name. A payload a reader can eyeball
+ * and see "this entry cites nothing, so it is an insert" is the whole readability of a
+ * diff.
+ *
+ * An id this event does not hold is a **422 on that entry** (`['body','pools',i,'id']`),
+ * never a quietly minted pool — which is why the ids reaching here may only ever have come
+ * from a read (`keepPools`, `./pool-entries`).
  *
  * **The order of this array IS the ordering.** The server assigns each pool the position
  * of its index in this very list, so reordering pools is done by sending them in the
@@ -386,13 +427,14 @@ export function catalogueToUpdateBody(
  * position order (`eventToFormValues`, `../event-form`): the array a save serializes has
  * to be the array the director was looking at, or the pools shuffle on the round trip.
  */
-function eventPoolsToApi(ev: TournamentEvent) {
-  return ev.pools.map((p) => ({
-    id: p.id,
-    name: p.name,
-    slot: p.slot,
-    table_ids: p.tableIds,
-  }))
+function poolEntriesToApi(
+  pools: readonly PoolEntry[],
+): components['schemas']['PoolUpsert'][] {
+  return pools.map((entry) =>
+    entry.kind === 'kept'
+      ? { id: entry.id, ...poolDraftToApi(entry) }
+      : poolDraftToApi(entry),
+  )
 }
 
 /**
@@ -419,16 +461,19 @@ function eventPoolsToApi(ev: TournamentEvent) {
  * first (`qualifiersPerPoolSchema`, `data/event-validation`); sending it is honest, and
  * far better than inventing a `1` the director never chose.
  */
-function drawSettingsToApi(ev: TournamentEvent) {
+function drawSettingsToApi(
+  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool'>,
+) {
   return ev.drawType === 'rr-then-ko'
     ? { draw_type: ev.drawType, qualifiers_per_pool: ev.qualifiersPerPool }
     : { draw_type: ev.drawType }
 }
 
 /** The event fields shared by the create and update bodies — everything except the
- * server-managed values: the `entered` count, and each pool's `position`
- * (`eventPoolsToApi` above). */
-function eventToApiFields(ev: TournamentEvent) {
+ * server-managed values (the `entered` count, and each pool's `id` and `position`) and
+ * the pools themselves, whose two shapes are the one thing the two verbs do NOT share:
+ * a create writes `PoolWrite[]`, a patch writes the `PoolUpsert[]` diff. */
+function eventToApiFields(ev: EditedEvent) {
   return {
     name: ev.name,
     format: ev.format,
@@ -439,21 +484,30 @@ function eventToApiFields(ev: TournamentEvent) {
     slot: ev.slot,
     match_settings: { rated: ev.match.rated, length_games: ev.match.lengthGames },
     predicates: ev.predicates,
-    pools: eventPoolsToApi(ev),
   }
 }
 
-/** Build the event *create* body (POST) from a prototype `TournamentEvent`. */
-export function eventToCreateBody(ev: TournamentEvent): TournamentEventCreate {
-  return eventToApiFields(ev)
+/** Build the event *create* body (POST) from the editor's `EditedEvent`. Its pools carry
+ * **no ids at all** — the server mints one per pool (`poolEntriesToWrite`). */
+export function eventToCreateBody(ev: EditedEvent): TournamentEventCreate {
+  return { ...eventToApiFields(ev), pools: poolEntriesToWrite(ev.pools) }
 }
 
-/** Build the event *update* body (PATCH) from a prototype `TournamentEvent`.
+/** Build the event *update* body (PATCH) from the editor's `EditedEvent`, its pools as
+ * the id-keyed diff (`poolEntriesToApi`).
+ *
  * `entered` is deliberately omitted: it's a server-managed registration count
  * the editor never touches, so echoing the client's last-read value back would
- * clobber registrations that changed server-side since load (a lost update). */
-export function eventToUpdateBody(ev: TournamentEvent): TournamentEventUpdate {
-  return eventToApiFields(ev)
+ * clobber registrations that changed server-side since load (a lost update).
+ *
+ * ⚠️ **The pools are not optional here**, even for a surface that is editing something
+ * else about the event. A PATCH leaves an absent field alone, but a *present* one is the
+ * whole diff — so a body built from an event whose pools were dropped, or whose entries
+ * had lost their ids, reads as "remove every pool you have", and takes the draw dealt
+ * across them with it. Build the entries from a read (`keepPools`) and the ids come along
+ * for free; that is what `eventToFormValues` does, and it is the only path to here. */
+export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
+  return { ...eventToApiFields(ev), pools: poolEntriesToApi(ev.pools) }
 }
 
 // ----- query keys ----------------------------------------------------------

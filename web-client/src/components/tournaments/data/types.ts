@@ -85,8 +85,19 @@ export interface MatchSettings {
   lengthGames: MatchLength
 }
 
-/** A slice of tables reserved for a window of time within an event. */
+/** A slice of tables reserved for a window of time within an event, **as it is read
+ * back**: the words a client wrote, plus the two fields the server owns.
+ *
+ * This is the READ shape. What goes *out* is `PoolEntry` below — the same distinction
+ * `TournamentTable`/`TournamentTableEntry` draw one resource over, and for the same
+ * reason: since ADR 20260801 a pool is a row with a uuid primary key, so neither of the
+ * two fields here is the client's to author. */
 export interface Pool {
+  /** The SERVER's uuid — the `tournament_event_pools` row's primary key (ADR 20260801).
+   * A client never mints one: the create shape (`PoolWrite`) has no `id` field at all
+   * and `extra="forbid"` turns a supplied one into a 422, and the patch shape
+   * (`PoolUpsert`) takes an id only to *cite* a pool the event already has. An id this
+   * event does not hold is a 422 naming that entry — never a quietly minted pool. */
   id: string
   name: string
   slot: Slot
@@ -94,19 +105,77 @@ export interface Pool {
   /**
    * Where this pool sits in its event's ordering — **0-based, and assigned by the
    * server** from the index of the pool in the list a write body sent. To reorder
-   * pools you send them in the order you want; you never send a position (the write
-   * schema is `extra="forbid"`, so a `position` key on a write body is a 422 that
-   * names the field — see `eventPoolsToApi`, `data/api`).
+   * pools you send them in the order you want; you never send a position (both write
+   * schemas are `extra="forbid"`, so a `position` key on a write body is a 422 that
+   * names the field — see `poolEntriesToApi`, `data/api`).
    *
-   * It exists because **pool ids do not order pools**. They are minted client-side
-   * (`genId('p')` → `p-1-…`, `p-2-…`, `p-10-…`), and sorted as strings `p-10-` falls
-   * between `p-1-` and `p-2-` — so a ten-pool event read its draw back as 1, 10, 2, 3.
-   * That was a live bug, not a hypothetical. Everything that puts pools in an order
-   * therefore orders them by THIS field (`poolsInOrder`, `data/helpers`) — never by id,
-   * and never by whatever order the array happened to arrive in.
+   * It exists because **pool ids do not order pools**, and that was true of the
+   * client-minted ids it was introduced against (`p-10-…` sorted between `p-1-…` and
+   * `p-2-…`, so a ten-pool event read its draw back as 1, 10, 2, 3 — a live bug) and is
+   * even more true of the uuids that replaced them, which sort by nothing at all.
+   * Everything that puts pools in an order therefore orders them by THIS field
+   * (`poolsInOrder`, `data/helpers`) — never by id, and never by whatever order the
+   * array happened to arrive in.
    */
   position: number
 }
+
+/** The part of a pool a client actually **authors**: what it is called, when it runs,
+ * and which tables it holds. Exactly `PoolWrite` on the wire — no `id`, no `position`,
+ * because neither is the client's (see `Pool` above). It is also all a `PoolCard` is
+ * given, so the editor's one pool control literally cannot touch an identity. */
+export interface PoolDraft {
+  name: string
+  slot: Slot
+  tableIds: string[]
+}
+
+/**
+ * One pool of an **edited** event — what the editor's pools tab holds and
+ * `poolEntriesToApi` (`./api`) puts on the wire as a `PoolUpsert`.
+ *
+ * A pools write is an **id-keyed diff**, not a replace (ADR 20260801), and the two
+ * things an entry can mean are opposite:
+ *
+ * - **`kept`** — "this is the pool you already have, with these words." It carries the
+ *   `id` the server minted, so the row keeps its identity and therefore every fixture
+ *   drawn into it.
+ * - **`added`** — "mint me one." It has no `id` **field at all**, so a client-minted id
+ *   is not a value this type can hold — which is the point: `PoolWrite` is
+ *   `extra="forbid"`, so an `id` on a new pool is a 422, and an entry citing an id the
+ *   event does not have is a 422 on that entry (`['body','pools',i,'id']`).
+ *
+ * (And a stored pool **no entry cites** is a *removal* — which is why this is a tagged
+ * union rather than the obvious `id?: string`. With one optional field, a draft pool
+ * that had somehow acquired an id and a saved pool that had lost one are both
+ * representable, and each is a silent data-loss bug: the first is a 422 at best and a
+ * duplicate pool at worst, the second deletes the pool — and its fixtures' home — that
+ * the director only meant to rename. It is the shape `TournamentTableEntry` already
+ * has, one resource over.)
+ *
+ * `key` on the `added` arm is a **React key and nothing else**: it is never sent, never
+ * read by the server, and never mistaken for an id, because the arm that has an id is a
+ * different arm. The cards need a stable key across re-renders — `useFieldArray`
+ * regenerates its own key on every `update()`, which would remount the card mid-keystroke
+ * and drop focus — and a pool the server has never seen has nothing else to be keyed on.
+ */
+export type PoolEntry =
+  | ({ kind: 'kept'; id: string } & PoolDraft)
+  | ({ kind: 'added'; key: string } & PoolDraft)
+
+/**
+ * An event as the **editor** hands it back: every read field of the event it was opened
+ * on, with the pools replaced by the diff the organizer built (`PoolEntry`).
+ *
+ * It is a distinct type from `TournamentEvent` rather than a loosened one so that the
+ * two directions cannot be confused at a call site: what comes *back* from the API has
+ * pools with server ids and positions, and what goes *out* has entries that either cite
+ * an id or carry none. `eventToCreateBody` / `eventToUpdateBody` take this, so an event
+ * read straight off a query can no longer be posted back as-is — which is exactly the
+ * 422 (`extra_forbidden` on `body.pools[i].id`) that this shape exists to make
+ * unsayable.
+ */
+export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] }
 
 /**
  * One planned pairing of an event's **draw** (ADR-0786): a round and a position —

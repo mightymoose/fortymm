@@ -166,6 +166,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
+    PoolNotInEventError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
     TableInUseError,
@@ -1382,7 +1383,11 @@ async def update_event(
     validates, so the MCP and HTTP surfaces can never drift on what a valid edit is.
 
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; ``predicates``
-    and ``pools`` replace wholesale when sent. Editing an event is OWNER-GATED — only
+    replaces wholesale when sent. ``pools`` is an ID-KEYED DIFF sent in full and in
+    order: an entry carrying an ``id`` keeps that pool (re-worded, re-timed, re-tabled,
+    re-positioned), an entry omitting one adds a pool the server mints an id for, and a
+    pool no entry names is removed — so send back the pools you read, edited. An ``id``
+    this event does not have is refused. Editing an event is OWNER-GATED — only
     the tournament's creator may (there is no permission on this route). **Once the
     event's draw is cut, two things freeze** (ADR-0786): a ``pools`` payload that
     changes *which pools* the event has is refused, and so is a ``draw_type`` change —
@@ -1423,6 +1428,13 @@ async def update_event(
             # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
             # (remove the draw, edit, cut again).
             raise ToolError(str(exc)) from exc
+        except PoolNotInEventError as exc:
+            # The HTTP surface answers this on the field; an agent reads prose, so the
+            # offending id rides in the sentence rather than in a ``loc`` — the same
+            # treatment the catalogue's ``TableNotInCatalogueError`` gets above.
+            raise ToolError(
+                f"{exc} (pools entry {exc.index} names “{exc.pool_id}”)."
+            ) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
         # so the shared shaping helper needs no re-query — the same helper the HTTP

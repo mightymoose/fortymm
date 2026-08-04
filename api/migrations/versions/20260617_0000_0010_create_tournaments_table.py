@@ -330,6 +330,14 @@ def upgrade() -> None:
             deferrable=True,
             initially="DEFERRED",
         ),
+        # Redundant against the primary key, and here for exactly one purpose: SQL can
+        # only reference a UNIQUE set of columns, so this is the target
+        # ``tournament_event_pool_tables`` foreign-keys ``(tournament_id, table_id)``
+        # against — the leg that says the table a pool reserves is its OWN tournament's
+        # (ADR 20260801). Added in place per the pre-deploy convention.
+        sa.UniqueConstraint(
+            "tournament_id", "id", name="uq_tournament_tables_tournament_id_id"
+        ),
     )
     # Postgres indexes the REFERENCED key of a foreign key, never the referencing
     # column, so this is what keeps the tournament-delete cascade from sequentially
@@ -386,6 +394,15 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
         ),
+        # Redundant against the primary key, and here for exactly one purpose: it is the
+        # target ``tournament_event_pool_tables`` foreign-keys ``(tournament_id,
+        # event_id)`` against, which is what forces a reservation's denormalized
+        # ``tournament_id`` to be the tournament its pool's event really belongs to. The
+        # other two legs of that row are satisfiable by a cross-tournament reservation
+        # without it (ADR 20260801). Added in place per the pre-deploy convention.
+        sa.UniqueConstraint(
+            "tournament_id", "id", name="uq_tournament_events_tournament_id_id"
+        ),
         # No ``entered`` column: an event's entry count is DERIVED from a live
         # count of its active ``tournament_entries`` rows (ADR-0016). A stored
         # counter is a second copy of the truth that can drift from the rows it
@@ -399,12 +416,14 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
-        sa.Column(
-            "pools",
-            postgresql.JSONB(),
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
+        # There is deliberately NO ``pools`` column. An event's pools were a NOT NULL
+        # JSONB list of ``{id, name, slot, table_ids}`` objects keyed by client-supplied
+        # strings; they are the ``tournament_event_pools`` table created below (ADR
+        # 20260801 "a pool belongs to its event, not to the event's draw settings"), so
+        # a fixture can foreign-key the pool it names — and specifically one of its OWN
+        # event's pools. Edited out of this migration in place, per the pre-deploy
+        # convention in api/CLAUDE.md — revision ids and the ``down_revision`` chain
+        # stay frozen.
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -442,8 +461,210 @@ def upgrade() -> None:
         ["draw_settings_id"],
     )
 
+    # An event's pools, as rows (ADR 20260801 "a pool belongs to its event, not to the
+    # event's draw settings"). Created after ``tournament_events`` because it FKs it, and
+    # before ``tournament_fixtures`` (0012), which carries the composite foreign key onto
+    # the ``(event_id, id)`` unique constraint below. Added here in place per the
+    # pre-deploy convention, not as a chained ALTER.
+    #
+    # ``id`` is a server-minted uuid — ``gen_random_uuid()``, exactly as
+    # ``tournament_tables.id`` is. It was a client-supplied string for as long as a pool
+    # was a JSONB value-object with nothing to mint it; this column,
+    # ``tournament_event_pool_tables.pool_id`` and ``tournament_fixtures.pool_id`` moved
+    # onto uuid in one step, because they are one representation and a half-moved one is
+    # not a state worth having.
+    #
+    # The window is ``date``/``time``, NOT ``timestamptz``, and that is the ADR's call
+    # rather than an oversight (api/CLAUDE.md's "datetimes are timezone-aware, always"
+    # governs datetimes, and these are not datetimes). A pool's window is wall-clock in
+    # the venue's own frame, which ``tournament_events.timezone`` carries and the solver
+    # anchors; storing an instant would bake that anchoring into the column, so a
+    # timezone correction would have to rewrite every pool window instead of re-reading
+    # the same wall-clock in the new zone.
+    op.create_table(
+        "tournament_event_pools",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            nullable=False,
+        ),
+        # CASCADE: deleting an event takes its pools with it, exactly as it takes its
+        # entries and fixtures.
+        sa.Column(
+            "event_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("name", sa.Text(), nullable=False),
+        # Where the pool sits in the event's own pool order: 0-based, contiguous,
+        # server-assigned from the order the pools were sent in. The JSONB array carried
+        # this for free and the client-minted ids sorted into it by accident; neither
+        # survives, and the snake seeds against this order (ADR 20260801, "Pools carry an
+        # explicit ``position``").
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("slot_date", sa.Date(), nullable=False),
+        sa.Column("slot_start", sa.Time(), nullable=False),
+        sa.Column("slot_end", sa.Time(), nullable=False),
+        # There is deliberately NO ``table_ids`` column. The tables a pool reserves were
+        # a NOT NULL JSONB array of table-id strings — which could name another
+        # tournament's table, or no table at all — and they are the
+        # ``tournament_event_pool_tables`` rows created below (ADR 20260801, "the
+        # tournament-scoping stops at the join table"). Edited out of this migration in
+        # place, per the pre-deploy convention in api/CLAUDE.md.
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        # The key is ``id`` ALONE. It was the pair ``(event_id, id)`` for as long as the
+        # id was a client-minted string, which is only unique per event — two events of
+        # one tournament could each hold a "pool-a", and a bare ``id`` key would have
+        # imposed platform-wide uniqueness on a string nothing above the database
+        # controlled. A minted uuid is globally unique by construction, so the narrower
+        # key is the honest one.
+        sa.PrimaryKeyConstraint("id", name="pk_tournament_event_pools"),
+        # ``UNIQUE (event_id, id)`` — the ADR's own DDL, and it is here for exactly the
+        # reason the ADR gives: "redundant against the primary key and exists purely as
+        # the target that composite FK needs". SQL can only reference a unique set of
+        # columns, and the *pair* is what carries "my pool is my own event's pool" — for
+        # ``tournament_fixtures`` (0012) and for ``tournament_event_pool_tables`` below.
+        #
+        # Its index earns its keep besides: ``event_id`` leads, so it answers every read
+        # of "this event's pools", the event-delete cascade's lookup, and both foreign
+        # keys' referential checks — none of which the single-column primary key serves.
+        sa.UniqueConstraint(
+            "event_id", "id", name="uq_tournament_event_pools_event_id_id"
+        ),
+        # Two pools of one event never share a place in its order.
+        #
+        # DEFERRABLE INITIALLY DEFERRED, exactly as ``tournament_tables``' position
+        # constraint is: the pools are written as an id-keyed diff, and a diff re-orders
+        # — sending C, A, B back as B, C, A moves each row onto a position its neighbour
+        # has not vacated yet. An immediately-checked constraint would refuse that
+        # intermediate state and so forbid reordering, though the transaction's END state
+        # is perfectly unique.
+        sa.UniqueConstraint(
+            "event_id",
+            "position",
+            name="uq_tournament_event_pools_event_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
+    # The tables a pool reserves, as rows (ADR 20260801, "the tournament-scoping stops
+    # at the join table"). Created last in this migration because it references three of
+    # the tables above. Added here in place per the pre-deploy convention, not as a
+    # chained ALTER.
+    #
+    # ``tournament_id`` is DENORMALIZED, and it is the whole mechanism: a pool hangs off
+    # its event and a table hangs off its tournament, so the two sides share no column
+    # until this row supplies one for them to agree on. Three composite foreign keys
+    # then pin every leg of the path — the pool is a real pool, the table is a real
+    # table of tournament X, and the pool's event really does belong to tournament X.
+    # Drop that third one and the first two are satisfied by exactly the row this table
+    # exists to forbid: ``tournament_id`` naming a tournament whose table the pool
+    # borrows while the pool itself lives under another.
+    #
+    # All three are ON DELETE CASCADE. The one that carries a decision is the table leg:
+    # removing a venue table a fixture is PLACED at is refused (``ON DELETE RESTRICT``
+    # on ``tournament_fixtures.table_id``) and the director opts in on purpose, while
+    # removing one a pool merely RESERVES is silent — a reservation is a preference, a
+    # placement is a commitment (ADR 20260801, "a placement names a real table").
+    op.create_table(
+        "tournament_event_pool_tables",
+        sa.Column("tournament_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("pool_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("table_id", postgresql.UUID(as_uuid=True), nullable=False),
+        # Where the table sits in the pool's reservation list: 0-based, contiguous,
+        # server-assigned from the order the ids were sent in. The JSONB array carried
+        # this for free and the wire shape is still an array; ordering by the random
+        # ``table_id`` instead would shuffle a director's list on every read. Same
+        # argument as the two sibling ``position`` columns above.
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        # A pool reserves a table at most once. ``event_id`` leads so the key's own
+        # index answers the pool leg's referential check and the event-delete cascade.
+        sa.PrimaryKeyConstraint(
+            "event_id", "pool_id", "table_id", name="pk_tournament_event_pool_tables"
+        ),
+        sa.ForeignKeyConstraint(
+            ["event_id", "pool_id"],
+            ["tournament_event_pools.event_id", "tournament_event_pools.id"],
+            name="fk_tournament_event_pool_tables_event_id_pool_id",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "table_id"],
+            ["tournament_tables.tournament_id", "tournament_tables.id"],
+            name="fk_tournament_event_pool_tables_tournament_id_table_id",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "event_id"],
+            ["tournament_events.tournament_id", "tournament_events.id"],
+            name="fk_tournament_event_pool_tables_tournament_id_event_id",
+            ondelete="CASCADE",
+        ),
+        # Two reservations of one pool never share a place in its order. DEFERRABLE
+        # INITIALLY DEFERRED for the reason both sibling position constraints are: the
+        # reservations are written as a diff keyed on the table id, and a diff re-orders
+        # — moving a table up the list puts it on a position its neighbour has not
+        # vacated yet, though the transaction's END state is perfectly unique.
+        sa.UniqueConstraint(
+            "event_id",
+            "pool_id",
+            "position",
+            name="uq_tournament_event_pool_tables_event_id_pool_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+    # Postgres indexes the REFERENCED key of a foreign key, never the referencing
+    # columns. The primary key covers the two legs that lead with ``event_id``; this is
+    # the third, and it is the one on a routine DELETE path — every venue table removed
+    # cascades through it, which unindexed is a sequential scan of every reservation on
+    # the platform per table removed.
+    op.create_index(
+        "ix_tournament_event_pool_tables_tournament_id_table_id",
+        "tournament_event_pool_tables",
+        ["tournament_id", "table_id"],
+    )
+
 
 def downgrade() -> None:
+    # Dropped before all three of the tables it references.
+    op.drop_index(
+        "ix_tournament_event_pool_tables_tournament_id_table_id",
+        table_name="tournament_event_pool_tables",
+    )
+    op.drop_table("tournament_event_pool_tables")
+
+    # Dropped before the events it references (and before the fixtures of 0012 reference
+    # it — that migration is torn down first by the chain).
+    op.drop_table("tournament_event_pools")
+
     op.drop_index(
         "ix_tournament_events_draw_settings_id",
         table_name="tournament_events",
