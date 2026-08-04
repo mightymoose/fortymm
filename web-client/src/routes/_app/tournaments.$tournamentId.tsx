@@ -91,7 +91,7 @@ function TournamentDetailRoute() {
       onUpdate={(next) =>
         updateTournament.mutate({
           id: next.id,
-          patch: tournamentToUpdateBody(next, allTables),
+          patch: tournamentToUpdateBody(next),
         })
       }
       // `mutateAsync`, and the rejection is deliberately NOT caught here: the

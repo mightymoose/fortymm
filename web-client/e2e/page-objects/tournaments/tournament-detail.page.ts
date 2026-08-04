@@ -697,9 +697,18 @@ export class TournamentDetailPage {
     await expect(this.page.getByTestId('tables-tab')).toBeVisible()
   }
 
-  /** One table's card, by the label the director reads. */
+  /** One table's card, by the label the director reads.
+   *
+   * `hasText` alone does a case-insensitive SUBSTRING match, so `tableCard('Table
+   * 1')` would also match `Table 10`, `Table 11`, ... — the same collision the
+   * root `e2e/` suite's `poolDrawNamed` hit and fixed with `exact: true`
+   * (`1e [e2e]: prove the ten-pool draw order against the real stack`).
+   * `.filter()` has no `exact` option of its own, so `has` + an exact-matching
+   * child locator is `.filter()`'s equivalent. */
   tableCard(label: string): Locator {
-    return this.page.locator('[data-slot=card]').filter({ hasText: label })
+    return this.page
+      .locator('[data-slot=card]')
+      .filter({ has: this.page.getByText(label, { exact: true }) })
   }
 
   /** One table's Remove button. Owner-only — a viewer is offered none. */

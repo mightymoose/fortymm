@@ -22,7 +22,6 @@ import type { components } from '@/api/schema'
 import { parseDrawTypeCatalogue } from './draw-types'
 import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
-import { keepTables } from './table-catalogue'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
 import {
@@ -319,31 +318,30 @@ function tableEntryToApi(
 }
 
 /** Build the tournament-level `TournamentUpdate` body from an edited prototype
- * `Tournament` and the full table catalogue. Events are NOT included — they
- * have their own endpoints.
+ * `Tournament`. Events are NOT included — they have their own endpoints.
  *
- * The catalogue this takes is the tournament's **stored** tables, and every one of
- * them is sent CITING ITS ID — a no-op diff (ADR 20260801). That is what keeps a
- * Details-tab save (a renamed tournament, a new venue) from reading, to the server,
- * as "remove every table you have": under an id-keyed diff, an uncited stored table
- * is a removal. The Tables tab does not come through here — an *edit* of the
- * catalogue is `catalogueToUpdateBody` below, which is the only builder that can
- * express an add or a removal.
+ * **No `table_catalogue`.** The Details tab never touches tables, so it says
+ * nothing about them: a PATCH leaves an absent field unchanged
+ * (`TournamentUpdate._reject_explicit_null`, `api/app/schemas/tournament.py` —
+ * "omitting the key entirely skips the validator and keeps the default (the
+ * absent case)"), which is the *safe* way to say "no change" under an id-keyed
+ * diff, not the dangerous one. Round-tripping the stored catalogue back
+ * unchanged was the earlier, more cautious shape here; it worked, but it also
+ * ran the server's full diff-and-refusal machinery on every Details-tab save
+ * to conclude nothing changed. The Tables tab does not come through here — an
+ * *edit* of the catalogue is `catalogueToUpdateBody` below, which is the only
+ * builder that can express an add or a removal.
  *
  * **No `status`.** An edit carries no status, so editing a tournament's name or
  * dates can never move its lifecycle (ADR-0017). Moving it is
  * `POST /v1/tournaments/{id}/transitions`, which is a mutation of its own. */
-export function tournamentToUpdateBody(
-  t: Tournament,
-  catalogue: TournamentTable[],
-): TournamentUpdate {
+export function tournamentToUpdateBody(t: Tournament): TournamentUpdate {
   return {
     name: t.name,
     description: t.description,
     start_date: t.startDate,
     end_date: t.endDate,
     address: toAddressInput(t.address),
-    table_catalogue: keepTables(catalogue).map(tableEntryToApi),
   }
 }
 

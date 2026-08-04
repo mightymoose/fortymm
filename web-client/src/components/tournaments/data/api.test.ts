@@ -623,7 +623,7 @@ describe('draftToCreateBody', () => {
 describe('tournamentToUpdateBody', () => {
   it('maps tournament-level fields and omits events', () => {
     const tournament: Tournament = { ...draft, id: 't-1', name: 'Renamed' }
-    const body = tournamentToUpdateBody(tournament, [])
+    const body = tournamentToUpdateBody(tournament)
 
     expect(body.name).toBe('Renamed')
     expect(body.start_date).toBe('2026-09-01')
@@ -647,7 +647,7 @@ describe('tournamentToUpdateBody', () => {
   // organizer has no venue for patches `address: null`, not an object of blanks.
   it('sends address: null for a tournament with no venue', () => {
     const tournament: Tournament = { ...draft, id: 't-1', address: null }
-    const body = tournamentToUpdateBody(tournament, [])
+    const body = tournamentToUpdateBody(tournament)
 
     expect(body.address).toBeNull()
     // Present-and-null, not absent: "removed" and "unchanged" are different edits.
@@ -675,7 +675,7 @@ describe('tournamentToUpdateBody', () => {
       id: 't-1',
       address: blankAddress(),
     }
-    const body = tournamentToUpdateBody(tournament, [])
+    const body = tournamentToUpdateBody(tournament)
 
     expect(body.address).toBeNull()
     expect('address' in body).toBe(true)
@@ -691,7 +691,7 @@ describe('tournamentToUpdateBody', () => {
       address: blankAddress({ venue: '   ', city: '\t\n' }),
     }
 
-    expect(tournamentToUpdateBody(tournament, []).address).toBeNull()
+    expect(tournamentToUpdateBody(tournament).address).toBeNull()
   })
 
   /** The positive control for the three above. One non-blank component is a venue,
@@ -704,7 +704,7 @@ describe('tournamentToUpdateBody', () => {
       address: blankAddress({ city: 'Oakland' }),
     }
 
-    expect(tournamentToUpdateBody(tournament, []).address).toEqual({
+    expect(tournamentToUpdateBody(tournament).address).toEqual({
       venue: '',
       street: '',
       city: 'Oakland',
@@ -720,27 +720,21 @@ describe('tournamentToUpdateBody', () => {
   // a patch can't sneak it forward either. Transitions are their own endpoint.
   it('sends NO status — an edit cannot move the lifecycle', () => {
     const tournament: Tournament = { ...draft, id: 't-1', status: 'live' }
-    const body = tournamentToUpdateBody(tournament, [])
+    const body = tournamentToUpdateBody(tournament)
 
     expect('status' in body).toBe(false)
   })
 
-  // A no-op diff, not a replace. Under the server's id-keyed diff (ADR 20260801) an
-  // uncited stored table is a REMOVAL, so a Details-tab save that dropped the ids —
-  // or the catalogue — would read as "remove every table you have".
-  it('cites every stored table’s id, so a field edit removes nothing', () => {
-    const tournament: Tournament = {
-      ...draft,
-      id: 't-1',
-      tableIds: ['t1', 't2'],
-    }
-    const catalogue = [
-      { id: 't1', label: 'Table 1', court: 'North' },
-      { id: 't2', label: 'Table 2', court: 'South' },
-    ]
-    const body = tournamentToUpdateBody(tournament, catalogue)
+  // Under the server's id-keyed diff (ADR 20260801) an uncited stored table is a
+  // REMOVAL — so a Details-tab save must not cite the catalogue at all: an id
+  // list can drift stale, but an ABSENT key cannot. Omitting the key entirely is
+  // what the server's own `_reject_explicit_null` treats as "unchanged"
+  // (`api/app/schemas/tournament.py`) — the same field sent as `null` is a 422.
+  it('sends NO table_catalogue — an absent key can’t drift stale into a removal', () => {
+    const tournament: Tournament = { ...draft, id: 't-1', tableIds: ['t1', 't2'] }
+    const body = tournamentToUpdateBody(tournament)
 
-    expect(body.table_catalogue).toEqual(catalogue)
+    expect('table_catalogue' in body).toBe(false)
   })
 })
 
