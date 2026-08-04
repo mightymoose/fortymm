@@ -19,6 +19,17 @@ const scoped = (container: Container) => ({
   getPoolHeading(poolName: string) {
     return container.getByRole('heading', { name: poolName })
   },
+  /** Every pool's heading, **in DOM order** — the sequence a director reads top to
+   * bottom, which is the whole claim `Pool.position` exists to make (`poolsInOrder`,
+   * `data/helpers`). Named accessors cannot state it: `getPoolHeading('Pool 2')` passes
+   * just as happily when Pool 2 is rendered tenth. */
+  getPoolNames(): string[] {
+    return container
+      .queryAllByTestId(/^pool-draw-/)
+      .map((pool: HTMLElement) =>
+        (within(pool).getByRole('heading').textContent ?? '').trim(),
+      )
+  },
   /** The pool's entrants, in the order they render (draw order: seed, then
    * registration). Names, not ids — a chip list of uuids would pass a "renders the
    * roster" assertion and tell a director nothing. */

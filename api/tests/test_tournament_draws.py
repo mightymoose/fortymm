@@ -36,7 +36,7 @@ from app.models import (
     User,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.tournament_draws import fixture_state
+from app.tournament_draws import draw_config, fixture_state, pool_order
 from app.tournament_queries import (
     completed_match_ids,
     fixtures_by_event,
@@ -288,3 +288,101 @@ async def test_a_match_that_has_not_completed_projects_no_games(
 
     assert state.match_id is not None, "the fixture HAS materialized into a match"
     assert state.games is None, "an in-progress board is not a result"
+
+
+# --- the event's pool ORDER --------------------------------------------------------
+#
+# ``draw_config`` seeds the snake against it, ``pool_order`` is what a persisted
+# fixture's ``pool_position`` is resolved through, and both read it off
+# ``Pool.position`` (ADR 20260801) rather than off the pool id. The ids below are
+# minted the way the client mints them — ``p-1-…``, ``p-2-…``, ``p-10-…`` — whose
+# lexicographic order (1, 10, 2, 3…) is deliberately not the director's, so a sort
+# that fell back to the id cannot pass.
+
+TEN_POOL_IDS = [f"p-{n}-x" for n in range(1, 11)]
+
+
+def _pools(ids: list[str], *, positions: bool = True) -> list[dict[str, object]]:
+    """These pool ids as stored JSONB, in this list's order — with or without the
+    ``position`` key, the latter being how every pool written before the field existed
+    still sits in the database today."""
+    return [
+        {
+            "id": pool_id,
+            "name": f"Pool {index + 1}",
+            "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+            "table_ids": [],
+            **({"position": index} if positions else {}),
+        }
+        for index, pool_id in enumerate(ids)
+    ]
+
+
+def test_draw_config_orders_the_pools_by_position_not_by_id() -> None:
+    """``DrawConfig.pool_ids`` is the sequence the snake deals against, so its order is
+    the draw's seeding — get it wrong and the draw still cuts, still looks like a draw,
+    and seats the wrong people together.
+
+    The pools are stored in *reverse* positional order here, so the array order and the
+    positions disagree: what comes back has to be the positions' order, which is neither
+    the array's nor the ids'.
+    """
+    stored = _pools(TEN_POOL_IDS)
+    event = TournamentEvent(pools=list(reversed(stored)))
+
+    assert draw_config(event).pool_ids == tuple(TEN_POOL_IDS)
+
+
+def test_draw_config_keeps_the_array_order_of_pools_that_have_no_position() -> None:
+    """Pools stored before ``position`` existed all parse to the default ``0``, and a
+    stable sort leaves them exactly where they were — the array order, which is the only
+    thing that ever carried their order. A read boundary must not re-seed a standing
+    draw's pools just because it cannot see their positions."""
+    event = TournamentEvent(pools=_pools(TEN_POOL_IDS, positions=False))
+
+    assert draw_config(event).pool_ids == tuple(TEN_POOL_IDS)
+
+
+def test_pool_order_ranks_every_pool_id_by_the_events_order() -> None:
+    """The lookup the fixture projection resolves through: id → 0-based place, the same
+    sequence ``draw_config`` hands the snake, so a draw is advanced in the order it was
+    cut in."""
+    event = TournamentEvent(pools=list(reversed(_pools(TEN_POOL_IDS))))
+
+    assert pool_order(event) == {
+        pool_id: index for index, pool_id in enumerate(TEN_POOL_IDS)
+    }
+
+
+def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
+    """The bridge fills ``pool_position`` from the passed lookup — the fact
+    ``ready_fixtures`` groups a plan by. Pool ``p-10-x`` is *last* in the director's
+    order and *second* in the ids', which is the discriminating case."""
+    event = TournamentEvent(pools=_pools(TEN_POOL_IDS))
+    fixture = TournamentFixture(
+        id=uuid.uuid4(), event_id=uuid.uuid4(), pool_id="p-10-x", round=1, position=1
+    )
+
+    assert (
+        fixture_state(fixture, None, frozenset(), pool_order(event)).pool_position == 9
+    )
+
+
+def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None:
+    """An un-pooled fixture (single-elim, or an rr-then-ko draw's KO stage) is in no
+    pool, so there is no place to project — ``None``, whatever lookup is passed. And a
+    caller that passes no lookup at all gets ``None`` for a *pooled* fixture too: the
+    order was not resolved, which is a different thing from position zero."""
+    event = TournamentEvent(pools=_pools(TEN_POOL_IDS))
+    un_pooled = TournamentFixture(
+        id=uuid.uuid4(), event_id=uuid.uuid4(), pool_id=None, round=1, position=1
+    )
+    pooled = TournamentFixture(
+        id=uuid.uuid4(), event_id=uuid.uuid4(), pool_id="p-1-x", round=1, position=1
+    )
+
+    assert (
+        fixture_state(un_pooled, None, frozenset(), pool_order(event)).pool_position
+        is None
+    )
+    assert fixture_state(pooled).pool_position is None

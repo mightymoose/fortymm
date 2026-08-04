@@ -249,14 +249,21 @@ class DrawConfig:
     picked the strategy. Its absence is what makes that unsayable.
 
     ``pool_ids`` are the ids of the event's configured pools, **in the event's own pool
-    order** — that order is what the snake seeds against, so it must not be re-sorted.
+    order** — ascending ``Pool.position``, which is what the caller
+    (:func:`app.tournament_draws.draw_config`) sorts them by, and which this tuple then
+    carries *as* its sequence. That order is what the snake seeds against, so nothing
+    downstream may re-sort it: an ``sorted(config.pool_ids)`` anywhere below here would
+    seed the draw against the ids' lexicographic order, which is not the director's
+    (``p-10-`` sorts between ``p-1-`` and ``p-2-``) and, once pools are rows with random
+    UUID ids, is not anybody's.
+
     Empty for an un-pooled draw type (single-elim), where every fixture's ``pool_id``
     is ``NULL``. The pool *id set* freezes while a draw exists, which is what lets a
     fixture's string ref stay valid without a foreign key. No id among them is ever the
     empty string — ``Pool.id`` is a ``ValueObjectId`` (``min_length=1``) at the write
     boundary, which is what keeps ``ready_fixtures``' "pooled?" test (``pool_id is
-    None``) and its sort key (``pool_id or ""``) answering the same question the same
-    way.
+    None``) and its id tie-break (``pool_id or ""``) answering the same question the
+    same way.
     """
 
     pool_ids: tuple[PoolId, ...] = ()
@@ -319,6 +326,25 @@ class FixtureState:
     position: int
     entry_a_id: EntryId | None
     entry_b_id: EntryId | None
+    #: Where this fixture's **pool** sits in its event's pool order — 0-based, the
+    #: ``Pool.position`` the write boundary stamped (ADR 20260801, "Pools carry an
+    #: explicit ``position``"). NOT to be confused with :attr:`position` above, which is
+    #: this fixture's slot within its own round; the two are different axes of the same
+    #: draw and the sort key below reads both.
+    #:
+    #: ``None`` means "no pool order to sort on", which is true of an **un-pooled**
+    #: fixture (``pool_id is None``) and of a caller that did not resolve the event's
+    #: pools at all — a strategy test built straight from :class:`FixtureState`
+    #: literals, or :func:`~app.tournament_draws.fixture_state` called with no
+    #: ``pool_positions`` map. A pool stored before the field existed still resolves to
+    #: a real int here — :func:`~app.tournament_draws.pool_order`'s stable sort leaves
+    #: it at its array index. It is deliberately not defaulted to ``0``: a real
+    #: position of ``0`` is the *first* pool, and "unknown" collapsing onto "first"
+    #: would silently promote every unresolved fixture to the head of the draw.
+    #: Unknown sorts after every known pool instead, where the id tie-break decides it
+    #: — which is exactly the order :func:`ready_fixtures` had before positions
+    #: existed.
+    pool_position: int | None = None
     #: Set when the fixture's match completed — the fixture is then **decided**.
     winner_entry_id: EntryId | None = None
     #: Set once the fixture **materialized** into a real match. ``None`` before that.
@@ -943,24 +969,68 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     (``match_id`` is ``ON DELETE SET NULL``) from rising from the dead and being played
     twice. Ordered by ``(pool, round, position)`` so the plan itself is deterministic.
 
-    The sort key asks two questions of ``pool_id`` — "is it pooled?" (``pool_id is
-    None``, which sorts the un-pooled last) and "which pool?" (``pool_id or ""``) — and
-    the two agree only because an id is never ``""``. It was: ``Pool.id`` was a bare
+    **"Pool" is the pool's** :attr:`~FixtureState.pool_position` — its place in the
+    event's own pool order — **not its id.** The ids are client-minted strings
+    (``p-1-…``, ``p-2-…``, ``p-10-…``) whose lexicographic order is not the director's:
+    ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a ten-pool draw's plan ran pool 1,
+    pool 10, pool 2. For a pool that **has** a position it is the same key the read
+    path's ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.pool_ids`
+    is ordered by, so the sequence a director sees, the sequence the snake dealt
+    against, and the sequence matches are created in are one order rather than three
+    that agree by luck.
+
+    **The exception is a pool written before positions existed**, and it is worth
+    stating because the two fallbacks are not the same one. ``pools`` is JSONB and no
+    migration backfilled it, so rows predating this field survive in any long-lived
+    database (UAT's ``fortymm-uat_postgres-data`` volume, a standing QA stack). For
+    those, the read path's SQL reads a missing key as ``NULL``, every pool ties, and it
+    falls through to ``pool_id`` — **id order**; while this sort and
+    :attr:`DrawConfig.pool_ids` parse through :class:`~app.schemas.tournament.Pool`,
+    where ``position`` defaults to ``0``, so every pool ties there too and a stable sort
+    leaves them in **array order**. Two different fallbacks for the same absent field.
+    It bites only an event with ten or more pre-field pools, and it changes the order
+    matches are *created* in rather than which fixtures exist or who plays whom — but
+    it is a real disagreement, not a documented equivalence. It stops existing when
+    pools become rows with a ``NOT NULL`` position, where the column cannot be absent.
+
+    The sort key asks three questions, in this order:
+
+    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim, or
+       an rr-then-ko draw's KO stage) LAST, behind the pools that feed them.
+    2. "Where in the event's order is its pool?" — ``pool_position``, with a ``None``
+       (an unresolved pool order; see the field) sorting after every pool that has one.
+    3. "Which pool?" — ``pool_id or ""``, the tie-break that keeps the order **total**
+       when the positions cannot decide it, and which is exactly the order this had
+       before positions existed.
+
+    (1) and (3) agree only because an id is never ``""``. It was: ``Pool.id`` was a bare
     ``str``, and a fixture drawn into an empty-id pool answered *pooled* to the first
-    question while colliding with the un-pooled group's ``""`` in the second. The floor
+    question while colliding with the un-pooled group's ``""`` in the third. The floor
     that closes it is at the write boundary (``ValueObjectId``, ``min_length=1``), not
     here — an ``if not pool_id`` in this sort would be a runtime check standing in for a
-    state that should not exist. Which is why the ``""`` fallback is now *unobservable*:
+    state that should not exist. Which is why the ``""`` fallback is *unobservable*:
     it is reached only by the ``None`` group, which the first key element has already
     partitioned off, so its value cannot change an order. (Mutation testing agrees —
     replacing it with any other string survives, and after this it is *supposed* to.)
+    The ``or 0`` beside it is unobservable for the same reason and by the same argument:
+    the element before it has already partitioned the ``None`` positions off, so what
+    the ``None`` group collapses to cannot change an order.
     """
     ready = [
         f
         for f in fixtures
         if not f.is_pending and f.match_id is None and f.winner_entry_id is None
     ]
-    ready.sort(key=lambda f: (f.pool_id is None, f.pool_id or "", f.round, f.position))
+    ready.sort(
+        key=lambda f: (
+            f.pool_id is None,
+            f.pool_position is None,
+            f.pool_position or 0,
+            f.pool_id or "",
+            f.round,
+            f.position,
+        )
+    )
     return tuple(f.fixture_id for f in ready)
 
 

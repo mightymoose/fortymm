@@ -599,6 +599,72 @@ describe('the rest of the event surface still holds', () => {
     if (!result.ok) throw new Error('update failed')
     expect(result.event.max_players).toBeNull()
   })
+
+  /**
+   * **The pool positions come from the array index, and nowhere else** — the store half
+   * of the rule the editor and the draw panel both depend on.
+   *
+   * `PoolWrite` has no `position` (it is `extra="forbid"`, so sending one is a 422), so
+   * the ORDER of the list is the only thing that says which pool is first. The server
+   * turns that order into numbers; if the mock did not, the app would look right in
+   * `npm run dev` while every pool came back tied for first — a mock/server disagreement
+   * about a rule the UI reads on every load.
+   *
+   * Ten pools, with ids whose lexicographic order is 1, 10, 2, 3 …, so a store that
+   * numbered them by id (or handed back a default `0`) cannot pass by coincidence.
+   */
+  const TEN_WRITE_POOLS = Array.from({ length: 10 }, (_, i) => ({
+    id: `p-${i + 1}-mkq1x`,
+    name: `Pool ${i + 1}`,
+    slot: SLOT,
+    table_ids: [],
+  }))
+
+  it('stamps a created event’s pools with the position of their index', () => {
+    const result = createEvent(TOURNAMENT, {
+      name: 'Ten-pool Singles',
+      format: 'singles',
+      draw_type: 'round-robin',
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+      pools: TEN_WRITE_POOLS,
+    })
+    if (!result.ok) throw new Error('create failed')
+
+    expect(result.event.pools.map((p) => p.position)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    ])
+    expect(result.event.pools.map((p) => p.name)).toEqual(
+      TEN_WRITE_POOLS.map((p) => p.name),
+    )
+  })
+
+  // …and RE-stamps on every pools patch, because that is the whole reordering API:
+  // send them in the order you want and the positions follow.
+  it('re-positions a patched event’s pools from the new order', () => {
+    const reversed = [...TEN_WRITE_POOLS].reverse()
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, { pools: reversed })
+    if (!result.ok) throw new Error('update failed')
+
+    expect(result.event.pools.map((p) => p.name)).toEqual(
+      reversed.map((p) => p.name),
+    )
+    expect(result.event.pools.map((p) => p.position)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    ])
+  })
+
+  // An absent `pools` is not touching them, so the stored positions stand — the same
+  // "absent means unchanged" the cap follows one test up.
+  it('leaves the stored positions alone when a PATCH names no pools', () => {
+    const before = event(FULLISH_SINGLES).pools.map((p) => p.position)
+    const result = updateEvent(TOURNAMENT, FULLISH_SINGLES, { name: 'Renamed' })
+    if (!result.ok) throw new Error('update failed')
+
+    expect(result.event.pools.map((p) => p.position)).toEqual(before)
+  })
 })
 
 // The lifecycle (ADR-0017). The store enforces the SERVER's edge table, not a

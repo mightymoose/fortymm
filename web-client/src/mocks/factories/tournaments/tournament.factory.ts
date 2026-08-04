@@ -1065,6 +1065,12 @@ export function buildTournamentEventRead(
         name: 'Pool A',
         slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
         table_ids: ['t1', 't2', 't3', 't4'],
+        // The pool's place in the event, 0-based — on the READ shape only. The server
+        // assigns it from the index of the pool in the list a write body sent, and
+        // `PoolWrite` forbids the key outright, so an override here is describing what
+        // came back, never what was asked for. A fixture with several pools numbers them
+        // 0, 1, 2 …: nothing orders pools by id (see `Pool.position`, `data/types`).
+        position: 0,
       },
     ],
     // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and of

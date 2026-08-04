@@ -7592,19 +7592,23 @@ internal enum Components {
                 case rank
             }
         }
-        /// A slice of tables reserved for a window of time within an event.
+        /// A pool as it is **read back**: everything a client wrote, plus the ``position``
+        /// the server stamped on it.
         ///
-        /// Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
-        /// by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
-        /// these ids. Which is only a coherent thing to say if an id names one pool — see
-        /// ``EventPools``, the type the event's list of them actually has — and if an id is a
-        /// thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
-        /// a fixture drawn into it is pooled by one rule and un-pooled by another.
+        /// It is also the model every interior read of an event's ``pools`` JSONB parses
+        /// through — ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule
+        /// snapshots — so the column becomes typed values at the read boundary rather than
+        /// stringly-keyed dict lookups (api/CLAUDE.md — "parse, don't validate"). Deriving it
+        /// from :class:`PoolWrite` is what keeps the two shapes one shape plus a field: a
+        /// column added to the write side is readable without a second edit, and the two can
+        /// never disagree about what a pool *is*.
         ///
-        /// Its ``name`` has the same floor for the plainer reason: a pool is *called*
-        /// something — it is what the director clicks, what the conflict warnings quote, and
-        /// what a player reads off a wall. ``""`` is not a name, and an event whose pools list
-        /// is three blank rows is not a thing anyone could act on.
+        /// ``position`` defaults to ``0`` so that pools stored before the field existed stay
+        /// *readable* — a read boundary must not turn a history it cannot change into a
+        /// ``ValidationError`` (the same asymmetry :data:`AddressComponent` is about). Every
+        /// pool written since goes through :func:`stored_pools` and carries a real one. The
+        /// default is a **read** concession only; it is not a way to write one, because there
+        /// is no way to write one.
         ///
         /// - Remark: Generated from `#/components/schemas/Pool`.
         internal struct Pool: Codable, Hashable, Sendable {
@@ -7616,6 +7620,10 @@ internal enum Components {
             internal var slot: Components.Schemas.Slot
             /// - Remark: Generated from `#/components/schemas/Pool/table_ids`.
             internal var tableIds: [Swift.String]
+            /// Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Pool/position`.
+            internal var position: Swift.Int?
             /// Creates a new `Pool`.
             ///
             /// - Parameters:
@@ -7623,22 +7631,26 @@ internal enum Components {
             ///   - name:
             ///   - slot:
             ///   - tableIds:
+            ///   - position: Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
             internal init(
                 id: Swift.String,
                 name: Swift.String,
                 slot: Components.Schemas.Slot,
-                tableIds: [Swift.String]
+                tableIds: [Swift.String],
+                position: Swift.Int? = nil
             ) {
                 self.id = id
                 self.name = name
                 self.slot = slot
                 self.tableIds = tableIds
+                self.position = position
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case name
                 case slot
                 case tableIds = "table_ids"
+                case position
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -7658,11 +7670,16 @@ internal enum Components {
                     [Swift.String].self,
                     forKey: .tableIds
                 )
+                self.position = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .position
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "name",
                     "slot",
-                    "table_ids"
+                    "table_ids",
+                    "position"
                 ])
             }
         }
@@ -7792,6 +7809,91 @@ internal enum Components {
                 case poolId = "pool_id"
                 case rows
                 case complete
+            }
+        }
+        /// A slice of tables reserved for a window of time within an event, as a client
+        /// **sends** it.
+        ///
+        /// Its ``id`` is the pool's **identity**: a fixture names the pool it was drawn into
+        /// by that string (ADR-0786), and the pool-set freeze is a rule about the *set* of
+        /// these ids. Which is only a coherent thing to say if an id names one pool — see
+        /// ``EventPools``, the type the event's list of them actually has — and if an id is a
+        /// thing at all, which is what ``ValueObjectId`` says: the empty string is not one, and
+        /// a fixture drawn into it is pooled by one rule and un-pooled by another.
+        ///
+        /// Its ``name`` has the same floor for the plainer reason: a pool is *called*
+        /// something — it is what the director clicks, what the conflict warnings quote, and
+        /// what a player reads off a wall. ``""`` is not a name, and an event whose pools list
+        /// is three blank rows is not a thing anyone could act on.
+        ///
+        /// What is **absent** is as deliberate as what is here: ``position`` is the server's to
+        /// assign (:data:`PoolPosition`), so it is simply not a field of this model, and
+        /// ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
+        /// the treatment ``entered`` already gets on the event schemas — a server-managed value
+        /// is kept **off** the write shape rather than accepted and then ignored. Accepting it
+        /// would be worse than useless in both directions: a client cannot tell from the schema
+        /// that the number it sent decided nothing, and a boundary that silently discards half
+        /// of a payload has to be documented to be understood. The order a client *does*
+        /// control is the order of the list itself.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PoolWrite`.
+        internal struct PoolWrite: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PoolWrite/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolWrite/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolWrite/slot`.
+            internal var slot: Components.Schemas.Slot
+            /// - Remark: Generated from `#/components/schemas/PoolWrite/table_ids`.
+            internal var tableIds: [Swift.String]
+            /// Creates a new `PoolWrite`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - slot:
+            ///   - tableIds:
+            internal init(
+                id: Swift.String,
+                name: Swift.String,
+                slot: Components.Schemas.Slot,
+                tableIds: [Swift.String]
+            ) {
+                self.id = id
+                self.name = name
+                self.slot = slot
+                self.tableIds = tableIds
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case slot
+                case tableIds = "table_ids"
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.slot = try container.decode(
+                    Components.Schemas.Slot.self,
+                    forKey: .slot
+                )
+                self.tableIds = try container.decode(
+                    [Swift.String].self,
+                    forKey: .tableIds
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "name",
+                    "slot",
+                    "table_ids"
+                ])
             }
         }
         /// An eligibility rule. ``field`` names the one fact we actually hold about a
@@ -10170,7 +10272,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/predicates`.
             internal var predicates: [Components.Schemas.Predicate]?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/pools`.
-            internal var pools: [Components.Schemas.Pool]?
+            internal var pools: [Components.Schemas.PoolWrite]?
             /// Creates a new `TournamentEventCreate`.
             ///
             /// - Parameters:
@@ -10196,7 +10298,7 @@ internal enum Components {
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate]? = nil,
-                pools: [Components.Schemas.Pool]? = nil
+                pools: [Components.Schemas.PoolWrite]? = nil
             ) {
                 self.name = name
                 self.format = format
@@ -10266,7 +10368,7 @@ internal enum Components {
                     forKey: .predicates
                 )
                 self.pools = try container.decodeIfPresent(
-                    [Components.Schemas.Pool].self,
+                    [Components.Schemas.PoolWrite].self,
                     forKey: .pools
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -10622,7 +10724,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/predicates`.
             internal var predicates: [Components.Schemas.Predicate]?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/pools`.
-            internal var pools: [Components.Schemas.Pool]?
+            internal var pools: [Components.Schemas.PoolWrite]?
             /// Creates a new `TournamentEventUpdate`.
             ///
             /// - Parameters:
@@ -10648,7 +10750,7 @@ internal enum Components {
                 slot: Components.Schemas.TournamentEventUpdate.SlotPayload? = nil,
                 matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload? = nil,
                 predicates: [Components.Schemas.Predicate]? = nil,
-                pools: [Components.Schemas.Pool]? = nil
+                pools: [Components.Schemas.PoolWrite]? = nil
             ) {
                 self.name = name
                 self.format = format
@@ -10718,7 +10820,7 @@ internal enum Components {
                     forKey: .predicates
                 )
                 self.pools = try container.decodeIfPresent(
-                    [Components.Schemas.Pool].self,
+                    [Components.Schemas.PoolWrite].self,
                     forKey: .pools
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [

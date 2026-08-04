@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import type { EditFreeze } from '../../data/draw'
-import { findPoolConflicts, genId } from '../../data/helpers'
+import { findPoolConflicts, genId, nextPoolPosition } from '../../data/helpers'
 import type { Pool, TournamentTable } from '../../data/types'
 import { EmptyState } from '../../empty-state'
 import type { EventFormValues } from '../event-form'
@@ -104,11 +104,18 @@ export const PoolsSection = ({
 
   // Clean domain pools (no `rhfKey`) for the conflict check and the cards, so an
   // edit never writes the field array's internal key back into form state.
+  //
+  // NOT re-sorted here. The field array arrived in position order (`eventToFormValues`
+  // seeds it that way) and its order is the director's, kept across every add and remove
+  // — and it is the order a save puts on the wire, from which the server re-derives the
+  // positions. Sorting the *render* while `update(i, …)` / `remove(i)` still addressed
+  // the underlying array by index would edit the wrong card.
   const pools: Pool[] = fields.map((f) => ({
     id: f.id,
     name: f.name,
     slot: f.slot,
     tableIds: f.tableIds,
+    position: f.position,
   }))
 
   // Double-booking is a diagnostic only the organizer can act on, so a viewer
@@ -124,6 +131,13 @@ export const PoolsSection = ({
       name: `Pool ${String.fromCharCode(65 + fields.length)}`,
       slot: { ...eventSlot },
       tableIds: [],
+      // One past the highest position in the list, never `fields.length` — the two part
+      // company as soon as a pool is removed from the middle, and a duplicate position is
+      // an order that is no order (`nextPoolPosition`, `data/helpers`). A new pool joins
+      // at the END, which is also where `append` puts it, so the array order and the
+      // positions agree — and they must, because the array order is what the save sends
+      // and the positions are what the next read comes back sorted by.
+      position: nextPoolPosition(pools),
     })
 
   return (

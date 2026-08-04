@@ -1,5 +1,5 @@
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
-import { render, screen, type Container } from '@/test/utilities'
+import { render, screen, within, type Container } from '@/test/utilities'
 
 import type { Pool } from '../../data/types'
 import {
@@ -25,6 +25,20 @@ const scoped = (container: Container) => ({
   },
   queryPoolCards() {
     return container.queryAllByTestId('pool-card')
+  },
+  /** Every pool's name, **in the order the cards render** — the claim `Pool.position`
+   * exists to make (`poolsInOrder`, `data/helpers`), and one no name-addressed accessor
+   * can state: `getPoolNameInputs()` returns boxes without saying which pool each holds.
+   *
+   * Reads the box when there is one and the read-back text when there is not, so the
+   * editor's order and the viewer's are the same assertion. */
+  getPoolNames(): string[] {
+    return container.queryAllByTestId('pool-card').map((card: HTMLElement) => {
+      const box = within(card).queryByLabelText<HTMLInputElement>('Pool name')
+      return box
+        ? box.value
+        : (within(card).getByTestId('pool-name').textContent ?? '').trim()
+    })
   },
   /** Every pool's name box, in card order — the card-scoped `getNameInput()` throws
    * once there is more than one pool, and "which card is red?" is a question about the

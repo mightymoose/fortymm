@@ -23,6 +23,7 @@
 import { ApiError } from '@/api/client'
 import type { MatchStatus } from '@/api/matches'
 
+import { poolsInOrder } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
 import { labelFor } from './options'
 import type {
@@ -233,7 +234,11 @@ export function drawState(event: TournamentEvent): DrawState {
     else byPool.set(poolId, [fixture])
   }
 
-  const pools: PoolDraw[] = event.pools.flatMap((pool) => {
+  // **In POSITION order** (`poolsInOrder`), which is the order the director arranged them
+  // in and the order the event editor shows them in — not the order they arrived in, and
+  // emphatically not by id: pool ids are minted `p-1-…`, `p-2-…`, `p-10-…`, so a sort by
+  // id puts `p-10-` between `p-1-` and `p-2-` and a ten-pool event reads 1, 10, 2, 3 …
+  const pools: PoolDraw[] = poolsInOrder(event.pools).flatMap((pool) => {
     const fixtures = byPool.get(pool.id)
     if (!fixtures) return []
     // Membership is the entry ids the pool's own fixtures name — the derivation

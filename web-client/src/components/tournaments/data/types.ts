@@ -91,6 +91,21 @@ export interface Pool {
   name: string
   slot: Slot
   tableIds: string[]
+  /**
+   * Where this pool sits in its event's ordering — **0-based, and assigned by the
+   * server** from the index of the pool in the list a write body sent. To reorder
+   * pools you send them in the order you want; you never send a position (the write
+   * schema is `extra="forbid"`, so a `position` key on a write body is a 422 that
+   * names the field — see `eventPoolsToApi`, `data/api`).
+   *
+   * It exists because **pool ids do not order pools**. They are minted client-side
+   * (`genId('p')` → `p-1-…`, `p-2-…`, `p-10-…`), and sorted as strings `p-10-` falls
+   * between `p-1-` and `p-2-` — so a ten-pool event read its draw back as 1, 10, 2, 3.
+   * That was a live bug, not a hypothetical. Everything that puts pools in an order
+   * therefore orders them by THIS field (`poolsInOrder`, `data/helpers`) — never by id,
+   * and never by whatever order the array happened to arrive in.
+   */
+  position: number
 }
 
 /**

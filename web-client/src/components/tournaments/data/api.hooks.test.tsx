@@ -43,7 +43,7 @@ import {
 } from '@/mocks/tournaments-store'
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
-import { buildEvent } from './seed.factory'
+import { buildEvent, buildTenPools } from './seed.factory'
 import {
   apiToEvent,
   eventToUpdateBody,
@@ -414,6 +414,41 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
     expect(apiToEvent(result.current.data!).qualifiersPerPool).toBe(2)
+  })
+
+  /**
+   * **A pool's `position` must not leave the client.** It is the server's to assign —
+   * from the index of the pool in this very array — and `PoolWrite` is `extra="forbid"`,
+   * so a `position` key here is a 422 naming the field and the director's whole save is
+   * refused.
+   *
+   * Asserted on the bytes rather than on `eventToUpdateBody`'s return value for the same
+   * reason the qualifier count is: the domain `Pool` the editor holds *does* carry a
+   * position, so a spread anywhere between the mapper and `openapi-fetch` would put it
+   * back, and nothing else in the suite would notice.
+   */
+  it('sends each pool WITHOUT a position — the server assigns it from the order', async () => {
+    const sent = captureEventPatch()
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
+    result.current.mutate({
+      eventId: 'ev-1',
+      // Ten pools, so a dropped position could not hide behind a single `0`.
+      body: eventToUpdateBody(buildEvent({ pools: buildTenPools() })),
+    })
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+    const pools = sent.body?.pools as Record<string, unknown>[]
+    expect(pools).toHaveLength(10)
+    for (const pool of pools) {
+      expect(Object.keys(pool).sort()).toEqual([
+        'id',
+        'name',
+        'slot',
+        'table_ids',
+      ])
+    }
   })
 })
 

@@ -10,7 +10,7 @@ import {
   qualifiersPerPoolSchema,
   type EventSection,
 } from '../data/event-validation'
-import { browserTimezone } from '../data/helpers'
+import { browserTimezone, poolsInOrder } from '../data/helpers'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
 import { eligibilityIssues } from '../data/predicate-validation'
 import type {
@@ -80,12 +80,19 @@ const predicateSchema: z.ZodType<Predicate, Predicate> = z.object({
  *
  * `name` carries the server's floor (`poolNameSchema`, `data/event-validation`) — the
  * one field of a pool the organizer can *clear*. Its `id` is minted and boxless, so it
- * is left alone: see the note on `poolNameSchema`. */
+ * is left alone: see the note on `poolNameSchema`.
+ *
+ * `position` is here because it is part of a `Pool` and the form holds whole pools, not
+ * because there is anything to check: it has no box either, it is the SERVER's to assign
+ * (`eventPoolsToApi`, `data/api` — a `position` on a write body is a 422), and the value
+ * the form carries is only what keeps the cards in the order the director left them in
+ * until the next read. So the rule is a shape, not a floor. */
 const poolSchema: z.ZodType<Pool, Pool> = z.object({
   id: z.string(),
   name: poolNameSchema,
   slot: slotSchema,
   tableIds: z.array(z.string()),
+  position: z.number().int().nonnegative(),
 })
 
 /**
@@ -236,7 +243,16 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     slot: event.slot,
     match: event.match,
     predicates: event.predicates,
-    pools: event.pools,
+    // **In POSITION order** (`poolsInOrder`, `data/helpers`), and this is the ONE place
+    // the pools editor's order is decided. From here on the field array's order IS the
+    // order: the cards render in it, `addPool` appends to the end of it, and — the reason
+    // it has to be settled here rather than at render time — a save serializes it, from
+    // which the server re-derives each pool's position (`eventPoolsToApi`, `data/api`).
+    //
+    // So sorting for *display* alone would be a bug with a delay on it: the director
+    // would see A, B, C, save, and get back whatever order the array was really in. The
+    // list they were looking at has to be the list that goes on the wire.
+    pools: poolsInOrder(event.pools),
   }
 }
 
