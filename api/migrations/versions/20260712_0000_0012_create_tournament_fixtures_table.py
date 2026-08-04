@@ -84,10 +84,22 @@ def upgrade() -> None:
             sa.ForeignKey("matches.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        # A *placement* (ADR-0790). ``table_id`` is a string ref into the tournament's
-        # ``table_catalogue`` JSONB (a ``TournamentTable.id``), the same pattern as
-        # ``pool_id`` — NOT a foreign key, there is no tables table. NULL = unassigned.
-        sa.Column("table_id", sa.Text(), nullable=True),
+        # A *placement* (ADR-0790). ``table_id`` is a real FOREIGN KEY into
+        # ``tournament_tables`` (created by 0010) — "the placement names a real table"
+        # is the one placement claim that is an invariant rather than a flag-on-read
+        # (ADR 20260801). NULL = unassigned.
+        #
+        # RESTRICT, not SET NULL: removing a table a fixture is placed at destroys
+        # information on an unrelated write — the fixture would become
+        # indistinguishable from one nobody ever placed — so the database refuses and
+        # the director opts in explicitly. A *pool* that merely reserves the table gets
+        # ON DELETE CASCADE on its own side instead; only a placement is loud.
+        sa.Column(
+            "table_id",
+            postgresql.UUID(as_uuid=False),
+            sa.ForeignKey("tournament_tables.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
         # ``scheduled_start`` is a placement's predicted start — a ``timestamptz``
         # instant (TIMESTAMP WITH TIME ZONE), composed server-side from the event's
         # Slot wall-clock components anchored by the event timezone. The 2026-07-19 ADR
@@ -144,9 +156,16 @@ def upgrade() -> None:
     op.create_index(
         "ix_tournament_fixtures_match_id", "tournament_fixtures", ["match_id"]
     )
+    # The index Postgres does not create for a REFERENCING column. Under RESTRICT every
+    # delete of a ``tournament_tables`` row must prove no fixture references it, which
+    # unindexed is a sequential scan of every fixture on the platform per table removed.
+    op.create_index(
+        "ix_tournament_fixtures_table_id", "tournament_fixtures", ["table_id"]
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_tournament_fixtures_table_id", table_name="tournament_fixtures")
     op.drop_index("ix_tournament_fixtures_match_id", table_name="tournament_fixtures")
     op.drop_index("ix_tournament_fixtures_event_id", table_name="tournament_fixtures")
     op.drop_table("tournament_fixtures")

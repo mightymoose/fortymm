@@ -352,3 +352,169 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     expect((body as TournamentEventRead).qualifiers_per_pool).toBeNull()
   })
 })
+
+// ----- the tournament write boundary — the venue catalogue (ADR 20260801) --------
+//
+// The catalogue moved from a JSONB blob a client authored ids into, to child ROWS whose
+// ids the SERVER mints, written as an id-keyed DIFF. Two of its consequences are wire
+// facts a component can only meet through a handler, so they are asserted here rather
+// than against the store: a create's response carries ids the client never sent, and a
+// removal the state of the world forbids comes back as a **409 carrying the server's own
+// sentence** (which the client shows verbatim) — not as a quietly-applied edit.
+//
+// A mock that answered that removal with a 200 would be more permissive than the API it
+// stands in for: the Tables tab would look perfect in `npm run dev` and in vitest, and
+// 409 in front of a director on the morning of their tournament.
+describe('the tournament write boundary — the venue catalogue (ADR 20260801)', () => {
+  /** Summer Slam: draft, owned, catalogue `T1`–`T8`, one drawn round-robin. */
+  const SLAM = SUMMER_SLAM
+
+  async function getTournament(id: string) {
+    const res = await fetch(`http://localhost/v1/tournaments/${id}`)
+    return { status: res.status, body: (await res.json()) as TournamentDetailRead }
+  }
+
+  async function patchTournament(
+    id: string,
+    patch: components['schemas']['TournamentUpdate'],
+  ) {
+    const res = await fetch(`http://localhost/v1/tournaments/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    return { status: res.status, body: await res.json() }
+  }
+
+  /** The tournament's catalogue as a PATCH body carries it: every table cited by id, so
+   * this alone is a no-op diff and dropping an entry from it is a removal. */
+  const upsertsOf = (t: TournamentDetailRead) =>
+    t.table_catalogue.map((tbl) => ({
+      id: tbl.id,
+      label: tbl.label,
+      court: tbl.court,
+    }))
+
+  /** Place Summer Slam's first pool fixture on its first table, over the wire. */
+  async function placeAFixture(): Promise<{ fixtureId: string; tableId: string }> {
+    const { body } = await getTournament(SLAM)
+    const tableId = body.table_catalogue[0].id
+    const fixtureId = body.events.flatMap((e) => e.fixtures)[0].id
+    const res = await fetch(
+      `http://localhost/v1/tournaments/${SLAM}/fixtures/${fixtureId}/placement`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          table_id: tableId,
+          scheduled_start: '2026-08-22T09:00:00',
+        }),
+      },
+    )
+    expect(res.status).toBe(200)
+    return { fixtureId, tableId }
+  }
+
+  it('mints an id for every table on a CREATE — the body carries none', async () => {
+    const res = await fetch('http://localhost/v1/tournaments', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Minted Over The Wire',
+        description: null,
+        start_date: null,
+        end_date: null,
+        address: null,
+        // `TournamentTableWrite` — no `id` is even sendable.
+        table_catalogue: [{ label: 'T1', court: 'A' }],
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const created = (await res.json()) as components['schemas']['TournamentRead']
+    const [table] = created.table_catalogue
+    expect(table).toMatchObject({ label: 'T1', court: 'A' })
+    expect(table.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+  })
+
+  it('409s a removal a placement stands in the way of, and writes nothing', async () => {
+    const { tableId } = await placeAFixture()
+    const before = (await getTournament(SLAM)).body
+
+    const { status, body } = await patchTournament(SLAM, {
+      // The rename rides along, so a guard that refused *after* writing is caught.
+      name: 'Renamed While Removing',
+      table_catalogue: upsertsOf(before).filter((t) => t.id !== tableId),
+    })
+
+    expect(status).toBe(409)
+    // A bare `detail` STRING — the shape `extractDetail` reads and the editor's banner
+    // shows verbatim, because the sentence is the domain's, not a validator's.
+    const { detail } = body as { detail: string }
+    expect(detail).toContain('“T1”')
+    expect(detail).toContain('1 match')
+    expect(detail).toContain('unplace_fixtures_on_removed_tables')
+    // …and named by LABEL, never by the id the diff actually compared.
+    expect(detail).not.toContain(tableId)
+
+    const after = (await getTournament(SLAM)).body
+    expect(after.table_catalogue).toEqual(before.table_catalogue)
+    expect(after.name).toBe(before.name)
+    expect(after.events.flatMap((e) => e.fixtures)[0].table_id).toBe(tableId)
+  })
+
+  it('accepts the same removal with the opt-in, leaving those fixtures unplaced', async () => {
+    const { fixtureId, tableId } = await placeAFixture()
+    const before = (await getTournament(SLAM)).body
+
+    const { status } = await patchTournament(SLAM, {
+      name: 'Renamed While Removing',
+      table_catalogue: upsertsOf(before).filter((t) => t.id !== tableId),
+      unplace_fixtures_on_removed_tables: true,
+    })
+
+    expect(status).toBe(200)
+    const after = (await getTournament(SLAM)).body
+    expect(after.table_catalogue.map((t) => t.id)).not.toContain(tableId)
+    expect(after.name).toBe('Renamed While Removing')
+    const fixture = after.events
+      .flatMap((e) => e.fixtures)
+      .find((f) => f.id === fixtureId)!
+    expect(fixture.table_id).toBeNull()
+    expect(fixture.scheduled_start).toBeNull()
+    expect(fixture.pinned_at).toBeNull()
+  })
+
+  it('422s an entry citing an id this catalogue does not hold, naming the entry', async () => {
+    const before = (await getTournament(SLAM)).body
+
+    const { status, body } = await patchTournament(SLAM, {
+      table_catalogue: [
+        ...upsertsOf(before),
+        { id: 'not-a-table-of-this-tournament', label: 'T9', court: '9' },
+      ],
+    })
+
+    expect(status).toBe(422)
+    // FastAPI's per-field array, so `validationFields` (`src/api/client.ts`) can blame
+    // the Tables row rather than falling through to the generic sentence.
+    const { detail } = body as {
+      detail: { loc: (string | number)[]; msg: string }[]
+    }
+    expect(detail[0].loc).toEqual([
+      'body',
+      'table_catalogue',
+      before.table_catalogue.length,
+      'id',
+    ])
+    expect(detail[0].msg).toBe(
+      "This tournament's venue catalogue has no table with that id.",
+    )
+    // Nothing minted, nothing removed.
+    expect((await getTournament(SLAM)).body.table_catalogue).toEqual(
+      before.table_catalogue,
+    )
+  })
+})

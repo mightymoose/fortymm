@@ -13,6 +13,7 @@ import {
   useTables,
   useTournament,
   useUpdateEvent,
+  useUpdateTableCatalogue,
   useUpdateTournament,
 } from '@/components/tournaments/data/api'
 import { pageTitle } from '@/lib/page-title'
@@ -62,6 +63,7 @@ function TournamentDetailRoute() {
   const { data: tournament, isPending } = useTournament(tournamentId)
   const allTables = useTables(tournamentId)
   const updateTournament = useUpdateTournament()
+  const updateCatalogue = useUpdateTableCatalogue(tournamentId)
   const createEvent = useCreateEvent(tournamentId)
   const updateEvent = useUpdateEvent(tournamentId)
   const deleteEvent = useDeleteEvent(tournamentId)
@@ -89,15 +91,18 @@ function TournamentDetailRoute() {
       onUpdate={(next) =>
         updateTournament.mutate({
           id: next.id,
-          patch: tournamentToUpdateBody(next, allTables),
+          patch: tournamentToUpdateBody(next),
         })
       }
-      onChangeCatalogue={(catalogue) =>
-        updateTournament.mutate({
-          id: tournament.id,
-          patch: tournamentToUpdateBody(tournament, catalogue),
-        })
-      }
+      // `mutateAsync`, and the rejection is deliberately NOT caught here: the
+      // `TablesTab` awaits it, turns the in-use 409 into a confirm carrying the
+      // server's sentence, and re-sends the identical diff with the opt-in when the
+      // organizer answers. Catching it here — or letting the mutation toast — would
+      // turn the one refusal the director can act on into a message that leaves after
+      // four seconds.
+      onChangeCatalogue={async (entries, options) => {
+        await updateCatalogue.mutateAsync({ entries, ...options })
+      }}
       // `mutateAsync`, not `mutate`: the event editor AWAITS these, closes only
       // when they resolve, and renders the failure inline when they don't (the
       // `NewTournamentModal` contract — a modal that closes over a rejected write

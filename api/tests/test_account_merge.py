@@ -46,7 +46,10 @@ from app.models import (
 from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
-from tests._helpers import start_session
+from tests._helpers import (
+    start_session,
+    venue_tables,
+)
 
 
 async def _make_ephemeral(db: AsyncSession, username: str) -> User:
@@ -412,7 +415,7 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+        tables=venue_tables(("Table 1", "A")),
     )
     tournament.events.append(
         TournamentEvent(
@@ -475,7 +478,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+        tables=venue_tables(("Table 1", "A")),
     )
     event = TournamentEvent(
         name="Open Singles",
@@ -970,7 +973,7 @@ async def _make_rr_event(
                 "latitude": 37.8703,
                 "longitude": -122.2731,
             },
-            table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+            tables=venue_tables(("Table 1", "A")),
         )
     slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     event = TournamentEvent(

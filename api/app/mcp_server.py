@@ -164,9 +164,12 @@ from app.tournament_errors import (
     NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlacementTableNotFoundError,
     PlayerNotFoundError,
     PoolSetFrozenError,
     ScheduleQueueUnavailableError,
+    TableInUseError,
+    TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
@@ -1031,10 +1034,10 @@ async def edit_tournament(
     surfaces can never drift on what a valid edit is.
 
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
-    field replaces the current value. ``name``, ``table_catalogue`` and ``league_id``
-    back NOT NULL columns, so an explicit ``null`` for any of them is rejected (send
-    them only to set a real value); ``description`` / ``start_date`` / ``end_date``
-    are nullable and may be cleared with ``null``.
+    field replaces the current value. ``name`` and ``league_id`` back NOT NULL columns
+    and ``table_catalogue`` backs a whole child table, so an explicit ``null`` for any
+    of them is rejected (send them only to set a real value); ``description`` /
+    ``start_date`` / ``end_date`` are nullable and may be cleared with ``null``.
 
     ``address`` (the venue) has THREE cases, so read this before sending one: OMIT it
     to leave the current venue and its coordinates untouched; send a real address to
@@ -1044,7 +1047,23 @@ async def edit_tournament(
     booked, or a private tournament withholding its address), so do not invent a
     placeholder address to fill the field.
 
-    ``table_catalogue`` replaces wholesale when present.
+    ``table_catalogue``, when present, is the venue catalogue IN FULL and IN ORDER, and
+    it is applied as an ID-KEYED DIFF. So SEND BACK THE CATALOGUE YOU READ, EDITED — a
+    fresh list is not an edit of the old one, it is a request to remove every table the
+    tournament has and add new ones. Each entry either carries the ``id`` of a table
+    this tournament already has (keeping that table, with the ``label``, ``court``
+    and place this list gives it) or omits the ``id`` to ADD a table, whose id the
+    server mints. A stored table no entry names is REMOVED. An ``id`` this tournament
+    does not have is rejected — it is never taken as a request for a new table.
+
+    REMOVING A TABLE THAT MATCHES ARE PLACED AT IS REFUSED, and nothing is written. The
+    refusal names the table and how many matches are on it. To go through with it, send
+    the SAME edit again with ``unplace_fixtures_on_removed_tables`` set to true: the
+    table goes and those matches are unplaced — table, predicted start and call all
+    cleared. Do not set it pre-emptively "just in case"; it exists so that losing a
+    director's schedule is something they said yes to. Removing a table that only a POOL
+    reserves is not refused and needs no opt-in — the pool simply reserves one fewer.
+
     ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
     published the ladder is settled. ``status`` is not editable here (it moves only
     across the guarded lifecycle transitions). Returns the updated
@@ -1053,7 +1072,9 @@ async def edit_tournament(
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may edit it), when you try to change
     the league of a tournament that has left ``draft``, when ``league_id`` names
-    no league, or when a changed venue ``address`` cannot be geocoded (the
+    no league, when a ``table_catalogue`` entry names a table id this tournament does
+    not have, when it would remove a table matches are placed at without the opt-in, or
+    when a changed venue ``address`` cannot be geocoded (the
     ``[address_not_geocodable]`` refusal — coordinates are geocoded server-side, and
     an address that has them cannot be stored without them). Removing the venue
     geocodes nothing and so can never raise that one.
@@ -1085,6 +1106,17 @@ async def edit_tournament(
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
             raise ToolError("No league found with that id.") from exc
+        except TableInUseError as exc:
+            # The catalogue's named 409, as prose: the sentence already names the tables
+            # and the way out (``unplace_fixtures_on_removed_tables``), which is exactly
+            # what an agent needs to decide whether to ask its director and retry.
+            raise ToolError(str(exc)) from exc
+        except TableNotInCatalogueError as exc:
+            # The HTTP surface answers this on the field; an agent reads prose, so the
+            # offending id rides in the sentence rather than in a ``loc``.
+            raise ToolError(
+                f"{exc} (table_catalogue entry {exc.index} names “{exc.table_id}”)."
+            ) from exc
         except AddressNotGeocodableError as exc:
             raise _map_address_not_geocodable_tool_error(exc) from exc
         # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
@@ -1868,9 +1900,9 @@ async def place_fixture(
     so the MCP and HTTP surfaces can never drift. You address the fixture by its
     ``tournament_id`` + ``fixture_id`` (the fixture must belong to that tournament).
 
-    ``placement`` is the placement in full: ``table_id`` (a string ref into the
-    tournament's ``table_catalogue``) and ``scheduled_start`` (a **naive** wall-clock
-    time in the venue's local frame). ``null`` on either clears that half;
+    ``placement`` is the placement in full: ``table_id`` (the id of one of the
+    tournament's ``table_catalogue`` tables) and ``scheduled_start`` (a **naive**
+    wall-clock time in the venue's local frame). ``null`` on either clears that half;
     ``(null, null)`` unassigns the fixture entirely.
 
     **A manual placement is a PIN.** A full placement (both halves set, both entrants
@@ -1883,16 +1915,21 @@ async def place_fixture(
     UNPINS (and, if the players had been called, cancels the call). Every successful
     write also queues a re-solve.
 
+    **The table must EXIST** (ADR 20260801): a ``table_id`` naming no table in this
+    tournament's ``table_catalogue`` is refused, not stored — a placement whose table
+    does not exist is a dangling reference, not a state the director chose.
+
     **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
-    prediction, and the constraints (table-in-pool, time-in-window, no double-booking)
-    are flags derived on read, NOT invariants — so an out-of-window time, or a
-    ``table_id`` that names no table in the catalogue, is STORED, not rejected. The one
-    hard rule: a fixture whose linked match is ``completed`` or ``voided`` is history,
-    so its placement can no longer be changed. Owner-gated: only the tournament's
-    creator may place its fixtures.
+    prediction, and the other constraints (table-in-pool, time-in-window, no
+    double-booking) are flags derived on read, NOT invariants — so an out-of-window
+    time, or a table outside the fixture's pool, is STORED, not rejected. The one hard
+    rule about the fixture itself: one whose linked match is ``completed`` or ``voided``
+    is history, so its placement can no longer be changed. Owner-gated: only the
+    tournament's creator may place its fixtures.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
-    tournament's owner, when no fixture with that id belongs to the tournament, or when
+    tournament's owner, when no fixture with that id belongs to the tournament, when the
+    placement's ``table_id`` names no table in the tournament's catalogue, or when
     the fixture's match is already completed/voided (its placement is frozen)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1917,6 +1954,11 @@ async def place_fixture(
             # Carries the exact, domain-authored 409 sentence — the played-out fixture's
             # freeze — surfaced as the ``ToolError`` prose verbatim.
             raise ToolError(str(exc)) from exc
+        except PlacementTableNotFoundError as exc:
+            # The HTTP route's 422 on ``body.table_id`` (ADR 20260801): a placement must
+            # name a real table. Named with the offending id, because an MCP caller
+            # composed it rather than clicked it.
+            raise ToolError(f"{exc} (table_id: {exc.table_id})") from exc
 
 
 @mcp.tool

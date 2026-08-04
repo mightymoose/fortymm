@@ -127,18 +127,19 @@ async def build_tournament_panels(
 
     by_tournament: dict[uuid.UUID, list[DashboardTournamentEvent]] = defaultdict(list)
     tournaments: dict[uuid.UUID, Tournament] = {}
-    # The table catalogue is a per-TOURNAMENT value-object, so it is parsed once per
-    # tournament rather than once per event — a caller entered in two events of one
-    # tournament (singles + doubles) would otherwise re-decode the identical JSONB.
+    # The table catalogue is per-TOURNAMENT, so it is parsed once per tournament rather
+    # than once per event — a caller entered in two events of one tournament (singles +
+    # doubles) would otherwise re-decode the identical rows. Keyed by the id's *text*:
+    # a fixture's ``table_id`` is still carried as a string ref (ADR 20260801 makes the
+    # table a row; the foreign key on the placement is the step after).
     tables_by_tournament: dict[uuid.UUID, dict[str, TournamentTable]] = {}
     for entry_id, event, tournament in entries:
         tournaments[tournament.id] = tournament
         if tournament.id not in tables_by_tournament:
             tables_by_tournament[tournament.id] = {
-                table.id: table
+                str(table.id): table
                 for table in (
-                    TournamentTable.model_validate(raw)
-                    for raw in tournament.table_catalogue
+                    TournamentTable.model_validate(row) for row in tournament.tables
                 )
             }
         by_tournament[tournament.id].append(

@@ -44,9 +44,9 @@ const ROUND_ONE_FIXTURES = 2
 /** Three tables, one per pool, so the seeded catalogue can furnish the pools the
  * director adds in the editor. */
 const TABLES: ReadonlyArray<TableSpec> = [
-  { id: 't1', label: 'Table 1', court: 'A' },
-  { id: 't2', label: 'Table 2', court: 'B' },
-  { id: 't3', label: 'Table 3', court: 'C' },
+  { label: 'Table 1', court: 'A' },
+  { label: 'Table 2', court: 'B' },
+  { label: 'Table 3', court: 'C' },
 ]
 
 /**
@@ -115,7 +115,9 @@ test.describe('Tournament — rr-then-ko draw', () => {
 
     // ----- the shell, over the API: a tournament and its tables, no events ----
     const name = `RRKO ${faker.string.alphanumeric(8)}`
-    const tournamentId = await createTournament(director, name, { tables: TABLES })
+    const { tournamentId } = await createTournament(director, name, {
+      tables: TABLES,
+    })
 
     const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
     // `toContainText`, not `toHaveText`: the hero sets its own full stop after the name.

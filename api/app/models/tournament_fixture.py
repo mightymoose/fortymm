@@ -74,6 +74,12 @@ class TournamentFixture(Base):
         # A completed match is the trigger to write ``winner_entry_id`` back and re-run
         # ``advance()``, and that path arrives holding a match id, not a fixture id.
         Index("ix_tournament_fixtures_match_id", "match_id"),
+        # The index Postgres does NOT create for a REFERENCING column, and under
+        # ``ON DELETE RESTRICT`` it is the one that pays for itself: every delete of a
+        # ``tournament_tables`` row must prove no fixture references it, which unindexed
+        # is a sequential scan of every fixture on the platform per table removed. The
+        # same argument ``VenueTable`` makes for its own ``tournament_id``.
+        Index("ix_tournament_fixtures_table_id", "table_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -144,12 +150,43 @@ class TournamentFixture(Base):
         ForeignKey("matches.id", ondelete="SET NULL"),
         nullable=True,
     )
-    #: A **placement**'s table: a *string ref* into the tournament's
-    #: ``table_catalogue`` JSONB (names a ``TournamentTable.id``), the same string-ref
-    #: pattern as ``pool_id`` — deliberately not a foreign key, there is no tables
-    #: table. ``NULL`` = unassigned. ``(table_id, scheduled_start) = (NULL, NULL)``
-    #: means the fixture is unplaced (ADR-0790).
-    table_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: A **placement**'s table — a real **foreign key** into ``tournament_tables``
+    #: (ADR 20260801, "a placement names a real table, and only that is an invariant").
+    #: ``NULL`` = unassigned; ``(table_id, scheduled_start) = (NULL, NULL)`` means the
+    #: fixture is unplaced (ADR-0790).
+    #:
+    #: This is the one placement claim that is an **invariant** rather than a flag. The
+    #: other three — the table belongs to the fixture's pool, the start falls inside the
+    #: pool's window, nothing is double-booked — are statements about a *relationship*
+    #: between things that each legitimately move while the other stands, so they stay
+    #: derived on read (ADR-0790, undisturbed). "This id names a table" is not that: it
+    #: is whether the reference resolves at all, and a placement whose table does not
+    #: exist is not a state the director chose but a dangling pointer nothing downstream
+    #: can render. It was soft only because there was no table to point at.
+    #:
+    #: ``ON DELETE RESTRICT``, deliberately, and deliberately unlike ``pool_id``'s
+    #: procedural freeze: ``SET NULL`` would destroy information on an *unrelated* write
+    #: — the fixture would stop being "placed at a table that vanished" and become
+    #: indistinguishable from "nobody ever placed this", as an invisible side effect of
+    #: editing the venue. The database refuses by default and the director says yes on
+    #: purpose, through the tournament-edit verb's named 409 and its unplace-and-remove
+    #: opt-in. (A *pool* that merely reserves a table gets the quiet treatment instead —
+    #: the table drops out of its ``table_ids``.)
+    #:
+    #: **The Python/wire type stays ``str``** while the column is a real ``uuid``
+    #: (``as_uuid=False``): a table id crosses this codebase as its canonical text in
+    #: three places at once — here, in a pool's ``table_ids``, and in the solver's
+    #: ``TableId`` — and they are one representation, moved together, not one at a
+    #: time. The database is what holds the type; ``str(table.id)`` is what everything
+    #: above it compares. A non-``uuid`` string can therefore still be *sent*, and it
+    #: is refused at the placement boundary by the same 422 an unknown id gets, rather
+    #: than splitting one refusal ("this names no table") into two a client must tell
+    #: apart.
+    table_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("tournament_tables.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     #: A **placement**'s predicted start — a ``timestamptz`` **instant**
     #: (``TIMESTAMP WITH TIME ZONE``), the server composes it from the event's Slot
     #: wall-clock components anchored by the event ``timezone`` (see the

@@ -53,7 +53,14 @@ from app.models import (
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB
 from app.tournament_draws import cut_draw
 from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, make_client, make_user, start_session
+from tests._helpers import (
+    grant_permissions,
+    make_client,
+    make_user,
+    start_session,
+    table_ids_of,
+    venue_tables,
+)
 
 DATE = "2030-01-01"
 #: The event's venue timezone, anchoring its wall-clock windows to real instants
@@ -123,6 +130,7 @@ async def _make_tournament(
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Scheduled Open",
         status=TournamentStatus.published,
@@ -136,9 +144,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -164,7 +170,7 @@ async def _make_tournament(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )
@@ -530,6 +536,7 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
     and ``call_notified_count`` 0, nobody told)."""
     client, owner = authed_client
     tournament_id, _ = await _make_tournament(db_session, owner)
+    catalogue = set(await table_ids_of(db_session, tournament_id))
 
     response = await client.post(_solves_url(tournament_id))
     assert response.status_code == 202, response.text
@@ -559,7 +566,7 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
     fixtures: list[dict[str, Any]] = event_read["fixtures"]
     assert len(fixtures) == 6
     for fixture in fixtures:
-        assert fixture["table_id"] in ("t1", "t2")
+        assert fixture["table_id"] in catalogue
         start = datetime.fromisoformat(fixture["scheduled_start"]["instant"])
         assert BASE <= start
         assert start + timedelta(minutes=MATCH_MINUTES) <= WINDOW_END

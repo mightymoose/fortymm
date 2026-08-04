@@ -42,6 +42,7 @@ import type {
   Tournament,
   TournamentEvent,
   TournamentTable,
+  TournamentTableEntry,
 } from './types'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
@@ -296,26 +297,77 @@ export function draftToCreateBody(
   }
 }
 
+/**
+ * One catalogue entry as the wire takes it (`TournamentTableUpsert`) — the domain's
+ * tagged union flattened onto the shape the server's **id-keyed diff** reads
+ * (ADR 20260801).
+ *
+ * The `added` arm omits the `id` **key**, rather than sending `null`. Both are
+ * accepted by `TournamentTableUpsert` (`id?: string | null`), so this is not a
+ * correctness fix on today's schema — it is the same discipline `drawSettingsToApi`
+ * applies below: send the field only when there is a table to name. A payload a
+ * reader can eyeball and see "this row cites nothing, so it is an insert" is the
+ * whole readability of a diff.
+ */
+function tableEntryToApi(
+  entry: TournamentTableEntry,
+): components['schemas']['TournamentTableUpsert'] {
+  return entry.kind === 'kept'
+    ? { id: entry.table.id, label: entry.table.label, court: entry.table.court }
+    : { label: entry.label, court: entry.court }
+}
+
 /** Build the tournament-level `TournamentUpdate` body from an edited prototype
- * `Tournament` and the full table catalogue. Events are NOT included — they
- * have their own endpoints. The catalogue is sent as-is (the Tables tab edits
- * it directly: assign IS catalogue here, since the API has no separate global
- * table list), so a Tables-tab edit round-trips the label/court, not just ids.
+ * `Tournament`. Events are NOT included — they have their own endpoints.
+ *
+ * **No `table_catalogue`.** The Details tab never touches tables, so it says
+ * nothing about them: a PATCH leaves an absent field unchanged
+ * (`TournamentUpdate._reject_explicit_null`, `api/app/schemas/tournament.py` —
+ * "omitting the key entirely skips the validator and keeps the default (the
+ * absent case)"), which is the *safe* way to say "no change" under an id-keyed
+ * diff, not the dangerous one. Round-tripping the stored catalogue back
+ * unchanged was the earlier, more cautious shape here; it worked, but it also
+ * ran the server's full diff-and-refusal machinery on every Details-tab save
+ * to conclude nothing changed. The Tables tab does not come through here — an
+ * *edit* of the catalogue is `catalogueToUpdateBody` below, which is the only
+ * builder that can express an add or a removal.
  *
  * **No `status`.** An edit carries no status, so editing a tournament's name or
  * dates can never move its lifecycle (ADR-0017). Moving it is
  * `POST /v1/tournaments/{id}/transitions`, which is a mutation of its own. */
-export function tournamentToUpdateBody(
-  t: Tournament,
-  catalogue: TournamentTable[],
-): TournamentUpdate {
+export function tournamentToUpdateBody(t: Tournament): TournamentUpdate {
   return {
     name: t.name,
     description: t.description,
     start_date: t.startDate,
     end_date: t.endDate,
     address: toAddressInput(t.address),
-    table_catalogue: catalogue,
+  }
+}
+
+/**
+ * Build the **catalogue-only** `TournamentUpdate` body — the Tables tab's write.
+ *
+ * `table_catalogue` and nothing else. A PATCH leaves an absent field unchanged, so
+ * this edit says exactly what it means and no more: re-sending the name, dates and
+ * address a Tables-tab save never touched would make every table edit a chance to
+ * clobber a rename another tab made in between.
+ *
+ * `unplace_fixtures_on_removed_tables` is the **removal opt-in**, and it is sent only
+ * when it is `true`. Omitted, `false` and `null` are one answer to the server ("not
+ * opted in"), so there is nothing to gain by spelling it — and the field's whole point
+ * is that it is *said on purpose*, by a director who has read the 409 and answered it.
+ * A body that always carried the key would make that answer look like a default.
+ */
+export function catalogueToUpdateBody(
+  entries: readonly TournamentTableEntry[],
+  options: { unplaceFixturesOnRemovedTables: boolean },
+): TournamentUpdate {
+  return {
+    table_catalogue: entries.map(tableEntryToApi),
+    ...(options.unplaceFixturesOnRemovedTables
+      ? { unplace_fixtures_on_removed_tables: true }
+      : {}),
   }
 }
 
@@ -672,6 +724,46 @@ export function useUpdateTournament() {
       ),
     onSuccess: (_data, input) => invalidateTournament(qc, input.id),
     onError: notifyError('update the tournament'),
+  })
+}
+
+/**
+ * Write the **table catalogue** — the Tables tab's add and remove — as the id-keyed
+ * diff the server applies (ADR 20260801): `PATCH /v1/tournaments/{id}` carrying
+ * `table_catalogue` alone (`catalogueToUpdateBody`).
+ *
+ * Separate from `useUpdateTournament`, which patches the tournament's *fields*, for
+ * two reasons that are really the same reason — this write has a refusal the caller
+ * has to answer:
+ *
+ * - **No global `onError` toast.** The refusal it can meet is the 409 naming the
+ *   tables matches are placed at, and the Tables tab answers it with a confirm
+ *   carrying the server's own sentence. A toast on top of that would tell the
+ *   director the same thing twice and then take the sentence away after four seconds
+ *   (`web-client/CLAUDE.md`, ## Forms). The tab therefore awaits `mutateAsync` and
+ *   surfaces *every* failure itself.
+ * - **Reconciles `onSuccess` only**, unlike the draw/entry/lifecycle mutations. Their
+ *   interesting failure is the one that says "this screen is stale"; this one's is
+ *   not — a refused catalogue edit wrote **nothing** (the server judges the diff
+ *   before it moves a row), so there is no server state to re-read and, more to the
+ *   point, the confirm is about to re-send this exact body. A refetch underneath an
+ *   open dialog would swap the catalogue the pending edit was computed from.
+ */
+export function useUpdateTableCatalogue(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: {
+      entries: readonly TournamentTableEntry[]
+      unplaceFixturesOnRemovedTables: boolean
+    }): Promise<TournamentRead> =>
+      unwrap(
+        'update the tables',
+        await api.PATCH('/v1/tournaments/{tournament_id}', {
+          params: { path: { tournament_id: tournamentId } },
+          body: catalogueToUpdateBody(input.entries, input),
+        }),
+      ),
+    onSuccess: () => invalidateTournament(qc, tournamentId),
   })
 }
 
@@ -1035,12 +1127,16 @@ export function useUncutDraw(tournamentId: string) {
  * with the table and predicted start in full (ADR-0790). Owner-only.
  *
  * The body is the placement whole — `table_id` + `scheduled_start`, both required, and
- * **`null` on either clears that half** (`(null, null)` unassigns the fixture). The
- * server stores it soft: an out-of-window time or a `table_id` that names no catalogue
- * table is saved, not refused (those are flags-on-read, a later scheduler slice). The one
- * refusal is a **409** on a fixture whose match is `completed`/`voided` — its placement is
- * history. The Schedule tab does not offer the control for a finished match, so the 409
- * only surfaces on a lost race; the toast carries the server's word for it.
+ * **`null` on either clears that half** (`(null, null)` unassigns the fixture). Only one
+ * rule about it is hard: `table_id` must name a table in this tournament's own catalogue
+ * (ADR 20260801, "a placement names a real table, and only that is an invariant") — a
+ * **422 on `table_id`**. `null` is not a miss; it is the unplace case, and always passes.
+ * Everything else about a placement stays soft — an out-of-window time, a table outside
+ * the fixture's pool, a double-booking — saved, not refused (flags derived on read,
+ * ADR-0790 undisturbed). The other refusal is a **409** on a fixture whose match is
+ * `completed`/`voided` — its placement is history. The Schedule tab does not offer the
+ * control for a finished match, so the 409 only surfaces on a lost race; the toast
+ * carries the server's word for it.
  *
  * Reconciles **`onSettled`** — the placement re-renders from the refetched tournament,
  * never from an optimistic local write, so what the grid shows is always the server's. */

@@ -2031,10 +2031,12 @@ export const handlers = [
     },
   ),
   // The placement (ADR-0790). Registered before the bare `:tournamentId` routes, like the
-  // draw routes above, so MSW never mistakes a fixtures path for a tournament path. Soft
-  // by design: an out-of-window time or an unknown table id is STORED, not refused — the
-  // one refusal is a 409 on a finished match, whose placement is frozen. 403 (not the
-  // owner), 404 (no such fixture).
+  // draw routes above, so MSW never mistakes a fixtures path for a tournament path. One
+  // hard rule: `table_id` must name a table of this tournament's own catalogue — a 422 on
+  // `body.table_id` (`_enforce_table_exists`, `api/app/tournament_placement.py`).
+  // Everything else — an out-of-window time, a double-booking — is STORED, not refused;
+  // those stay flags-on-read (ADR-0790). The other refusal is a 409 on a finished match,
+  // whose placement is frozen. 403 (not the owner), 404 (no such fixture).
   http.patch(
     '*/v1/tournaments/:tournamentId/fixtures/:fixtureId/placement',
     async ({ params, request }) => {
@@ -2049,6 +2051,21 @@ export const handlers = [
       )
       if (!result.ok) {
         if (result.status === 409) return detail(result.detail, 409)
+        if (result.status === 422) {
+          return HttpResponse.json(
+            {
+              detail: [
+                {
+                  type: 'value_error',
+                  loc: ['body', 'table_id'],
+                  msg: result.detail,
+                  input: body?.table_id ?? null,
+                },
+              ],
+            },
+            { status: 422 },
+          )
+        }
         return detail(
           result.status === 403
             ? 'Only the creator can place a match.'
@@ -2187,6 +2204,29 @@ export const handlers = [
       | undefined
     const result = updateTournament(String(params.tournamentId), body ?? {})
     if (!result.ok) {
+      // The catalogue's named refusal (ADR 20260801): this edit would remove a table
+      // matches are placed at, and nobody opted in. Bare prose, carrying the domain's
+      // own sentence — the client shows it verbatim — and nothing was written.
+      if (result.status === 409) return detail(result.detail, 409)
+      // An entry citing an id this tournament's catalogue does not hold. Shaped as a
+      // **field** refusal — FastAPI's per-field array, `loc` naming the entry's index —
+      // because that is what the route really sends and what `validationFields`
+      // (`src/api/client.ts`) reads to blame the Tables row.
+      if (result.status === 422) {
+        return HttpResponse.json(
+          {
+            detail: [
+              {
+                type: 'value_error',
+                loc: ['body', 'table_catalogue', result.index, 'id'],
+                msg: result.detail,
+                input: result.tableId,
+              },
+            ],
+          },
+          { status: 422 },
+        )
+      }
       return detail(
         result.status === 403
           ? 'Only the creator can edit this tournament.'
