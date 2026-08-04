@@ -213,8 +213,10 @@ export function buildEditedEvent(
   } = {},
 ): EditedEvent {
   const { pools, ...eventOverrides } = overrides
-  const event = buildEvent(eventOverrides)
-  return { ...event, pools: pools ?? keepPools(event.pools) }
+  // `pools: undefined` still triggers `asEditedEvent`'s own default (`keepPools`)
+  // — passing it through rather than repeating the default here is what keeps the
+  // no-op-diff default in the one place `asEditedEvent` already states it.
+  return asEditedEvent(buildEvent(eventOverrides), pools)
 }
 
 /** One read event, re-expressed as the editor's no-op diff — `buildEditedEvent` for a

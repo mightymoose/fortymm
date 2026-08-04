@@ -6,7 +6,6 @@ import {
   type RatingRange,
 } from '@/api/players'
 import type { components } from '@/api/schema'
-import { conjoinWithAnd } from '@/components/tournaments/data/helpers'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
   FORTYMM_LEAGUE_ID,
@@ -54,6 +53,7 @@ import {
   enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
+  namedList,
   type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
@@ -1108,9 +1108,8 @@ function validateEventBody(
     if (duplicated.length > 0) {
       const ids = [...new Set(duplicated)]
       return detail(
-        `A pool id identifies one pool: ${conjoinWithAnd(
-          ids.map((id) => `“${id}”`),
-        )} ${ids.length === 1 ? 'is' : 'are'} cited by more than one entry of this ` +
+        `A pool id identifies one pool: ${namedList(ids)} ` +
+          `${ids.length === 1 ? 'is' : 'are'} cited by more than one entry of this ` +
           "event's pools. Cite each pool you are keeping exactly once, and omit the id " +
           'of a pool you are adding.',
         422,

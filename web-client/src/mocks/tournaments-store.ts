@@ -1896,7 +1896,7 @@ const NOTHING_TO_START =
 
 /** The things a refusal is about, as a human would say them: `“Pool B”`, or
  * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
-function namedList(names: string[]): string {
+export function namedList(names: string[]): string {
   return conjoinWithAnd(names.map((name) => `“${name}”`))
 }
 
