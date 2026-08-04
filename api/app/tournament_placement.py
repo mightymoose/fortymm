@@ -19,10 +19,13 @@ Per the tournament-verbs ADR (mirroring ``tournament_lifecycle`` /
 ``tournament_events`` / ``tournament_entries`` / ``tournament_edit``), it signals every
 refusal with a **domain exception** from ``app.tournament_errors`` — never an
 ``HTTPException`` — and each adapter maps it back to the exact response it produced
-before. ``apply_manual_placement`` raises no refusal of its own (the placement is soft,
-ADR-0790: an out-of-window time or a dangling ``table_id`` SAVES), so the two coded
-refusals — a missing fixture (:class:`FixtureNotFoundError`) and a played-out fixture
-(:class:`FixturePlacementFrozenError`) — are judged here, before it is called.
+before. ``apply_manual_placement`` raises no refusal of its own (the placement is still
+soft everywhere ADR-0790 made it soft: an out-of-window time, an off-pool table and a
+double-booking all SAVE), so all three coded refusals — a missing fixture
+(:class:`FixtureNotFoundError`), a played-out fixture
+(:class:`FixturePlacementFrozenError`), and a ``table_id`` that names no table in the
+tournament's catalogue (:class:`PlacementTableNotFoundError`, ADR 20260801) — are judged
+here, before it is called.
 """
 
 import uuid
@@ -36,6 +39,7 @@ from app.models import (
     Match,
     MatchStatus,
     ScheduleSolveTrigger,
+    Tournament,
     TournamentEvent,
     TournamentFixture,
     User,
@@ -49,6 +53,7 @@ from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     FixtureNotFoundError,
     FixturePlacementFrozenError,
+    PlacementTableNotFoundError,
 )
 from app.tournament_queries import fixtures_by_event
 from app.tournament_realtime import stage_event_entrant_hints
@@ -113,6 +118,37 @@ def _enforce_fixture_placeable(match_status: MatchStatus | None) -> None:
             assert_never(match_status)
 
 
+def _enforce_table_exists(tournament: Tournament, table_id: str | None) -> None:
+    """Raise :class:`PlacementTableNotFoundError` unless ``table_id`` names a table in
+    ``tournament``'s venue catalogue — the one *invariant* of an otherwise-soft
+    placement (ADR 20260801).
+
+    ``None`` is not a miss: it is the placement's "no table", which is exactly how a
+    fixture is unplaced.
+
+    Answered against the catalogue rows the locked owner-load already carries
+    (``Tournament.tables`` is ``lazy="selectin"``), so this costs no extra statement,
+    and it is judged under the same tournament row lock the catalogue is *edited* under
+    — a concurrent PATCH cannot remove the table between this check and the write.
+
+    Scoped to **this tournament**, which is stricter than the column's foreign key can
+    be: the key only knows the row exists somewhere on the platform, while a table
+    belonging to somebody else's tournament is, from here, exactly the dangling pointer
+    the ADR makes unrepresentable — nothing on this page could render it. That is not a
+    fourth constraint sneaking in: it is the same claim ("the placement names a real
+    table") asked of the only catalogue this placement can be read against.
+
+    The comparison is on the id's **text**, so a ``table_id`` that is not even a
+    well-formed UUID lands here rather than at the database as a type error, and one
+    refusal covers both — a client that sent a bad id gets told the id is bad, not two
+    different things depending on how bad.
+    """
+    if table_id is None:
+        return
+    if table_id not in {str(table.id) for table in tournament.tables}:
+        raise PlacementTableNotFoundError(table_id)
+
+
 async def place_fixture(
     db: AsyncSession,
     *,
@@ -141,11 +177,15 @@ async def place_fixture(
       (:func:`_load_fixture_for_placement`); a mismatched pair raises
       :class:`FixtureNotFoundError`, alongside its match's live status and its event's
       timezone.
-    * **409** — the one hard rule, before anything is written: a played-out
-      (``completed``/``voided``) fixture keeps its placement
+    * **409** — the hard rule about the fixture's state, before anything is written: a
+      played-out (``completed``/``voided``) fixture keeps its placement
       (:func:`_enforce_fixture_placeable`, raising
-      :class:`FixturePlacementFrozenError`). Everything else — an odd time, a dangling
-      table ref — saves (the write is soft, ADR-0790).
+      :class:`FixturePlacementFrozenError`).
+    * **422** — the hard rule about the body: the ``table_id`` must name a table in
+      this tournament's catalogue (:func:`_enforce_table_exists`, raising
+      :class:`PlacementTableNotFoundError`, ADR 20260801). Everything else still saves
+      — an out-of-window time, a table outside the fixture's pool and a double-booking
+      are flags derived on read, not refusals (ADR-0790).
 
     Then the whole pin/notify transition runs through
     :func:`app.match_calls.apply_manual_placement` on this open transaction (a
@@ -173,9 +213,16 @@ async def place_fixture(
     fixture, match_status, event_timezone = await _load_fixture_for_placement(
         db, tournament_id, fixture_id
     )
-    # The one hard rule, before anything is written: a played-out fixture keeps its
-    # placement. Everything else — an odd time, a dangling table ref — saves.
+    # The one hard rule about the fixture's STATE, before anything is written: a
+    # played-out fixture keeps its placement.
     _enforce_fixture_placeable(match_status)
+    # ...and the one hard rule about the BODY: the table must exist (ADR 20260801).
+    # Judged second, because the freeze is the fact that will not change — a completed
+    # fixture is never placeable again, whatever id is sent — where a bogus table id is
+    # a request the director can fix and retry. Everything else about the placement
+    # still saves: an out-of-window start, an off-pool table and a double-booking are
+    # flags derived on read, not refusals (ADR-0790).
+    _enforce_table_exists(tournament, placement.table_id)
     # The whole pin/notify transition — columns, ``pinned_at``, in-app rows — on this
     # open transaction (the atomicity contract of ``app.match_calls``: a call and its
     # durable record commit together); the returned push/email fan-out is enqueued

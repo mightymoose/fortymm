@@ -69,12 +69,12 @@ from app.tournament_errors import (
     TournamentNotFoundError,
     TournamentNotPreLiveError,
 )
-from tests._helpers import make_user
+from tests._helpers import make_user, venue_tables, with_table_aliases
 
-TABLE_CATALOGUE: list[dict[str, object]] = [
-    {"id": "t1", "label": "Table 1", "court": "A"},
-    {"id": "t2", "label": "Table 2", "court": "A"},
-]
+# Built per tournament, never as a module constant: a catalogue is
+# ``tournament_tables`` rows now (ADR 20260801). The pools name them by the positional
+# ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
+TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
 
 def _pool(
@@ -134,7 +134,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=TABLE_CATALOGUE,
+        tables=venue_tables(*TABLE_CATALOGUE),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=status,
@@ -169,7 +169,9 @@ async def _add_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
-        pools=[_pool(["t1", "t2"])] if pools is None else pools,
+        pools=with_table_aliases(
+            tournament, [_pool(["t1", "t2"])] if pools is None else pools
+        ),
         timezone=timezone,
     )
     db.add(event)

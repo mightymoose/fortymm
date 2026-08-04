@@ -41,13 +41,13 @@ from app.models import (
 )
 from app.models.tournament import DrawType, EventFormat
 from app.schedule_preview import DEFAULT_UNCAPPED_FIELD, build_preview_snapshot
-from tests._helpers import make_user
+from tests._helpers import make_user, venue_tables, with_table_aliases
 
-# A venue with two tables, so a pool can be given one or both.
-TABLE_CATALOGUE: list[dict[str, object]] = [
-    {"id": "t1", "label": "Table 1", "court": "A"},
-    {"id": "t2", "label": "Table 2", "court": "A"},
-]
+# A venue with two tables, so a pool can be given one or both. Built per tournament,
+# never as a module constant: a catalogue is ``tournament_tables`` rows now
+# (ADR 20260801), and rows belong to one tournament and one session. The pools below
+# name them by the positional ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
+TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
 
 def _one_pool(table_ids: list[str]) -> dict[str, object]:
@@ -76,7 +76,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=TABLE_CATALOGUE,
+        tables=venue_tables(*TABLE_CATALOGUE),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,
@@ -111,7 +111,9 @@ async def _add_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
-        pools=[_one_pool(["t1"])] if pools is None else pools,
+        pools=with_table_aliases(
+            tournament, [_one_pool(["t1"])] if pools is None else pools
+        ),
         timezone=timezone,
     )
     db.add(event)

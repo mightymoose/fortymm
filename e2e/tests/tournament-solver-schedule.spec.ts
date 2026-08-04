@@ -23,10 +23,11 @@ import {
 const EVENT_NAME = 'Open Singles'
 
 /** The two-table venue this spec seeds; labels are what the call notification
- * names, ids are what the board's table sections are keyed by. */
+ * names, and the ids the board's table sections are keyed by are minted by the server
+ * (ADR 20260801) — read back off the seed as `tables`, never written down here. */
 const TABLES = [
-  { id: 't1', label: 'Table 1', court: 'A' },
-  { id: 't2', label: 'Table 2', court: 'A' },
+  { label: 'Table 1', court: 'A' },
+  { label: 'Table 2', court: 'A' },
 ]
 
 /** The `HH:MM` of a naive wire timestamp (`YYYY-MM-DDTHH:MM:SS`) — the same
@@ -101,7 +102,7 @@ test.describe('Tournament — solver schedule', () => {
       end: '23:55',
     }
     const name = `Solve ${faker.string.alphanumeric(8)}`
-    const { tournamentId, eventId } = await seedTournament(director, name, {
+    const { tournamentId, eventId, tables } = await seedTournament(director, name, {
       slot,
       tables: TABLES,
     })
@@ -190,7 +191,7 @@ test.describe('Tournament — solver schedule', () => {
     expect(tracked.table_id).not.toBeNull()
     expect(tracked.scheduled_start).not.toBeNull()
     expect(tracked.call_notified_count).toBeGreaterThan(0)
-    const trackedTable = TABLES.find((t) => t.id === tracked.table_id)!
+    const trackedTable = tables.find((t) => t.id === tracked.table_id)!
     const trackedTime = tracked.scheduled_start!.local_label
 
     // Record the called fixture's placement on the Gantt board: its bar exists

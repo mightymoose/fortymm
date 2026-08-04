@@ -102,7 +102,12 @@ from app.schemas.schedule_solve import (
 )
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
-from tests._helpers import hijack_solve, make_user
+from tests._helpers import (
+    hijack_solve,
+    make_user,
+    table_ids_of,
+    venue_tables,
+)
 
 DATE = "2030-01-01"
 #: The event's venue timezone — the IANA zone anchoring its wall-clock windows
@@ -151,6 +156,7 @@ async def _make_tournament(
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Scheduled Open",
         status=status,
@@ -164,9 +170,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -188,7 +192,7 @@ async def _make_tournament(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": slot_date, "start": window[0], "end": window[1]},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )
@@ -913,8 +917,9 @@ class TestSolveJob:
         fixtures = await _fixtures_of(db_session, event_id)
         assert len(fixtures) == 6  # round-robin over 4 entrants
         window_end = BASE + timedelta(hours=8)
+        catalogue = set(await table_ids_of(db_session, tournament_id))
         for fixture in fixtures:
-            assert fixture.table_id in {"t1", "t2"}
+            assert fixture.table_id in catalogue
             assert fixture.scheduled_start is not None
             assert BASE <= fixture.scheduled_start
             assert fixture.scheduled_start + timedelta(minutes=25) <= window_end
@@ -992,7 +997,8 @@ class TestSolveJob:
         assert ledger.fixtures_placed == 1
 
         (fixture,) = await _fixtures_of(db_session, event_id)
-        assert fixture.table_id == "t1"
+        (only_table,) = await table_ids_of(db_session, tournament_id)
+        assert fixture.table_id == only_table
         assert fixture.scheduled_start is not None
         # Placed at/after ``now`` and finishing inside the venue window — the
         # instant axis the whole epic hinges on. Aware/aware comparisons across
@@ -1066,7 +1072,8 @@ class TestSolveJob:
         # this pin is uncontended and the solver leaves it exactly here.
         pinned_start = BASE + timedelta(minutes=302)
         pinned_at = BASE - timedelta(minutes=30)
-        pinned.table_id = "t1"
+        table_1, table_2 = await table_ids_of(db_session, tournament_id)
+        pinned.table_id = table_1
         pinned.scheduled_start = pinned_start
         pinned.pinned_at = pinned_at
         await db_session.commit()
@@ -1082,13 +1089,13 @@ class TestSolveJob:
         db_session.expire_all()
         refreshed = {f.id: f for f in await _fixtures_of(db_session, event_id)}
         survivor = refreshed[pinned_id]
-        assert survivor.table_id == "t1"
+        assert survivor.table_id == table_1
         assert survivor.scheduled_start == pinned_start
         assert survivor.pinned_at == pinned_at
         for fixture in refreshed.values():
             if fixture.id == pinned_id:
                 continue
-            assert fixture.table_id in {"t1", "t2"}
+            assert fixture.table_id in {table_1, table_2}
             assert fixture.scheduled_start is not None
             assert (fixture.scheduled_start - BASE).total_seconds() / 60 % 5 == 0
 
@@ -1110,7 +1117,8 @@ class TestSolveJob:
         pre_placed = fixtures[0]
         pre_placed_id = pre_placed.id
         pre_start = BASE + timedelta(minutes=5)
-        pre_placed.table_id = "t2"
+        _table_1, table_2 = await table_ids_of(db_session, tournament_id)
+        pre_placed.table_id = table_2
         pre_placed.scheduled_start = pre_start
         await db_session.commit()
 
@@ -1124,7 +1132,7 @@ class TestSolveJob:
 
         db_session.expire_all()
         refreshed = {f.id: f for f in await _fixtures_of(db_session, event_id)}
-        assert refreshed[pre_placed_id].table_id == "t2"
+        assert refreshed[pre_placed_id].table_id == table_2
         assert refreshed[pre_placed_id].scheduled_start == pre_start
         for fixture in refreshed.values():
             if fixture.id == pre_placed_id:
@@ -1484,9 +1492,10 @@ class TestSolveJob:
         # Stage both as physically underway on the SAME table at the SAME start
         # (a soft double-book): pinned, live, promised start already arrived.
         colliding = (first_fixture, partner)
+        table_1, _table_2 = await table_ids_of(db_session, tournament_id)
         for fixture in colliding:
             await _link_match(db_session, fixture, status=MatchStatus.in_progress)
-            fixture.table_id = "t1"
+            fixture.table_id = table_1
             fixture.scheduled_start = BASE
             fixture.pinned_at = BASE - timedelta(minutes=5)
         await db_session.commit()
@@ -1714,10 +1723,11 @@ class TestCalledMatchSlides:
         entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
         assert entry_a_id is not None and entry_b_id is not None
         original_pin_time = BASE - timedelta(minutes=15)
+        (table_1,) = await table_ids_of(db_session, tournament_id)
         await _pin_fixture(
             db_session,
             fixture,
-            table_id="t1",
+            table_id=table_1,
             start=BASE,
             pinned_at=original_pin_time,
             notified=1,
@@ -1740,7 +1750,7 @@ class TestCalledMatchSlides:
 
         db_session.expire_all()
         slid = (await _fixtures_of(db_session, event_id))[0]
-        assert slid.table_id == "t1"  # the table is invariant
+        assert slid.table_id == table_1  # the table is invariant
         assert slid.scheduled_start == BASE + timedelta(minutes=20)  # slid later
         assert slid.pinned_at == apply_now  # the promise is renewed, not demoted
         assert slid.call_notified_count == 2  # the call, then the moved correction
@@ -1777,10 +1787,11 @@ class TestCalledMatchSlides:
         fixture_id = fixture.id
         original_pin_time = BASE - timedelta(minutes=15)
         pinned_start = BASE + timedelta(minutes=7)  # off the 5-minute grid
+        (table_1,) = await table_ids_of(db_session, tournament_id)
         await _pin_fixture(
             db_session,
             fixture,
-            table_id="t1",
+            table_id=table_1,
             start=pinned_start,
             pinned_at=original_pin_time,
             notified=1,
@@ -1800,7 +1811,7 @@ class TestCalledMatchSlides:
         db_session.expire_all()
         survivor = (await _fixtures_of(db_session, event_id))[0]
         assert survivor.id == fixture_id
-        assert survivor.table_id == "t1"
+        assert survivor.table_id == table_1
         assert survivor.scheduled_start == pinned_start  # byte-identical
         assert survivor.pinned_at == original_pin_time  # not refreshed
         assert survivor.call_notified_count == 1  # never re-told

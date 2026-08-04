@@ -39,7 +39,7 @@ const ID_SUFFIX = 'mkq1x'
  * warns about, and this spec's subject is the order, not the warning. */
 const TABLES: ReadonlyArray<TableSpec> = Array.from(
   { length: POOL_COUNT },
-  (_, i) => ({ id: `t${i + 1}`, label: `Table ${i + 1}`, court: 'A' }),
+  (_, i) => ({ label: `Table ${i + 1}`, court: 'A' }),
 )
 
 /**
@@ -57,7 +57,7 @@ const POOLS: ReadonlyArray<PoolSpec> = Array.from(
   (_, i) => ({
     id: `p-${i + 1}-${ID_SUFFIX}`,
     name: `Pool ${i + 1}`,
-    tableIds: [`t${i + 1}`],
+    tableLabels: [`Table ${i + 1}`],
   }),
 )
 

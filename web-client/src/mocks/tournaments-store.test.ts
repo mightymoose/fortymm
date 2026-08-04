@@ -17,6 +17,7 @@ import {
   findTournament,
   listTournaments,
   markFixturePlayed,
+  placeFixture,
   placeInStatus,
   requestScheduleSolve,
   resetTournamentsStore,
@@ -26,12 +27,15 @@ import {
   updateTournament,
   withdrawEntry,
   type EnterResult,
+  type StoreResult,
   type TransitionResult,
   type WithdrawResult,
 } from './tournaments-store'
 import type { components } from '@/api/schema'
 
 type TournamentStatus = components['schemas']['TournamentStatus']
+type TournamentTable = components['schemas']['TournamentTable']
+type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 
 const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
 const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, one drawn event
@@ -2281,5 +2285,358 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
     // The finishes hold only what the bracket has actually settled: the two beaten
     // semifinalists, tied 3rd. No 1st, no 2nd — those do not exist yet.
     expect(midFlight.finishes.map((f) => f.position)).toEqual([3, 3])
+  })
+})
+
+// ----- the venue catalogue on a write (ADR 20260801) --------------------------
+//
+// A table is a ROW now, and two things about it moved at once:
+//
+//   1. its **id is the server's to mint** — the create shape has no `id` at all, and the
+//      patch shape's optional one *cites* a table rather than authoring one;
+//   2. the catalogue write is a **diff**, not a replace — a stored table no entry names
+//      is removed, and a removal can be REFUSED.
+//
+// Both are mirrored here, and the refusal is the reason it matters. A mock that
+// wholesale-replaced the catalogue would let a component that drops a table look
+// perfectly healthy in `npm run dev` and in vitest, and 409 in front of a director on
+// the morning of their tournament — with the matches they had already placed silently
+// homeless in the mock world in the meantime.
+//
+// The asymmetry is the ADR's point and is asserted on both sides: a table only a POOL
+// reserves goes quietly (a table breaking or freeing up is ordinary venue traffic), a
+// table a fixture is PLACED at is refused (clearing a placement destroys information on
+// an unrelated write).
+describe('the venue catalogue on a write (ADR 20260801)', () => {
+  beforeEach(() => resetTournamentsStore())
+  afterEach(() => resetTournamentsStore())
+
+  /** Summer Slam: draft, owned, catalogue `T1`–`T8`, one drawn round-robin whose two
+   * pools reserve `T1`–`T4`. Everything below edits ITS catalogue. */
+  const SLAM = DRAFT_TOURNAMENT
+
+  const catalogueOf = (id: string): TournamentTable[] =>
+    findTournament(id)!.table_catalogue
+
+  const fixturesOf = (id: string) =>
+    findTournament(id)!.events.flatMap((e) => e.fixtures)
+
+  /** The tournament's own catalogue as a PATCH body carries it — the round trip the
+   * client really makes: read the tables, send them back edited. Every entry cites its
+   * id, so this alone is a no-op diff. */
+  const asUpserts = (id: string): TournamentTableUpsert[] =>
+    catalogueOf(id).map((t) => ({ id: t.id, label: t.label, court: t.court }))
+
+  /** Assert the named refusal and hand back its payload, narrowed — one per status, so
+   * a test reading `.index` off a 409 is a type error rather than an `undefined`. */
+  function refusal409(result: StoreResult) {
+    if (result.ok || result.status !== 409) {
+      throw new Error(`expected a 409, got ${JSON.stringify(result)}`)
+    }
+    return result
+  }
+
+  function refusal422(result: StoreResult) {
+    if (result.ok || result.status !== 422) {
+      throw new Error(`expected a 422, got ${JSON.stringify(result)}`)
+    }
+    return result
+  }
+
+  /** Place Summer Slam's first pool fixture on `T1` — a FULL placement of a fixture
+   * whose two sides are known, so it pins (`manualPlacementPin`, every status). That
+   * pin is what makes the opt-in's "all three columns go" a real assertion. */
+  function placeAFixtureOnT1(): { fixtureId: string; tableId: string } {
+    const tableId = catalogueOf(SLAM)[0].id
+    const fixtureId = fixturesOf(SLAM)[0].id
+    const placed = placeFixture(SLAM, fixtureId, {
+      table_id: tableId,
+      scheduled_start: '2026-08-22T09:00:00',
+    })
+    if (!placed.ok) throw new Error('setup failed: could not place the fixture')
+    expect(placed.fixture.pinned_at).not.toBeNull()
+    return { fixtureId, tableId }
+  }
+
+  const fixtureIn = (tournamentId: string, fixtureId: string) =>
+    fixturesOf(tournamentId).find((f) => f.id === fixtureId)!
+
+  // ----- the one hard rule about a placement (ADR 20260801) -------------------
+  //
+  // Everything else about a placement is soft (ADR-0790, undisturbed): an
+  // out-of-window time, a table outside the fixture's pool, a double-booking all
+  // still save. Only "does `table_id` name a real table of THIS tournament" is an
+  // invariant, mirroring the server's `_enforce_table_exists`
+  // (`api/app/tournament_placement.py`) — without this, a component tested against
+  // the mock could place a fixture at a garbage id and never see the 422 the real
+  // API would answer with.
+
+  it('REFUSES a placement whose table_id names no table of this tournament', () => {
+    const fixtureId = fixturesOf(SLAM)[0].id
+    const before = fixtureIn(SLAM, fixtureId)
+
+    const result = placeFixture(SLAM, fixtureId, {
+      table_id: 'not-a-real-table-id',
+      scheduled_start: '2026-08-22T09:00:00',
+    })
+
+    if (result.ok || result.status !== 422) {
+      throw new Error(`expected a 422, got ${JSON.stringify(result)}`)
+    }
+    expect(result.detail).toBe(
+      "This tournament's venue catalogue has no table with that id.",
+    )
+    // NOTHING was written — a refused placement leaves the fixture exactly as it was.
+    expect(fixtureIn(SLAM, fixtureId)).toEqual(before)
+  })
+
+  it('ACCEPTS a placement naming a real table, and unplacing with table_id: null always passes', () => {
+    const { fixtureId, tableId } = placeAFixtureOnT1()
+    expect(fixtureIn(SLAM, fixtureId).table_id).toBe(tableId)
+
+    // `null` is not a miss — it is the unplace case, and the one value that always
+    // passes the check regardless of what the catalogue holds.
+    const cleared = placeFixture(SLAM, fixtureId, {
+      table_id: null,
+      scheduled_start: null,
+    })
+
+    expect(cleared.ok).toBe(true)
+    if (!cleared.ok) throw new Error('expected the unplace to succeed')
+    expect(cleared.fixture.table_id).toBeNull()
+  })
+
+  // ----- who mints an id ------------------------------------------------------
+
+  it('MINTS an id for every table on a create — the client sends none', () => {
+    const created = createTournament({
+      name: 'Minted On Create',
+      description: null,
+      start_date: null,
+      end_date: null,
+      address: null,
+      // `TournamentTableWrite`: label and court, and no `id` to send.
+      table_catalogue: [
+        { label: 'T1', court: 'A' },
+        { label: 'T2', court: 'B' },
+      ],
+    })
+
+    const [first, second] = created.table_catalogue
+    expect(first).toMatchObject({ label: 'T1', court: 'A' })
+    expect(second).toMatchObject({ label: 'T2', court: 'B' })
+    // Real, distinct uuids — the wire says `format: uuid`, and two rows sharing an id
+    // is the one thing an id-keyed diff cannot survive.
+    expect(first.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    expect(second.id).not.toBe(first.id)
+  })
+
+  it('MINTS an id for a table added by a PATCH, and leaves the cited ones alone', () => {
+    const before = catalogueOf(SLAM)
+
+    const result = updateTournament(SLAM, {
+      // The whole catalogue, cited by id, plus one entry with NO id: "add this one".
+      table_catalogue: [...asUpserts(SLAM), { label: 'T9', court: '9' }],
+    })
+
+    expect(result.ok).toBe(true)
+    const after = catalogueOf(SLAM)
+    expect(after).toHaveLength(before.length + 1)
+    // Every table that was already there kept its id — every pool `table_ids` and
+    // fixture `table_id` that names one still names it.
+    expect(after.slice(0, before.length).map((t) => t.id)).toEqual(
+      before.map((t) => t.id),
+    )
+    const added = after[after.length - 1]
+    expect(added).toMatchObject({ label: 'T9', court: '9' })
+    expect(before.map((t) => t.id)).not.toContain(added.id)
+  })
+
+  // ----- the diff is keyed on the id, not the position ------------------------
+
+  it('re-words a CITED table in place — the id is what the entry names', () => {
+    const [first, ...rest] = catalogueOf(SLAM)
+
+    updateTournament(SLAM, {
+      table_catalogue: [
+        { id: first.id, label: 'Centre Court', court: 'Z' },
+        ...rest.map((t) => ({ id: t.id, label: t.label, court: t.court })),
+      ],
+    })
+
+    expect(catalogueOf(SLAM)[0]).toEqual({
+      id: first.id,
+      label: 'Centre Court',
+      court: 'Z',
+    })
+  })
+
+  // The by-position stopgap this replaces matched the i-th sent against the i-th stored,
+  // so sending two tables in the other order left each row holding its own id and its
+  // NEIGHBOUR's words: a fixture placed at "T1" silently began rendering as "T2", with
+  // nothing refused and nothing to see. Only the client knows which of its rows is which.
+  it('MOVES tables on a reorder — it does not swap labels between ids', () => {
+    const [first, second, ...rest] = catalogueOf(SLAM)
+
+    updateTournament(SLAM, {
+      table_catalogue: [second, first, ...rest].map((t) => ({
+        id: t.id,
+        label: t.label,
+        court: t.court,
+      })),
+    })
+
+    const after = catalogueOf(SLAM)
+    expect(after[0]).toEqual(second)
+    expect(after[1]).toEqual(first)
+  })
+
+  it('refuses an entry citing an id this catalogue does not hold, naming the entry', () => {
+    const before = catalogueOf(SLAM)
+
+    const result = updateTournament(SLAM, {
+      name: 'Renamed While Citing A Ghost',
+      table_catalogue: [
+        ...asUpserts(SLAM),
+        { id: 'not-a-table-of-this-tournament', label: 'T9', court: '9' },
+      ],
+    })
+
+    const refused = refusal422(result)
+    // The INDEX, because a catalogue is a list and a refusal a client cannot attribute
+    // to a row is a refusal it cannot render.
+    expect(refused.index).toBe(before.length)
+    expect(refused.tableId).toBe('not-a-table-of-this-tournament')
+    expect(refused.detail).toBe(
+      "This tournament's venue catalogue has no table with that id.",
+    )
+    // Never a silently minted table — and never the name that rode along either.
+    expect(catalogueOf(SLAM)).toEqual(before)
+    expect(findTournament(SLAM)!.name).toBe('Summer Slam 2026')
+  })
+
+  // ----- removal: the quiet half, and the loud one ----------------------------
+
+  it('REMOVES a table no entry names', () => {
+    const before = catalogueOf(SLAM)
+
+    updateTournament(SLAM, {
+      table_catalogue: asUpserts(SLAM).filter((t) => t.id !== before[7].id),
+    })
+
+    expect(catalogueOf(SLAM).map((t) => t.id)).toEqual(
+      before.slice(0, 7).map((t) => t.id),
+    )
+  })
+
+  // The QUIET half of the ADR's split. A pool's `table_ids` are a reservation, not a
+  // placement — "a table breaks, a table frees up" is ordinary venue traffic — so the
+  // pool simply reserves one fewer and nothing is refused. (The stored `table_ids` still
+  // list the dead id; pruning them is a later slice on the server too.)
+  it('removes a table only a POOL reserves — no refusal, no opt-in', () => {
+    // `T2` is reserved by Pool A and has nothing placed on it.
+    const [t1, t2, ...rest] = catalogueOf(SLAM)
+    const pool = findTournament(SLAM)!.events[0].pools[0]
+    expect(pool.table_ids).toContain(t2.id)
+
+    const result = updateTournament(SLAM, {
+      table_catalogue: [t1, ...rest].map((t) => ({
+        id: t.id,
+        label: t.label,
+        court: t.court,
+      })),
+    })
+
+    expect(result.ok).toBe(true)
+    expect(catalogueOf(SLAM).map((t) => t.id)).not.toContain(t2.id)
+  })
+
+  // The LOUD half. Silently clearing a placement destroys information on an UNRELATED
+  // write: the fixture stops being "placed at a table that vanished" and becomes
+  // indistinguishable from "nobody ever placed this".
+  it('REFUSES removing a table matches are placed at, in the server’s words', () => {
+    const { fixtureId, tableId } = placeAFixtureOnT1()
+    const before = catalogueOf(SLAM)
+
+    const result = updateTournament(SLAM, {
+      // The rename is the tripwire: a guard that refused AFTER writing would satisfy
+      // every assertion about the 409 and still have moved the venue underneath the
+      // director.
+      name: 'Renamed While Removing',
+      table_catalogue: asUpserts(SLAM).filter((t) => t.id !== tableId),
+    })
+
+    const { detail } = refusal409(result)
+    // Named by LABEL, never by id: an id tells a director looking at a page of named
+    // tables nothing to act on.
+    expect(detail).toBe(
+      '“T1” has 1 match placed at it, so removing it from the catalogue would leave ' +
+        'those matches with no table — indistinguishable from matches nobody ever ' +
+        'placed. To remove it anyway, send the same edit again with ' +
+        '“unplace_fixtures_on_removed_tables”: true, and those matches lose their ' +
+        'table, their time and their call and go back to the schedule to be placed ' +
+        'again. To keep them where they are, leave the table in the catalogue and ' +
+        'move the matches off it first.',
+    )
+    expect(detail).not.toContain(tableId)
+
+    // NOTHING was written. Not the catalogue…
+    expect(catalogueOf(SLAM)).toEqual(before)
+    // …not the name that rode along on the same refused request…
+    expect(findTournament(SLAM)!.name).toBe('Summer Slam 2026')
+    // …and not the placement the refusal was protecting.
+    const fixture = fixtureIn(SLAM, fixtureId)
+    expect(fixture.table_id).toBe(tableId)
+    expect(fixture.scheduled_start).not.toBeNull()
+    expect(fixture.pinned_at).not.toBeNull()
+  })
+
+  it('the OPT-IN removes the table and leaves those fixtures unplaced', () => {
+    const { fixtureId, tableId } = placeAFixtureOnT1()
+
+    const result = updateTournament(SLAM, {
+      name: 'Renamed While Removing',
+      table_catalogue: asUpserts(SLAM).filter((t) => t.id !== tableId),
+      unplace_fixtures_on_removed_tables: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(catalogueOf(SLAM).map((t) => t.id)).not.toContain(tableId)
+    // The rest of the same edit landed too.
+    expect(findTournament(SLAM)!.name).toBe('Renamed While Removing')
+    // All THREE placement columns go together: a start with no table is a bar on a
+    // schedule with nowhere to be, and a pin is a *promise about a table*.
+    const fixture = fixtureIn(SLAM, fixtureId)
+    expect(fixture.table_id).toBeNull()
+    expect(fixture.scheduled_start).toBeNull()
+    expect(fixture.pinned_at).toBeNull()
+    // And only the fixtures that were on the removed table: nobody else was touched.
+    expect(
+      fixturesOf(SLAM).filter((f) => f.id !== fixtureId && f.table_id !== null),
+    ).toHaveLength(0)
+  })
+
+  // The opt-in has ONE affirmative spelling and three ways of not saying it. The field is
+  // `bool | None` on the wire rather than `bool = False` because a non-null default is
+  // emitted as `"default": false` and `openapi-typescript` promotes any property carrying
+  // one to REQUIRED — which would make an opt-in for one destructive action mandatory on
+  // every unrelated PATCH. That third wire value must not become a third state.
+  it.each([
+    ['omitted', {}],
+    ['false', { unplace_fixtures_on_removed_tables: false }],
+    ['null', { unplace_fixtures_on_removed_tables: null }],
+  ] as const)('refuses identically when the opt-in is %s', (_spelling, optIn) => {
+    const { fixtureId, tableId } = placeAFixtureOnT1()
+
+    const result = updateTournament(SLAM, {
+      table_catalogue: asUpserts(SLAM).filter((t) => t.id !== tableId),
+      ...optIn,
+    })
+
+    expect(refusal409(result).detail).toContain('“T1”')
+    expect(catalogueOf(SLAM).map((t) => t.id)).toContain(tableId)
+    expect(fixtureIn(SLAM, fixtureId).table_id).toBe(tableId)
   })
 })

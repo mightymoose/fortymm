@@ -69,22 +69,40 @@ against the old field should not land.
 inviolable against *optimization*, never against physics. The snapshot phase
 detects pins physics broke, so they never reach the solver *as pins*:
 
-* **table gone** — the pinned ``table_id`` is no longer in the venue
-  **catalogue**: the fixture enters the snapshot **unpinned** (the solver
-  re-places it), and its id is carried in ``SolveInputs.broken_pin_moves``.
-  Pool membership does **not** break a pin: a director deliberately pinning a
-  fixture to a spare catalogue table outside its pool's ``table_ids`` (the
-  manual PATCH allows off-pool soft placements, ADR-0790) is a legitimate
-  hand, and pins are broken by physics, not preferences. Such a pin enters
-  the snapshot as a pin like any other — the pure module treats pins as
-  constants and never checks a pin's table against the pool (or even the
-  catalogue) — survives every solve byte-identical, and is called by the
-  ordinary call pass when imminent;
 * **entrant withdrew** — an entry of the fixture is ``withdrawn`` (and the
   match isn't already settled): the promised match cannot happen, so the
   fixture is **excluded** from the snapshot and carried in
   ``SolveInputs.broken_pin_voids``;
 * a deleted fixture needs nothing — the pin died with its row.
+
+Pool membership does **not** break a pin: a director deliberately pinning a
+fixture to a spare catalogue table outside its pool's ``table_ids`` (the manual
+PATCH allows off-pool soft placements, ADR-0790) is a legitimate hand, and pins
+are broken by physics, not preferences. Such a pin enters the snapshot as a pin
+like any other — the pure module treats pins as constants and never checks a
+pin's table against the pool (or even the catalogue) — survives every solve
+byte-identical, and is called by the ordinary call pass when imminent.
+
+There **was** a third case here, "the pinned table is no longer in the venue
+catalogue" (``SolveInputs.broken_pin_moves``): the fixture entered the snapshot
+unpinned and was re-pinned + moved-notified at apply. It is gone, because the
+state it repaired stopped being representable when ADR 20260801 landed in full.
+``tournament_fixtures.table_id`` is a foreign key (so the row cannot vanish),
+nothing anywhere re-parents a ``VenueTable`` onto another tournament, the
+placement verb refuses a table outside *this* tournament's catalogue, and the one
+route by which a table can leave a catalogue — the tournament PATCH's diff —
+either refuses the removal (the named 409) or unplaces the fixtures first. Three
+of the four writers of ``table_id`` in ``app/`` write a catalogue table of this
+tournament and the fourth writes ``NULL``. The arm survived only because its
+tests manufactured the state by re-parenting a table row onto a throwaway
+tournament, which no production path performs — a guard whose only reachable
+caller is its own test is not defence in depth, it is a claim that the invariant
+above it is optional. The slide-later repair keeps the whole "moved" machinery
+alive, so what went is the detection, not the correction.
+
+A *planned* (unpinned) fixture needs no case at all and never did: it is
+re-placed by the ordinary placement write, silently, because it was never
+promised.
 
 The *repair* is applied only by phase (c), in the same transaction and under
 the same locks as every other placement write — and only on a successful
@@ -518,14 +536,15 @@ class SolveInputs:
     frame, and the fixture rows themselves (keyed by id) so the apply that
     re-read them under lock writes to exactly the rows it fingerprinted.
 
-    The ``broken_pin_*`` sets are the snapshot phase's broken-pin findings
-    (module docstring): ``broken_pin_moves`` entered the snapshot unpinned and
-    are re-pinned+notified at apply; ``broken_pin_voids`` were excluded from
-    the snapshot and have their placement cleared at apply.
-    ``withdrawn_entry_ids`` lets the cancelled correction pick the *remaining*
-    entrant. Everything these sets derive from is fingerprinted, so a
-    fingerprint match between snapshot and apply guarantees the fresh read's
-    sets are the ones the solve was computed against.
+    ``broken_pin_voids`` is the snapshot phase's broken-pin finding (module
+    docstring): those fixtures were excluded from the snapshot and have their
+    placement cleared at apply. ``withdrawn_entry_ids`` lets the cancelled
+    correction pick the *remaining* entrant. Everything these sets derive from is
+    fingerprinted, so a fingerprint match between snapshot and apply guarantees
+    the fresh read's sets are the ones the solve was computed against. (There was
+    a ``broken_pin_moves`` beside it, for a pin whose table left the venue
+    catalogue; that state stopped being representable under ADR 20260801 and the
+    field went with it — see the module docstring.)
 
     ``pool_resolutions`` (keyed by the solver's namespaced ``PoolId`` string
     ``f"{event.id}:{pool.id}"``) and ``fixture_best_of`` (keyed by
@@ -558,7 +577,6 @@ class SolveInputs:
     #: a named ``past_window`` date on the ledger row — the pure solver stays
     #: minute-only, and naming the wall-clock day is this DB-aware layer's job.
     pool_dates: dict[str, date] = field(default_factory=dict)
-    broken_pin_moves: frozenset[uuid.UUID] = frozenset()
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
     pool_resolutions: dict[str, _PoolResolution] = field(default_factory=dict)
@@ -748,15 +766,19 @@ async def _load_solver_inputs(
             match_status[match_id] = status
             match_completed_at[match_id] = completed_at
 
-    # Parse the JSONB value-objects once, at this boundary, with the same
-    # models the write boundary validated them with (parse, don't validate).
+    # Parse the value-objects once, at this boundary, with the same models the write
+    # boundary validated them with (parse, don't validate). The catalogue is rows now
+    # (ADR 20260801), eagerly loaded on the tournament and already in the director's
+    # order; the solver's ``TableId`` stays a string, so a table's UUID id crosses into
+    # it as its text — the same text a pool's ``table_ids`` and a fixture's ``table_id``
+    # hold.
     parsed_tables = [
-        TournamentTable.model_validate(table) for table in tournament.table_catalogue
+        TournamentTable.model_validate(table) for table in tournament.tables
     ]
-    catalogue = tuple(TableId(table.id) for table in parsed_tables)
+    catalogue = tuple(TableId(str(table.id)) for table in parsed_tables)
     # table_id → catalogue label: the DB-aware resolution a placement conflict's
     # shared table is humanized through (mirrors ``load_copy_ingredients``).
-    table_labels = {table.id: table.label for table in parsed_tables}
+    table_labels = {str(table.id): table.label for table in parsed_tables}
     parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Pool]]] = [
         (
             event,
@@ -844,7 +866,6 @@ async def _load_solver_inputs(
     in_progress: list[InProgressMatch] = []
     previous_plan: list[PreviousPlacement] = []
     rest_shadows: list[RestShadow] = []
-    broken_pin_moves: set[uuid.UUID] = set()
     broken_pin_voids: set[uuid.UUID] = set()
     for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
@@ -879,26 +900,23 @@ async def _load_solver_inputs(
                     fixture.entry_a_id in withdrawn_entry_ids
                     or fixture.entry_b_id in withdrawn_entry_ids
                 ):
-                    # Case (b), entrant withdrew: the promised match cannot
-                    # happen. Excluded from the snapshot; voided at apply.
+                    # An entrant withdrew: the promised match cannot happen.
+                    # Excluded from the snapshot; voided at apply.
                     broken_pin_voids.add(fixture.id)
                     continue
-                if not settled and TableId(fixture.table_id) not in catalogue_ids:
-                    # Case (a), table gone from the venue CATALOGUE: enters
-                    # the snapshot UNPINNED so the solver re-places it;
-                    # re-pinned + moved-notified at apply. The pool's
-                    # table_ids are deliberately NOT consulted — an off-pool
-                    # pin on a catalogue table is the director's hand (the
-                    # manual PATCH allows off-pool soft placements, ADR-0790),
-                    # and pins break on physics, not preferences. The pure
-                    # module honors it as-is: pins are constants there, never
-                    # checked against pool residency.
-                    broken_pin_moves.add(fixture.id)
-                else:
-                    pin = Pin(
-                        table_id=TableId(fixture.table_id),
-                        start_min=to_min(fixture.scheduled_start),
-                    )
+                # Otherwise the pin stands, as-is. Its table is deliberately NOT
+                # re-checked against the pool's ``table_ids`` — an off-pool pin
+                # on a catalogue table is the director's hand (the manual PATCH
+                # allows off-pool soft placements, ADR-0790), and pins break on
+                # physics, not preferences. Nor against the catalogue, which the
+                # foreign key and the tournament PATCH's diff have made an
+                # invariant rather than a thing to defend against here (module
+                # docstring). The pure module honors it either way: pins are
+                # constants there, never checked against pool residency.
+                pin = Pin(
+                    table_id=TableId(fixture.table_id),
+                    start_min=to_min(fixture.scheduled_start),
+                )
             fixture_id = FixtureId(str(fixture.id))
             # Only placeable (pooled, both-sides-known) fixtures reach here, and
             # only such a fixture can surface in a WindowTooShortForMatch reason
@@ -1053,7 +1071,6 @@ async def _load_solver_inputs(
         base=base,
         fixtures={fixture.id: fixture for fixture in fixture_rows},
         pool_dates=pool_dates,
-        broken_pin_moves=frozenset(broken_pin_moves),
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
         pool_resolutions=pool_resolutions,
@@ -1337,10 +1354,7 @@ async def _apply_result(
                     fixture = fresh.fixtures[uuid.UUID(placement.fixture_id)]
                     new_table = str(placement.table_id)
                     new_start = fresh.base + timedelta(minutes=placement.start_min)
-                    if (
-                        fixture.pinned_at is not None
-                        and fixture.id not in fresh.broken_pin_moves
-                    ):
+                    if fixture.pinned_at is not None:
                         # A called match holds its table, but its start can be
                         # pushed LATER on a re-solve when a predecessor overruns
                         # (ADR "a called match holds its table and slides
@@ -1372,14 +1386,14 @@ async def _apply_result(
                     fixture.table_id = new_table
                     fixture.scheduled_start = new_start
                     if repaired_pin:
-                        # Broken pin, case (a): physics moved the promise, so
-                        # it is renewed — still a pin, re-dated to the moment
+                        # A pin the solver slid later: physics moved the promise,
+                        # so it is renewed — still a pin, re-dated to the moment
                         # the new placement was made — never demoted back to
                         # an estimate.
                         fixture.pinned_at = apply_now
                         moved_repairs.append(fixture)
                     placed += 1
-                # Broken pins, case (b): an entrant withdrew, so the promised
+                # Broken pins: an entrant withdrew, so the promised
                 # match cannot happen and the fixture stops being schedulable.
                 # Whether the draw layer later voids or deletes the fixture is
                 # its business; here the placement and the pin are cleared.

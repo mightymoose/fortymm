@@ -63,7 +63,11 @@ from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
 from app.tournament_lifecycle import transition_tournament
 from app.tournament_placement import place_fixture
-from tests._helpers import make_user
+from tests._helpers import (
+    make_user,
+    table_ids_of,
+    venue_tables,
+)
 from tests._realtime import watch_hints
 
 #: Far enough out that the solver never has to argue with the wall clock.
@@ -156,6 +160,7 @@ async def _seed_field(
     this is about the create routes. The draw is left un-cut; callers cut it.
     """
     director = await make_user(db, _name("director"))
+    catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
     tournament = Tournament(
         name="Realtime Open",
         status=status,
@@ -169,9 +174,7 @@ async def _seed_field(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=[
-            {"id": table, "label": table.upper(), "court": "Main"} for table in tables
-        ],
+        tables=catalogue,
         league_id=league.id,
         created_by_user_id=director.id,
     )
@@ -193,7 +196,7 @@ async def _seed_field(
                 "id": "pool-a",
                 "name": "Pool A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                "table_ids": list(tables),
+                "table_ids": [str(row.id) for row in catalogue],
             }
         ],
     )
@@ -434,6 +437,7 @@ async def test_applying_a_schedule_solve_hints_the_players_whose_times_moved(
     field = await _seed_field(db_session, default_league, entrants=2, tables=("t1",))
     await cut_draw(db_session, field.event)
     await db_session.commit()
+    (the_table,) = await table_ids_of(db_session, field.tournament.id)
     (unplaced,) = await _fixtures_of(db_session, field.event.id)
     assert unplaced.scheduled_start is None and unplaced.table_id is None
 
@@ -461,7 +465,7 @@ async def test_applying_a_schedule_solve_hints_the_players_whose_times_moved(
             )
         )
     ).one()
-    assert table_id == "t1" and scheduled_start is not None, (
+    assert table_id == the_table and scheduled_start is not None, (
         "the solve actually moved something — otherwise the hint proves nothing"
     )
     field.assert_only_entrants_hinted(hints)
@@ -484,6 +488,8 @@ async def test_placing_a_fixture_hints_the_events_entrants(
     await cut_draw(db_session, field.event)
     await db_session.commit()
     (fixture,) = await _fixtures_of(db_session, field.event.id)
+    # The catalogue's real id: a placement names a real table now (ADR 20260801).
+    (the_table, *_) = await table_ids_of(db_session, field.tournament.id)
 
     async with watch_hints(realtime_broker, *field.everyone) as watch:
         read = await place_fixture(
@@ -492,12 +498,12 @@ async def test_placing_a_fixture_hints_the_events_entrants(
             fixture_id=fixture.id,
             actor=field.director,
             placement=TournamentFixturePlacementUpdate(
-                table_id="t1", scheduled_start=START
+                table_id=the_table, scheduled_start=START
             ),
         )
         hints = await watch.collect()
 
-    assert read.table_id == "t1"
+    assert read.table_id == the_table
     field.assert_only_entrants_hinted(hints)
 
 
@@ -518,13 +524,14 @@ async def test_unpinning_a_fixture_still_hints_the_events_entrants(
     await db_session.commit()
     (fixture,) = await _fixtures_of(db_session, field.event.id)
     fixture_id = fixture.id
+    (the_table, *_) = await table_ids_of(db_session, field.tournament.id)
     await place_fixture(
         db_session,
         tournament_id=field.tournament.id,
         fixture_id=fixture_id,
         actor=field.director,
         placement=TournamentFixturePlacementUpdate(
-            table_id="t1", scheduled_start=START
+            table_id=the_table, scheduled_start=START
         ),
     )
 

@@ -38,9 +38,10 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
+    VenueTable,
 )
 from app.schemas.tournament import ScheduleSolveRead
-from tests._helpers import make_user
+from tests._helpers import make_user, venue_tables
 
 
 async def _make_tournament(db_session: AsyncSession) -> Tournament:
@@ -66,6 +67,9 @@ async def _make_tournament(db_session: AsyncSession) -> Tournament:
         },
         league_id=league.id,
         created_by_user_id=owner.id,
+        # One catalogue row, so a pinned fixture below has a real table to sit at:
+        # ``table_id`` is a foreign key since ADR 20260801.
+        tables=venue_tables(("Table 3", "A")),
     )
     db_session.add(tournament)
     await db_session.commit()
@@ -277,13 +281,24 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     superseding ADR-0790's naive frame), and the notified count comes back
     exact."""
     event = await _make_event(db_session)
+    # The catalogue's one table, by the id the server minted for it — ``table_id`` is a
+    # foreign key now (ADR 20260801), so "table-3" is no longer a table.
+    table_id = str(
+        (
+            await db_session.execute(
+                select(VenueTable.id).where(
+                    VenueTable.tournament_id == event.tournament_id
+                )
+            )
+        ).scalar_one()
+    )
     called_at = datetime(2026, 8, 1, 14, 30, tzinfo=UTC)
     fixture = TournamentFixture(
         event_id=event.id,
         pool_id="pool-a",
         round=1,
         position=1,
-        table_id="table-3",
+        table_id=table_id,
         scheduled_start=datetime(2026, 8, 1, 14, 40, tzinfo=UTC),
         pinned_at=called_at,
         call_notified_count=2,

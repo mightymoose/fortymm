@@ -1047,11 +1047,12 @@ async def load_copy_ingredients(
         .scalars()
         .all()
     }
+    # The catalogue is rows now (ADR 20260801), eagerly loaded on the tournament. The
+    # fixture's ``table_id`` is still carried as a string ref, so the lookup is keyed by
+    # the table id's text.
     table_labels = {
-        table.id: table.label
-        for table in (
-            TournamentTable.model_validate(raw) for raw in tournament.table_catalogue
-        )
+        str(table.id): table.label
+        for table in (TournamentTable.model_validate(row) for row in tournament.tables)
     }
     pool_names = {
         event.id: {pool.id: pool.name for pool in event_pools(event)}

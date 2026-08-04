@@ -25,9 +25,11 @@ from app.models import (
     RatingHistorySource,
     Role,
     RolePermission,
+    Tournament,
     User,
     UserLeagueRating,
     UserRole,
+    VenueTable,
 )
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
@@ -119,6 +121,75 @@ async def make_user(db_session: AsyncSession, username: str) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
+    """Catalogue rows — ``(label, court)`` pairs — for a tournament a test seeds
+    straight through the ORM, positioned in the order given.
+
+    The ids are minted **here**, up front, rather than left to the column's
+    ``gen_random_uuid()`` default, for one reason: a pool's ``table_ids`` and a
+    fixture's ``table_id`` name a table by id, so a test that seeds a placement needs
+    the id before the row is flushed. Fresh ``uuid4``s per call, never module
+    constants — the id is a primary key, so two tournaments in one test cannot share
+    one.
+
+    Through the API the ids are the *server's* and there is no ``id`` on the write
+    shape at all (ADR 20260801); this is the direct-to-database seam, which no HTTP
+    caller can reach.
+    """
+    return [
+        VenueTable(id=uuid.uuid4(), label=label, court=court, position=position)
+        for position, (label, court) in enumerate(specs)
+    ]
+
+
+def with_table_aliases(
+    tournament: Tournament, pools: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """Rewrite each pool's ``table_ids`` from the positional aliases a test writes
+    (``"t1"``, ``"t2"``, …) into the real ids of ``tournament``'s catalogue rows.
+
+    A pool reserves a slice of the venue by naming table ids, and those ids are UUIDs
+    the server minted (ADR 20260801) — so a seeded pool cannot spell one as a literal.
+    The alias is 1-based and positional: ``"t1"`` is the tournament's first table, in
+    its own catalogue order. It exists so a test can go on saying which tables a pool
+    holds in the terms the test is about, instead of threading a UUID through every
+    helper it passes a pool to.
+    """
+    by_alias = {
+        f"t{position}": str(table.id)
+        for position, table in enumerate(tournament.tables, start=1)
+    }
+    resolved: list[dict[str, object]] = []
+    for pool in pools:
+        aliases = pool["table_ids"]
+        assert isinstance(aliases, list)
+        resolved.append({**pool, "table_ids": [by_alias[alias] for alias in aliases]})
+    return resolved
+
+
+async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
+    """The tournament's venue-table ids, as strings, in its own catalogue order.
+
+    Read from ``tournament_tables`` rather than off an ORM instance, so it is safe
+    after the commits and ``expire_all``s these suites do between acting and
+    asserting. Tests unpack it (``table_1, table_2 = await table_ids_of(...)``) where
+    they used to write the literal ``"t1"``: the id is a server-minted UUID now
+    (ADR 20260801), so a placement or a pool has to be told which one it means.
+    """
+    return [
+        str(table_id)
+        for table_id in (
+            await db_session.execute(
+                select(VenueTable.id)
+                .where(VenueTable.tournament_id == tournament_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    ]
 
 
 async def assert_tournament_address_is_sql_null(

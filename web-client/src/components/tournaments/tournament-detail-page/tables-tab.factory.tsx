@@ -10,7 +10,7 @@ export function buildTablesTabProps(
     tournament: buildTournament({ tableIds: catalogue.map((t) => t.id) }),
     catalogue,
     canEdit: true,
-    onChangeCatalogue: () => {},
+    onChangeCatalogue: async () => {},
     ...overrides,
   }
 }

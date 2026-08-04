@@ -265,10 +265,13 @@ def build_preview_snapshot(
     overrides = count_overrides or {}
     now = now if now is not None else datetime.now(UTC)
 
+    # The catalogue is rows now (ADR 20260801), eagerly loaded on the tournament and
+    # already in the director's order. The solver's ``TableId`` stays a string, so a
+    # table's UUID id crosses into it as its text.
     catalogue_tables = [
-        TournamentTable.model_validate(table) for table in tournament.table_catalogue
+        TournamentTable.model_validate(table) for table in tournament.tables
     ]
-    catalogue = tuple(TableId(table.id) for table in catalogue_tables)
+    catalogue = tuple(TableId(str(table.id)) for table in catalogue_tables)
     catalogue_ids = set(catalogue)
 
     # First pass: plan every event's synthetic draw. A global counter mints the

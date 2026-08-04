@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.geocoding import FakeGeocoder
@@ -35,8 +35,13 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTable,
 )
-from app.schemas.tournament import AddressInput, TournamentCreate, TournamentTable
+from app.schemas.tournament import (
+    AddressInput,
+    TournamentCreate,
+    TournamentTableWrite,
+)
 from app.tournament_draws import cut_draw
 from app.tournament_errors import (
     IllegalTournamentTransitionError,
@@ -57,6 +62,7 @@ from tests._helpers import (
     assert_tournament_address_is_sql_null,
     blank_addresses,
     make_user,
+    venue_tables,
 )
 
 # The deterministic geocoder the create verb resolves the venue address with (the
@@ -108,7 +114,7 @@ def _payload(*, league_id: uuid.UUID | None = None) -> TournamentCreate:
         name="Bay Area Open 2026",
         description="Two-day open.",
         address=_address(),
-        table_catalogue=[TournamentTable(id="t1", label="Table 1", court="A")],
+        table_catalogue=[TournamentTableWrite(label="Table 1", court="A")],
         league_id=league_id,
     )
 
@@ -145,7 +151,21 @@ async def test_create_persists_a_draft_owned_by_the_actor(
         )
     ).scalar_one()
     assert row.created_by_user_id == actor_id
-    assert row.table_catalogue == [{"id": "t1", "label": "Table 1", "court": "A"}]
+    # The catalogue is ROWS now (ADR 20260801), positioned in the order it was sent,
+    # and the id on each is the SERVER's — a v4 UUID the payload could not have named.
+    (table,) = (
+        (
+            await db_session.execute(
+                select(VenueTable)
+                .where(VenueTable.tournament_id == tournament_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert (table.label, table.court, table.position) == ("Table 1", "A", 0)
+    assert table.id.version == 4
 
 
 async def test_create_naming_a_league_runs_on_that_league(
@@ -375,7 +395,6 @@ async def _make_tournament(
     tournament = Tournament(
         name="Deletable Cup",
         address=_stored_address(),
-        table_catalogue=[],
         league_id=league.id,
         created_by_user_id=owner.id,
         status=TournamentStatus.draft,
@@ -402,6 +421,161 @@ async def test_delete_removes_an_owned_tournament(
             select(Tournament).where(Tournament.id == tournament_id)
         )
     ).scalar_one_or_none() is None
+
+
+async def test_delete_takes_the_tournaments_venue_tables_with_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The catalogue is a child table now (ADR 20260801), so deleting a tournament has
+    to take its ``tournament_tables`` rows with it — by ``ON DELETE CASCADE``, the
+    shape ``tournament_events`` already uses, not by the ORM loading and deleting them
+    one at a time.
+
+    Asserted against the rows rather than through the read model, because the read
+    model would answer "no catalogue" for a tournament whose rows were orphaned just as
+    happily as for one whose rows were removed."""
+    owner = await make_user(db_session, "lifecycle-delete-tables")
+    tournament = Tournament(
+        name="Deletable Cup",
+        address=_stored_address(),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "B")),
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    tournament_id = tournament.id
+    assert len(await _catalogue_ids(db_session, tournament_id)) == 2
+    await db_session.refresh(owner)
+
+    await delete_tournament(db_session, tournament_id=tournament_id, actor=owner)
+
+    db_session.expire_all()
+    assert await _catalogue_ids(db_session, tournament_id) == []
+    # Asserted over the WHOLE table, not just this tournament's rows, so a stray row
+    # left behind anywhere would show.
+    assert (
+        await db_session.execute(select(func.count()).select_from(VenueTable))
+    ).scalar_one() == 0
+
+
+async def test_the_venue_tables_fk_cascades_in_the_database(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The FK itself, with the ORM taken out of the picture.
+
+    The verb's delete goes through ``Tournament.tables``, which ``lazy="selectin"``
+    has already loaded, so SQLAlchemy issues the child ``DELETE`` itself — meaning the
+    test above would stay green against ``ON DELETE RESTRICT`` (measured: it does).
+    The cascade is the backstop for every path that does NOT load the collection first
+    — a raw ``DELETE``, a psql session, a future bulk reap — and it is only tested by
+    being one of those paths, so this one deletes the row in SQL.
+    """
+    owner = await make_user(db_session, "lifecycle-cascade-tables")
+    tournament = Tournament(
+        name="Cascade Cup",
+        address=_stored_address(),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+        tables=venue_tables(("Table 1", "A")),
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    tournament_id = tournament.id
+    assert len(await _catalogue_ids(db_session, tournament_id)) == 1
+
+    await db_session.execute(
+        text("DELETE FROM tournaments WHERE id = :id"), {"id": tournament_id}
+    )
+    await db_session.commit()
+
+    db_session.expire_all()
+    assert await _catalogue_ids(db_session, tournament_id) == []
+
+
+async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A tournament with a fixture PLACED at one of its own tables still deletes — the
+    tables, the fixtures and the tournament all go.
+
+    Without the unplace the delete verb does first, this is a **500**: a fixture's
+    ``table_id`` is ``ON DELETE RESTRICT`` (ADR 20260801) and the ORM deletes the
+    catalogue rows in their own statement, ahead of the ``tournaments`` row whose
+    cascade takes the fixtures — so the immediate, undeferrable RESTRICT check fires
+    while the placements are still pointing at the tables. The refusal that ADR asks
+    for is about removing a table out from under a fixture that SURVIVES; here nothing
+    survives, and the director asked for exactly that.
+    """
+    owner = await make_user(db_session, "lifecycle-delete-placed")
+    tournament = Tournament(
+        name="Placed Cup",
+        address=_stored_address(),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.draft,
+        tables=venue_tables(("Table 1", "A")),
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await db_session.refresh(tournament)
+    tournament_id = tournament.id
+    event = TournamentEvent(
+        tournament_id=tournament_id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": False, "length_games": 3},
+        pools=[],
+    )
+    db_session.add(event)
+    await db_session.commit()
+    db_session.add(
+        TournamentFixture(
+            event_id=event.id,
+            round=1,
+            position=1,
+            table_id=str(tournament.tables[0].id),
+        )
+    )
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    await delete_tournament(db_session, tournament_id=tournament_id, actor=owner)
+
+    db_session.expire_all()
+    assert await _catalogue_ids(db_session, tournament_id) == []
+    assert (
+        await db_session.execute(select(func.count()).select_from(TournamentFixture))
+    ).scalar_one() == 0
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == tournament_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[uuid.UUID]:
+    return list(
+        (
+            await db.execute(
+                select(VenueTable.id)
+                .where(VenueTable.tournament_id == tournament_id)
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 async def test_delete_of_a_non_owned_tournament_raises_not_owner(
@@ -462,10 +636,7 @@ async def _make_tournament_at(
     tournament = Tournament(
         name="Lifecycle Cup",
         address=_stored_address(),
-        table_catalogue=[
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
-        ],
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
         status=status,

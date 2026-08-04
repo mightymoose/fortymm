@@ -53,12 +53,17 @@ from app.schemas.schedule_preview import (
     UNSUPPORTED_DRAW_TYPE_CODE,
     UnsupportedDrawTypeResponse,
 )
-from tests._helpers import make_client, start_session
+from tests._helpers import (
+    make_client,
+    start_session,
+    venue_tables,
+    with_table_aliases,
+)
 
-TABLE_CATALOGUE: list[dict[str, object]] = [
-    {"id": "t1", "label": "Table 1", "court": "A"},
-    {"id": "t2", "label": "Table 2", "court": "A"},
-]
+# Built per tournament, never as a module constant: a catalogue is
+# ``tournament_tables`` rows now (ADR 20260801). The pool below names them by the
+# positional ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
+TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
 
 @pytest.fixture
@@ -122,7 +127,7 @@ async def _make_tournament(
             "latitude": 37.8703,
             "longitude": -122.2731,
         },
-        table_catalogue=TABLE_CATALOGUE,
+        tables=venue_tables(*TABLE_CATALOGUE),
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -140,14 +145,21 @@ async def _make_tournament(
             slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
             match_settings={"rated": False, "length_games": 3},
             timezone="America/Los_Angeles",
-            pools=[
-                {
-                    "id": "pool-a",
-                    "name": "Pool A",
-                    "slot": {"date": "2030-01-01", "start": "09:00", "end": "17:00"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
+            pools=with_table_aliases(
+                tournament,
+                [
+                    {
+                        "id": "pool-a",
+                        "name": "Pool A",
+                        "slot": {
+                            "date": "2030-01-01",
+                            "start": "09:00",
+                            "end": "17:00",
+                        },
+                        "table_ids": ["t1", "t2"],
+                    }
+                ],
+            ),
         )
         db.add(event)
         await db.flush()

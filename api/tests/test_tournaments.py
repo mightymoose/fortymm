@@ -56,6 +56,7 @@ from app.models import (
     TournamentStatus,
     User,
     UserLeagueRating,
+    VenueTable,
 )
 from app.models.tournament import DrawType, EventFormat
 from app.schemas.notification import NotificationJob
@@ -144,9 +145,12 @@ def _create_payload(**overrides: Any) -> dict[str, Any]:
         "start_date": "2026-06-13",
         "end_date": "2026-06-14",
         "address": _address(),
+        # No ``id`` on a submitted table: a table is a row whose id the server mints
+        # (ADR 20260801), so sending one is a 422 (see the two tests at
+        # "the catalogue's ids are the server's").
         "table_catalogue": [
-            {"id": "t1", "label": "Table 1", "court": "A"},
-            {"id": "t2", "label": "Table 2", "court": "A"},
+            {"label": "Table 1", "court": "A"},
+            {"label": "Table 2", "court": "A"},
         ],
     }
     payload.update(overrides)
@@ -196,10 +200,13 @@ async def test_create_tournament_returns_201(
     # The venue address is geocoded on write: the read carries the six text fields the
     # client sent PLUS the server-resolved coordinates (NOT NULL).
     assert body["address"] == await _geocoded_address(_address())
-    assert body["table_catalogue"] == [
-        {"id": "t1", "label": "Table 1", "court": "A"},
-        {"id": "t2", "label": "Table 2", "court": "A"},
+    # The catalogue comes back in the order it was sent, each table carrying the id the
+    # SERVER minted for it — a real UUID the client never chose (ADR 20260801).
+    assert [(table["label"], table["court"]) for table in body["table_catalogue"]] == [
+        ("Table 1", "A"),
+        ("Table 2", "A"),
     ]
+    assert [uuid.UUID(table["id"]) for table in body["table_catalogue"]]
     assert body["can_edit"] is True
     assert body["created_by_username"] == user.username
     assert body["created_by_user_id"] == str(user.id)
@@ -766,11 +773,12 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     shifts into the new zone."""
     client, _ = authed_client
     tournament_id, event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     # Place it at 18:00 local; the default event zone is America/Chicago.
     place = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T18:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T18:00:00"},
     )
     assert place.status_code == 200, place.text
     before = await _fixture_in_detail(client, tournament_id, str(fixture.id))
@@ -1797,12 +1805,15 @@ async def test_patch_event_answers_with_its_existing_entrants(
 
 
 # The pin, measured (print the statements below to re-measure): the tournaments +
-# usernames join, the events, ONE batched load of every event's active entrants, ONE
-# batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load of
-# the caller's rating on every league those tournaments run on (which each event's
-# ``entry_state`` is judged against, ADR-0783). Five, whatever the number of tournaments
-# and events.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 5
+# usernames join, ONE batched load of every one of those tournaments' venue tables
+# (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
+# ADR 20260801, and selectin batches it across the whole page rather than one query
+# per card), the events, ONE batched load of every event's active entrants, ONE
+# batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load
+# of the caller's rating on every league those tournaments run on (which each event's
+# ``entry_state`` is judged against, ADR-0783). Six, whatever the number of
+# tournaments, tables and events.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 6
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -1933,7 +1944,6 @@ async def _seed_located_tournament(
         name=name,
         status=status,
         address={**_address(), "latitude": latitude, "longitude": longitude},
-        table_catalogue=[],
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -2038,7 +2048,6 @@ async def test_a_tournament_with_no_venue_never_matches_a_proximity_search(
         name="Unbooked Open",
         status=TournamentStatus.published,
         address=None,
-        table_catalogue=[],
         league_id=default_league.id,
         created_by_user_id=user.id,
     )
@@ -4329,22 +4338,24 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
     assert await _catalogue_of(client, tournament_id)
 
 
-# The pin, measured: the tournament + username join, its events, ONE batched load of
+# The pin, measured: the tournament + username join, ONE load of its venue tables
+# (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
+# ADR 20260801), its events, ONE batched load of
 # those events' active entrants (their ratings on the tournament's ladder ride along on
 # that same statement — see ``active_entrants_by_event``), ONE batched load of those
 # events' fixtures — their draws (ADR-0786) — ONE read of the caller's rating on the
 # tournament's league, ONE read of the newest solve-ledger row (the Schedule tab's
 # solve strip, ADR "the schedule is solved, the call is pinned"), and ONE read of the
 # ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
-# seeded row, and the enum holds only what runs"). Seven, whatever the number of
+# seeded row, and the enum holds only what runs"). Eight, whatever the number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
-# and whatever the length of the day's solve ledger.
+# whatever the size of the venue, and whatever the length of the day's solve ledger.
 #
-# It was six until the catalogue landed, and the seventh is deliberate: the catalogue
-# is global reference data with nothing to key off the page, so it is one flat read
-# that does not grow with anything — which is exactly what the parametrized cases
-# below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 7
+# Two of the eight are deliberate flat reads that grow with nothing: the draw-type
+# catalogue is global reference data with nothing to key off the page, and the venue
+# tables are one batched read per *page*, not per card — which is exactly what the
+# parametrized cases below check by measuring the same number at one event and at four.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 8
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -5796,8 +5807,10 @@ async def test_place_fixture_blocks_on_a_concurrent_uncut_then_404s_the_gone_fix
             actor = (
                 await session.execute(select(User).where(User.id == owner_id))
             ).scalar_one()
+            # The placement's CONTENT is beside the point here — this test is about the
+            # lock — so it is the empty one, which no table has to exist for.
             payload = TournamentFixturePlacementUpdate(
-                table_id="t1", scheduled_start=None
+                table_id=None, scheduled_start=None
             )
             try:
                 await place_fixture(
@@ -6582,23 +6595,75 @@ async def test_a_pools_patch_that_empties_a_pool_id_or_name_is_refused(
     assert await _pools_of(db_session, event["id"]) == _positioned(POOL_A, POOL_B)
 
 
-async def test_creating_a_tournament_with_an_empty_table_id_is_refused(
+# ----- the catalogue's ids are the server's ---------------------------------
+#
+# A table used to be a JSONB value-object whose ``id`` was a client-supplied string —
+# which is exactly why a placement naming no table could be stored rather than refused:
+# there was no key to point at. It is a ``tournament_tables`` row now (ADR 20260801) and
+# its id is minted by ``gen_random_uuid()``.
+#
+# Minting and CITING are different things, and the diff needs the second. A **create**
+# has no tables to cite, so its write shape has no ``id`` field at all and sending one
+# is a 422. A **patch** is a diff, so each entry may carry the id of a table it is
+# keeping — but only one this tournament actually has: an id is something a client was
+# *given*, never something it authors.
+
+
+async def test_a_created_table_carries_a_server_minted_uuid_the_client_never_chose(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The whole claim, end to end: the catalogue round-trips through its own rows, and
+    the id on each one is a UUID the server minted.
+
+    It is asserted against the ``tournament_tables`` rows and not only the response
+    body, because a response body alone cannot tell "stored as rows" from "stored as
+    JSONB and echoed back" — which is the thing that changed."""
+    client, _ = authed_client
+
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    rows = (
+        (
+            await db_session.execute(
+                select(VenueTable)
+                .where(VenueTable.tournament_id == uuid.UUID(created["id"]))
+                .order_by(VenueTable.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(row.label, row.court, row.position) for row in rows] == [
+        ("Table 1", "A", 0),
+        ("Table 2", "A", 1),
+    ]
+    # Real, distinct, version-4 UUIDs — not a client string, and not one id reused.
+    assert {row.id.version for row in rows} == {4}
+    assert len({row.id for row in rows}) == 2
+    # And the read path serves exactly those row ids, in the director's order.
+    assert [table["id"] for table in created["table_catalogue"]] == [
+        str(row.id) for row in rows
+    ]
+
+
+async def test_creating_a_tournament_that_sends_a_table_id_is_refused(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """A table in the venue catalogue is the same string-ref pattern as a pool: a pool
-    holds a list of these ids (``table_ids``) and nothing else connects the two — no
-    table, no foreign key, no index. An id of ``""`` is a table nothing can name, and a
-    ``table_ids`` entry of ``""`` would "resolve" against it.
+    """A table's identity is the server's to mint (ADR 20260801), so ``id`` is simply
+    not a field of the write shape and ``extra="forbid"`` turns sending one into a 422
+    that names it.
 
-    Closing the hole on pools and leaving it open on the thing pools point AT would be a
-    boundary drawn half way.
-    """
+    Refused rather than ignored, for the reason ``PoolWrite`` refuses a ``position``: a
+    client cannot tell from the schema that the id it sent decided nothing, and a
+    boundary that silently discards half a payload has to be documented to be
+    understood."""
     client, _ = authed_client
 
     response = await client.post(
         "/v1/tournaments",
         json=_create_payload(
-            table_catalogue=[{"id": "", "label": "Table 1", "court": "A"}]
+            table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}]
         ),
     )
 
@@ -6606,25 +6671,427 @@ async def test_creating_a_tournament_with_an_empty_table_id_is_refused(
     assert ["body", "table_catalogue", 0, "id"] in _error_locs(response), response.text
 
 
-async def test_patching_a_table_catalogue_with_an_empty_table_id_is_refused(
+async def test_patching_a_table_catalogue_that_authors_a_table_id_is_refused(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """The table catalogue's patch verb, for the reason every pools rule is stated
-    on both verbs: a tournament that could not be created with an id-less table and
-    could be edited into one is a tournament that holds an id-less table."""
+    """A patch entry's ``id`` is one the server **gave** the client, so a string of the
+    client's own devising — ``"t9"``, the id shape the JSONB catalogue used to accept —
+    is a 422 on that entry rather than a table born holding it.
+
+    The patch verb states the rule for the same reason the create verb does: a
+    tournament that could not be *created* holding a client-authored id and could be
+    *edited* into one is a tournament that holds one. What the patch adds is the
+    second half — an id that is a well-formed UUID but names no table of this
+    tournament is refused too (see the citing-an-unknown-id test below), so "the id is
+    the server's" survives both the shape and the lookup."""
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    minted = [table["id"] for table in created["table_catalogue"]]
 
     response = await client.patch(
         f"/v1/tournaments/{created['id']}",
-        json={"table_catalogue": [{"id": "", "label": "Table 9", "court": "B"}]},
+        json={"table_catalogue": [{"id": "t9", "label": "Table 9", "court": "B"}]},
     )
 
     assert response.status_code == 422, response.text
     assert ["body", "table_catalogue", 0, "id"] in _error_locs(response), response.text
     # And the catalogue it was born with is the catalogue it still has.
     reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
-    assert [table["id"] for table in reread["table_catalogue"]] == ["t1", "t2"]
+    assert [table["id"] for table in reread["table_catalogue"]] == minted
+
+
+async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_cited(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The catalogue is an ID-KEYED DIFF: an entry citing an ``id`` keeps that table
+    (re-worded), an entry with no ``id`` adds one, and nobody's id is re-minted.
+
+    This is what makes a placement survive an unrelated edit. Rebuild the catalogue on
+    each PATCH and every fixture's ``table_id`` and every pool's ``table_ids`` would
+    dangle as an invisible side effect of renaming the venue."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    first, second = [table["id"] for table in created["table_catalogue"]]
+
+    # Re-send the catalogue with the second table re-worded, and a third appended.
+    patched = (
+        await client.patch(
+            f"/v1/tournaments/{created['id']}",
+            json={
+                "table_catalogue": [
+                    {"id": first, "label": "Table 1", "court": "A"},
+                    {"id": second, "label": "Centre Table", "court": "B"},
+                    {"label": "Table 3", "court": "C"},
+                ]
+            },
+        )
+    ).json()
+
+    catalogue = patched["table_catalogue"]
+    assert [table["id"] for table in catalogue[:2]] == [first, second]
+    assert [(t["label"], t["court"]) for t in catalogue] == [
+        ("Table 1", "A"),
+        ("Centre Table", "B"),
+        ("Table 3", "C"),
+    ]
+    assert catalogue[2]["id"] not in {first, second}
+
+
+async def test_reordering_a_catalogue_moves_the_tables_not_their_labels(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """Send the same two tables in the other order and the **ids move with their
+    words** — the regression this chore's diff exists to make unreachable.
+
+    The by-position stopgap it replaces matched the i-th sent against the i-th stored,
+    so this exact request left each row holding its own id and its neighbour's label
+    (measured end-to-end on 2a: ``[{"Table 2", id_1}, {"Table 1", id_2}]``). Nothing
+    refused it, nothing logged it, and the bill landed somewhere else entirely: a
+    fixture placed at ``id_1`` — untouched, still pointing where the director put it —
+    started rendering as "Table 2". A silently-wrong catalogue is worse than a dangling
+    one, because the page still looks right.
+
+    Asserted as the id→label PAIRING rather than as the order alone, because order
+    alone cannot tell the two implementations apart: both answer "Table 2" first."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    first, second = [table["id"] for table in created["table_catalogue"]]
+    assert [t["label"] for t in created["table_catalogue"]] == ["Table 1", "Table 2"]
+
+    patched = (
+        await client.patch(
+            f"/v1/tournaments/{created['id']}",
+            json={
+                "table_catalogue": [
+                    {"id": second, "label": "Table 2", "court": "A"},
+                    {"id": first, "label": "Table 1", "court": "A"},
+                ]
+            },
+        )
+    ).json()
+
+    swapped = [(t["id"], t["label"]) for t in patched["table_catalogue"]]
+    assert swapped == [(second, "Table 2"), (first, "Table 1")]
+    # And on the page a client actually loads, not only in the PATCH echo.
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [(t["id"], t["label"]) for t in reread["table_catalogue"]] == swapped
+
+
+async def test_a_catalogue_entry_citing_an_unknown_table_id_is_422_on_that_entry(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """An ``id`` this tournament's catalogue does not hold is refused **on the entry
+    that carried it**, never quietly minted as a new table.
+
+    Minting one would be the worst available answer: the client would be handed back a
+    different id than it asked for, AND the table it meant to keep — cited by nothing
+    else — would be removed, taking its placements through the 409 or (with the opt-in)
+    through an unplacing nobody asked for. Two failures out of one typo."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    minted = [table["id"] for table in created["table_catalogue"]]
+    stranger = str(uuid.uuid4())
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={
+            "table_catalogue": [
+                {"id": minted[0], "label": "Table 1", "court": "A"},
+                {"id": stranger, "label": "Table 2", "court": "A"},
+            ]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue", 1, "id"] in _error_locs(response), response.text
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == minted
+
+
+async def test_two_catalogue_entries_citing_one_table_id_are_refused(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """One row cannot be in two places at once, or be called two things.
+
+    The diff would have to pick a winner — and whichever it picked, the *other* table
+    the director looked like they were keeping is cited by nothing and therefore
+    removed. Refused at the boundary, like the duplicate pool id, and for the same
+    reason: a payload that is nonsense in every state the tournament could be in."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    minted = [table["id"] for table in created["table_catalogue"]]
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={
+            "table_catalogue": [
+                {"id": minted[0], "label": "Table 1", "court": "A"},
+                {"id": minted[0], "label": "Table 2", "court": "A"},
+            ]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_catalogue"] in _error_locs(response), response.text
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == minted
+
+
+# ----- removing a table: the 409, and the opt-in that gets past it ------------
+#
+# The ADR's split, and it is deliberately asymmetric. A **pool** that merely reserves a
+# removed table is not consulted — a table breaking or freeing up is ordinary venue
+# traffic, and the pool simply reserves one fewer. A **placement** refuses, because
+# silently clearing one destroys information on an unrelated write: the fixture stops
+# being "placed at a table that vanished" and becomes indistinguishable from "nobody
+# ever placed this". The database refuses by default; the director says yes on purpose.
+
+
+async def _tables_of(client: AsyncClient, tournament_id: str) -> list[dict[str, Any]]:
+    body = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    tables: list[dict[str, Any]] = body["table_catalogue"]
+    return tables
+
+
+async def _tournament_with_a_placed_fixture(
+    client: AsyncClient, db_session: AsyncSession, *, prefix: str
+) -> tuple[str, str, TournamentFixture, str, str]:
+    """A drawn round-robin whose pool reserves **both** of the tournament's real tables,
+    with its first fixture placed on the first of them.
+
+    The pool reserving the real ids is the whole point of the third case below: an event
+    payload's ``table_ids`` are written before the tournament's tables have ids a test
+    can know, so the default fixtures reserve the string ``"t1"`` — which names no table
+    and would make "a table only a pool reserves" untestable. Here the event is created
+    *after* the tournament, off its minted ids."""
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = created["id"]
+    table_1, table_2 = [table["id"] for table in created["table_catalogue"]]
+    event = (
+        await client.post(
+            f"/v1/tournaments/{tournament_id}/events",
+            json=_rr_payload({**POOL_A, "table_ids": [table_1, table_2]}),
+        )
+    ).json()
+    await _seed_field(db_session, event["id"], 3, prefix=prefix)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+    return tournament_id, event["id"], fixture, table_1, table_2
+
+
+async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming_it(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Omit a table a match is placed at and the whole edit is refused, with a
+    sentence that names the table **by label** and names the way out — and **nothing
+    is written**.
+
+    That last clause is the load-bearing one, and it is why this PATCH also renames the
+    tournament. A guard that refused *after* writing would satisfy every assertion about
+    the 409 and still have moved the venue underneath the director; the ``name`` is the
+    tripwire that catches it, because it is the one field on this payload the verb would
+    otherwise have ``setattr``'d before the catalogue branch ran."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr1")
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "name": "Renamed While Removing",
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    # Named by LABEL, never by id: an id tells a director looking at a page of named
+    # tables nothing to act on.
+    assert "“Table 1”" in detail, detail
+    assert table_1 not in detail, detail
+    assert "1 match" in detail, detail
+    # …and the way out, so the refusal is actionable rather than merely correct.
+    assert "unplace_fixtures_on_removed_tables" in detail, detail
+
+    # Nothing was written. Not the catalogue…
+    reread = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == [table_1, table_2]
+    # …not the name that rode along on the same refused request…
+    assert reread["name"] == "Bay Area Open 2026"
+    # …and not the placement the refusal was protecting.
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+    assert fixture.scheduled_start is not None
+    assert fixture.pinned_at is not None
+
+
+async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The identical request, plus ``unplace_fixtures_on_removed_tables``, goes through:
+    the table is gone and the matches that were on it are unplaced.
+
+    All three placement columns go, not just ``table_id``. A predicted start with no
+    table is a bar on a schedule with nowhere to be, and a ``pinned_at`` is a *promise
+    about a table* — leaving it would tell every later solve the fixture is nailed to a
+    table that no longer exists. Unplaced means unplaced, which is exactly why it takes
+    a confirmation to ask for."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr2")
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "name": "Renamed While Removing",
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+            "unplace_fixtures_on_removed_tables": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [table["id"] for table in response.json()["table_catalogue"]] == [table_2]
+    assert response.json()["name"] == "Renamed While Removing"
+    # The row itself is gone, not merely absent from the projection.
+    remaining = (
+        (
+            await db_session.execute(
+                select(VenueTable.id).where(
+                    VenueTable.tournament_id == uuid.UUID(tournament_id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [str(row) for row in remaining] == [table_2]
+
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id is None
+    assert fixture.scheduled_start is None
+    assert fixture.pinned_at is None
+
+
+@pytest.mark.parametrize(
+    ("spelling", "opt_in"),
+    [
+        ("omitted", {}),
+        ("false", {"unplace_fixtures_on_removed_tables": False}),
+        ("null", {"unplace_fixtures_on_removed_tables": None}),
+    ],
+)
+async def test_only_an_explicit_true_opts_in_to_unplacing(
+    spelling: str,
+    opt_in: dict[str, Any],
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The opt-in has **one** affirmative spelling and three ways of not saying it —
+    omitted, ``false`` and ``null`` — and all three are refused identically.
+
+    The field is ``bool | None`` on the wire rather than ``bool = False`` for a reason
+    that pytest cannot see: a non-null default is emitted as ``"default": false`` into
+    the JSON schema, and ``openapi-typescript`` promotes any property carrying one to
+    **required** — which made an opt-in for one destructive action mandatory on every
+    unrelated PATCH, down to ``{"name": "…"}``. Omitting a key on a partial update means
+    "unchanged", and it has to stay sayable.
+
+    What that costs is a third wire value, and this test is what keeps it from becoming
+    a third *state*: ``None`` and ``False`` are one answer — nobody opted in — collapsed
+    at ``TournamentUpdate.unplacing_is_confirmed`` before the verb ever sees them. The
+    parametrization is over spellings of the same request, so a future coercion that got
+    ``null`` wrong (or a client that sends it explicitly) cannot quietly start unplacing
+    somebody's schedule."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix=f"opt{spelling[:2]}"
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+            **opt_in,
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert "“Table 1”" in response.json()["detail"], response.text
+    # Nothing written: the table stands and the placement it was protecting stands.
+    reread = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    assert [table["id"] for table in reread["table_catalogue"]] == [table_1, table_2]
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+
+
+async def test_removing_a_catalogue_table_only_a_pool_reserves_succeeds_silently(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A table a pool merely **reserves**, with no match placed at it, is removed with
+    no refusal and no opt-in — the quiet half of the ADR's split.
+
+    A pool's ``table_ids`` are a reservation, not a placement: "a table breaks, a table
+    frees up" is ordinary venue traffic and is exactly why a pool's tables stay editable
+    mid-event. The pool simply reserves one fewer, which today is derived on read (the
+    solver intersects ``table_ids`` with the catalogue, ``_load_solver_inputs``) — the
+    stored JSONB still lists the dead id, and cleaning that up is Slice 3's
+    ``tournament_event_pool_tables`` CASCADE, not this verb's. Asserted, so that when
+    the join table lands the change is a decision rather than a surprise."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="tr3")
+    # The pool reserves BOTH tables; only ``table_1`` has a match on it.
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={"table_catalogue": [{"id": table_1, "label": "Table 1", "court": "A"}]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [table["id"] for table in await _tables_of(client, tournament_id)] == [
+        table_1
+    ]
+    # The placement on the surviving table is untouched — this removal unplaced nobody.
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+    assert fixture.scheduled_start is not None
+
+    (event,) = await _events_of(client, tournament_id)
+    (pool,) = event["pools"]
+    assert pool["table_ids"] == [table_1, table_2]  # Slice 3's to prune
 
 
 # ----- the draw-type freeze (409) -------------------------------------------
@@ -7316,6 +7783,11 @@ async def _call_fixtures(
     follows a call, so the tests go through one rather than forcing the status."""
     tournament = await db.get(Tournament, uuid.UUID(tournament_id))
     assert tournament is not None
+    # Real catalogue rows, cycled: ``table_id`` is a foreign key now (ADR 20260801), so
+    # the ``f"t{i + 1}"`` this used to send is no longer a table a fixture can sit at.
+    # Cycling past the end of a two-table catalogue double-books, which is fine and
+    # deliberate — a double-booking is a flag derived on read, never a refusal.
+    tables = [str(table.id) for table in tournament.tables]
     # The director enters ``scheduled_start`` as venue wall-clock; the write path
     # anchors it to the event timezone into the ``timestamptz`` column (ADR
     # "tournament times are timezone-aware instants").
@@ -7324,7 +7796,7 @@ async def _call_fixtures(
             db,
             tournament,
             fixture,
-            table_id=f"t{i + 1}",
+            table_id=tables[i % len(tables)],
             scheduled_start=datetime(2026, 6, 1, 10, 0),
             event_timezone="America/Chicago",
         )
@@ -8146,20 +8618,21 @@ async def test_owner_sets_a_fixture_placement_and_the_detail_reflects_it(
     rides the detail BFF, so this is where a client sees it)."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["id"] == str(fixture.id)
-    assert body["table_id"] == "t1"
+    assert body["table_id"] == table_1
     assert _is_venue_instant(body["scheduled_start"], "2026-06-13T10:00:00")
 
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    assert placed["table_id"] == "t1"
+    assert placed["table_id"] == table_1
     assert _is_venue_instant(placed["scheduled_start"], "2026-06-13T10:00:00")
 
 
@@ -8180,10 +8653,11 @@ async def test_a_pinned_fixture_time_carries_a_venue_local_label_and_a_utc_insta
     """
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T18:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T18:00:00"},
     )
     assert response.status_code == 200, response.text
 
@@ -8216,9 +8690,10 @@ async def test_owner_clears_a_fixture_placement_back_to_null(
     both halves; the detail shows an unplaced fixture again."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8242,13 +8717,14 @@ async def test_a_non_owner_cannot_place_a_fixture(
     fixture is left unplaced."""
     owner_client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(owner_client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(owner_client, tournament_id)
 
     async with make_client() as stranger:
         user = await start_session(stranger, db_session)
         await _grant_tournament_perms(db_session, user)
         response = await stranger.patch(
             _placement_url(tournament_id, str(fixture.id)),
-            json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+            json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
         )
         assert response.status_code == 403
 
@@ -8257,35 +8733,101 @@ async def test_a_non_owner_cannot_place_a_fixture(
     assert placed["scheduled_start"] is None
 
 
+async def test_an_out_of_window_or_off_pool_placement_still_saves(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The placement is still **soft** everywhere ADR-0790 made it soft:
+    ``scheduled_start`` is a prediction, and three of its four constraints (table-in-
+    pool, time-in-window, no double-booking) are flags on read, not invariants — so the
+    write does not reject them. Pool A reserves the first table for 09:00–12:30; the
+    SECOND table (in the catalogue, off the pool) at 23:00 **saves** rather than 4xx.
+    Conflict detection is the scheduler's job, not this boundary's.
+
+    This test used to carry a second parameter — a ``table_id`` naming nothing in the
+    catalogue at all — asserting that *that* saved too. It no longer does: ADR 20260801
+    supersedes exactly that clause of ADR-0790 and makes it the 422 in the test below.
+    The two are kept adjacent on purpose, because the whole content of the decision is
+    where the line falls between them."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    _table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_2, "scheduled_start": "2026-06-13T23:00:00"},
+    )
+
+    assert 200 <= response.status_code < 300, response.text
+    body = response.json()
+    assert body["table_id"] == table_2
+    assert _is_venue_instant(body["scheduled_start"], "2026-06-13T23:00:00")
+
+
 @pytest.mark.parametrize(
     "table_id",
     [
-        pytest.param("t2", id="off-pool"),  # in the catalogue, but not in Pool A
-        pytest.param("ghost-table", id="not-in-catalogue"),  # names no table at all
+        # A well-formed id that names no row, and a string that is not an id at all —
+        # the ``"t1"`` a client of the old JSONB catalogue would still be sending.
+        pytest.param(str(uuid.uuid4()), id="unknown-id"),
+        pytest.param("ghost-table", id="not-even-an-id"),
     ],
 )
-async def test_an_out_of_window_or_off_pool_placement_still_saves(
+async def test_a_placement_naming_no_table_is_a_422_on_the_field(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     table_id: str,
 ) -> None:
-    """The placement is **soft** (ADR-0790): ``scheduled_start`` is a prediction, and
-    the constraints (table-in-pool, time-in-window, no double-booking) are flags on
-    read, not invariants — so the write does not reject them. Pool A reserves ``t1`` for
-    09:00–12:30; a table off the pool (or naming nothing in the catalogue at all) and a
-    23:00 start both **save** rather than 4xx. Conflict detection is a later slice."""
+    """A ``table_id`` that names no table of this tournament is refused with a **422
+    naming the field** — where it was previously stored and answered 200 (ADR 20260801,
+    superseding ADR-0790's fourth clause now that a table is a real row to point at).
+
+    The refusal is attributed to ``body.table_id``, not to the request at large: this is
+    the same ``loc`` a schema 422 on this field would carry, so a client renders it
+    under the input that caused it and needs no second parser for the database-answered
+    half of the same question.
+
+    And it writes nothing — the fixture is left unplaced, not half-placed."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": table_id, "scheduled_start": "2026-06-13T23:00:00"},
+        json={"table_id": table_id, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
-    assert 200 <= response.status_code < 300, response.text
-    body = response.json()
-    assert body["table_id"] == table_id
-    assert _is_venue_instant(body["scheduled_start"], "2026-06-13T23:00:00")
+    assert response.status_code == 422, response.text
+    assert ["body", "table_id"] in _error_locs(response), response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] is None
+    assert placed["scheduled_start"] is None
+
+
+async def test_another_tournaments_table_cannot_be_placed_at(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A real table id — belonging to a **different** tournament — is refused the same
+    way, which the foreign key alone cannot do (it only knows the row exists somewhere).
+
+    From this tournament's page that id renders as nothing, so it is the same dangling
+    pointer the ADR makes unrepresentable, and it earns the same 422 on the same field.
+    """
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    other_id, _other_event, _other_fixture = await _drawn_fixture(
+        client, db_session, prefix="ot", name="Other Open"
+    )
+    (foreign_table, *_) = await _catalogue_table_ids(client, other_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": foreign_table, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "table_id"] in _error_locs(response), response.text
 
 
 @pytest.mark.parametrize("frozen_status", [MatchStatus.completed, MatchStatus.voided])
@@ -8304,9 +8846,10 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     both the 409 and that the historical placement survives the refusal."""
     client, owner = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     match = await _make_match(db_session, owner, default_league)
@@ -8315,7 +8858,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     await db_session.commit()
 
     response = await client.patch(
-        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T14:00:00"}
+        url, json={"table_id": table_2, "scheduled_start": "2026-06-13T14:00:00"}
     )
 
     assert response.status_code == 409, response.text
@@ -8323,7 +8866,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     # The move changed nothing: the placement recorded before the match went to history
     # is the placement the fixture still carries.
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
-    assert placed["table_id"] == "t1"
+    assert placed["table_id"] == table_1
     assert _is_venue_instant(placed["scheduled_start"], "2026-06-13T10:00:00")
 
 
@@ -8337,6 +8880,7 @@ async def test_an_in_progress_fixture_is_freely_placeable(
     live-match fixture still (re)places."""
     client, owner = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     match = await _make_match(db_session, owner, default_league)
     match.status = MatchStatus.in_progress
     fixture.match_id = match.id
@@ -8344,11 +8888,11 @@ async def test_an_in_progress_fixture_is_freely_placeable(
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["table_id"] == "t1"
+    assert response.json()["table_id"] == table_1
 
 
 async def test_an_offset_aware_start_is_a_422(
@@ -8361,10 +8905,11 @@ async def test_an_offset_aware_start_is_a_422(
     500-ing in the driver — the same discipline the fee/player-limit bounds keep."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00Z"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00Z"},
     )
 
     assert response.status_code == 422, response.text
@@ -8478,6 +9023,16 @@ async def _entrant_user_ids_of(
     )
 
 
+async def _catalogue_table_ids(client: AsyncClient, tournament_id: str) -> list[str]:
+    """The tournament's venue-table ids, read back off its detail payload.
+
+    A table's id is minted by the server now (ADR 20260801), so a test that wants a
+    placement to RESOLVE to a label — rather than merely to save, which an unknown ref
+    still does — has to ask which ids exist rather than assert one."""
+    body = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    return [table["id"] for table in body["table_catalogue"]]
+
+
 def _match_call_jobs(queue: Queue) -> list[NotificationJob]:
     jobs = [NotificationJob.model_validate_json(job.args[0]) for job in queue.jobs]
     return [job for job in jobs if job.category == "match_calls"]
@@ -8496,12 +9051,13 @@ async def test_a_live_placement_pins_and_calls_both_entrants(
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     entrants = await _entrant_user_ids_of(db_session, fixture)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     await _clear_solve_ledger(db_session)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
@@ -8569,6 +9125,7 @@ async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     entrants = await _entrant_user_ids_of(db_session, fixture)
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
 
@@ -8576,7 +9133,7 @@ async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
         match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 40, tzinfo=UTC)
     )
     first = await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
     assert datetime.fromisoformat(first.json()["pinned_at"]["instant"]) == datetime(
         2026, 6, 13, 9, 40, tzinfo=UTC
@@ -8586,7 +9143,7 @@ async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
         match_calls, "_wall_now", lambda: datetime(2026, 6, 13, 9, 50, tzinfo=UTC)
     )
     response = await client.patch(
-        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
+        url, json={"table_id": table_2, "scheduled_start": "2026-06-13T10:30:00"}
     )
 
     assert response.status_code == 200, response.text
@@ -8617,10 +9174,11 @@ async def test_a_pre_live_placement_is_a_silent_pin(
     first drag — but nobody is paged and the count stays 0."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
@@ -8644,13 +9202,14 @@ async def test_clearing_a_called_placement_cancels_the_call(
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     entrants = await _entrant_user_ids_of(db_session, fixture)
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
     await client.patch(
-        url, json={"table_id": "t2", "scheduled_start": "2026-06-13T10:30:00"}
+        url, json={"table_id": table_2, "scheduled_start": "2026-06-13T10:30:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8679,9 +9238,10 @@ async def test_clearing_a_pre_live_placement_is_silent(
     nobody hears about a promise that was never made."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
 
     response = await client.patch(url, json={"table_id": None, "scheduled_start": None})
@@ -8704,9 +9264,10 @@ async def test_clearing_a_never_notified_placement_is_silent_even_live(
     nothing (a cancellation corrects a promise; this fixture never carried one)."""
     client, _ = authed_client
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     url = _placement_url(tournament_id, str(fixture.id))
     await client.patch(
-        url, json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"}
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
     )
     await _go_live_directly(db_session, tournament_id)
 
@@ -8733,17 +9294,18 @@ async def test_a_tbd_side_fixture_placement_saves_without_pinning(
     tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
     fixture.entry_b_id = None  # a TBD side — representable by design (ADR-0786)
     await db_session.commit()
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     await _go_live_directly(db_session, tournament_id)
     await _clear_solve_ledger(db_session)
 
     response = await client.patch(
         _placement_url(tournament_id, str(fixture.id)),
-        json={"table_id": "t1", "scheduled_start": "2026-06-13T10:00:00"},
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["table_id"] == "t1"
+    assert body["table_id"] == table_1
     assert _is_venue_instant(body["scheduled_start"], "2026-06-13T10:00:00")
     assert body["pinned_at"] is None
     assert body["call_notified_count"] == 0

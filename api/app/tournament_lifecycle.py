@@ -26,7 +26,7 @@ and its 500.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.geocoding import Geocoder
@@ -36,6 +36,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentFixture,
     TournamentStatus,
     User,
 )
@@ -57,6 +58,7 @@ from app.tournament_errors import (
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_realtime import stage_tournament_entrant_hints
+from app.tournament_tables import stored_tables
 
 # The lifecycle runs forward only, and exactly three transitions exist (ADR-0017):
 # ``draft`` → ``published`` (publish), ``published`` → ``live`` (go live), and
@@ -130,8 +132,10 @@ async def create_tournament(
       than attempted-and-forgiven precisely because a blank address composes to ``""``,
       which resolves to zero candidates — an organizer with no venue would otherwise be
       told their nonexistent venue could not be found.
-    * The value-objects (``address``, ``table_catalogue``) persist as plain JSONB;
-      the dicts ``model_dump`` produces don't propagate beyond this write boundary.
+    * The ``address`` value-object persists as plain JSONB; the dict ``model_dump``
+      produces doesn't propagate beyond this write boundary. The ``table_catalogue``
+      does **not**: it becomes ``tournament_tables`` rows (ADR 20260801), each carrying
+      a server-minted UUID id and the ``position`` of its place in the submitted list.
     * **No** ``status`` is set: it isn't on the create schema (ADR-0017), so a
       tournament is born ``draft`` from the column's server default — one source for
       the starting status — and the ``refresh`` below reads it back.
@@ -164,7 +168,10 @@ async def create_tournament(
         start_date=payload.start_date,
         end_date=payload.end_date,
         address=address.model_dump() if address is not None else None,
-        table_catalogue=[t.model_dump() for t in payload.table_catalogue],
+        # The catalogue is child ROWS now (ADR 20260801), not a JSONB column, and the
+        # ids on them are the database's — ``stored_tables`` sets no id, only the
+        # ``position`` each table's index in the submitted list gives it.
+        tables=stored_tables(payload.table_catalogue),
         league_id=league.id,
         created_by_user_id=actor.id,
     )
@@ -209,9 +216,34 @@ async def delete_tournament(
     pending tournament delete ahead of it anyway. It is spelled out so the ordering
     survives a session with autoflush disabled — and, measured, removing it alone
     leaves the suite green, so nothing here would catch its loss.
+
+    It also **unplaces every fixture first**, and that one IS the mechanism. A
+    fixture's ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` (ADR 20260801),
+    ``Tournament.tables`` is loaded, so SQLAlchemy issues the child ``DELETE`` of
+    ``tournament_tables`` **itself** — as its own statement, ahead of the
+    ``tournaments`` row whose cascade takes the fixtures. RESTRICT is checked
+    immediately and cannot be deferred, so at that moment the fixtures are still
+    there, still pointing at the tables, and the whole delete dies on a foreign-key
+    violation. Dropping the references first is not a policy decision sneaking in:
+    RESTRICT exists so a placement is not destroyed as a side effect of editing the
+    **venue**, and this is not a venue edit — the fixture is being deleted too, one
+    statement later, along with everything else the director asked to be rid of. The
+    refusal that ADR belongs to is the tournament PATCH's, over a table removed out
+    from under a fixture that survives it.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
+    await db.execute(
+        update(TournamentFixture)
+        .where(
+            TournamentFixture.event_id.in_(
+                select(TournamentEvent.id).where(
+                    TournamentEvent.tournament_id == tournament.id
+                )
+            )
+        )
+        .values(table_id=None)
+    )
     await db.delete(tournament)
     await db.flush()
     await reap_draw_settings(db, settings_ids)
