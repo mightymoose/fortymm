@@ -583,19 +583,20 @@ export function buildDrawnEvent(
 }
 
 /** How many pools `buildTenPools` builds — ten, because ten is the smallest count at
- * which a client-minted id (`p-10-…`) sorts into the middle of the single digits. Nine
- * pools would order identically by id and by position, and prove nothing. */
+ * which a legacy client-minted id (`p-10-…`) sorts into the middle of the single digits.
+ * Nine pools would order identically by id and by position, and prove nothing. */
 const TEN = 10
 
 /**
  * **Ten pools whose ids sort differently from their positions** — the fixture the whole
  * ordering rule is about, and the only pool fixture that can falsify it.
  *
- * The ids are minted the way the editor mints them (`genId('p')` — `p-1-<ts>`,
- * `p-2-<ts>` … `p-10-<ts>`, one timestamp for the burst), and as strings `p-10-` falls
- * between `p-1-` and `p-2-`. So anything that sorted these by id renders **1, 10, 2, 3 …
- * 9** — which is not a hypothetical: it is exactly what a ten-pool event's draw did
- * before pools carried a position.
+ * The ids reproduce the legacy shape the editor used to mint before pool ids became
+ * server-minted UUIDs (`genId('p')` — `p-1-<ts>`, `p-2-<ts>` … `p-10-<ts>`, one
+ * timestamp for the burst), and as strings `p-10-` falls between `p-1-` and `p-2-`. So
+ * anything that sorted these by id renders **1, 10, 2, 3 … 9** — which is not a
+ * hypothetical: it is exactly what a ten-pool event's draw did before pools carried a
+ * position.
  *
  * They are returned **in that wrong order on purpose**, positions 0–9 telling the truth
  * underneath. A fixture handed over already sorted cannot tell "orders by position" from
@@ -610,7 +611,7 @@ export function buildTenPools(): Pool[] {
   const inPositionOrder = Array.from({ length: TEN }, (_, i) => {
     const n = i + 1
     return buildPool({
-      // The `genId('p')` shape: index, then the shared base-36 timestamp.
+      // The legacy `genId('p')` shape: index, then the shared base-36 timestamp.
       id: `p-${n}-mkq1x`,
       name: `Pool ${n}`,
       position: i,

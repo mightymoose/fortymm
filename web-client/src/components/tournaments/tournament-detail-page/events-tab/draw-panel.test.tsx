@@ -53,7 +53,7 @@ describe('DrawPanel', () => {
      * **Ten pools read 1 … 10, top to bottom** — the bug `Pool.position` was added to
      * kill, at the surface it was actually seen on.
      *
-     * Pool ids are minted client-side (`genId('p')`), so a ten-pool event holds
+     * Pool ids used to be minted client-side (`genId('p')`), so a ten-pool event held
      * `p-1-…` … `p-10-…`; sorted as strings `p-10-` lands between `p-1-` and `p-2-` and
      * the draw rendered **1, 10, 2, 3 …**. The fixture hands the panel its pools in that
      * very order (`buildTenPools`), so the assertion reds for a panel that sorts by id

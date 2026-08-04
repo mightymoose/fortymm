@@ -211,8 +211,9 @@ export class TournamentDetailPage {
    *
    * Asserted with `toHaveText([...])`, which pins the count AND the order in one
    * statement — the only shape that can catch a draw rendering `Pool 1, Pool 10,
-   * Pool 2 …` (ADR 20260801: pool ids are client-minted `p-1-…`, `p-10-…`, and `p-10-`
-   * sorts between `p-1-` and `p-2-`). */
+   * Pool 2 …`, the bug that pool ids being client-minted `p-1-…`, `p-10-…` used to
+   * cause (`p-10-` sorts between `p-1-` and `p-2-`), and that ADR 20260801 ended by
+   * making pool ids server-minted UUIDs sorted by an explicit `position`. */
   poolDrawHeadings(eventId: string): Locator {
     return this.poolDraws(eventId).getByRole('heading', { level: 4 })
   }

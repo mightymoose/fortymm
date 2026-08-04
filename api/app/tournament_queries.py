@@ -298,8 +298,8 @@ async def fixtures_by_event(
     NULL there, so round and position decide it alone).
 
     "Pool" here means the pool's **position in the event's own pool order**
-    (:func:`_pool_position`), not its id. The id is a client-minted string —
-    ``p-1-…``, ``p-2-…``, ``p-10-…`` — and *lexicographically* ``p-10-`` falls between
+    (:func:`_pool_position`), not its id. The id used to be a client-minted string —
+    ``p-1-…``, ``p-2-…``, ``p-10-…`` — and *lexicographically* ``p-10-`` fell between
     ``p-1-`` and ``p-2-``, so a ten-pool event rendered its draw as pool 1, pool 10,
     pool 2. Sorting on the stored ``position`` (ADR 20260801, "Pools carry an explicit
     ``position``") is also the only key that survives pools becoming rows with random
