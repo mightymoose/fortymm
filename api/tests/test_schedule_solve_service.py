@@ -79,6 +79,8 @@ from app.schedule_solves import (
 from app.scheduling import (
     REST_MIN,
     PlacedFixture,
+    PlayerId,
+    PlayerOverSubscribed,
     PoolHasNoTables,
     PoolId,
     PoolOverCapacity,
@@ -91,6 +93,7 @@ from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerConflictRead,
+    PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     TableConflictRead,
@@ -1347,6 +1350,73 @@ class TestSolveJob:
         assert over_capacity.required_min == 600
         assert over_capacity.capacity_min == 480
         assert over_capacity.table_count == 2
+
+    async def test_over_subscribed_player_resolves_to_their_display_name(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The one reason arm that names a *human* is humanized at apply through
+        the same ``player_names`` map the player-conflict arm already uses — the
+        persisted reason carries the entrant's display username (never the raw
+        user-id string the solver speaks), alongside the pool's name and clock."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, window=("09:00", "17:00")
+        )
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        # Any entrant of the drawn event: ``player_names`` is built from all of
+        # them, so a pre-check can blame any one.
+        user_id, username = (
+            await db_session.execute(
+                select(User.id, User.username)
+                .join(TournamentEntry, TournamentEntry.user_id == User.id)
+                .where(TournamentEntry.event_id == event_id)
+                .order_by(User.username)
+                .limit(1)
+            )
+        ).one()
+
+        def infeasible(
+            snapshot: ScheduleSnapshot, time_cap_s: float, num_search_workers: int
+        ) -> SolveResult:
+            return SolveResult(
+                verdict=Verdict.infeasible,
+                placements=(),
+                stats=SolveStats(wall_time_ms=42, objective=None),
+                reasons=(
+                    PlayerOverSubscribed(
+                        pool_id=PoolId(f"{event_id}:pool-a"),
+                        player_id=PlayerId(str(user_id)),
+                        match_count=3,
+                        required_min=95,
+                        window_span_min=60,
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(schedule_solves, "_solve", infeasible)
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.infeasible
+
+        (reason,) = parse_infeasibility_reasons(ledger.infeasibility_reasons)
+        assert isinstance(reason, PlayerOverSubscribedRead)
+        assert reason.player_name == username
+        assert reason.pool_name == "Pool A"
+        assert reason.window_start == "09:00"
+        assert reason.window_end == "17:00"
+        assert reason.match_count == 3
+        assert reason.required_min == 95
+        assert reason.window_span_min == 60
 
     async def test_succeeded_apply_leaves_infeasibility_reasons_null(
         self, db_session: AsyncSession, solver_queue: Queue

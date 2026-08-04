@@ -171,6 +171,7 @@ from app.scheduling import (
     PlacementConflict,
     PlayerConflict,
     PlayerId,
+    PlayerOverSubscribed,
     PoolHasNoTables,
     PoolId,
     PoolOverCapacity,
@@ -192,6 +193,7 @@ from app.schemas.schedule_solve import (
     NoSingleCauseRead,
     PastWindowReasonRead,
     PlayerConflictRead,
+    PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     ResolvedConflict,
@@ -534,7 +536,11 @@ class SolveInputs:
     usernames) are the sibling lookups the apply humanizes a solve's
     *placement conflicts* through (ADR "overlapping in-progress matches are
     tolerated and reported"). Same fingerprinted provenance, so the fresh read's
-    maps resolve exactly the ids a conflict carries."""
+    maps resolve exactly the ids a conflict carries. ``player_names`` does
+    double duty: it is also how the one *reason* that names a human
+    (:class:`~app.scheduling.PlayerOverSubscribed`) is resolved — it is built
+    from every drawn event's entrants, not just the in-progress ones, so it
+    covers any player a pre-check can blame."""
 
     snapshot: ScheduleSnapshot
     fingerprint: str
@@ -1061,7 +1067,8 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
     """Humanize one pure, id-and-minute reason into its resolved read form
     (ADR "structured data, not prose"): the pool's display name and ``HH:MM``
     window come from ``inputs.pool_resolutions``, ``best_of`` from
-    ``inputs.fixture_best_of``; the integer minutes pass through untouched for
+    ``inputs.fixture_best_of``, the blamed human's display name from
+    ``inputs.player_names``; the integer minutes pass through untouched for
     the client to format. Direct id lookups are safe here — the apply resolves
     only after the drift guard proved this read's inputs fingerprint-identical
     to the ones the reasons were computed against, so every pool/fixture id a
@@ -1095,6 +1102,21 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
+            )
+        case PlayerOverSubscribed():
+            # The one arm that names a *human*: resolved through the same
+            # ``player_names`` map the PlayerConflict humanization already uses
+            # (solver PlayerId — a user-id string — → display username), built in
+            # the same fingerprinted read, so no second lookup is needed.
+            pool = inputs.pool_resolutions[reason.pool_id]
+            return PlayerOverSubscribedRead(
+                player_name=inputs.player_names[reason.player_id],
+                pool_name=pool.name,
+                window_start=pool.window_start,
+                window_end=pool.window_end,
+                match_count=reason.match_count,
+                required_min=reason.required_min,
+                window_span_min=reason.window_span_min,
             )
         case NoSingleCause():
             return NoSingleCauseRead(

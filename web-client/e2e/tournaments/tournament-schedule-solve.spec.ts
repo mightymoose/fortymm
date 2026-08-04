@@ -243,6 +243,61 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expectAxeClean(page, 'schedule tab — past-window infeasible solve on the strip')
   })
 
+  test('names an over-subscribed PLAYER — the `player_over_subscribed` fact crosses the real wire, and the remedy never says "add tables"', async ({
+    page,
+  }) => {
+    // A `player_over_subscribed` arm of `infeasibility_reasons` crosses the real
+    // wire (MSW off, this stub IS the API) with all seven of its fields; the
+    // client Zod-parses it in the queryFn and the strip renders the human-named
+    // sentence (ADR "the conflict core is a second, max-placed solve", decision 1).
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        trigger: 'manual',
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        infeasibility_reasons: [
+          {
+            kind: 'player_over_subscribed',
+            player_name: 'spiked-frigatebird',
+            pool_name: 'Pool A',
+            window_start: '09:00',
+            window_end: '10:30',
+            match_count: 4,
+            required_min: 150,
+            window_span_min: 90,
+          },
+        ],
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('infeasible')
+    await expect(state).toBeVisible()
+    // WHO, in HOW MANY matches, in WHICH window — the ticket's headline.
+    await expect(state).toContainText('spiked-frigatebird is in 4 matches')
+    await expect(state).toContainText("Pool A's 09:00–10:30 window")
+    await expect(state).toContainText('they need about 2.5h')
+    // The remedies that work for one human — and NOT the add-tables trap: extra
+    // tables let somebody ELSE play in parallel, never this person twice at once.
+    await expect(state).toContainText('fewer matches in Pool A')
+    await expect(state).toContainText("adding tables won't help one player")
+    await expect(state).not.toContainText('Add a table to Pool A')
+    await expect(state).not.toContainText('Add tables, widen a pool window')
+    // Still a designed state, not an error, and the raw wire code stays off screen.
+    await expect(pom.runSchedulerNotice).not.toBeVisible()
+    await expect(pom.toasts).toHaveCount(0)
+    await expect(state).not.toContainText('player_over_subscribed')
+    await expect(pom.runScheduler).toBeEnabled()
+
+    await expectAxeClean(
+      page,
+      'schedule tab — over-subscribed-player infeasible solve on the strip',
+    )
+  })
+
   test('answers the coded 422 with the designed "cut a draw first" message, inline on the strip', async ({
     page,
   }) => {

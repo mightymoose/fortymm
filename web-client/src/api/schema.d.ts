@@ -1794,7 +1794,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
@@ -3519,6 +3519,37 @@ export interface components {
             rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /**
+         * PlayerOverSubscribedRead
+         * @description One human with more match-time in a pool than its window can hold: their
+         *     ``match_count`` matches plus the rest between them need ``required_min``
+         *     minutes of *their* time, against a window spanning only ``window_span_min``.
+         *     A pigeonhole over one person, so adding tables cannot fix it — the remedy is
+         *     fewer matches for them in this pool, or a longer window. Resolved: the
+         *     human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
+         *     the minutes stay integers for the client to format.
+         */
+        PlayerOverSubscribedRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "player_over_subscribed";
+            /** Player Name */
+            player_name: string;
+            /** Pool Name */
+            pool_name: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Match Count */
+            match_count: number;
+            /** Required Min */
+            required_min: number;
+            /** Window Span Min */
+            window_span_min: number;
+        };
+        /**
          * PlayerRead
          * @description A user the current player can pick as a match opponent.
          *
@@ -3882,7 +3913,7 @@ export interface components {
             /** Events */
             events: components["schemas"]["PreviewEventBreakdown"][];
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Notes */
             notes: string[];
             /**
@@ -4240,7 +4271,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };

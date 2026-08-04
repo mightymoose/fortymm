@@ -189,6 +189,46 @@ describe('SolveStrip', () => {
     expect(text).not.toContain('past_window')
   })
 
+  it('names an over-subscribed PLAYER — the human, the pool, its window and the match count — and never tells the director to add tables', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibilityReasons: [
+          {
+            kind: 'player_over_subscribed',
+            playerName: 'spiked-frigatebird',
+            poolName: 'Pool A',
+            windowStart: '09:00',
+            windowEnd: '10:30',
+            matchCount: 4,
+            requiredMin: 150,
+            windowSpanMin: 90,
+          },
+        ],
+      }),
+    })
+    const text = solveStripPage.getStateText('infeasible')
+    expect(text).toContain("The day doesn't fit")
+    // The ticket's headline sentence: WHO, in HOW MANY matches, in WHICH window.
+    expect(text).toContain('spiked-frigatebird is in 4 matches')
+    expect(text).toContain("Pool A's 09:00–10:30 window")
+    expect(text).toContain('they need about 2.5h')
+    expect(text).toContain('the window is only 1.5h long')
+    // The remedies that work for ONE human — and NOT the add-tables trap, which
+    // would only let somebody else play in parallel.
+    expect(text).toContain('fewer matches in Pool A')
+    expect(text).toContain('widen its window')
+    expect(text).toContain("adding tables won't help one player")
+    expect(text).not.toContain('Add a table to Pool A')
+    // The generic body (which DOES say "Add tables") is replaced, not appended.
+    expect(text).not.toContain('Add tables, widen a pool window')
+    // The raw wire code never reaches the UI.
+    expect(text).not.toContain('player_over_subscribed')
+  })
+
   it('falls back to the generic sentence if an infeasible row carries no reasons — the strip never renders bodyless', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
