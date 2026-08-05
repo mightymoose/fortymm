@@ -47,12 +47,15 @@ from app.draws import (
     PoolId,
     order_entrants,
     strategy_for,
+    unseated_entrant_allowance,
 )
 from app.models import (
+    DrawType,
     EventFormat,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventDrawSettings,
     TournamentFixture,
 )
 from app.schemas.tournament import Pool
@@ -412,10 +415,24 @@ async def draw_currency_by_event(
 
     A ``NULL`` side counts as nothing: it means TBD (a KO round whose feeder is
     undecided), never a bye and never an absent player. The seated set is therefore
-    the union of the non-NULL ``entry_a_id`` / ``entry_b_id`` refs — which, for
-    every strategy that exists today (and every one designed: a byed seed is placed
-    directly into round 2, so it is still *seated somewhere*), is exactly the set of
-    entrants the draw covers.
+    the union of the non-NULL ``entry_a_id`` / ``entry_b_id`` refs.
+
+    **That set is the field itself for three draw types, and one short of it for a
+    swiss draw over an odd field.** It used to be assumed exactly equal, on the strength
+    of every strategy then designed seating its byed entrants somewhere — a round-robin
+    bye sits out one round of a schedule that seats it in the others, a single-elim bye
+    is seated onto its round-2 side at the cut. Swiss breaks that: it emits ``⌊n/2⌋``
+    fixtures a round, and a bye is the *absence* of a row, so an odd field leaves one
+    entrant referenced nowhere. Under the plain equality such a draw read ``stale`` the
+    moment it was cut and go-live refused it with a 409 no re-cut could clear.
+
+    So the comparison is now: **nobody seated has left** (``seated <= active``, which is
+    what a withdrawal breaks) **and no more entrants are unseated than this draw type's
+    byes can account for** (:func:`~app.draws.unseated_entrant_allowance`, which is
+    ``0`` for the three and the field's parity for swiss). For every draw type but
+    swiss the pair is exactly the old equality, so the check they are protected by has
+    not moved: an entry that lands after the cut is still ``stale``, by name, on the
+    same 409. See that function for what the swiss allowance can and cannot tell apart.
 
     ``uncut`` is decided on the fixtures EXISTING, not on the seated set being
     empty. The two come apart on the event nobody has entered: no entrants and no
@@ -425,11 +442,14 @@ async def draw_currency_by_event(
     fiction, and it would be the fiction that carried an unplayable event into
     ``live``.
 
-    TWO statements for the whole batch, whatever the number of events (none at all
+    THREE statements for the whole batch, whatever the number of events (none at all
     when there are none), for the same reason every other loader here is batched:
     this runs on the go-live path with the tournament's row lock held, and a
-    per-event pair of queries would hold that lock for a time that grows with the
-    tournament.
+    per-event set of queries would hold that lock for a time that grows with the
+    tournament. The third is the events' draw types, which the allowance above turns
+    on; it is read here rather than off ``TournamentEvent.draw_settings`` because this
+    loader is handed **ids**, not rows, and a relationship walk would be the per-event
+    query this function exists not to issue.
     """
     if not event_ids:
         return {}
@@ -472,16 +492,70 @@ async def draw_currency_by_event(
             entry_id for entry_id in (entry_a_id, entry_b_id) if entry_id is not None
         )
 
+    # The third statement: each event's draw type, which decides how many of its
+    # entrants its fixtures may legitimately leave unseated. Read as the FK slug and
+    # parsed here — ``DrawType(slug)`` is the same parse the settings row's own
+    # ``draw_type`` property does, and the FK plus the seed-vs-enum migration test are
+    # what make an unparseable slug unreachable.
+    draw_types = {
+        event_id: DrawType(slug)
+        for event_id, slug in (
+            await db.execute(
+                select(TournamentEvent.id, TournamentEventDrawSettings.draw_type_key)
+                .join(
+                    TournamentEventDrawSettings,
+                    TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
+                )
+                # ``in_`` over the same ids, so this scales with the batch and not with
+                # the table.
+                .where(TournamentEvent.id.in_(active.keys()))
+            )
+        ).all()
+    }
+
     return {
         event_id: (
             DrawCurrency.uncut
             if event_id not in cut
             else DrawCurrency.current
-            if seated[event_id] == active[event_id]
+            if _covers_the_field(
+                draw_types[event_id],
+                active=active[event_id],
+                seated=seated[event_id],
+            )
             else DrawCurrency.stale
         )
         for event_id in active
     }
+
+
+def _covers_the_field(
+    draw_type: DrawType, *, active: set[uuid.UUID], seated: set[uuid.UUID]
+) -> bool:
+    """Do these fixtures cover this field — the comparison
+    :func:`draw_currency_by_event` calls ``current``.
+
+    Two questions, and both have to hold:
+
+    * **nobody the fixtures seat has left.** A withdrawn entry is not an entrant
+      (ADR-0016), so a draw that still names one is stale however many byes the format
+      has. This is the subset test, and it is the half a bye allowance must never reach
+      — "the draw seats somebody who is gone" is the opposite complaint from "an
+      entrant the draw does not seat".
+    * **no more entrants are unseated than this draw type byes.**
+      :func:`~app.draws.unseated_entrant_allowance` is ``0`` for every draw type whose
+      byed entrants are seated somewhere anyway, which makes this pair exactly the
+      equality it replaced for all of them.
+
+    The allowance is measured against the **active** field, not the seated set: it is
+    a question about the tournament's parity ("does somebody have to sit out?"), and
+    reading it off the fixtures would ask the draw to justify itself.
+    """
+    if not seated <= active:
+        return False
+    return len(active) - len(seated) <= unseated_entrant_allowance(
+        draw_type, len(active)
+    )
 
 
 async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:

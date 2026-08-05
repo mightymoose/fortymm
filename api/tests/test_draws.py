@@ -42,6 +42,7 @@ from app.draws import (
     reads_fixture_games,
     ready_fixtures,
     strategy_for,
+    unseated_entrant_allowance,
 )
 from app.models.tournament import DrawType
 from app.schemas.tournament import (
@@ -341,6 +342,57 @@ class TestStrategyRegistry:
             # (Buchholz, then game difference), so it declares the games it will read.
             DrawType.swiss: True,
         }
+
+    @pytest.mark.parametrize("field_size", [6, 7])
+    def test_the_bye_allowance_names_every_draw_type_and_only_swiss_byes_absently(
+        self, field_size: int
+    ) -> None:
+        """``unseated_entrant_allowance`` is what lets a draw's currency tell a **byed**
+        entrant from one who entered after the cut.
+
+        A whole-enum equality at both parities, so a new ``DrawType`` reds here as well
+        as failing to type-check in the catch-all-free ``match``. The three zeros are
+        not "these formats have no byes" — an odd round-robin pool byes somebody every
+        round — they are "their byed entrants are seated in some *other* fixture", which
+        is what makes the strict comparison right for them and wrong for swiss.
+        """
+        assert {
+            draw_type: unseated_entrant_allowance(draw_type, field_size)
+            for draw_type in DrawType
+        } == {
+            DrawType.round_robin: 0,
+            DrawType.single_elim: 0,
+            DrawType.rr_then_ko: 0,
+            # A swiss round seats ⌊n/2⌋ pairs, so an odd field leaves exactly one
+            # entrant in no fixture at all.
+            DrawType.swiss: field_size % 2,
+        }
+
+    def test_the_bye_allowance_matches_what_the_swiss_cut_actually_leaves_unseated(
+        self,
+    ) -> None:
+        """And the allowance is *true of the strategy*, not merely asserted about it:
+        for each field size, the entrants the cut leaves in no fixture are counted off
+        the fixtures it emits.
+
+        This is the falsifiable half. A cut that started seating its byed entrant (or a
+        parity slip in either direction) would part company with the allowance here,
+        rather than in a go-live 409 three layers away.
+        """
+        for field_size in range(2, 10):
+            ordered = _ordered(field_size)
+            fixtures = SwissStrategy(rounds=1).plan_initial(DrawConfig(), ordered)
+            seated = {
+                entry_id
+                for f in fixtures
+                for entry_id in (f.entry_a_id, f.entry_b_id)
+                if entry_id is not None
+            }
+            unseated = {entrant.entry_id for entrant in ordered} - seated
+
+            assert len(unseated) == unseated_entrant_allowance(
+                DrawType.swiss, field_size
+            ), f"field of {field_size}"
 
     def test_a_draw_type_the_gate_clears_advances_the_same_without_its_games(
         self,

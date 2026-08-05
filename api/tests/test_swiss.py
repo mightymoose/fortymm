@@ -30,12 +30,18 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
+    TournamentStatus,
     User,
 )
 from app.schemas.tournament import MAX_SWISS_ROUNDS
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_draws import DrawCurrency, draw_currency_by_event
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import grant_permissions, make_user, start_session
+
+# The tournament suite's own lifecycle helpers, imported rather than re-declared so a
+# change to how a tournament is started (or a status is staged) reaches this file too.
+from tests.test_tournaments import _go_live, _set_status, _withdraw
 
 SWISS = DrawType.swiss.value
 
@@ -511,6 +517,146 @@ async def test_the_round_count_is_editable_while_no_draw_exists(
     assert response.json()["rounds"] == 6
     event = await _settings_of(db_session, event_id)
     assert _stored_rounds(event) == 6
+
+
+# ----- draw currency: a byed entrant is covered, a latecomer is not ------------------
+
+
+async def _currency(db: AsyncSession, event_id: str) -> DrawCurrency:
+    """Where this event's draw stands relative to its field — read through the same
+    loader the go-live precondition asks."""
+    event_uuid = uuid.UUID(event_id)
+    db.expire_all()
+    return (await draw_currency_by_event(db, [event_uuid]))[event_uuid]
+
+
+async def test_an_odd_swiss_field_reads_current_and_can_go_live(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**A bye is not a missing player.** Seven entrants across two rounds means one of
+    them sits out round 1, and a bye is the absence of a fixture row — so the byed
+    entrant is seated in no fixture at all.
+
+    Currency compares the fixtures' seated entries against the active ones, and that
+    comparison read the bye as an entrant the draw had failed to cover: the draw came
+    back ``stale`` and go-live answered 409 for an odd field that had just been cut
+    from exactly those entrants. Nothing a director could do would clear it — re-cutting
+    deals the same bye — so an odd-field swiss event could be configured, entered and
+    cut, and then never start.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 7, rounds=2)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    assert await _currency(db_session, event_id) is DrawCurrency.current
+
+    started = await _go_live(client, tournament_id)
+    assert started.status_code == 201, started.text
+
+
+async def test_a_swiss_draw_is_stale_when_an_entry_lands_after_the_cut(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The check the bye must not blunt: somebody entered after the cut.
+
+    Seven entrants are cut (six seated, one byed) and an eighth arrives. Two of the
+    eight are now seated nowhere, which is one more than a single round's bye can
+    account for — so the draw is stale and the director is told to cut it again, exactly
+    as they would be for a round-robin.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 7, rounds=2)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    await _enter(
+        db_session,
+        event_id,
+        await make_user(db_session, "swiss-latecomer"),
+        seed=8,
+        minutes=8,
+    )
+
+    assert await _currency(db_session, event_id) is DrawCurrency.stale
+
+    refused = await _go_live(client, tournament_id)
+    assert refused.status_code == 409, refused.text
+    assert "no longer matches its entrants" in refused.json()["detail"]
+
+
+async def test_a_swiss_draw_is_stale_when_a_seated_entrant_withdraws(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The other direction, and the one a bye allowance must not swallow: the draw seats
+    somebody who has **left**. An entry the fixtures still name is not covered by "one
+    entrant may be unseated" — it is the opposite complaint, and it stays a 409."""
+    client, _ = authed_client
+    tournament_id, event_id, entries = await _field(client, db_session, 8, rounds=2)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    await _withdraw(db_session, entries[0])
+
+    assert await _currency(db_session, event_id) is DrawCurrency.stale
+
+    refused = await _go_live(client, tournament_id)
+    assert refused.status_code == 409, refused.text
+
+
+async def test_two_late_entries_exhaust_the_bye_allowance_and_are_stale(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The allowance is **one** entrant, not "swiss stopped checking": eight are cut and
+    two more arrive, so two of the ten are seated nowhere and no single round's bye can
+    account for them."""
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 8, rounds=2)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    for n in (9, 10):
+        await _enter(
+            db_session,
+            event_id,
+            await make_user(db_session, f"swiss-late-{n}"),
+            seed=n,
+            minutes=n,
+        )
+
+    assert await _currency(db_session, event_id) is DrawCurrency.stale
+    assert (await _go_live(client, tournament_id)).status_code == 409
+
+
+async def test_a_lone_latecomer_leaving_an_odd_field_reads_as_that_rounds_bye(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The known limit of the allowance, pinned rather than left to be discovered.**
+
+    Eight entrants are cut and a ninth arrives. That draw holds exactly the rows a draw
+    cut for nine holds — ⌊8/2⌋ and ⌊9/2⌋ are the same four fixtures a round, and the
+    byed entrant of a nine-player cut is recorded nowhere either. So the two states are
+    indistinguishable, and this one reads ``current``: the latecomer is treated as the
+    entrant sitting round 1 out.
+
+    The direction of the error is deliberate. On swiss it costs the newcomer a bye,
+    which the format hands somebody every odd round anyway. It is *not* a licence taken
+    for the other draw types, where an unseated entrant would play no match at all: the
+    test above them still shows a round-robin refusing the identical movement of the
+    field, and ``test_two_late_entries_exhaust_the_bye_allowance_and_are_stale`` shows
+    the allowance stops at one.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 8, rounds=2)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    await _enter(
+        db_session,
+        event_id,
+        await make_user(db_session, "swiss-ninth"),
+        seed=9,
+        minutes=9,
+    )
+
+    assert await _currency(db_session, event_id) is DrawCurrency.current
+    assert (await _go_live(client, tournament_id)).status_code == 201
 
 
 async def test_a_swiss_event_has_no_schedule_preview(
