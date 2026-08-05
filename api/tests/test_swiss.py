@@ -810,6 +810,73 @@ async def test_completing_every_round_one_match_pairs_and_materializes_round_two
         assert is_unpaired(rows, 3), "round 3 waits for round 2's table"
 
 
+async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The bye scores, end to end.** Three entrants over two rounds: round 1 pairs
+    seeds 1 and 2 and seed 3 sits out. Seed 2 wins it, and the table then reads
+    2, 3, 1 — the byed entrant credited with a win and placed above the player who lost
+    a real match, but below the player who won one.
+
+    The row is the assertion that matters: **played 1, won 1, and no games either way**.
+    A nominal 3-0 for the bye would be invisible in the wins column and would show up
+    here as game counts nobody played, which is exactly the game difference that would
+    float a byed entrant over somebody who beat a real opponent.
+
+    Round 2 is paired in the same breath, seating the byed entrant and passing the bye
+    to seed 1 — the entrant who has not had one.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "swiss-bye-two") as (client_2, user_2),
+        opponent_session(db_session, "swiss-bye-three") as (client_3, user_3),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id, rounds=2)).json()["id"]
+        entries = [
+            await _enter(db_session, event_id, user, seed=seed, minutes=seed)
+            for seed, user in enumerate((owner, user_2, user_3), start=1)
+        ]
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        entry_ids = [entry.id for entry in entries]
+        clients = dict(zip(entry_ids, [client, client_2, client_3], strict=True))
+
+        rows = await _fixtures(db_session, event_id)
+        round_one = [f for f in rows if f.round == 1]
+        await _call_fixtures(db_session, tournament_id, round_one)
+        await _win_fixture_match(
+            round_one[0],
+            clients_by_entry=clients,
+            winner_entry_id=entry_ids[1],
+            rated=False,
+        )
+
+        db_session.expire_all()
+        results = (await _event_read(client, tournament_id))["results"]
+
+        by_entry = {row["entry_id"]: row for row in results["rows"]}
+        byed = by_entry[str(entry_ids[2])]
+        assert (byed["played"], byed["wins"], byed["losses"]) == (1, 1, 0)
+        assert (byed["games_won"], byed["games_lost"]) == (0, 0), (
+            "a bye is worth zero games — a nominal score would be a game difference "
+            "nobody played for"
+        )
+        assert [row["entry_id"] for row in results["rows"]] == [
+            str(entry_ids[1]),
+            str(entry_ids[2]),
+            str(entry_ids[0]),
+        ], "the winner, then the bye, then the loser"
+
+        fixtures = await _fixtures(db_session, event_id)
+        (round_two,) = [f for f in fixtures if f.round == 2]
+        assert {round_two.entry_a_id, round_two.entry_b_id} == {
+            entry_ids[1],
+            entry_ids[2],
+        }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
+
+
 async def test_a_swiss_event_has_no_schedule_preview(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:

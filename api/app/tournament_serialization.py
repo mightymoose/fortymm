@@ -18,7 +18,7 @@ from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import EntryId, PoolId
+from app.draws import EntryId, PoolId, SeatedPairing, swiss_byes
 from app.models import (
     MatchStatus,
     ScheduleSolve,
@@ -355,7 +355,13 @@ def _field_input(
     A round nobody has been paired into yet is still **counted**: it can very much still
     yield a result. Only a **voided** pairing is left out of the count, exactly as it is
     for a pool — it never will produce one, and counting it would hold the event one
-    outcome short of complete forever."""
+    outcome short of complete forever.
+
+    The **byes** are derived here rather than stored, because there is nothing to store:
+    a bye is the absence of a fixture row, so it is read off the rounds that *are*
+    paired (:func:`~app.draws.swiss_byes`, the same call the draw layer's pairing makes,
+    so the table and the next round's seedings cannot rank the field differently). They
+    are scored as a win worth zero games one layer down, in the standings themselves."""
     field = {EntryId(entrant.id) for entrant in entrants} | {
         EntryId(entry_id)
         for f in fixtures
@@ -373,7 +379,39 @@ def _field_input(
             1 for f in fixtures if f.match_status is not MatchStatus.voided
         ),
         outcomes=tuple(outcomes),
+        byes=swiss_byes(field, _seated_pairings(fixtures, game_counts)),
     )
+
+
+def _seated_pairings(
+    fixtures: list[TournamentFixtureRead],
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> list[SeatedPairing]:
+    """The read rows that seat **both** sides, in the shape
+    :func:`~app.draws.swiss_byes` reads them.
+
+    A **voided** pairing is deliberately still a pairing here. It happened — those two
+    were drawn against each other and neither sat out — so counting its round as one
+    nobody was paired into would invent a bye for every other entrant in it. Voiding
+    takes away the *result*, which ``outcomes`` above already reflects, not the fact of
+    the pairing. It counts as ``decided`` for the same reason it is left out of
+    ``fixture_count``: it will never produce a result, so it must not hold its round —
+    and the bye scored against that round — open forever.
+
+    ``decided`` is read through :func:`_fixture_outcome`, the same projection the
+    standings themselves are built from, so a result under correction un-decides its
+    round here exactly as it un-scores its match there."""
+    return [
+        SeatedPairing(
+            round=f.round,
+            entry_a_id=EntryId(f.entry_a_id),
+            entry_b_id=EntryId(f.entry_b_id),
+            decided=f.match_status is MatchStatus.voided
+            or _fixture_outcome(f, game_counts) is not None,
+        )
+        for f in fixtures
+        if f.entry_a_id is not None and f.entry_b_id is not None
+    ]
 
 
 def _bracket_fixtures(

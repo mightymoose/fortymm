@@ -129,6 +129,44 @@ def test_a_swiss_field_stands_in_one_table_ordered_by_the_shared_chain() -> None
     assert [row.rank for row in standings.rows] == [1, 2, 3, 4]
 
 
+def test_a_byed_entrant_is_credited_with_a_win_and_no_games() -> None:
+    """The bye reaches the table as a **win worth zero games** (ADR "swiss standings
+    add Buchholz"): C sat out round 1 and reads 1-0 with a game difference of zero.
+
+    The rule is pinned link by link in ``tests/test_pool_finishing_order.py``; what
+    this asserts is that the swiss table actually *passes its byes through*, which is
+    the half a test of the chain alone cannot see.
+    """
+    field = FieldInput(
+        entrants=(A, B, C),
+        fixture_count=3,
+        outcomes=(_outcome(A, B, 3, 1),),
+        byes=(C,),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    by_entry = {row.entry_id: row for row in standings.rows}
+    assert (by_entry[C].played, by_entry[C].wins, by_entry[C].losses) == (1, 1, 0)
+    assert (by_entry[C].games_won, by_entry[C].games_lost) == (0, 0)
+    assert by_entry[C].game_difference == 0
+    # A won a real match 3-1, so A's +2 outranks the bye's 0 — the two are level on
+    # wins and have never met. A nominal 3-0 for the bye would put C first.
+    assert [row.entry_id for row in standings.rows] == [A, C, B]
+
+
+def test_a_pool_scores_no_byes() -> None:
+    """A round-robin pool passes none, and that is a fact about the format rather than
+    an omission: its byed entrant sits out one round of a schedule that seats them in
+    every other, so there is no result to credit. B has played nobody and reads a row
+    of zeros."""
+    pool = _single_pool(entrants=(A, B), fixture_count=1, outcomes=[])
+
+    (standings,) = RoundRobinResults().tabulate([pool]).pools
+
+    assert all((row.played, row.wins) == (0, 0) for row in standings.rows)
+
+
 def test_a_swiss_event_is_complete_and_crowned_when_every_round_is_decided() -> None:
     """A swiss ranks the whole field, so its complete table's top row is the champion —
     no single-pool carve-out, because there are no pools to have more than one of."""

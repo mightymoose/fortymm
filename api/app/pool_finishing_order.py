@@ -25,7 +25,7 @@ a snapshot — a corrected or voided match re-derives the order the instant it l
 
 The chain, in order:
 
-1. **wins** — most match wins first;
+1. **wins** — most match wins first, and a **bye counts as one of them**;
 2. **head-to-head**, *only when exactly two entries are tied* on wins — the one that
    beat the other ranks above it. A three-or-more-way tie can cycle (A beat B beat C
    beat A), so it is **not** broken head-to-head; it falls straight through to the game
@@ -34,6 +34,21 @@ The chain, in order:
 4. **games won**;
 5. the **entry id** — a total, deterministic fallback, so a pool in which two entries
    are genuinely level on every count still orders the same way on every read.
+
+**A bye is a win worth zero games** (ADR "swiss standings add Buchholz, and
+head-to-head is guarded on having met"). The win, because a player must not be punished
+for a scheduling artifact they did not cause. Zero games, because steps 3 and 4 are the
+ones a nominal 3-0 would corrupt: it would hand the byed entrant a game difference
+nobody earned, which can lift them above somebody who went out and beat a real
+opponent. So a bye moves step 1 and is neutral on everything below it, and it is
+slightly *under*-credited — the deliberate direction to err on a result nobody played.
+
+Byes reach here as a **flat sequence of entry ids, one per bye taken**, because they are
+derived rather than stored: a bye is the absence of a fixture row (CONTEXT.md, "Bye"),
+so the byed entrant is the one with no fixture that round. :func:`app.draws.swiss_byes`
+is where that derivation lives, once, for both callers. Round-robin passes none — its
+byed entrant sits out one round of a schedule that seats them in every other, which is
+not a result and is not scored as one.
 """
 
 from __future__ import annotations
@@ -134,13 +149,21 @@ _TIEBREAKERS: tuple[Callable[[EntryTally], int], ...] = (
 
 
 def finishing_order(
-    entrants: Iterable[EntryId], outcomes: Sequence[MatchOutcome]
+    entrants: Iterable[EntryId],
+    outcomes: Sequence[MatchOutcome],
+    byes: Iterable[EntryId] = (),
 ) -> list[EntryTally]:
-    """The pool's finishing order: its ``entrants`` tallied from ``outcomes``, then
-    ordered by the chain in this module's docstring.
+    """The pool's finishing order: its ``entrants`` tallied from ``outcomes`` and
+    ``byes``, then ordered by the chain in this module's docstring.
 
     ``entrants`` is the full seated field — not just the entries that have played — so
     the returned list always covers the whole pool. First place is index ``0``.
+
+    ``byes`` names one entry id **per bye taken**, so an entrant who has sat out twice
+    appears twice. Empty for every format but swiss, and empty for an even swiss field.
+    Both it and ``outcomes`` may only name entries that are in ``entrants``: the tallies
+    are keyed by entrant, so a stranger is a ``KeyError`` rather than a row appearing
+    from nowhere.
     """
     tallies: dict[EntryId, EntryTally] = {
         entry_id: EntryTally(entry_id=entry_id) for entry_id in entrants
@@ -149,6 +172,8 @@ def finishing_order(
         _record_outcome(
             tallies[outcome.entry_a_id], tallies[outcome.entry_b_id], outcome
         )
+    for entry_id in byes:
+        _record_bye(tallies[entry_id])
     return _order(list(tallies.values()), outcomes)
 
 
@@ -174,6 +199,23 @@ def _record_outcome(a: EntryTally, b: EntryTally, outcome: MatchOutcome) -> None
     else:
         b.wins += 1
         a.losses += 1
+
+
+def _record_bye(tally: EntryTally) -> None:
+    """Fold one bye into its holder's tally: a **win worth zero games**.
+
+    The three lines this function does *not* have are the point. No ``games_won``,
+    because awarding a nominal 3-0 would give the byed entrant a game difference nobody
+    earned and float them above a player who beat a real opponent. No ``games_lost``,
+    for the mirror reason. No ``losses``, obviously — this is a win.
+
+    ``played`` does move, and it is the one judgement call the ADR leaves open: the
+    entrant has a result for that round, and the invariant every other row on the table
+    satisfies is ``played == wins + losses``. A row reading "played 0, won 1" would look
+    to a director exactly like an arithmetic bug in the standings.
+    """
+    tally.played += 1
+    tally.wins += 1
 
 
 def entry_id_order(entry_id: EntryId) -> int:

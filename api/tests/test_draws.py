@@ -33,6 +33,7 @@ from app.draws import (
     QualifierSeat,
     RoundRobinStrategy,
     RrThenKoStrategy,
+    SeatedPairing,
     Side,
     SideFill,
     SingleElimStrategy,
@@ -43,6 +44,7 @@ from app.draws import (
     reads_fixture_games,
     ready_fixtures,
     strategy_for,
+    swiss_byes,
     swiss_pairings,
     unseated_entrant_allowance,
 )
@@ -2594,6 +2596,51 @@ class TestSwissAdvance:
 
         assert byes == [{5}, {4}, {3}]
 
+    def test_the_pairing_counts_a_bye_as_a_win_when_it_ranks_the_field(self) -> None:
+        """**The two layers rank one table.** A bye is a win worth zero games in the
+        standings (ADR "swiss standings add Buchholz"), and the next round is paired by
+        walking those standings — so the win has to count *here* too, or the draw would
+        pair the field in an order that contradicts the table on screen.
+
+        Seven entrants, three rounds, driven through two rounds of real results. By
+        round 3 the two byed entrants are seed 7 (round 1) and seed 5 (round 2), and
+        their bye wins move both of them up the table: 7 into the two-win group above
+        every one-win player, and 5 above seeds 1 and 3. Score the byes as nothing and
+        the walk sees a different order and emits three different pairings —
+        2v4, 7v1, 6v5 — including one the rematch rule then has to work around.
+        """
+        cut = _persisted(
+            SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(7))
+        )
+        round_one = _played(
+            cut,
+            {
+                frozenset({1, 4}): (1, 3, 2),
+                frozenset({2, 5}): (2, 3, 2),
+                frozenset({3, 6}): (6, 3, 2),
+            },
+        )
+        round_two = _played(
+            _apply(round_one, SwissStrategy(rounds=3).advance(round_one, _ordered(7))),
+            {
+                frozenset({1, 2}): (2, 3, 0),
+                frozenset({6, 7}): (7, 3, 2),
+                frozenset({3, 4}): (4, 3, 0),
+            },
+        )
+
+        plan = SwissStrategy(rounds=3).advance(round_two, _ordered(7))
+
+        assert _seed_pairs(round_two, 2) == [(1, 1, 2), (2, 6, 7), (3, 3, 4)]
+        assert _seed_pairs(_apply(round_two, plan), 3) == [
+            (1, 2, 7),
+            (2, 4, 6),
+            (3, 5, 1),
+        ]
+        assert _seated(_apply(round_two, plan), 3) == {1, 2, 4, 5, 6, 7}, (
+            "seed 3 takes round 3's bye, being the lowest-ranked entrant without one"
+        )
+
     def test_a_forced_rematch_is_paired_rather_than_refused(self) -> None:
         """**The last resort, reached by a draw the cut itself writes.** Five entrants,
         three rounds in: by round 3 the standings put seeds 2 and 4 last among those
@@ -2662,6 +2709,81 @@ class TestSwissAdvance:
 
     def test_an_empty_draw_advances_to_nothing(self) -> None:
         assert self._advance([], _ordered(8)) == AdvancePlan()
+
+
+class TestSwissByes:
+    """Who has sat out, derived from the rows — because a bye is the *absence* of a
+    row (CONTEXT.md, "Bye") and there is nothing else to read it off."""
+
+    def _byes(
+        self,
+        field: Sequence[int],
+        pairings: Sequence[tuple[int, int, int]],
+        *,
+        undecided: Collection[tuple[int, int, int]] = (),
+    ) -> list[int]:
+        """The byes of a field whose ``pairings`` are ``(round, seed a, seed b)``. Every
+        pairing is decided unless it is named in ``undecided`` — a bye is scored with
+        its round, so the flag is what a round being over means here."""
+        return [
+            entry_id.int
+            for entry_id in swiss_byes(
+                [_entry_id(seed) for seed in field],
+                [
+                    SeatedPairing(
+                        round=round_number,
+                        entry_a_id=_entry_id(a),
+                        entry_b_id=_entry_id(b),
+                        decided=(round_number, a, b) not in undecided,
+                    )
+                    for round_number, a, b in pairings
+                ],
+            )
+        ]
+
+    def test_the_entrant_missing_from_a_paired_round_took_its_bye(self) -> None:
+        assert self._byes([1, 2, 3], [(1, 1, 2)]) == [3]
+
+    def test_an_even_field_byes_nobody(self) -> None:
+        assert self._byes([1, 2, 3, 4], [(1, 1, 2), (1, 3, 4)]) == []
+
+    def test_each_paired_round_yields_its_own_bye(self) -> None:
+        """One id per bye taken, so the multiset carries how many each entrant has —
+        which is what the selection rule ("who has not had one") reads."""
+        assert self._byes([1, 2, 3], [(1, 1, 2), (2, 1, 3)]) == [3, 2]
+
+    def test_the_same_entrant_byed_twice_appears_twice(self) -> None:
+        assert self._byes([1, 2, 3], [(1, 1, 2), (2, 2, 1)]) == [3, 3]
+
+    def test_a_round_nobody_is_paired_into_yields_no_byes(self) -> None:
+        """**The one that stops a freshly cut draw handing everybody a bye.** Rounds 2
+        and 3 of a swiss draw exist as rows with both sides unknown from the moment it
+        is cut, so they contribute no pairings — and a round with no pairing is a round
+        waiting to be paired, not a round the whole field sat out."""
+        assert self._byes([1, 2, 3], [(1, 1, 2)]) == [3]
+
+    def test_a_round_still_being_played_scores_no_bye_yet(self) -> None:
+        """**A bye is scored with its round.** Round 2 is paired but one of its matches
+        is still on, so nobody has a result for that round — and the entrant sitting it
+        out does not get one either. Credit it early and a freshly cut seven-player draw
+        would show its byed entrant top of the table before a ball was hit."""
+        pairings = [(1, 1, 2), (1, 3, 4), (2, 1, 3), (2, 2, 4)]
+
+        assert self._byes([1, 2, 3, 4, 5], pairings, undecided=[(2, 2, 4)]) == [5]
+
+    def test_a_round_of_one_undecided_match_scores_no_bye_at_all(self) -> None:
+        """The same rule at the start of an event: round 1 is paired at the cut, so its
+        pairings exist from day one, and none of them has been played."""
+        assert self._byes([1, 2, 3], [(1, 1, 2)], undecided=[(1, 1, 2)]) == []
+
+    def test_an_entrant_seated_nowhere_is_byed_in_every_paired_round(self) -> None:
+        """The latecomer: a draw cut for four that a fifth player joined seats them in
+        no round at all. They are in the field, so they collect a bye for every round
+        that has been paired — which is what stops the selection rule handing them yet
+        another one."""
+        pairings = [(1, 1, 2), (1, 3, 4), (2, 1, 3), (2, 2, 4)]
+
+        assert self._byes([1, 2, 3, 4, 5], pairings) == [5, 5]
 
 
 class TestSwissPairings:

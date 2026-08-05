@@ -43,14 +43,19 @@ from __future__ import annotations
 
 import enum
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
 
 from app.models.tournament import DrawType, EventFormat
-from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
+from app.pool_finishing_order import (
+    EntryTally,
+    MatchOutcome,
+    entry_id_order,
+    finishing_order,
+)
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     RoundRobinDrawSettingsWrite,
@@ -402,6 +407,42 @@ class FixtureState:
     def is_pending(self) -> bool:
         """Some side is still unknown."""
         return self.entry_a_id is None or self.entry_b_id is None
+
+
+@dataclass(frozen=True, slots=True)
+class SeatedPairing:
+    """A fixture that seats **both** sides, in the one round it belongs to — the whole
+    input to :func:`swiss_byes`, and deliberately nothing more.
+
+    Both sides are non-optional, which is the type doing the work: a bye is derived by
+    asking who is *absent* from a round that was paired, so a fixture with an empty side
+    (a round nobody has been paired into yet) must not be able to enter that derivation
+    at all. Filtering happens where these are built, once, rather than being re-asserted
+    inside every reader.
+
+    It exists because **two layers derive byes and must not disagree** — the draw layer
+    pairs the next round down the standings (:class:`SwissStrategy`), and the results
+    layer reads those standings out to a director (:mod:`app.results`) — and the two
+    hold entirely different row shapes (:class:`FixtureState` and a
+    ``TournamentFixtureRead``). This is the small common shape both can project into, so
+    the *rule* has one implementation while the projections stay each caller's own.
+    """
+
+    round: int
+    entry_a_id: EntryId
+    entry_b_id: EntryId
+    #: Whether this pairing has produced all the result it ever will — a completed
+    #: match, or a **voided** one, which never will. It is here because a bye is scored
+    #: with its round (:func:`swiss_byes`), and a round is only over when every pairing
+    #: in it is: a fixture still being played leaves the round open, and a voided one
+    #: does not, exactly as :func:`_swiss_round_is_decided` reads the same two facts for
+    #: the pairing.
+    #:
+    #: **No default**, deliberately. Either default is a lie a caller can tell by
+    #: omission, and both fail quietly: ``False`` credits nobody for a bye they took,
+    #: and ``True`` credits a round still being played. Every construction site holds
+    #: the fact already, so it states it.
+    decided: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1120,6 +1161,58 @@ def swiss_pairings(
     return pairs
 
 
+def swiss_byes(
+    field: Iterable[EntryId], pairings: Iterable[SeatedPairing]
+) -> tuple[EntryId, ...]:
+    """Every bye this draw has handed out: one entry id **per bye taken**, so an entrant
+    who has sat out twice appears twice.
+
+    A bye is the absence of a fixture row (CONTEXT.md, "Bye"), never a row with a
+    ``NULL`` side and never a stored flag — so it is *derived*, here, by asking who is
+    missing from a round that was paired. Nothing else can answer it: the rows are the
+    only record there is, and the absence of one is the record of a bye.
+
+    **The field comes from the event's entrants**, not from the entries the fixtures
+    seat, for the reason that runs through the whole format: the byed entrant is by
+    definition in no row that round, and a swiss draw cut for eight that a ninth player
+    joined is seated nowhere at all. Derive the field from the rows and the very
+    entrants this function exists to find would be the ones it could not see.
+
+    A round with no seated pairing is **not** a round everybody was byed in — it is a
+    round nobody has been paired into yet, which is the ordinary state of every later
+    round of a freshly cut draw. Only rounds present in ``pairings`` are counted, which
+    is why the input is pairings rather than a round count.
+
+    **A bye is scored with its round**, so a round counts only once every pairing in it
+    is :attr:`~SeatedPairing.decided`. The alternative — crediting it the moment the
+    round is *paired* — puts a win on the table for a round nobody has played: a
+    seven-player draw would be cut and immediately show its byed entrant top of the
+    standings, ahead of six players who have not been given the chance to hit a ball.
+    Gating on the round makes the bye land at the same moment every real result in that
+    round does. It costs the pairing nothing, because a round is paired only after the
+    round before it is decided.
+
+    One definition, two readers (see :class:`SeatedPairing`): the draw layer picks the
+    next bye by preferring an entrant with none of these, and the results layer scores
+    each one as a win worth zero games. Ordered by round then by entry id so the value
+    is reproducible, though only its *multiset* is ever read.
+    """
+    seated: dict[int, set[EntryId]] = defaultdict(set)
+    undecided: set[int] = set()
+    for pairing in pairings:
+        seated[pairing.round].update({pairing.entry_a_id, pairing.entry_b_id})
+        if not pairing.decided:
+            undecided.add(pairing.round)
+    ordered_field = sorted(field, key=entry_id_order)
+    return tuple(
+        entry_id
+        for round_number in sorted(seated)
+        if round_number not in undecided
+        for entry_id in ordered_field
+        if entry_id not in seated[round_number]
+    )
+
+
 def _swiss_pairing_fills(
     fixtures: Sequence[FixtureState], ordered_entrants: Sequence[OrderedEntrant]
 ) -> list[SideFill]:
@@ -1133,10 +1226,13 @@ def _swiss_pairing_fills(
     if round_fixtures is None:
         return []
     field = [entrant.entry_id for entrant in ordered_entrants]
-    order = _swiss_standings_order(field, fixtures)
-    bye = _swiss_bye(order, fixtures)
+    # Projected once and handed to all three readers, so "who has played whom" and "who
+    # has sat out" are two questions asked of one set of pairings.
+    pairings = _swiss_seated_pairings(fixtures)
+    order = _swiss_standings_order(field, fixtures, pairings)
+    bye = _swiss_bye(order, pairings)
     pairs = swiss_pairings(
-        [entry_id for entry_id in order if entry_id != bye], _swiss_met(fixtures)
+        [entry_id for entry_id in order if entry_id != bye], _swiss_met(pairings)
     )
     fills: list[SideFill] = []
     # ``position`` is the pairing's rank (ADR), so the round's rows are filled in
@@ -1219,10 +1315,18 @@ def _swiss_round_is_decided(round_fixtures: Sequence[FixtureState]) -> bool:
 
 
 def _swiss_standings_order(
-    field: Sequence[EntryId], fixtures: Sequence[FixtureState]
+    field: Sequence[EntryId],
+    fixtures: Sequence[FixtureState],
+    pairings: Sequence[SeatedPairing],
 ) -> list[EntryId]:
     """The field ordered by the current standings — the order the next round is paired
     down.
+
+    **Byes are scored here too**, as a win worth zero games, by the same
+    :func:`finishing_order` the table on screen is built by (ADR "swiss standings add
+    Buchholz"). Leaving them out would rank a byed entrant below everybody who played
+    while the director's table ranked them above — the two layers disagreeing about the
+    standings, which is precisely what one shared chain exists to prevent.
 
     :func:`~app.pool_finishing_order.finishing_order` is the *shared* definition of that
     table, the same call the standings on screen are projected through, so the order a
@@ -1258,65 +1362,68 @@ def _swiss_standings_order(
                 entry_b_games=games.entry_b_games,
             )
         )
-    return [tally.entry_id for tally in finishing_order(field, outcomes)]
+    return [
+        tally.entry_id
+        for tally in finishing_order(field, outcomes, swiss_byes(field, pairings))
+    ]
 
 
 def _swiss_bye(
-    order: Sequence[EntryId], fixtures: Sequence[FixtureState]
+    order: Sequence[EntryId], pairings: Sequence[SeatedPairing]
 ) -> EntryId | None:
     """Who sits out this round: the **lowest-ranked entrant who has not had a bye yet**,
     or ``None`` when the field is even.
 
-    A bye is the absence of a fixture row, so who has already had one is *derived* —
-    an entrant seated in no fixture of a round that was paired (:func:`_swiss_seated`).
-    Nothing is stored, and nothing needs to be: the rows are the record.
+    Selection and scoring read the *same* derivation (:func:`swiss_byes`), so the
+    entrant this passes over for having had one is exactly the entrant the standings
+    credited with a win for it. Two derivations could disagree, and the shape of that
+    disagreement is somebody sitting out twice while the table says they never did.
 
     The fallback for a field in which everybody has had one (the lowest-ranked overall)
     is written for completeness rather than because it runs. The cut refuses ``R > n −
     1``, so there are always fewer rounds than entrants and the byeless set cannot
     empty.
-
-    Bye **scoring** — a win worth zero games — is not here. It is a standings question,
-    and it lands with the standings (ADR "swiss standings add Buchholz").
     """
     if len(order) % 2 == 0:
         return None
-    byes: dict[EntryId, int] = dict.fromkeys(order, 0)
-    for seated in _swiss_seated(fixtures).values():
-        for entry_id in order:
-            if entry_id not in seated:
-                byes[entry_id] += 1
+    byes = Counter(swiss_byes(order, pairings))
     for entry_id in reversed(order):
-        if byes[entry_id] == 0:
+        if not byes[entry_id]:
             return entry_id
     return order[-1]
 
 
-def _swiss_seated(fixtures: Sequence[FixtureState]) -> dict[int, set[EntryId]]:
-    """Who is seated in each **paired** round — a round with no seated fixture at all is
-    absent from the map, so an unpaired round does not read as a round everybody was
-    byed in."""
-    seated: dict[int, set[EntryId]] = defaultdict(set)
-    for fixture in fixtures:
-        if fixture.entry_a_id is None or fixture.entry_b_id is None:
-            continue
-        seated[fixture.round].update({fixture.entry_a_id, fixture.entry_b_id})
-    return seated
-
-
-def _swiss_met(fixtures: Sequence[FixtureState]) -> set[frozenset[EntryId]]:
+def _swiss_met(pairings: Iterable[SeatedPairing]) -> set[frozenset[EntryId]]:
     """Every pair this draw has already put in a fixture together.
 
     Read off the *pairings*, not the results: a voided match and a result still being
     corrected are both pairings that happened, and pairing them again would be the
     rematch the walk exists to avoid.
     """
-    met: set[frozenset[EntryId]] = set()
-    for fixture in fixtures:
-        if fixture.entry_a_id is None or fixture.entry_b_id is None:
-            continue
-        met.add(frozenset({fixture.entry_a_id, fixture.entry_b_id}))
-    return met
+    return {frozenset({pairing.entry_a_id, pairing.entry_b_id}) for pairing in pairings}
+
+
+def _swiss_seated_pairings(
+    fixtures: Sequence[FixtureState],
+) -> list[SeatedPairing]:
+    """This draw's fixtures that seat **both** sides, as the shape the bye and rematch
+    derivations read. A fixture with an empty side is a round waiting to be paired, not
+    a pairing.
+
+    ``decided`` reads the same two facts :func:`_swiss_round_is_decided` reads — a live
+    score, or a void that means there will never be one — so "this round is over" is one
+    answer here, whether it is being asked in order to pair the next round or in order
+    to score a bye."""
+    return [
+        SeatedPairing(
+            round=fixture.round,
+            entry_a_id=fixture.entry_a_id,
+            entry_b_id=fixture.entry_b_id,
+            decided=fixture.match_voided or fixture.games is not None,
+        )
+        for fixture in fixtures
+        if fixture.entry_a_id is not None and fixture.entry_b_id is not None
+    ]
 
 
 def _finished_pool_order(
