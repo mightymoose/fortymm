@@ -313,8 +313,100 @@ jobs:
             echo "      oci://${REGISTRY}/mightymoose/fortymm/charts/fortymm-uat --version ${CHART_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-# The observability chart publishes from this workflow too, and belongs here as
-# a job of its own rather than another step in `chart`. It bakes no fortymm
-# images, so it must NOT `needs` the image jobs -- waiting ~25 minutes on an
-# emulated arm64 build it does not consume would be pure delay. It also carries
-# subcharts, so it needs `helm dependency build`, which `deploy/uat/` does not.
+  observability:
+    name: observability chart
+    # `needs: [tag]` ONLY, and that is the point of it being a separate job
+    # rather than another step in `chart`. This chart bakes no fortymm image
+    # digests, so it consumes nothing the image jobs produce -- making it wait
+    # on the ~25-minute emulated-arm64 build would be pure delay for an artifact
+    # that does not depend on it. It still takes the 12-char SHA from `tag`,
+    # because every published artifact must be addressable by the same commit
+    # string (never `git rev-parse --short` -- see the `tag` job).
+    needs: [tag]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same pin as the `chart` job. It matters more here: helm decides how
+      # subchart dependencies are laid out inside the package, and the readback
+      # below asserts against that layout.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.2
+
+      - name: Package and push the observability chart
+        env:
+          # `sha` glued to the front is LOAD-BEARING -- see the identical
+          # comment on the `chart` job. SemVer forbids a leading zero in a
+          # numeric pre-release identifier, so `0.1.0-<sha>` is rejected
+          # whenever the 12-char truncation is all digits starting with 0.
+          CHART_VERSION: 0.1.0-sha${{ needs.tag.outputs.short-sha }}
+          # Chart.yaml says `appVersion: "uat"`, which is not a version of
+          # anything. Stamp the commit at package time instead, so no commit has
+          # to bump a chart file.
+          APP_VERSION: ${{ needs.tag.outputs.short-sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # `deploy/observability/charts/` is GITIGNORED -- only `Chart.lock` is
+          # committed -- so a runner starts with no subcharts on disk and an
+          # empty repo cache. Both `helm repo add`s are therefore mandatory, not
+          # best-effort: without them the next command dies with "no repository
+          # definition for ...". They carry no `|| true` for that reason. A
+          # runner is always fresh, so an "already exists" failure cannot happen
+          # here, and swallowing a real failure would only relocate the error.
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update prometheus-community grafana
+
+          # `build`, NEVER `update`. `helm dependency build` resolves from the
+          # committed `Chart.lock`, so the published chart vendors exactly the
+          # subchart versions this repo has run in UAT. `helm dependency update`
+          # re-resolves against the upstream repositories and would silently
+          # pull whatever they publish next -- turning a tagged, immutable chart
+          # into something whose contents depend on the day CI ran.
+          helm dependency build deploy/observability
+
+          mkdir -p dist/charts
+          helm package deploy/observability \
+            --version "$CHART_VERSION" \
+            --app-version "$APP_VERSION" \
+            -d dist/charts
+
+          chart="$(ls dist/charts/*.tgz)"
+
+          # Prove the subcharts are inside the artifact about to be pushed. The
+          # entire point of publishing this chart is that a deploy stops
+          # reaching out to prometheus-community.github.io and grafana.github.io
+          # (see the ADR's consequences), and a chart that packaged cleanly with
+          # an empty `charts/` would break exactly that, at pull time, on
+          # someone else's machine. Read the bytes rather than trusting the
+          # three steps above -- the repo's verify-the-artifact-under-test rule.
+          #
+          # `helm package` UNPACKS each vendored `.tgz` into a directory, so the
+          # anchor is `observability/charts/<name>/Chart.yaml` and NOT the
+          # `<name>-<version>.tgz` the `charts/` dir holds on disk. The single
+          # path segment also keeps loki-stack's own nested subcharts (promtail,
+          # filebeat, and five more) from inflating the count.
+          vendored="$(tar -tzf "$chart" | grep -cE '^observability/charts/(kube-prometheus-stack|loki-stack|tempo)/Chart\.yaml$' || true)"
+          if [ "$vendored" -ne 3 ]; then
+            echo "::error::packaged chart vendors ${vendored} of 3 subcharts (kube-prometheus-stack, loki-stack, tempo) -- refusing to publish a chart whose deploy would still fetch from upstream Helm repos."
+            exit 1
+          fi
+
+          printf '%s' "$GHCR_TOKEN" | helm registry login "$REGISTRY" -u "$GHCR_USER" --password-stdin
+
+          # `helm push` appends the chart name, so this lands at
+          # <repo>/charts/observability. As with the stack chart, helm derives
+          # the OCI tag from the chart version and there is NO moving `main` tag.
+          helm push "$chart" "oci://${REGISTRY}/mightymoose/fortymm/charts"
+
+          {
+            echo "Published \`observability-${CHART_VERSION}\` to \`${REGISTRY}/mightymoose/fortymm/charts\`."
+            echo ""
+            echo "    helm upgrade --install observability \\"
+            echo "      oci://${REGISTRY}/mightymoose/fortymm/charts/observability --version ${CHART_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
