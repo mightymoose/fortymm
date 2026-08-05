@@ -160,13 +160,26 @@ def upgrade() -> None:
             sa.ForeignKey("draw_types.key", ondelete="RESTRICT"),
             nullable=False,
         ),
-        # **K** — how many of each pool's finishers advance into the knockout
-        # stage. Only ``rr-then-ko`` has one, so the column is NULLABLE and the
-        # CHECK below is what pairs it with the draw type: NOT NULL and >= 1 for
-        # ``rr-then-ko``, NULL for every other slug. Added in place per the
-        # pre-deploy convention (api/CLAUDE.md), not as a chained ALTER —
+        # The draw type's settings, as ONE NOT NULL JSON object (ADR "a draw
+        # type's settings are one NOT NULL JSON object"). ``{}`` for a draw type
+        # that takes no configuration — ``round-robin`` and ``single-elim`` —
+        # and ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``. A draw type with
+        # no configuration stores the empty object and never NULL, so no reader
+        # has to test for absence before it reads.
+        #
+        # It replaces a nullable ``qualifiers_per_pool`` integer column and the
+        # CASE constraint that paired it with its draw type. Which settings a
+        # draw type has is a union, and a union modelled as a wide row of
+        # nullable columns is what forced that constraint to exist: each new
+        # setting cost a column, a branch and a migration. Edited in place per
+        # the pre-deploy convention (api/CLAUDE.md), not as a chained ALTER —
         # revision ids and the down_revision chain stay frozen.
-        sa.Column("qualifiers_per_pool", sa.Integer(), nullable=True),
+        sa.Column(
+            "settings",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -179,12 +192,20 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        # All the database has an opinion on: ``settings`` is a JSON **object**.
+        # A list, a number, a string or a JSON ``null`` would each be a stored
+        # "settings" that means nothing, so they are refused here.
+        #
+        # Deliberately weaker than the CASE constraint it replaces, which knew
+        # that only ``rr-then-ko`` carries a qualifier count. Which settings
+        # belong to which draw type now lives in the discriminated union at the
+        # request boundary (``app.schemas.tournament.DrawSettingsWrite``), which
+        # refuses a mismatched pair with a 422. That trade is the ADR's, made on
+        # purpose: the constraint grew one branch per draw type per setting, and
+        # a migration cannot import the enum it would have to keep agreeing with.
         sa.CheckConstraint(
-            "CASE WHEN draw_type_key = 'rr-then-ko'"
-            " THEN qualifiers_per_pool IS NOT NULL AND qualifiers_per_pool >= 1"
-            " ELSE qualifiers_per_pool IS NULL"
-            " END",
-            name="ck_tournament_event_draw_settings_qualifiers_per_pool",
+            "jsonb_typeof(settings) = 'object'",
+            name="ck_tournament_event_draw_settings_settings_object",
         ),
     )
 

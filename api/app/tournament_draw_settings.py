@@ -1,6 +1,22 @@
-"""Cleanup for the rows behind ``tournament_events.draw_settings_id``.
+"""The rows behind ``tournament_events.draw_settings_id`` — their settings column's
+storage boundary, and their cleanup.
 
-An event's draw configuration is a row, not a column (ADR "an event's draw
+**The boundary.** ``tournament_event_draw_settings.settings`` is one NOT NULL JSON
+object (ADR "a draw type's settings are one NOT NULL JSON object") and it is the
+serialized form of a union that already exists: ``DrawSettingsWriteArm``, the
+discriminated union the request boundary parses into. :func:`draw_settings_of` decodes a
+row into that arm and :func:`stored_settings` encodes an arm back, so the untyped blob
+lives in exactly these two functions and nothing inward of them holds a
+``dict[str, Any]`` (api/CLAUDE.md, "parse, don't validate"). Both directions are here,
+in one module, because a settings object written one way and read another is the single
+failure this column can have.
+
+They live beside the row rather than on it: the model cannot import the schemas (the
+schemas import the models, and the arrow only points one way), so the model takes the
+draw type and a plain mapping and this module is what turns an arm into that pair.
+
+**The cleanup.** An event's draw configuration is a row, not a column (ADR "an event's
+draw
 configuration is a row, not a column"), and the FK lives on the *parent*: the
 event points at its settings row, never the other way round. That direction is
 what makes "every event has exactly one settings row" a database fact — and it is
@@ -29,6 +45,50 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import TournamentEvent, TournamentEventDrawSettings
+from app.schemas.tournament import DrawSettingsWriteArm, draw_settings_from_storage
+
+
+def draw_settings_of(row: TournamentEventDrawSettings) -> DrawSettingsWriteArm:
+    """This settings row's draw configuration, parsed — the ONE read boundary onto the
+    ``settings`` column.
+
+    Every reader of an event's draw configuration goes through here and holds the
+    **arm**, never the row's two columns: the draw type and the settings that belong to
+    it are one fact, and reading them apart is how a strategy ends up configured from a
+    blob that names a different draw type.
+
+    Raises :class:`~pydantic.ValidationError` on a blob that is not the arm its draw
+    type names — see :func:`app.schemas.tournament.draw_settings_from_storage` for why
+    that is louder than the request side's 422.
+    """
+    return draw_settings_from_storage(row.draw_type, row.settings)
+
+
+def store_draw_settings(
+    row: TournamentEventDrawSettings, settings: DrawSettingsWriteArm
+) -> None:
+    """Write ``settings`` onto ``row`` — the ONE write boundary onto that column.
+
+    The inverse of :func:`draw_settings_of`, and the reason both are in one module: the
+    arm's discriminator becomes the ``draw_type_key`` slug and the rest of it becomes
+    the JSON object, in a single call, so the pair cannot be written half-way. Delegates
+    to ``configure``, which is the model's own "these two columns are one fact" door.
+    """
+    row.configure(settings.draw_type, settings=settings.stored_settings())
+
+
+def draw_settings_row(
+    settings: DrawSettingsWriteArm,
+) -> TournamentEventDrawSettings:
+    """A **new** settings row carrying ``settings`` — what the event-create path builds
+    its event's ``draw_settings`` with.
+
+    The create-shaped face of :func:`store_draw_settings`, so create and edit serialize
+    an arm exactly one way between them.
+    """
+    return TournamentEventDrawSettings.for_draw_type(
+        settings.draw_type, settings=settings.stored_settings()
+    )
 
 
 async def draw_settings_ids_for_tournament(

@@ -44,6 +44,7 @@ from app.models import (
     User,
 )
 from app.schemas.tournament import MAX_QUALIFIERS_PER_POOL
+from app.tournament_draw_settings import draw_settings_of
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     grant_permissions,
@@ -196,6 +197,17 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
     )
 
 
+def _stored_qualifiers(event: TournamentEvent) -> int | None:
+    """The qualifier count this event has **stored**, parsed back out of its settings
+    row's JSON object (ADR "a draw type's settings are one NOT NULL JSON object").
+
+    Read through the storage boundary rather than off a column, because there is no
+    column any more: ``{"qualifiers_per_pool": K}`` is the whole of an ``rr-then-ko``
+    row's settings, and ``None`` is what the arms with no knockout stage answer.
+    """
+    return draw_settings_of(event.draw_settings).qualifiers_per_pool
+
+
 async def _settings_of(db: AsyncSession, event_id: str) -> TournamentEvent:
     db.expire_all()
     return (
@@ -305,7 +317,7 @@ async def test_creating_an_rr_then_ko_event_persists_its_qualifier_count(
     assert created.status_code == 201, created.text
     event = await _settings_of(db_session, created.json()["id"])
     assert event.draw_settings.draw_type is DrawType.rr_then_ko
-    assert event.draw_settings.qualifiers_per_pool == 3
+    assert _stored_qualifiers(event) == 3
 
 
 @pytest.mark.parametrize("draw_type", ["round-robin", "single-elim"])
@@ -434,7 +446,7 @@ async def test_a_qualifier_count_at_the_ceiling_is_accepted(
 
     assert created.status_code == 201, created.text
     event = await _settings_of(db_session, created.json()["id"])
-    assert event.draw_settings.qualifiers_per_pool == MAX_QUALIFIERS_PER_POOL
+    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_POOL
 
 
 @pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_POOL + 1, INT32_OVERFLOW])
@@ -457,7 +469,7 @@ async def test_patching_a_qualifier_count_above_the_ceiling_is_422(
     assert response.status_code == 422, response.text
     assert "qualifiers_per_pool" in response.text
     event = await _settings_of(db_session, event_id)
-    assert event.draw_settings.qualifiers_per_pool == 2, "a refusal wrote nothing"
+    assert _stored_qualifiers(event) == 2, "a refusal wrote nothing"
 
 
 async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
@@ -480,7 +492,7 @@ async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
 
     assert response.status_code == 200, response.text
     event = await _settings_of(db_session, event_id)
-    assert event.draw_settings.qualifiers_per_pool == MAX_QUALIFIERS_PER_POOL
+    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_POOL
 
 
 async def test_patching_a_qualifier_count_without_its_draw_type_is_422(
@@ -524,7 +536,7 @@ async def test_the_qualifier_count_is_editable_while_no_draw_exists(
 
     assert response.status_code == 200, response.text
     event = await _settings_of(db_session, event_id)
-    assert event.draw_settings.qualifiers_per_pool == 3
+    assert _stored_qualifiers(event) == 3
 
 
 async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
@@ -545,7 +557,7 @@ async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
     assert response.status_code == 200, response.text
     event = await _settings_of(db_session, event_id)
     assert event.draw_settings.draw_type is DrawType.round_robin
-    assert event.draw_settings.qualifiers_per_pool is None
+    assert _stored_qualifiers(event) is None
 
 
 # ----- the read: the stored qualifier count comes back ------------------------------
@@ -578,7 +590,7 @@ async def test_an_rr_then_ko_events_qualifier_count_reads_back(
     assert created.json()["qualifiers_per_pool"] == 3
     assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] == 3
     event = await _settings_of(db_session, created.json()["id"])
-    assert event.draw_settings.qualifiers_per_pool == 3
+    assert _stored_qualifiers(event) == 3
 
 
 @pytest.mark.parametrize("draw_type", ["round-robin", "single-elim"])
@@ -790,7 +802,7 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
         "again."
     )
     event = await _settings_of(db_session, event_id)
-    assert event.draw_settings.qualifiers_per_pool == 2, "a refusal wrote nothing"
+    assert _stored_qualifiers(event) == 2, "a refusal wrote nothing"
 
 
 # ----- the seam: a finished pool seats its qualifiers -------------------------------

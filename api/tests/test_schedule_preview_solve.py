@@ -38,7 +38,6 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -69,7 +68,12 @@ from app.tournament_errors import (
     TournamentNotFoundError,
     TournamentNotPreLiveError,
 )
-from tests._helpers import make_user, venue_tables, with_table_aliases
+from tests._helpers import (
+    event_draw_settings,
+    make_user,
+    venue_tables,
+    with_table_aliases,
+)
 
 # Built per tournament, never as a module constant: a catalogue is
 # ``tournament_tables`` rows now (ADR 20260801). The pools name them by the positional
@@ -160,7 +164,7 @@ async def _add_event(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(
+        draw_settings=event_draw_settings(
             draw_type, qualifiers_per_pool=qualifiers_per_pool
         ),
         max_players=max_players,

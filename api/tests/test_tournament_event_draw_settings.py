@@ -1,7 +1,7 @@
 """An event's draw configuration is a row, and the row is what the database
 constrains (ADR "an event's draw configuration is a row, not a column").
 
-Three claims, and they are separate ones:
+Four claims, and they are separate ones:
 
 * **Creating an event creates exactly one settings row carrying that event's draw
   type** — driven through the real HTTP route, not the service verb, because the
@@ -18,6 +18,10 @@ Three claims, and they are separate ones:
   ``TournamentEvent.draw_settings``, the tournament path by an explicit reap in
   ``delete_tournament``, because the tournament's ``ON DELETE CASCADE`` sweeps its
   events in the DATABASE and a database cascade cannot run a Python-side one.
+* **The row's ``settings`` column is one NOT NULL JSON object, and an arm round-trips
+  through it** (ADR "a draw type's settings are one NOT NULL JSON object"). The
+  database's remaining opinion is only that the value is an object; which settings
+  belong to which draw type is the discriminated union's rule, at the request boundary.
 
 The draw type has exactly one home — ``tournament_event_draw_settings.draw_type_key``
 — so these tests read it from there and nowhere else. There is no ``draw_type``
@@ -32,6 +36,7 @@ import pytest
 import pytest_asyncio
 import sqlalchemy as sa
 from httpx import AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +47,15 @@ from app.models import (
     TournamentEventDrawSettings,
     User,
 )
-from app.schemas.tournament import DrawSettingsWrite
+from app.schemas.tournament import (
+    DrawSettingsWrite,
+    DrawSettingsWriteArm,
+    RoundRobinDrawSettingsWrite,
+    RrThenKoDrawSettingsWrite,
+    SingleElimDrawSettingsWrite,
+    draw_settings_from_storage,
+)
+from app.tournament_draw_settings import draw_settings_of, draw_settings_row
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import grant_permissions, start_session
 
@@ -416,147 +429,175 @@ def test_every_draw_type_has_an_arm_in_the_write_union() -> None:
     assert len(discriminators) == len(DrawType)
 
 
-async def test_a_new_events_settings_row_carries_no_qualifier_count(
+async def test_a_new_events_settings_row_carries_an_empty_settings_object(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """A round-robin event's settings row has ``qualifiers_per_pool`` NULL — not 0,
-    and not "unset but present".
+    """A round-robin event's settings row stores ``{}`` — not ``NULL``, and not a
+    key with an empty value.
 
-    ``NULL`` is the whole representation of "this draw type takes no qualifier
-    count" (ADR "rr-then-ko cuts both stages upfront"). A default of ``0`` would
-    make every round-robin event carry a number that reads as a real configuration
-    and that the ``K >= 1`` floor would then contradict.
+    The empty object is the whole representation of "this draw type takes no
+    configuration" (ADR "a draw type's settings are one NOT NULL JSON object"). A
+    ``NULL`` would mean the same thing to every reader, which is precisely why only
+    one of the two may be representable: nothing has to test for absence before it
+    reads, and the parse below has one shape to handle rather than two.
     """
     client, _ = authed_client
     _, event_id = await _create_event(client, draw_type="round-robin")
 
     (event,) = await _load_events(db_session, event_id)
     assert event.draw_settings.draw_type is DrawType.round_robin
-    assert event.draw_settings.qualifiers_per_pool is None
+    assert event.draw_settings.settings == {}
+    assert draw_settings_of(event.draw_settings) == RoundRobinDrawSettingsWrite()
 
 
-async def test_a_settings_row_that_is_not_rr_then_ko_may_not_carry_a_qualifier_count(
+async def test_the_settings_column_holds_an_object_or_nothing_at_all(
     db_session: AsyncSession,
 ) -> None:
-    """The qualifier count is unrepresentable on any other draw type — refused by
-    the database, not dropped on the way in.
+    """What the database still has an opinion on: ``settings`` is a JSON **object**,
+    and it is NOT NULL.
 
-    This is the storage-layer half of the claim the request boundary makes: "top K
-    from each pool advance" is meaningless for a round-robin (there is no cut to
-    size) and for a single-elim (there are no pools to cut from), so a row pairing
-    either slug with a number is not a row Postgres will accept. Both other slugs
-    are asked, because a constraint that only covered one of them would look
-    identical on a one-slug test.
+    This is all that is left of the storage-layer guard, and deliberately so (ADR "a
+    draw type's settings are one NOT NULL JSON object"). The ``CASE`` constraint that
+    paired a qualifier count with its draw type went away with the column it guarded;
+    which settings belong to which draw type is now the discriminated union's rule,
+    refused at the request boundary with a 422 and pinned by
+    :func:`test_every_draw_type_has_an_arm_in_the_write_union` above.
 
-    A NULL-carrying row of each slug is inserted first, so a green result cannot be
-    explained by the table or the statements being wrong.
+    A list, a number, a string and a JSON ``null`` are each a stored "settings" that
+    means nothing, so each is asked separately — a constraint that had been written as
+    ``settings IS NOT NULL`` would accept every one of them and still look green on a
+    one-case test. Accepted objects are asked too, so the refusals are the constraint
+    discriminating rather than rejecting everything.
     """
-    for slug in ("round-robin", "single-elim"):
-        accepted = await db_session.execute(
-            sa.text(
-                "INSERT INTO tournament_event_draw_settings"
-                " (draw_type_key, qualifiers_per_pool)"
-                " VALUES (:slug, NULL) RETURNING qualifiers_per_pool"
-            ),
-            {"slug": slug},
-        )
-        assert accepted.scalar_one() is None
+    accepted = ("'{}'::jsonb", "'{\"qualifiers_per_pool\": 2}'::jsonb")
+    refused = ("'[]'::jsonb", "'1'::jsonb", "'\"nope\"'::jsonb", "'null'::jsonb")
 
-        with pytest.raises(IntegrityError) as refusal:
-            async with db_session.begin_nested():
-                await db_session.execute(
-                    sa.text(
-                        "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_key, qualifiers_per_pool)"
-                        " VALUES (:slug, 2)"
-                    ),
-                    {"slug": slug},
-                )
-        assert "ck_tournament_event_draw_settings_qualifiers_per_pool" in str(
-            refusal.value
-        ), f"{slug} accepted a qualifier count: {refusal.value}"
-
-    await db_session.rollback()
-
-
-async def test_an_rr_then_ko_settings_row_round_trips_its_qualifier_count(
-    db_session: AsyncSession,
-) -> None:
-    """The column is a real, readable configuration for the one draw type that has
-    one: written as 2, read back as 2.
-
-    Driven through raw SQL rather than through the HTTP boundary because the subject
-    is the **column and its CHECK**, not the route: the end-to-end path an
-    ``rr-then-ko`` event now takes is covered in ``test_tournaments.py``.
-    """
-    settings_id = (
-        await db_session.execute(
-            sa.text(
-                "INSERT INTO tournament_event_draw_settings"
-                " (draw_type_key, qualifiers_per_pool)"
-                " VALUES (:key, 2) RETURNING id"
-            ),
-            {"key": RR_THEN_KO},
-        )
-    ).scalar_one()
-
-    db_session.expire_all()
-    stored = (
-        await db_session.execute(
-            select(TournamentEventDrawSettings).where(
-                TournamentEventDrawSettings.id == settings_id
+    for value in accepted:
+        async with db_session.begin_nested():
+            stored = await db_session.execute(
+                sa.text(
+                    "INSERT INTO tournament_event_draw_settings"
+                    " (draw_type_key, settings)"
+                    f" VALUES (:key, {value}) RETURNING settings"
+                ),
+                {"key": RR_THEN_KO},
             )
-        )
-    ).scalar_one()
-    assert stored.draw_type_key == RR_THEN_KO
-    assert stored.qualifiers_per_pool == 2
+            assert stored.scalar_one() is not None, value
 
-    await db_session.rollback()
-
-
-async def test_an_rr_then_ko_settings_row_needs_at_least_one_qualifier(
-    db_session: AsyncSession,
-) -> None:
-    """``K >= 1`` is the STATIC half of the ADR's legal configuration space, so it
-    is a floor the row itself carries — zero, negative and absent are all refused.
-
-    A qualifier count of zero advances nobody, which is not a knockout stage; a
-    negative one is not a count at all; and an absent one leaves an ``rr-then-ko``
-    row with no answer to "how many advance", which the cut has no default for. The
-    two bounds that MOVE with the entrant count — ``P × K >= 2`` and ``K <= ⌊N/P⌋``
-    — are deliberately NOT here: they are refused at the cut as ``DegenerateDraw``,
-    because a row that was legal when written must not become unwritable when a
-    player withdraws.
-    """
-    for count in ("0", "-1", "NULL"):
+    for value in (*refused, "NULL"):
         with pytest.raises(IntegrityError) as refusal:
             async with db_session.begin_nested():
                 await db_session.execute(
                     sa.text(
                         "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_key, qualifiers_per_pool)"
-                        f" VALUES (:key, {count})"
+                        " (draw_type_key, settings)"
+                        f" VALUES (:key, {value})"
                     ),
                     {"key": RR_THEN_KO},
                 )
-        assert "ck_tournament_event_draw_settings_qualifiers_per_pool" in str(
-            refusal.value
-        ), f"qualifiers_per_pool={count} was accepted: {refusal.value}"
+        assert "settings" in str(refusal.value), (
+            f"settings={value} was refused by something other than the settings "
+            f"column: {refusal.value}"
+        )
+
+    await db_session.rollback()
+
+
+async def test_every_arm_round_trips_through_the_settings_column(
+    db_session: AsyncSession,
+) -> None:
+    """The claim the whole change turns on: an arm written onto a row and read back
+    off it is the **same arm**.
+
+    Both directions go through ``app.tournament_draw_settings`` — the one storage
+    boundary for this column — so this is what says the encode and the decode agree.
+    Every arm is asked, including the configured one, because a round trip that only
+    covers the empty object would be satisfied by an encoder that drops every setting
+    on the floor.
+
+    The row is flushed and expired before the read, so what is parsed is what Postgres
+    stored and not the dict the encoder left in memory.
+    """
+    arms: list[DrawSettingsWriteArm] = [
+        RoundRobinDrawSettingsWrite(),
+        SingleElimDrawSettingsWrite(),
+        RrThenKoDrawSettingsWrite(qualifiers_per_pool=2),
+    ]
+    assert len(arms) == len(DrawType), (
+        "a draw type has been added without an arm in this round trip: "
+        f"{sorted(t.value for t in DrawType)}"
+    )
+
+    rows = [draw_settings_row(arm) for arm in arms]
+    db_session.add_all(rows)
+    await db_session.flush()
+    ids = [row.id for row in rows]
+    db_session.expire_all()
+
+    for arm, settings_id in zip(arms, ids, strict=True):
+        stored = (
+            await db_session.execute(
+                select(TournamentEventDrawSettings).where(
+                    TournamentEventDrawSettings.id == settings_id
+                )
+            )
+        ).scalar_one()
+        assert stored.draw_type_key == arm.draw_type.value
+        assert draw_settings_of(stored) == arm
+
+    await db_session.rollback()
+
+
+async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
+    db_session: AsyncSession,
+) -> None:
+    """``K >= 1`` is the STATIC half of the ADR's legal configuration space, and since
+    the settings column became one JSON object it is enforced in exactly one place: the
+    union arm.
+
+    Zero advances nobody, a negative one is not a count, and an absent one leaves an
+    ``rr-then-ko`` configuration with no answer to "how many advance". All three are a
+    refusal where the arm is built — at the request boundary, as a 422 naming the field
+    — rather than an ``IntegrityError`` from a ``CHECK`` that no longer exists.
+
+    The database's part is asserted too, and it is the *absence* of an opinion: a
+    settings object carrying ``0`` is a row Postgres now accepts. That is the loss the
+    ADR takes deliberately, and stating it here is what keeps it a decision rather than
+    a regression somebody discovers.
+
+    The two bounds that MOVE with the entrant count — ``P × K >= 2`` and
+    ``K <= ⌊N/P⌋`` — are deliberately NOT here: they are refused at the cut as
+    ``DegenerateDraw``, because a configuration that was legal when written must not
+    become unwritable when a player withdraws.
+    """
+    for count in (0, -1):
+        with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+            draw_settings_from_storage(
+                DrawType.rr_then_ko, {"qualifiers_per_pool": count}
+            )
+    with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+        draw_settings_from_storage(DrawType.rr_then_ko, {})
 
     # One qualifier per pool IS legal — a two-pool event at K=1 is a single final
     # between the two pool winners, which the ADR names as a supported shape. So the
-    # floor is at 1, not at 2, and this is what says the refusals above are the
-    # constraint discriminating rather than rejecting everything.
-    accepted = await db_session.execute(
+    # floor is at 1, not at 2, and this is what says the refusals above are the union
+    # discriminating rather than rejecting everything.
+    assert draw_settings_from_storage(
+        DrawType.rr_then_ko, {"qualifiers_per_pool": 1}
+    ) == RrThenKoDrawSettingsWrite(qualifiers_per_pool=1)
+
+    # And the storage layer no longer has a view: the same K the union refuses is a row
+    # the database stores. Named out loud, because a reader who assumes the old CHECK
+    # is still there would be wrong about where this rule lives.
+    stored = await db_session.execute(
         sa.text(
-            "INSERT INTO tournament_event_draw_settings"
-            " (draw_type_key, qualifiers_per_pool)"
-            " VALUES (:key, 1) RETURNING qualifiers_per_pool"
+            "INSERT INTO tournament_event_draw_settings (draw_type_key, settings)"
+            " VALUES (:key, '{\"qualifiers_per_pool\": 0}'::jsonb) RETURNING settings"
         ),
         {"key": RR_THEN_KO},
     )
-    assert accepted.scalar_one() == 1
+    assert stored.scalar_one() == {"qualifiers_per_pool": 0}
 
     await db_session.rollback()
 

@@ -217,125 +217,154 @@ async def test_every_seeded_draw_type_carries_picker_copy(
     )
 
 
-async def test_migration_creates_the_qualifiers_per_pool_column(
-    migrated_database_url: str,
-) -> None:
-    """The qualifier count exists, as a NULLABLE integer, on a database built by
-    Alembic — not by ``create_all``.
-
-    Worth its own test precisely because ``create_all`` is what the rest of the
-    suite runs on: a column added to the model and forgotten in the migration is
-    invisible to every other test in this repo and fails on the first real
-    deployment (api/CLAUDE.md, "pytest never runs the migrations"). Nullability is
-    asserted, not just presence, because ``NULL`` is the whole representation of
-    "this draw type takes no qualifier count" — a NOT NULL column would make every
-    round-robin row carry a number.
-    """
-    engine = create_async_engine(migrated_database_url)
+async def _draw_settings_column(
+    url: str, column_name: str
+) -> sa.Row[tuple[str, str, str | None]] | None:
+    """One column of ``tournament_event_draw_settings`` as the **migrated** database
+    describes it, or ``None`` when the migration did not create it."""
+    engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
-            column = (
+            return (
                 await conn.execute(
                     sa.text(
                         "SELECT data_type, is_nullable, column_default"
                         " FROM information_schema.columns"
                         " WHERE table_name = 'tournament_event_draw_settings'"
-                        "   AND column_name = 'qualifiers_per_pool'"
-                    )
+                        "   AND column_name = :column_name"
+                    ),
+                    {"column_name": column_name},
                 )
             ).one_or_none()
     finally:
         await engine.dispose()
 
+
+async def test_migration_creates_the_settings_column(
+    migrated_database_url: str,
+) -> None:
+    """The settings object exists, as a NOT NULL ``jsonb`` defaulting to ``{}``, on a
+    database built by Alembic — not by ``create_all``.
+
+    Worth its own test precisely because ``create_all`` is what the rest of the
+    suite runs on: a column added to the model and forgotten in the migration is
+    invisible to every other test in this repo and fails on the first real
+    deployment (api/CLAUDE.md, "pytest never runs the migrations").
+
+    All three facts are asserted, not just presence, because each is load-bearing (ADR
+    "a draw type's settings are one NOT NULL JSON object"): ``jsonb`` because the
+    ``jsonb_typeof`` check and every read depend on it, NOT NULL because ``NULL`` and
+    ``{}`` would be two spellings of "no configuration", and the default because it is
+    what makes the NOT NULL survivable for a writer that omits the column.
+    """
+    column = await _draw_settings_column(migrated_database_url, "settings")
+
     assert column is not None, (
-        "migrated database has no tournament_event_draw_settings.qualifiers_per_pool"
-        " column — the model has it and create_all builds it, so the whole suite is"
-        " green without the migration"
+        "migrated database has no tournament_event_draw_settings.settings column —"
+        " the model has it and create_all builds it, so the whole suite is green"
+        " without the migration"
     )
-    assert column.data_type == "integer", column
-    assert column.is_nullable == "YES", column
-    assert column.column_default is None, column
+    assert column.data_type == "jsonb", column
+    assert column.is_nullable == "NO", column
+    assert column.column_default is not None, column
+    assert "'{}'" in column.column_default, column
 
 
-# Every ``(draw_type_key, qualifiers_per_pool)`` pair the CHECK has an opinion
-# about, and the opinion. Written as data so the test below reports the WHOLE
-# outcome table on a failure rather than dying at the first disagreement — a
-# constraint that has lost one arm and a constraint that was never created look
-# very different here, and that difference is the finding.
+async def test_migration_no_longer_creates_the_qualifiers_per_pool_column(
+    migrated_database_url: str,
+) -> None:
+    """The column the settings object replaced is **gone** from a migrated database.
+
+    The half of an edit-in-place that is easy to leave half-done: adding ``settings``
+    to migration 0010 and forgetting to delete ``qualifiers_per_pool`` beside it leaves
+    a database with two homes for one fact, and every other test in this repo — built
+    by ``create_all`` from the model, which has only one — stays green over it.
+    """
+    assert (
+        await _draw_settings_column(migrated_database_url, "qualifiers_per_pool")
+        is None
+    ), (
+        "migrated database still has tournament_event_draw_settings."
+        "qualifiers_per_pool — migration 0010 replaced it with the settings object,"
+        " so the column is a second, stale home for the qualifier count"
+    )
+
+
+# Every ``settings`` value the CHECK has an opinion about, and the opinion. Written
+# as data so the test below reports the WHOLE outcome table on a failure rather than
+# dying at the first disagreement — a constraint that was never created and one that
+# refuses everything look very different here, and that difference is the finding.
 #
-# ``count`` is SQL text, not a bound parameter, because ``NULL`` is one of the
-# values under test and a bound ``None`` would be indistinguishable from the
-# literal in the failure message. The values are this module's own constants and
-# never touch user input.
-QUALIFIER_COUNT_CASES: list[tuple[str, str, bool]] = [
-    # No other draw type may carry a count at all: there is no cut to size for a
-    # round-robin, and no pools to cut from for a single-elim. Both are asked,
-    # because a constraint that had lost one of them looks identical on a
-    # one-slug test.
-    ("round-robin", "2", False),
-    ("single-elim", "2", False),
-    # ...and NULL is how they say so. This is the arm the verifier's `ELSE TRUE`
-    # corruption destroys while leaving everything else intact.
-    ("round-robin", "NULL", True),
-    ("single-elim", "NULL", True),
-    # ``K >= 1`` is the ADR's static bound: zero advances nobody, negative is not
-    # a count, and absent leaves the cut with no answer to "how many advance".
-    ("rr-then-ko", "0", False),
-    ("rr-then-ko", "-1", False),
-    ("rr-then-ko", "NULL", False),
-    # One qualifier per pool IS legal — two pools at K=1 is a single final
-    # between the pool winners, which the ADR names as a supported shape. Without
-    # an accepted case the refusals above would also be satisfied by a constraint
-    # that rejects everything.
-    ("rr-then-ko", "1", True),
-    ("rr-then-ko", "2", True),
+# The value is SQL text, not a bound parameter, because ``NULL`` and the JSON literal
+# ``null`` are both under test and a bound ``None`` could not tell them apart in the
+# failure message. The values are this module's own constants and never touch user
+# input.
+#
+# There are deliberately **no cases pairing a draw type with the wrong settings**. The
+# ``CASE`` constraint that refused ``('round-robin', 2)`` went away with the column it
+# guarded, and a migrated database now accepts a round-robin row carrying a qualifier
+# count (ADR "a draw type's settings are one NOT NULL JSON object"). That rule lives in
+# the discriminated union at the request boundary now, where
+# ``test_tournament_event_draw_settings.py`` pins it.
+SETTINGS_VALUE_CASES: list[tuple[str, bool]] = [
+    # The empty object is what a draw type with no configuration stores, and the
+    # populated one is what ``rr-then-ko`` stores. Both must be accepted, or the
+    # refusals below would also be satisfied by a constraint that rejects everything.
+    ("'{}'::jsonb", True),
+    ("'{\"qualifiers_per_pool\": 2}'::jsonb", True),
+    # Everything that is JSON but not an object. Each is asked, because a constraint
+    # mistakenly written as ``settings IS NOT NULL`` accepts all four and would look
+    # green on any one of them alone.
+    ("'[]'::jsonb", False),
+    ("'1'::jsonb", False),
+    ("'\"nope\"'::jsonb", False),
+    # JSON ``null`` is the sly one: it is a legal jsonb value, it is NOT SQL NULL, and
+    # ``jsonb_typeof`` calls it ``'null'``.
+    ("'null'::jsonb", False),
+    # And SQL NULL, which the NOT NULL refuses rather than the CHECK — one column, two
+    # guards, and the row must be refused either way.
+    ("NULL", False),
 ]
 
 
-async def test_migration_pairs_the_qualifier_count_with_its_draw_type(
+async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
     migrated_database_url: str,
 ) -> None:
     """What the CHECK **does** on a migrated database, not what its text says.
 
-    An earlier version of this test asserted only that ``rr-then-ko`` and
-    ``qualifiers_per_pool`` appeared in ``pg_get_constraintdef``. That caught a
-    *missing* constraint but not a *wrong* one: corrupting the migration's ``ELSE
-    qualifiers_per_pool IS NULL`` to ``ELSE TRUE`` — keeping the ``THEN`` arm,
-    keeping the model correct — left this file green while shipping a database
-    that happily stores ``round-robin`` with two qualifiers. A wrong constraint is
-    the *likelier* mistake the next time someone edits migration 0010, since the
-    edit-in-place convention means that expression gets rewritten rather than
-    replaced.
+    An earlier version of this test asserted only that a constraint's text appeared in
+    ``pg_get_constraintdef``. That caught a *missing* constraint but not a *wrong* one,
+    and a wrong constraint is the likelier mistake the next time someone edits
+    migration 0010, since the edit-in-place convention means the expression gets
+    rewritten rather than replaced.
 
-    So every case in :data:`QUALIFIER_COUNT_CASES` is actually attempted, and it
-    is the accept/reject outcome that is asserted. That also makes the test
-    immune to Postgres re-rendering the expression (it already normalises
-    ``'rr-then-ko'`` to ``'rr-then-ko'::text`` and adds its own parentheses).
+    So every case in :data:`SETTINGS_VALUE_CASES` is actually attempted, and it is the
+    accept/reject outcome that is asserted. That also makes the test immune to Postgres
+    re-rendering the expression.
 
     The model's copy of this rule is exercised by
     ``test_tournament_event_draw_settings.py`` against a ``create_all`` schema.
     This is the same questions asked of the schema **Alembic** built — which is
     the only way the two descriptions can be shown to agree.
 
-    Every slug the cases name — ``rr-then-ko`` included, since #1227 seeded it —
-    is a row the migration itself inserted, so the settings rows below FK against
-    the real seed rather than a test-local stand-in. Everything runs inside one
-    transaction that is **rolled back**, so the session-scoped migrated database
-    is left exactly as Alembic made it and the seed assertions in this file
+    The slug the cases name is a row the migration itself inserted, so the settings
+    rows below FK against the real seed rather than a test-local stand-in. Everything
+    runs inside one transaction that is **rolled back**, so the session-scoped migrated
+    database is left exactly as Alembic made it and the seed assertions in this file
     cannot be affected by test ordering.
     """
     engine = create_async_engine(migrated_database_url)
-    outcomes: dict[tuple[str, str], bool] = {}
+    outcomes: dict[str, bool] = {}
     try:
         conn = await engine.connect()
         try:
             transaction = await conn.begin()
             try:
-                for slug, count, _ in QUALIFIER_COUNT_CASES:
+                for value, _ in SETTINGS_VALUE_CASES:
                     statement = sa.text(
                         "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_key, qualifiers_per_pool)"
-                        f" VALUES (:slug, {count})"
+                        " (draw_type_key, settings)"
+                        f" VALUES (:slug, {value})"
                     )
                     try:
                         # A SAVEPOINT per case: a refused INSERT poisons the
@@ -343,11 +372,11 @@ async def test_migration_pairs_the_qualifier_count_with_its_draw_type(
                         # rejection would abort every case after it and the
                         # outcome table would be a lie.
                         async with conn.begin_nested():
-                            await conn.execute(statement, {"slug": slug})
+                            await conn.execute(statement, {"slug": "rr-then-ko"})
                     except IntegrityError:
-                        outcomes[(slug, count)] = False
+                        outcomes[value] = False
                     else:
-                        outcomes[(slug, count)] = True
+                        outcomes[value] = True
             finally:
                 await transaction.rollback()
         finally:
@@ -355,18 +384,16 @@ async def test_migration_pairs_the_qualifier_count_with_its_draw_type(
     finally:
         await engine.dispose()
 
-    expected = {
-        (slug, count): accepted for slug, count, accepted in QUALIFIER_COUNT_CASES
-    }
+    expected = dict(SETTINGS_VALUE_CASES)
     disagreed = {
-        case: f"expected {'accepted' if want else 'REFUSED'}, "
-        f"got {'accepted' if outcomes[case] else 'REFUSED'}"
-        for case, want in expected.items()
-        if outcomes[case] != want
+        value: f"expected {'accepted' if want else 'REFUSED'}, "
+        f"got {'accepted' if outcomes[value] else 'REFUSED'}"
+        for value, want in expected.items()
+        if outcomes[value] != want
     }
     assert not disagreed, (
-        "migration 0010's ck_tournament_event_draw_settings_qualifiers_per_pool "
-        "does not behave like the model's copy on a migrated database: "
+        "migration 0010's tournament_event_draw_settings.settings column does not "
+        "behave like the model's copy on a migrated database: "
         f"{disagreed}"
     )
 

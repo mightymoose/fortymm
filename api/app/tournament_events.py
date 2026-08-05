@@ -31,7 +31,6 @@ from app.models import (
     DrawType,
     ScheduleSolveTrigger,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentFixture,
     User,
 )
@@ -42,6 +41,11 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventUpdate,
     named_list,
+)
+from app.tournament_draw_settings import (
+    draw_settings_of,
+    draw_settings_row,
+    store_draw_settings,
 )
 from app.tournament_draws import event_has_draw, event_pools
 from app.tournament_edit import _load_owned_tournament_for_update
@@ -123,12 +127,10 @@ async def create_event(
         #
         # Written from the parsed union arm, never from the two loose payload fields:
         # the boundary has already refused a qualifier count that does not belong to
-        # the draw type beside it (ADR 20260727), so what is written here is a pair
-        # the settings table's ``CHECK`` will accept.
-        draw_settings=TournamentEventDrawSettings.for_draw_type(
-            payload.draw_settings.draw_type,
-            qualifiers_per_pool=payload.draw_settings.qualifiers_per_pool,
-        ),
+        # the draw type beside it (ADR 20260727), and ``draw_settings_row`` serializes
+        # that arm onto the row's ``draw_type_key`` + ``settings`` pair in the one place
+        # that knows how (ADR "a draw type's settings are one NOT NULL JSON object").
+        draw_settings=draw_settings_row(payload.draw_settings),
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
         timezone=payload.timezone,
@@ -378,7 +380,10 @@ async def _enforce_draw_settings_frozen(
     What the event *currently* has is read off its ``draw_settings`` row — the one home
     of that fact (ADR "an event's draw configuration is a row, not a column") — and read
     once, before the caller's ``setattr`` loop, so what is compared is the stored
-    configuration and not the one the payload is asking for.
+    configuration and not the one the payload is asking for. Both sides of the
+    comparison are the **parsed arm**, so "did the configuration move" is one equality
+    over the whole union rather than a field-by-field walk that a new setting could fall
+    out of.
     """
     # ``None`` is "this patch does not touch the draw configuration": the schema refuses
     # an explicit ``null`` on ``draw_type`` (422) and refuses a ``qualifiers_per_pool``
@@ -386,13 +391,10 @@ async def _enforce_draw_settings_frozen(
     incoming = updates.draw_settings
     if incoming is None:
         return
-    current = event.draw_settings.draw_type
-    current_qualifiers = event.draw_settings.qualifiers_per_pool
-    if (
-        incoming.draw_type is current
-        and incoming.qualifiers_per_pool == current_qualifiers
-    ):
+    stored = draw_settings_of(event.draw_settings)
+    if incoming == stored:
         return
+    current = stored.draw_type
     # Only now the query — and only for a payload that really moves the configuration.
     # It is the same ``event_has_draw`` the pool freeze asks; a payload that changes
     # both
@@ -406,7 +408,7 @@ async def _enforce_draw_settings_frozen(
     detail = (
         _draw_type_frozen_detail(current)
         if incoming.draw_type is not current
-        else _qualifiers_per_pool_frozen_detail(current, current_qualifiers)
+        else _qualifiers_per_pool_frozen_detail(current, stored.qualifiers_per_pool)
     )
     raise DrawTypeFrozenError(detail, draw_type=current.value)
 
@@ -610,17 +612,16 @@ async def update_event(
         apply_event_pools(tournament, event, updates.pools)
     if draw_settings is not None:
         # The one place an event's draw configuration moves after create (the freeze
-        # above has already refused this on a cut draw). Assigned through the settings
-        # row's ``configure``, not its columns, so the enum→slug conversion and the
-        # "these two columns are one fact" pairing stay in the single place that owns
-        # them — the same door ``for_draw_type`` goes through at create. The settings
-        # row
-        # is loaded with the event (``lazy="joined"``), so this is a plain attribute
-        # write, not a lazy load in async context.
-        event.draw_settings.configure(
-            draw_settings.draw_type,
-            qualifiers_per_pool=draw_settings.qualifiers_per_pool,
-        )
+        # above has already refused this on a cut draw). Assigned through
+        # ``store_draw_settings``, not through the row's columns, so serializing the arm
+        # onto ``draw_type_key`` + ``settings`` stays in the single place that owns it —
+        # the same door ``draw_settings_row`` goes through at create. That matters most
+        # on THIS path: a draw type patched from ``rr-then-ko`` back to ``round-robin``
+        # has to drop the qualifier count with it, and writing the pair together is what
+        # makes that automatic. The settings row is loaded with the event
+        # (``lazy="joined"``), so this is a plain attribute write, not a lazy load in
+        # async context.
+        store_draw_settings(event.draw_settings, draw_settings)
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a
         # no-op): recompose every placement so its local reading is unchanged and only

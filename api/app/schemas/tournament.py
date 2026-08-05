@@ -1,5 +1,6 @@
 import uuid
 from collections import Counter
+from collections.abc import Mapping
 from datetime import date, datetime, time
 from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
@@ -154,19 +155,48 @@ become unwritable when a player withdraws (the same split ``_snake`` already use
 its own pool floor)."""
 
 
-class RoundRobinDrawSettingsWrite(BaseModel):
-    """A round-robin event's draw configuration: the draw type, and nothing else.
+class DrawSettingsWriteBase(BaseModel):
+    """What every arm of the draw-settings union shares: ``extra="forbid"``, and the
+    serialization onto the settings column.
 
-    ``extra="forbid"`` is doing real work on this arm — it is what makes
-    ``qualifiers_per_pool`` on a round-robin event a **422 at the boundary** rather than
-    a value silently dropped on the way to a column that cannot hold it (the settings
-    table's ``CHECK`` says ``NULL`` for every draw type but ``rr-then-ko``). A director
-    who names a qualifier count for a format that has no knockout stage has
-    misunderstood something, and the useful answer is to say so, not to run the event
-    they did not ask for.
+    A base class rather than three copies, because the storage form is one rule (ADR "a
+    draw type's settings are one NOT NULL JSON object") and a new arm that spelled it
+    differently would store a shape the read side could not parse back.
+
+    It adds **no field**, so it moves nothing on the wire and mints no OpenAPI
+    component of its own.
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    def stored_settings(self) -> dict[str, Any]:
+        """This arm as the object the settings column stores: its settings, **without**
+        the discriminator.
+
+        ``draw_type`` is excluded because it is not a setting — it is the column beside
+        this one (``draw_type_key``, the FK onto ``draw_types``), and storing it twice
+        would let the two disagree. The read side puts it back
+        (``app.tournament_draw_settings.draw_settings_of``), which is what makes the
+        round trip total.
+
+        ``{}`` for the two draw types that take no configuration, and that is the whole
+        representation of "no configuration" — never ``NULL``.
+        """
+        return self.model_dump(mode="json", exclude={"draw_type"})
+
+
+class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
+    """A round-robin event's draw configuration: the draw type, and nothing else.
+
+    ``extra="forbid"`` (inherited) is doing real work on this arm — it is what makes
+    ``qualifiers_per_pool`` on a round-robin event a **422 at the boundary** rather than
+    a value silently dropped on the way to storage. Since the settings column became one
+    JSON object, this union is the **only** thing that says which settings belong to
+    which draw type: the table's old ``CASE`` constraint went with the column it
+    guarded. A director who names a qualifier count for a format that has no knockout
+    stage has misunderstood something, and the useful answer is to say so, not to run
+    the event they did not ask for.
+    """
 
     draw_type: Literal[DrawType.round_robin] = DrawType.round_robin
 
@@ -180,12 +210,10 @@ class RoundRobinDrawSettingsWrite(BaseModel):
         return None
 
 
-class SingleElimDrawSettingsWrite(BaseModel):
+class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
     """A single-elimination event's draw configuration: the draw type, and nothing else.
     See :class:`RoundRobinDrawSettingsWrite` for why ``extra="forbid"`` is the rule and
     not decoration."""
-
-    model_config = ConfigDict(extra="forbid")
 
     draw_type: Literal[DrawType.single_elim] = DrawType.single_elim
 
@@ -195,7 +223,7 @@ class SingleElimDrawSettingsWrite(BaseModel):
         return None
 
 
-class RrThenKoDrawSettingsWrite(BaseModel):
+class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
     """A round-robin-then-knockout event's draw configuration: the draw type **and** its
     qualifier count (ADR 20260727).
 
@@ -203,8 +231,6 @@ class RrThenKoDrawSettingsWrite(BaseModel):
     defensible number to assume — "2" is a convention, not a fact about the event — and
     a draw silently cut for a K the director never chose is the worst of the available
     failures: it looks like it worked."""
-
-    model_config = ConfigDict(extra="forbid")
 
     draw_type: Literal[DrawType.rr_then_ko] = DrawType.rr_then_ko
     qualifiers_per_pool: QualifiersPerPool
@@ -280,6 +306,29 @@ def _draw_settings_write(
                 for error in exc.errors()
             )
         ) from exc
+
+
+def draw_settings_from_storage(
+    draw_type: DrawType, settings: Mapping[str, Any]
+) -> DrawSettingsWriteArm:
+    """Parse a stored ``(draw_type, settings)`` pair back into the union arm it is the
+    serialized form of — the READ half of the settings column (ADR "a draw type's
+    settings are one NOT NULL JSON object").
+
+    The discriminator is not in the blob (``stored_settings`` leaves it out, because the
+    row carries it in ``draw_type_key`` beside it), so it is put back here. It is put
+    back as the **enum member**, never as the slug, because that is the shape
+    :func:`_draw_settings_write` has always validated and the one place slug→enum
+    happens is ``TournamentEventDrawSettings.draw_type``.
+
+    Raises :class:`~pydantic.ValidationError` — deliberately NOT the ``ValueError`` its
+    request-side sibling raises. That wrapper exists to render a **client's** bad pair
+    as a 422; a stored blob that will not parse is nobody's request and must not be
+    dressed up as one. It is a row that should not exist, and the loud failure is the
+    point: the alternative is a settings object silently read as empty, which cuts a
+    draw for a configuration nobody chose.
+    """
+    return _DRAW_SETTINGS_WRITE.validate_python({"draw_type": draw_type, **settings})
 
 
 # ----- value-objects (typed JSONB) -----------------------------------------
