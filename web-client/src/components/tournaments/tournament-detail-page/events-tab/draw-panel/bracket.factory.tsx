@@ -226,6 +226,10 @@ export function buildSingleElimDrawState(
   return {
     kind: 'drawn',
     pools: [],
+    // A single-elim draw's un-pooled fixtures ARE its bracket (`unpooledShape`,
+    // `../../../data/draw`) — stated, because since swiss landed "un-pooled" no longer
+    // implies it.
+    unpooledShape: 'bracket',
     unpooled: buildEightEntrantRounds(),
     ...overrides,
   }

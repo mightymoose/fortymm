@@ -5,10 +5,13 @@ import {
   drawState,
   drawTypeFreeze,
   poolSetFreeze,
+  unpooledShape,
   type DrawState,
   type FixtureSide,
 } from './draw'
+import { DRAW_TYPES } from './draw-types'
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildDrawTypes,
   buildEntrant,
@@ -16,6 +19,8 @@ import {
   buildEvent,
   buildFixture,
   buildPool,
+  buildSwissDrawnEvent,
+  buildTwoStageDrawnEvent,
 } from './seed.factory'
 
 /** The drawn arm, or a failed assertion — so the tests below can read `.pools`
@@ -47,6 +52,51 @@ function label(side: FixtureSide): string {
   }
 }
 
+/**
+ * **Which view an event's un-pooled fixtures get** — a fact about the DRAW TYPE, and the
+ * one this module exists to keep away from `poolId === null`.
+ *
+ * Three draw types put fixtures in `unpooled`, and nothing about the fixtures themselves
+ * tells them apart: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every
+ * fixture of a swiss draw all carry a null pool id. Routing on that null rendered a swiss
+ * draw as a knockout bracket, through the successor arithmetic the ADR says swiss does not
+ * have — silently, because a value check is not something a type checker can read.
+ */
+describe('unpooledShape', () => {
+  it('sends swiss to the ROUNDS view — never the bracket', () => {
+    expect(unpooledShape('swiss')).toBe('swiss-rounds')
+  })
+
+  // The regression pin, at the decision rather than at the DOM. `pool_id IS NULL` keeps
+  // meaning "the knockout stage" for `rr-then-ko`, and a single-elim draw is a bracket
+  // whole — neither may move because swiss now shares the null.
+  it.each(['single-elim', 'rr-then-ko'] as const)(
+    'keeps %s on the bracket',
+    (drawType) => {
+      expect(unpooledShape(drawType)).toBe('bracket')
+    },
+  )
+
+  /** A round-robin fixture with no pool is a payload the server cannot send — it names a
+   * pool the event does not list. `drawState` deliberately does not DROP it, and the
+   * bracket is the existing "show it anyway" fallback. Pinned so the arm is a decision
+   * somebody made rather than a default nobody noticed. */
+  it('keeps a round-robin’s orphaned fixtures on the same fallback they had', () => {
+    expect(unpooledShape('round-robin')).toBe('bracket')
+  })
+
+  /** Every draw type this client knows has an answer, and the `switch` has no catch-all —
+   * so a fifth member of the vocabulary is a compile error in `./draw` until somebody says
+   * how its draw reads. This asserts the runtime half: nothing falls through to
+   * `undefined`. Driven off `DRAW_TYPES` rather than a re-typed list, so adding a slug
+   * reaches this test without anybody remembering to. */
+  it('answers for every draw type in the vocabulary', () => {
+    for (const drawType of DRAW_TYPES) {
+      expect(['bracket', 'swiss-rounds']).toContain(unpooledShape(drawType))
+    }
+  })
+})
+
 describe('drawState', () => {
   it('reads an event with no fixtures as the designed UNDRAWN state', () => {
     expect(drawState(buildEvent({ fixtures: [] }))).toEqual({ kind: 'undrawn' })
@@ -57,6 +107,27 @@ describe('drawState', () => {
 
     expect(state.pools.map((p) => p.name)).toEqual(['Pool A', 'Pool B'])
     expect(state.unpooled).toEqual([])
+  })
+
+  /** The shape rides the read model, so the panel reads a tag rather than inferring a
+   * format from a null pool id. Asserted on all three un-pooled draw types, because the
+   * payloads they produce are indistinguishable at the fixture level. */
+  it('carries the un-pooled SHAPE, read off the event’s draw type', () => {
+    expect(drawn(drawState(buildSwissDrawnEvent())).unpooledShape).toBe(
+      'swiss-rounds',
+    )
+    expect(drawn(drawState(buildBracketDrawnEvent())).unpooledShape).toBe('bracket')
+    expect(drawn(drawState(buildTwoStageDrawnEvent())).unpooledShape).toBe('bracket')
+  })
+
+  /** A swiss draw's rounds all arrive un-pooled — every one of them, from the cut — so the
+   * pool list is empty and nothing is dropped. */
+  it('reads a swiss draw as un-pooled rounds, with every cut round present', () => {
+    const state = drawn(drawState(buildSwissDrawnEvent()))
+
+    expect(state.pools).toEqual([])
+    expect(state.unpooled.map((r) => r.round)).toEqual([1, 2, 3])
+    expect(state.unpooled.map((r) => r.fixtures.length)).toEqual([3, 3, 3])
   })
 
   it('lists each pool’s entrants — the members its own fixtures name, by NAME', () => {

@@ -27,6 +27,7 @@ import { poolsInOrder } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
 import { labelFor } from './options'
 import type {
+  DrawType,
   DrawTypeOption,
   Entrant,
   Fixture,
@@ -110,6 +111,61 @@ export interface PoolDraw {
 }
 
 /**
+ * How an event's **un-pooled fixtures read** — the one decision that says which view the
+ * draw panel gives them.
+ *
+ * ⚠️ **It is a fact about the DRAW TYPE, never about `poolId` being null**, and that
+ * distinction is the whole reason this type exists. `pool_id IS NULL` is the *stage*
+ * discriminator: for an `rr-then-ko` draw it means "the knockout stage" and will keep
+ * meaning exactly that. Swiss is a different **draw type** that happens to share the null,
+ * because it is pool-less end to end. Reading the null as "this is a bracket" conflated the
+ * two and rendered a swiss draw through single-elimination's successor arithmetic — the one
+ * thing the ADR says swiss does not have (ADR "swiss pre-cuts every round and pairs each
+ * one on advance": "swiss has no successor arithmetic").
+ */
+export type UnpooledShape =
+  /** Rounds-as-columns, named back from the final (`Bracket`). */
+  | 'bracket'
+  /** A flat list of rounds, the unpaired ones announced as forthcoming (`SwissRounds`). */
+  | 'swiss-rounds'
+
+/**
+ * Which view an event's un-pooled fixtures get — **exhaustive over `DrawType`, with no
+ * catch-all**, so a fifth draw type is a compile error here until somebody says how its
+ * draw reads.
+ *
+ * That exhaustiveness is the point. The routing this replaces was a value check
+ * (`unpooled.length > 0` → render a bracket), which no type checker can see through: swiss
+ * landed, shared the null, and silently rendered as a knockout bracket with nothing red.
+ */
+export function unpooledShape(drawType: DrawType): UnpooledShape {
+  switch (drawType) {
+    case 'single-elim':
+      return 'bracket'
+    case 'rr-then-ko':
+      // The knockout stage, which IS a bracket — `pool_id IS NULL` is the stage
+      // discriminator for this draw type, and the pool stage renders above it as pools.
+      return 'bracket'
+    case 'round-robin':
+      // A round-robin draw has no un-pooled fixtures the server can send: every fixture is
+      // dealt into a pool. One reaching here names a pool the event does not list, which is
+      // a payload that cannot legitimately arise — and `drawState` deliberately does not
+      // DROP it (see below). `'bracket'` is that existing "show it anyway" fallback and is
+      // preserved deliberately; it is not a claim that a round-robin has a bracket.
+      return 'bracket'
+    case 'swiss':
+      // Pool-less by design, and NOT a bracket: nobody is eliminated, `position` is a
+      // pairing rank rather than a topology, and rounds past the first are cut with both
+      // sides unknown until `advance()` pairs them.
+      return 'swiss-rounds'
+    default: {
+      const exhaustive: never = drawType
+      return exhaustive
+    }
+  }
+}
+
+/**
  * What an event's draw *is*, as a sum type — `undrawn` is a designed data state, not an
  * empty list to be rendered as a gap (`DEFINITION_OF_COMPLETE`: "Empty is a designed
  * data state, never a thrown one").
@@ -122,12 +178,16 @@ export type DrawState =
       kind: 'drawn'
       /** The pools the draw actually used, in the event's own pool order. */
       pools: PoolDraw[]
-      /** Fixtures belonging to **no pool** — an un-pooled draw (single-elim), or the
-       * knockout stage of a combined draw type (#787; ADR-0786: `pool_id` is `null` for
-       * both). A fixture that has no pool must not be *dropped*: it is rendered as a
-       * bracket (#785), and anything a bracket cannot place is still shown, honestly,
-       * outside the pools. */
+      /** Fixtures belonging to **no pool** — a pool-less draw (single-elim, swiss), or the
+       * knockout stage of a combined draw type (#787; ADR-0786: `pool_id` is `null` for all
+       * of them). A fixture that has no pool must not be *dropped*: it is rendered,
+       * honestly, outside the pools.
+       *
+       * **Which view it gets is `unpooledShape` below, not this list.** */
       unpooled: DrawRound[]
+      /** How `unpooled` reads — decided from the event's **draw type**, once, here, so no
+       * renderer has to infer a format from a null pool id. */
+      unpooledShape: UnpooledShape
     }
 
 /**
@@ -260,7 +320,14 @@ export function drawState(event: TournamentEvent): DrawState {
     ]
   })
 
-  return { kind: 'drawn', pools, unpooled: roundsOf(unpooled, byId) }
+  return {
+    kind: 'drawn',
+    pools,
+    unpooled: roundsOf(unpooled, byId),
+    // Read off the DRAW TYPE, never off the null pool id the fixtures above were bucketed
+    // by — see `unpooledShape`.
+    unpooledShape: unpooledShape(event.drawType),
+  }
 }
 
 /**
