@@ -4609,17 +4609,69 @@ export interface components {
          */
         Status: "scheduled" | "live" | "final";
         /**
+         * SwissStandingRowRead
+         * @description One entry's line in a **swiss** table: every column a pool's row carries, plus
+         *     the **Buchholz** figure that ordered it.
+         *
+         *     ``buchholz`` is the sum of this entrant's opponents' win counts — the wins column
+         *     this same table shows, **bye wins included** (ADR "swiss standings add Buchholz, and
+         *     head-to-head is guarded on having met"), so a director can check the figure by
+         *     adding up the rows of the players this one has played. A **bye adds no term** to its
+         *     own holder's sum: it produced no opponent.
+         *
+         *     It is on the wire because it is the one tiebreak a client cannot derive from the row
+         *     it ordered: ``rank`` is settled by wins, then head-to-head, then *this*, then
+         *     ``game_difference`` and ``games_won``, and every other link shows its working in the
+         *     columns beside it. A swiss table that ranks A above B on equal wins and worse game
+         *     difference is unreadable without it.
+         *
+         *     It extends the round-robin row rather than replacing it, so a client renders a swiss
+         *     table with the component it already has and one extra column.
+         */
+        SwissStandingRowRead: {
+            /**
+             * Entry Id
+             * Format: uuid
+             */
+            entry_id: string;
+            /** Rank */
+            rank: number;
+            /** Played */
+            played: number;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Games Won */
+            games_won: number;
+            /** Games Lost */
+            games_lost: number;
+            /** Buchholz */
+            buchholz: number;
+            /**
+             * Game Difference
+             * @description ``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+             *     to show but derived here so it cannot disagree with the two counts beside it.
+             */
+            readonly game_difference: number;
+        };
+        /**
          * SwissStandingsResultsRead
          * @description The **pool-less standings** shape of an event's results — the swiss arm of the
          *     ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
          *     pre-cuts every round and pairs each one on advance").
          *
          *     One table over the whole field, because swiss has no pools: everybody is ranked
-         *     against everybody, which is what pairing by score is for. The rows are the *same*
-         *     :class:`StandingRowRead` a round-robin pool carries, so a client renders this with
-         *     the table it already has — the difference is that they arrive as one list rather
-         *     than grouped under a pool, which is a fact about the format and not a second row
-         *     shape.
+         *     against everybody, which is what pairing by score is for. The rows are a
+         *     :class:`StandingRowRead` plus one column (:class:`SwissStandingRowRead`), and they
+         *     arrive as one list rather than grouped under a pool — both facts about the format
+         *     rather than a second row shape.
+         *
+         *     The order is swiss's own chain: wins, head-to-head when exactly two are tied **and
+         *     they met**, then **Buchholz**, then game difference, games won and the entry id (ADR
+         *     "swiss standings add Buchholz, and head-to-head is guarded on having met"). Strength
+         *     of schedule outranks margin here because swiss pairs by score, so two entrants level
+         *     on wins may have faced different halves of the field.
          *
          *     ``complete`` is every round decided, including the later rounds that are cut up
          *     front with their sides still unknown. ``champion`` is the leader of a complete
@@ -4634,7 +4686,7 @@ export interface components {
              */
             kind: "swiss_standings";
             /** Rows */
-            rows: components["schemas"]["StandingRowRead"][];
+            rows: components["schemas"]["SwissStandingRowRead"][];
             /** Complete */
             complete: boolean;
             /** Champion */
