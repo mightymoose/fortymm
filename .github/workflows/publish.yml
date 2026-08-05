@@ -1,9 +1,14 @@
-name: publish-images
+name: publish
 
 # Builds the two images UAT actually runs -- `api/Dockerfile.dev` and
 # `web-client/Dockerfile.uat` -- and pushes them to GHCR, so a deploy pulls a
 # published artifact instead of one built on the operator's laptop. See
 # docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
+#
+# Named `publish` rather than `publish-images` because the Helm charts publish
+# from here too: the chart job needs the image digests these jobs report, which
+# is why each image job exposes its push step's `digest` as a job output. See
+# docs/adr/20260805-charts-publish-to-ghcr-versioned-by-commit-with-image-digests-baked-in.md.
 #
 # Trigger: push to `main` only. Deliberately NOT on `pull_request` -- an image
 # built from a PR head is not deployable (`redeploy-uat.sh` refuses any ref but
@@ -43,7 +48,7 @@ on:
 # deployed, and the newest queued run is the one that survives, so the tip always
 # publishes. See the header comment.
 concurrency:
-  group: publish-images-${{ github.ref }}
+  group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 # `packages: write` is what pushes to GHCR; the built-in GITHUB_TOKEN covers
@@ -75,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "::error::publish-images only publishes main (got ${GITHUB_REF}); a non-main run would move the :main tag onto an unreviewed commit."
+            echo "::error::publish.yml only publishes main (got ${GITHUB_REF}); a non-main run would move the :main tag onto an unreviewed commit."
             exit 1
           fi
 
@@ -106,6 +111,13 @@ jobs:
     # The emulated arm64 leg is slow; ~25 min is normal, so allow headroom
     # without letting a wedged build hold a runner all day.
     timeout-minutes: 90
+    # The manifest-list digest of the image this job just pushed, taken from the
+    # push step itself. A downstream job bakes it into the chart, and it reads it
+    # from here rather than asking the GHCR API what CI just published --
+    # skipping that round trip is a stated goal of the charts ADR, and the step
+    # output is the only source that cannot answer about a different push.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
@@ -122,6 +134,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: api
@@ -146,6 +159,10 @@ jobs:
     needs: tag
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Same as the api job: the pushed manifest digest, straight from the push
+    # step, for a downstream job to bake into the chart.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
@@ -162,6 +179,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: web-client

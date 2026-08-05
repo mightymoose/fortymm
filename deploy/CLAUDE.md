@@ -28,7 +28,7 @@ Infra has no single directory — it spans:
   `deploy/uat/templates/_helpers.tpl` (`fortymm-uat.nginxConf`, which also adds a
   `/faro/` block). When you touch `uat.conf`, update the helper copy too.
 - `.github/workflows/*.yml` — CI (api, web-client, e2e, openapi-schema, ios, …),
-  including **`publish-images.yml`**, which pushes the api/web images to GHCR on
+  including **`publish.yml`**, which pushes the api/web images to GHCR on
   every push to `main` (see `## Published images (GHCR)`).
 - `mise.toml` — toolchain pins (node, python, `helm`, `k3d`) + task runner:
   `redeploy-uat` (deploy published, digest-pinned images to k3d), `qa-down`,
@@ -40,11 +40,11 @@ Infra has no single directory — it spans:
 |-------|-----|----------|-------|
 | dev   | `docker compose -f docker-compose.dev.yml up` | :8080 | dev servers, MSW off; real API |
 | QA    | up `scripts/qa-up.sh [id]` / down `scripts/qa-down.sh [id]` | :8085 (auto) | built artifacts, MSW off, **Mailpit :8087** captures all mail; multi-stack; **reap on merge** |
-| UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; deploys **CI-published GHCR images pinned by digest** (builds nothing, so a merge isn't deployable until `publish-images` finishes); sends REAL Postmark email |
+| UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; deploys **CI-published GHCR images pinned by digest** (builds nothing, so a merge isn't deployable until `publish` finishes); sends REAL Postmark email |
 
 ## Published images (GHCR)
 
-`.github/workflows/publish-images.yml` builds the two Dockerfiles UAT runs —
+`.github/workflows/publish.yml` builds the two Dockerfiles UAT runs —
 `api/Dockerfile.dev` and `web-client/Dockerfile.uat` — and pushes them to two
 GHCR packages:
 
@@ -159,7 +159,7 @@ breaks the map only on that origin.
 
 **Why a digest and not the tag.** `fortymm-uat.imageRef` in `_helpers.tpl` renders `repository@sha256:…` whenever a digest is set, and every workload that runs app code (api, worker, migrate Job, retirement CronJob, web-client) goes through it. A digest is content-addressed, so "every replica runs the same bytes" stops being a convention the deploy script has to maintain and becomes structural — two pods naming one digest *cannot* be running different content, and re-running the publish workflow for an already-published commit cannot change what UAT is serving the way overwriting a `:<sha>` tag would. Empty `digest` in `values.yaml` falls back to `repository:tag` (the moving `:main`) purely so `helm template deploy/uat` renders on its own; a real deploy always passes digests, and a set-but-malformed one fails the render rather than being tolerated. The old `$(short-sha)-$(epoch)` unique-tag scheme is gone and should not come back — it existed because a *local* rebuild could produce different content under one commit, so the pod template had to change to force a roll. Published images are immutable, so a same-commit redeploy is a correct no-op. See `docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md`.
 
-**Deploying now depends on CI.** The images for a commit exist only once `publish-images.yml` has finished for it (~25 min, dominated by the emulated arm64 leg), so a just-merged commit is not immediately deployable. The script polls GHCR every 30s for up to `DIGEST_WAIT_TIMEOUT_S` (default `2400`, i.e. 40 min) and then fails naming the commit and linking the workflow runs, rather than deploying an older commit without saying so. `DIGEST_WAIT_TIMEOUT_S=0` fails immediately instead of waiting. The anonymous digest read doubles as the public-visibility preflight (see the one-time flip under `## Published images (GHCR)`): if it resolves, the cluster can pull, which is why the chart carries no `imagePullSecrets` — and a package still private fails here with the click-path instead of dying as an `ErrImagePull` five minutes into `helm --wait`.
+**Deploying now depends on CI.** The images for a commit exist only once `publish.yml` has finished for it (~25 min, dominated by the emulated arm64 leg), so a just-merged commit is not immediately deployable. The script polls GHCR every 30s for up to `DIGEST_WAIT_TIMEOUT_S` (default `2400`, i.e. 40 min) and then fails naming the commit and linking the workflow runs, rather than deploying an older commit without saying so. `DIGEST_WAIT_TIMEOUT_S=0` fails immediately instead of waiting. The anonymous digest read doubles as the public-visibility preflight (see the one-time flip under `## Published images (GHCR)`): if it resolves, the cluster can pull, which is why the chart carries no `imagePullSecrets` — and a package still private fails here with the click-path instead of dying as an `ErrImagePull` five minutes into `helm --wait`.
 
 **UAT is also on the tailnet.** The chart runs a `tailscale/tailscale` proxy (`deploy/uat/templates/tailscale.yaml`, `tailscale.enabled` in values, on by default) that fronts the routing nginx via `tailscale serve`, so UAT is reachable privately at **`https://fortymm-uat.<tailnet>.ts.net`** with auto-HTTPS — independent of the DDNS/router/Caddy chain (which still serves `uat.fortymm.com` unchanged; Tailscale is purely additive). It reads `TS_AUTHKEY` (a reusable, non-ephemeral key from the Tailscale admin console) straight from the `.env`-backed secret, so just add a `TS_AUTHKEY=tskey-...` line to `.env`; `redeploy-uat.sh` errors early if it's missing. The proxy persists its node identity in the `tailscale-state` Secret (survives restarts; no re-auth). Requires HTTPS certs + MagicDNS enabled in the tailnet. Set `tailscale.enabled=false` to skip it.
 
@@ -175,7 +175,7 @@ Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only
 ```bash
 mise run redeploy-uat                 # helm upgrade the k3d UAT stack onto this commit's published GHCR images (digest-pinned); smoke-check uat.fortymm.com
 DEPLOY_OBSERVABILITY=false mise run redeploy-uat   # skip the monitoring chart
-DIGEST_WAIT_TIMEOUT_S=0 mise run redeploy-uat      # don't wait on publish-images; fail now if this commit has no images
+DIGEST_WAIT_TIMEOUT_S=0 mise run redeploy-uat      # don't wait on publish; fail now if this commit has no images
 scripts/qa-up.sh [id]                 # bring up an isolated QA stack on a free port trio; prints QA_URL / Mailpit URL
 scripts/qa-down.sh [id]               # reap that stack: containers, volumes (named + anonymous), networks, built images
 scripts/qa-down.sh --dry-run [id]     # preview what would be removed
@@ -255,7 +255,7 @@ unprompted.**
 - **Symptom:** The script prints `ghcr.io/mightymoose/fortymm-<pkg>:<12-char
   sha> not published yet — waiting up to 2400s`, then eventually
   `ERROR: no image published for … after 2400s` and exits without deploying.
-- **Cause:** `publish-images.yml` has not produced images for the commit at
+- **Cause:** `publish.yml` has not produced images for the commit at
   HEAD (after the script's `git merge origin/main`). Either the run is still
   going (~25 min, emulated arm64), or it failed for that commit, or HEAD is not
   a commit that exists on `origin/main` — only pushed `main` commits are ever

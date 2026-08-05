@@ -3,7 +3,7 @@
 
 # The api and web images are the ones CI publishes to GHCR from
 # api/Dockerfile.dev and web-client/Dockerfile.uat on every push to `main`
-# (.github/workflows/publish-images.yml). UAT deploys what CI built; it no
+# (.github/workflows/publish.yml). UAT deploys what CI built; it no
 # longer builds its own. The package names are NOT the repo's internal
 # `fortymm/{api,web}` — they are what the workflow pushes.
 #
