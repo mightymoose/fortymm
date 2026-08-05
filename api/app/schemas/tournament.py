@@ -154,6 +154,32 @@ The two bounds that **move with the entrant count** — ``P × K >= 2`` and
 become unwritable when a player withdraws (the same split ``_snake`` already uses for
 its own pool floor)."""
 
+MAX_SWISS_ROUNDS = 32
+"""The ceiling on **R** — how many rounds a swiss event plays.
+
+The same kind of bound as ``MAX_QUALIFIERS_PER_POOL``, and not the domain rule either.
+The rule that matters moves with the field: ``R <= N - 1``, because with ``N`` entrants
+nobody has more than ``N - 1`` distinct opponents, and the cut refuses more with a
+message naming both numbers (``DegenerateDraw``). This is the *boundary* refusing round
+counts that are nonsense on their face and would otherwise reach the column. A swiss
+field of 512 — the largest event this API will hold — is conventionally paired out in
+nine rounds (``ceil(log2 N)``), so 32 is far above any event a table-tennis director
+will run and far below the ``Integer`` column's 2,147,483,647."""
+
+SwissRounds = Annotated[int, Field(ge=1, le=MAX_SWISS_ROUNDS)]
+"""**R** — how many rounds a ``swiss`` draw plays.
+
+``1 <= R <= MAX_SWISS_ROUNDS`` is the **static** half of the legal space (ADR "swiss
+pre-cuts every round and pairs each one on advance"): a swiss of zero rounds plays
+nothing, a negative count is not a count, and a count in the thousands is not a round
+count whatever the field looks like. Stated once and shared by the create schema, the
+patch schema and the union arm below, so the three cannot drift.
+
+The bound that **moves with the entrant count** — ``R <= N - 1`` — is deliberately not
+here, for the reason ``QualifiersPerPool`` gives: ``N`` is not known when the setting is
+written, and a configuration that was legal when it was written must not become
+unwritable when a player withdraws."""
+
 
 class DrawSettingsWriteBase(BaseModel):
     """What every arm of the draw-settings union shares: ``extra="forbid"``, and the
@@ -209,6 +235,14 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
         every arm the same question without an ``isinstance`` ladder."""
         return None
 
+    @property
+    def rounds(self) -> int | None:
+        """``None`` — a round-robin's round count is dealt by the circle method, not
+        chosen. Only ``swiss`` carries one, and for the reason
+        :meth:`qualifiers_per_pool` is a property here: every arm answers the same
+        question, and the field's absence is what refuses the key on the wire."""
+        return None
+
 
 class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
     """A single-elimination event's draw configuration: the draw type, and nothing else.
@@ -220,6 +254,11 @@ class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
     @property
     def qualifiers_per_pool(self) -> int | None:
         """``None`` — a bracket has no pools to qualify out of."""
+        return None
+
+    @property
+    def rounds(self) -> int | None:
+        """``None`` — a bracket's depth is derived from the field, not chosen."""
         return None
 
 
@@ -235,11 +274,41 @@ class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
     draw_type: Literal[DrawType.rr_then_ko] = DrawType.rr_then_ko
     qualifiers_per_pool: QualifiersPerPool
 
+    @property
+    def rounds(self) -> int | None:
+        """``None`` — neither of this draw type's two stages has a chosen round count:
+        the pools are dealt by the circle method and the bracket's depth follows from
+        the qualifier count."""
+        return None
+
+
+class SwissDrawSettingsWrite(DrawSettingsWriteBase):
+    """A swiss event's draw configuration: the draw type **and** its round count (ADR
+    "swiss pre-cuts every round and pairs each one on advance").
+
+    ``rounds`` is **required** here, with no default, for the reason
+    :class:`RrThenKoDrawSettingsWrite`'s qualifier count is: there is no defensible
+    number to assume. ``ceil(log2 N)`` is the convention, and it is deliberately *not*
+    a derived default — a director books tables and a venue window before registration
+    opens, so a round count that moved as entrants arrived would change the length of a
+    day that is already booked. A swiss cut for a round count nobody chose is the worst
+    of the available failures: it looks like it worked."""
+
+    draw_type: Literal[DrawType.swiss] = DrawType.swiss
+    rounds: SwissRounds
+
+    @property
+    def qualifiers_per_pool(self) -> int | None:
+        """``None`` — swiss is pool-less and eliminates nobody, so there is nothing to
+        qualify out of or into."""
+        return None
+
 
 DrawSettingsWriteArm = (
     RoundRobinDrawSettingsWrite
     | SingleElimDrawSettingsWrite
     | RrThenKoDrawSettingsWrite
+    | SwissDrawSettingsWrite
 )
 """The **arms** of the draw-settings union, listed once.
 
@@ -274,21 +343,25 @@ _DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettin
 
 
 def _draw_settings_write(
-    draw_type: DrawType, qualifiers_per_pool: int | None
+    draw_type: DrawType, qualifiers_per_pool: int | None, rounds: int | None
 ) -> DrawSettingsWriteArm:
-    """Parse a ``(draw_type, qualifiers_per_pool)`` pair into the union arm it names, or
-    raise :class:`ValueError` — a 422 — when it names none.
+    """Parse a ``(draw_type, qualifiers_per_pool, rounds)`` triple into the union arm it
+    names, or raise :class:`ValueError` — a 422 — when it names none.
 
-    The pair is **flat on the wire** and a union in the interior. Nesting it
+    The settings are **flat on the wire** and a union in the interior. Nesting them
     (``draw: {…}``) would express the union in the generated clients too, at the cost of
     changing the shape of every event create and patch that has ever been written; the
     same rule is enforced either way, and this is the shape that lets the draw type stay
     where every existing caller already sends it.
 
-    ``None`` means "no qualifier count was sent" and is therefore *omitted* rather than
+    ``None`` means "this setting was not sent" and is therefore *omitted* rather than
     passed as ``null``: an absent key and an explicit ``null`` mean the same thing for
-    this field — the draw type takes no count — and ``extra="forbid"`` would reject the
-    explicit one on the two arms that have no such field.
+    these fields — the draw type takes no such setting — and ``extra="forbid"`` would
+    reject the explicit one on the arms that have no such field. Omitting the key is
+    also what makes a **missing** required setting the arm's own refusal: a ``swiss``
+    payload with no round count reaches the union with no ``rounds`` key at all, so
+    Pydantic answers "Field required" against the field, which is the 422 the director
+    needs.
 
     The refusal text is the **union's own**, re-raised as a ``ValueError`` so FastAPI
     renders it as an ordinary 422 body. Composing a friendlier sentence here would be a
@@ -297,6 +370,8 @@ def _draw_settings_write(
     payload: dict[str, object] = {"draw_type": draw_type}
     if qualifiers_per_pool is not None:
         payload["qualifiers_per_pool"] = qualifiers_per_pool
+    if rounds is not None:
+        payload["rounds"] = rounds
     try:
         return _DRAW_SETTINGS_WRITE.validate_python(payload)
     except ValidationError as exc:
@@ -1575,15 +1650,43 @@ class StandingsThenFinishesResultsRead(BaseModel):
     champion: uuid.UUID | None
 
 
+class SwissStandingsResultsRead(BaseModel):
+    """The **pool-less standings** shape of an event's results — the swiss arm of the
+    ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
+    pre-cuts every round and pairs each one on advance").
+
+    One table over the whole field, because swiss has no pools: everybody is ranked
+    against everybody, which is what pairing by score is for. The rows are the *same*
+    :class:`StandingRowRead` a round-robin pool carries, so a client renders this with
+    the table it already has — the difference is that they arrive as one list rather
+    than grouped under a pool, which is a fact about the format and not a second row
+    shape.
+
+    ``complete`` is every round decided, including the later rounds that are cut up
+    front with their sides still unknown. ``champion`` is the leader of a complete
+    event — a swiss ranks its whole field, so unlike the round-robin arm there is no
+    multi-pool carve-out — and ``null`` until then. Derived live from the fixtures'
+    completed matches like every other results shape."""
+
+    kind: Literal["swiss_standings"] = "swiss_standings"
+    rows: list[StandingRowRead]
+    complete: bool
+    champion: uuid.UUID | None
+
+
 # An event's results cross the wire as a **discriminated union tagged by shape**
 # (ADR-0785): a round-robin reads out ``standings``, a single-elim reads out
-# ``finishes``, and a round-robin-then-knockout reads out ``standings_then_finishes`` —
-# both blocks at once (ADR 20260727). Coercing finishes into the standings row shape was
+# ``finishes``, a round-robin-then-knockout reads out ``standings_then_finishes`` —
+# both blocks at once (ADR 20260727) — and a swiss event reads out ``swiss_standings``,
+# one pool-less table. Coercing finishes into the standings row shape was
 # rejected — a bracket has no wins/game-difference columns, so every such row would
 # carry meaningless nullable fields, the tri-state smell ``api/CLAUDE.md`` warns
 # against. Each shape is its own model; the client switches on ``kind``.
 EventResultsRead = Annotated[
-    StandingsResultsRead | FinishesResultsRead | StandingsThenFinishesResultsRead,
+    StandingsResultsRead
+    | FinishesResultsRead
+    | StandingsThenFinishesResultsRead
+    | SwissStandingsResultsRead,
     Field(discriminator="kind"),
 ]
 
@@ -1615,6 +1718,12 @@ class TournamentEventRead(BaseModel):
     # one, which pre-draw silently overwrites the director's number and post-draw trips
     # the freeze with a 409 for an edit nobody made.
     qualifiers_per_pool: int | None
+    # **R** — how many rounds a swiss event plays — read back flat beside its draw type
+    # for exactly the reasons the qualifier count above is: it is the other setting the
+    # editor has to send back on every PATCH of a swiss event, because the arm requires
+    # it and has no default. ``null`` for every other draw type, and that is a fact
+    # rather than missing data — none of them has a chosen round count.
+    rounds: int | None
     # ``null`` means the event is uncapped — there is no entrant limit (ADR-0935).
     max_players: int | None
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
@@ -2019,6 +2128,13 @@ class TournamentEventCreate(BaseModel):
     # union arm carries, restated on the field so both bounds reach the generated
     # clients too.
     qualifiers_per_pool: QualifiersPerPool | None = None
+    # **R**, and only for the one draw type that has one — the same flat-beside-the-type
+    # shape ``qualifiers_per_pool`` takes, parsed into the same union by the validator
+    # below, so a round count on a round-robin event is a 422 here and a *missing* one
+    # on a swiss event is a 422 too (``SwissDrawSettingsWrite.rounds`` is required).
+    # ``SwissRounds`` restates the ``1 <= R <= 32`` bound the arm carries so both reach
+    # the generated clients.
+    rounds: SwissRounds | None = None
     # ``None`` (or omitted) is the uncapped event — the "no cap" sentinel of ADR-0935,
     # not a cap of zero. When a cap IS supplied it is an ``EventMaxPlayers``: ``gt=0``
     # (a cap of zero admits nobody, which is not an event) and ``le=512`` (the column
@@ -2081,7 +2197,7 @@ class TournamentEventCreate(BaseModel):
         (:attr:`_draw_settings`) rather than discarded — parse once, at the boundary,
         and carry the parsed value inward."""
         self._draw_settings = _draw_settings_write(
-            self.draw_type, self.qualifiers_per_pool
+            self.draw_type, self.qualifiers_per_pool, self.rounds
         )
         return self
 
@@ -2117,6 +2233,10 @@ class TournamentEventUpdate(BaseModel):
     # the pair's point of view ("this draw type takes no qualifier count"), which is why
     # it is not in the ``_reject_explicit_null`` list.
     qualifiers_per_pool: QualifiersPerPool | None = None
+    # **R**, patched with its draw type and never alone, exactly as the qualifier count
+    # is — and ``null`` means the same thing here as absent does ("this draw type takes
+    # no round count"), which is what patching a swiss event back to a round-robin says.
+    rounds: SwissRounds | None = None
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee | None = None
     # The same validated IANA zone create requires — correcting the venue timezone is a
@@ -2195,9 +2315,14 @@ class TournamentEventUpdate(BaseModel):
                 "qualifiers_per_pool is part of an event's draw configuration and is "
                 "patched with it: send draw_type alongside it."
             )
+        if self.draw_type is None and self.rounds is not None:
+            raise ValueError(
+                "rounds is part of an event's draw configuration and is patched with "
+                "it: send draw_type alongside it."
+            )
         if self.draw_type is not None:
             self._draw_settings = _draw_settings_write(
-                self.draw_type, self.qualifiers_per_pool
+                self.draw_type, self.qualifiers_per_pool, self.rounds
             )
         return self
 

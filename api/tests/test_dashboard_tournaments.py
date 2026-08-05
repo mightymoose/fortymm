@@ -830,6 +830,86 @@ async def test_panel_statement_count_does_not_grow_with_events(
         ), (event.name, event.match.round_label)
 
 
+async def test_a_swiss_panel_reads_the_callers_rank_off_the_pool_less_table(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A swiss event's results are one table over the whole field, with no pool to key
+    it by — so the panel has to read that shape, or a swiss player is shown no rank at
+    all while the table carrying their row rides along on the same payload.
+
+    Driven end to end over the smallest event that can finish: **two** players and one
+    round. One pairing, and the caller wins it — which makes their rank a fact of the
+    result rather than of a tiebreak. A four-player round would leave two winners level
+    on wins who never met, separated by the entry-id fallback, so the test would pass or
+    fail on which uuid the database minted. ``position`` comes off the standings row
+    (counting the caller's own fixtures cannot produce a rank at all), and
+    ``stage_label`` reads the event's own completeness rather than a pool's, because
+    swiss has no pool whose flag could stand in.
+
+    An **odd** field is deliberately not the subject: its byed entrant is seated in no
+    fixture, so ``draw_currency_by_event`` reads the draw as stale and go-live refuses
+    it (409) — the bye lands with the pairing, in its own slice.
+    """
+    client, owner = authed_client
+    async with opponent_session(db_session, "swiss-panel-2") as (client_2, user_2):
+        tournament_id, (event,) = await _tournament_with_events(
+            client,
+            _event_payload(
+                draw_type="swiss",
+                rounds=1,
+                pools=[],
+                match_settings={"rated": False, "length_games": 3},
+                predicates=[],
+            ),
+        )
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        entries = [
+            await _enter(
+                db_session,
+                event["id"],
+                user,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+            for seed, user in ((1, owner), (2, user_2))
+        ]
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        clients = dict(
+            zip(
+                [entry.id for entry in entries],
+                [client, client_2],
+                strict=True,
+            )
+        )
+
+        fixtures = await _fixture_rows(db_session, event["id"])
+        await _call_fixtures(db_session, tournament_id, fixtures)
+        fixtures = await _fixture_rows(db_session, event["id"])
+        # One round of a two-player field is one fixture, and the caller is seed 1.
+        (fixture,) = fixtures
+        assert fixture.entry_a_id is not None
+        await _win_fixture_match(
+            fixture,
+            clients_by_entry=clients,
+            winner_entry_id=fixture.entry_a_id,
+            rated=False,
+        )
+
+        (panel,) = await _panels(client)
+
+    (swiss_event,) = panel["events"]
+    assert swiss_event["draw_type"] == "swiss"
+    assert swiss_event["position"] == 1, "the caller won the only match, so they lead"
+    assert (swiss_event["wins"], swiss_event["losses"]) == (1, 0)
+    assert swiss_event["stage_label"] == "Complete", (
+        "the only round is decided, so the event is over — and swiss has no pool whose "
+        "completeness could have answered this instead"
+    )
+
+
 async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

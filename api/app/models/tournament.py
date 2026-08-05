@@ -66,6 +66,7 @@ class DrawType(enum.Enum):
     single_elim = "single-elim"
     round_robin = "round-robin"
     rr_then_ko = "rr-then-ko"
+    swiss = "swiss"
 
 
 class Tournament(Base):

@@ -91,6 +91,19 @@ DRAW_TYPE_SEED = [
         "knockout bracket.",
         3,
     ),
+    (
+        "swiss",
+        # The director-facing copy is pinned by the ADR "swiss pre-cuts every
+        # round and pairs each one on advance" — it is seed data, so changing
+        # either string is a migration.
+        "Swiss",
+        "A fixed number of rounds, each pairing entrants who are on similar "
+        "scores. Nobody is eliminated and everybody plays every round, so a "
+        "large field is ranked in far fewer matches than a round robin — but a "
+        "round's pairings are only known once the round before it has finished, "
+        "and a long event may repeat a pairing.",
+        4,
+    ),
 ]
 
 

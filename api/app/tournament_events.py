@@ -36,8 +36,13 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
+    DrawSettingsWriteArm,
     MatchSettings,
+    RoundRobinDrawSettingsWrite,
+    RrThenKoDrawSettingsWrite,
+    SingleElimDrawSettingsWrite,
     Slot,
+    SwissDrawSettingsWrite,
     TournamentEventCreate,
     TournamentEventUpdate,
     named_list,
@@ -274,6 +279,46 @@ def _qualifiers_per_pool_frozen_detail(
     )
 
 
+def _rounds_frozen_detail(rounds: int | None) -> str:
+    """The 409 sentence for a ``rounds`` change on a swiss event whose draw is already
+    cut — the qualifier count's sibling, about the other configured setting.
+
+    Not hypothetical either: a swiss draw writes **every** round's fixtures at the cut
+    (ADR "swiss pre-cuts every round and pairs each one on advance"), so the round count
+    is the number of rows standing in the database. Raising it would leave the added
+    rounds with no fixtures and lowering it would leave fixtures no round claims.
+    """
+    round_noun = "round" if rounds == 1 else "rounds"
+    return (
+        "This event's draw is already cut, so its number of rounds is frozen: all "
+        f"{rounds} {round_noun} were cut at once, and changing the count would leave "
+        "the draw with rounds it has no fixtures for. To change it, remove the draw "
+        "first, then cut it again."
+    )
+
+
+def _draw_settings_frozen_detail(stored: DrawSettingsWriteArm) -> str:
+    """The 409 sentence for a settings change on an event whose draw type is unchanged —
+    which setting moved is a question about the arm, so it is asked of the arm.
+
+    An exhaustive ``match`` with no catch-all: a draw type that grows a setting is a
+    type error here until it says how a change to it reads."""
+    match stored:
+        case RrThenKoDrawSettingsWrite():
+            return _qualifiers_per_pool_frozen_detail(
+                stored.draw_type, stored.qualifiers_per_pool
+            )
+        case SwissDrawSettingsWrite():
+            return _rounds_frozen_detail(stored.rounds)
+        case RoundRobinDrawSettingsWrite() | SingleElimDrawSettingsWrite():
+            # Unreachable: these arms carry no setting, so an incoming arm of the same
+            # draw type is EQUAL to the stored one and the caller has already returned.
+            # Answered with the draw type's own sentence rather than an ``assert``,
+            # because the honest fallback for "the configuration moved" is to name the
+            # configuration.
+            return _draw_type_frozen_detail(stored.draw_type)
+
+
 async def _enforce_pool_set_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
@@ -408,7 +453,7 @@ async def _enforce_draw_settings_frozen(
     detail = (
         _draw_type_frozen_detail(current)
         if incoming.draw_type is not current
-        else _qualifiers_per_pool_frozen_detail(current, stored.qualifiers_per_pool)
+        else _draw_settings_frozen_detail(stored)
     )
     raise DrawTypeFrozenError(detail, draw_type=current.value)
 
@@ -589,6 +634,10 @@ async def update_event(
     # them leaves the loop below touching mapped columns only.
     changes.pop("draw_type", None)
     changes.pop("qualifiers_per_pool", None)
+    # The swiss round count is the same kind of key for the same reason: it lives in the
+    # settings row's JSON object, not on the event, so the loop would bind an unmapped
+    # attribute and drop the edit silently.
+    changes.pop("rounds", None)
     # Pools are rows, so they are taken OUT of the generic setattr loop entirely and
     # applied as a diff (:func:`app.tournament_pools.apply_event_pools`) — assigning the
     # dumped payload would put dicts where the relationship expects

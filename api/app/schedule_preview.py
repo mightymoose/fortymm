@@ -329,7 +329,12 @@ def build_preview_snapshot(
                 fixtures = strategy_for_event(event).plan_initial(
                     draw_config(event), ordered_entrants
                 )
-            case DrawType.single_elim:
+            case DrawType.single_elim | DrawType.swiss:
+                # Swiss takes single-elim's path for single-elim's reason: it is
+                # POOL-LESS (ADR "swiss pre-cuts every round and pairs each one on
+                # advance"), and the preview covers the pool stage. A director asking
+                # for one is told the format has no preview, rather than shown an empty
+                # day that silently covers nothing.
                 raise UnsupportedDrawType(draw_type)
             case _:
                 assert_never(draw_type)

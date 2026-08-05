@@ -53,6 +53,7 @@ from app.schemas.tournament import (
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
+    SwissDrawSettingsWrite,
     draw_settings_from_storage,
 )
 from app.tournament_draw_settings import draw_settings_of, draw_settings_row
@@ -365,9 +366,11 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
     """The FK to ``draw_types.key`` is the enforcement, and this is the test that
     makes it one.
 
-    ``swiss`` is a draw type the product does not run: it has no ``DrawType``
+    ``double-elim`` is a draw type the product does not run: it has no ``DrawType``
     member and therefore no seeded row (ADR "a draw type is a seeded row, and the
-    enum holds only what runs"). Written with raw SQL on purpose — the ORM path
+    enum holds only what runs"). It took this test's place from ``swiss``, which
+    shipped — the list of unseeded slugs shrinks by exactly the format that lands,
+    which is the mechanism working. Written with raw SQL on purpose — the ORM path
     goes through ``for_draw_type``, which cannot produce an unseeded slug, so only
     a hand-written INSERT can ask the database the question.
 
@@ -386,7 +389,7 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
         await db_session.execute(
             sa.text(
                 "INSERT INTO tournament_event_draw_settings (draw_type_key)"
-                " VALUES ('swiss')"
+                " VALUES ('double-elim')"
             )
         )
     assert "draw_type_key" in str(refusal.value)
@@ -550,6 +553,7 @@ async def test_every_arm_round_trips_through_the_settings_column(
         RoundRobinDrawSettingsWrite(),
         SingleElimDrawSettingsWrite(),
         RrThenKoDrawSettingsWrite(qualifiers_per_pool=2),
+        SwissDrawSettingsWrite(rounds=5),
     ]
     assert len(arms) == len(DrawType), (
         "a draw type has been added without an arm in this round trip: "
