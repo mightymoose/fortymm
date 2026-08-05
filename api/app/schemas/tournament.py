@@ -258,9 +258,10 @@ here).
 One arm per :class:`DrawType`, carrying exactly the configuration that draw type has —
 which for two of the three is nothing at all. That is the whole point: "a round-robin
 event with 2 qualifiers per pool" is not a payload this type can hold, so it cannot be
-half-honoured, and the settings table's ``CHECK`` and this union say the same thing at
-two different boundaries rather than one of them silently absorbing what the other
-refuses.
+half-honoured. This union is now the **sole** enforcement of that pairing: the settings
+table's ``CASE`` ``CHECK`` was dropped with the column it named (ADR "a draw type's
+settings are one NOT NULL JSON object"), so nothing underneath catches a pair this type
+lets through.
 
 Adding a draw type is an arm in :data:`DrawSettingsWriteArm` above (one list, read by
 this alias, its ``TypeAdapter`` and the parse alike), and it is *not* a type error until
@@ -1593,10 +1594,11 @@ class TournamentEventRead(BaseModel):
     # so this is the stored configuration and not a second copy of it.
     #
     # ``null`` for a round-robin or single-elim event, and that is a *fact* rather than
-    # missing data: neither draw type has a qualifier count, which is what the settings
-    # table's ``CHECK`` says in DDL and what the write union says at the boundary. This
-    # read is the third statement of the same pairing and it cannot disagree with
-    # either, because it does not decide anything — it reports the column.
+    # missing data: neither draw type has a qualifier count, which is what the write
+    # union says at the boundary. (It is no longer also said in DDL — the settings
+    # table's ``CASE`` ``CHECK`` was dropped with the column it named.) This read is the
+    # second statement of the same pairing and it cannot disagree with the union,
+    # because it does not decide anything — it reports the parsed arm.
     #
     # It is on the read at all because the client edits the pair as a unit. The event
     # editor always sends ``draw_type``, and the server parses ``(draw_type, K)``
@@ -2064,9 +2066,12 @@ class TournamentEventCreate(BaseModel):
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventCreate":
         """Parse at the boundary: an illegal ``(draw_type, qualifiers_per_pool)`` pair
-        is a 422 on the create, not a row the settings table's ``CHECK`` rejects later
-        with a 500. The arm it parses is **kept** (:attr:`_draw_settings`) rather than
-        discarded — parse once, at the boundary, and carry the parsed value inward."""
+        is a 422 on the create. This is now the **only** guard on that pairing — the
+        settings table's ``CASE`` ``CHECK`` went away with the column it named (ADR "a
+        draw type's settings are one NOT NULL JSON object"), so there is no longer a
+        database refusal behind this one. The arm it parses is **kept**
+        (:attr:`_draw_settings`) rather than discarded — parse once, at the boundary,
+        and carry the parsed value inward."""
         self._draw_settings = _draw_settings_write(
             self.draw_type, self.qualifiers_per_pool
         )

@@ -5,11 +5,19 @@ storage boundary, and their cleanup.
 object (ADR "a draw type's settings are one NOT NULL JSON object") and it is the
 serialized form of a union that already exists: ``DrawSettingsWriteArm``, the
 discriminated union the request boundary parses into. :func:`draw_settings_of` decodes a
-row into that arm and :func:`stored_settings` encodes an arm back, so the untyped blob
-lives in exactly these two functions and nothing inward of them holds a
-``dict[str, Any]`` (api/CLAUDE.md, "parse, don't validate"). Both directions are here,
-in one module, because a settings object written one way and read another is the single
-failure this column can have.
+row into that arm, and :func:`store_draw_settings` encodes an arm back onto one
+(:func:`draw_settings_row` is the same write for a row that does not exist yet, and
+delegates). Both directions are here, in one module, because a settings object written
+one way and read another is the single failure this column can have.
+
+**Where the untyped blob is allowed to exist.** It crosses this module's boundary
+functions and the two ends they call —
+:meth:`~app.schemas.tournament.DrawSettingsWriteBase.stored_settings` encoding on the
+schema side, and ``TournamentEventDrawSettings.configure`` storing on the model side.
+That is the whole of it: no caller of this module ever holds a ``dict[str, Any]``, which
+is the property api/CLAUDE.md's "parse, don't validate" asks for. The claim is about
+*callers*, not about a literal two-function count — the encode necessarily lives on the
+schema because the model cannot import the schemas.
 
 They live beside the row rather than on it: the model cannot import the schemas (the
 schemas import the models, and the arrow only points one way), so the model takes the
@@ -83,12 +91,13 @@ def draw_settings_row(
     """A **new** settings row carrying ``settings`` — what the event-create path builds
     its event's ``draw_settings`` with.
 
-    The create-shaped face of :func:`store_draw_settings`, so create and edit serialize
-    an arm exactly one way between them.
+    The create-shaped face of :func:`store_draw_settings` — and it *delegates* to it
+    rather than restating the split, so create and edit serialize an arm exactly one way
+    between them by construction rather than by two spellings that happen to agree.
     """
-    return TournamentEventDrawSettings.for_draw_type(
-        settings.draw_type, settings=settings.stored_settings()
-    )
+    row = TournamentEventDrawSettings()
+    store_draw_settings(row, settings)
+    return row
 
 
 async def draw_settings_ids_for_tournament(

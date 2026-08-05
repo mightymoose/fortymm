@@ -604,7 +604,9 @@ async def update_event(
     changes.pop("pools", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
-    # one the settings table's ``CHECK`` accepts (ADR 20260727).
+    # one the write union accepted at the request boundary (ADR 20260727). That union is
+    # the only thing that checks the pairing now — the settings table's ``CASE``
+    # ``CHECK`` was dropped with the column it named.
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
