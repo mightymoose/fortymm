@@ -329,7 +329,15 @@ def draw_settings_from_storage(
     point: the alternative is a settings object silently read as empty, which cuts a
     draw for a configuration nobody chose.
     """
-    return _DRAW_SETTINGS_WRITE.validate_python({"draw_type": draw_type, **settings})
+    # ``draw_type`` goes LAST so the column wins. Splatting the blob last instead would
+    # let a stored ``draw_type`` key override the discriminator this function was handed
+    # — ``draw_type`` is a declared field on every arm, so ``extra="forbid"`` does not
+    # catch it — and a row whose ``draw_type_key`` says ``round-robin`` would parse as
+    # whatever arm its own JSON named. Nothing writes such a blob today
+    # (``stored_settings()`` excludes the key), but "the union is the only enforcement"
+    # is exactly the claim this change rests on, so it must hold against a writer that
+    # did not go through it.
+    return _DRAW_SETTINGS_WRITE.validate_python({**settings, "draw_type": draw_type})
 
 
 # ----- value-objects (typed JSONB) -----------------------------------------

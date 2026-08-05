@@ -74,8 +74,26 @@ union, which refuses a qualifier count on a round-robin event with a 422 at the
 request boundary.
 
 This is a genuine loss and it is accepted deliberately. The constraint protected
-against a writer that bypasses the schema. There is one writer, it parses through
-the union, and a test pins that a mismatched pair is refused.
+against a writer that bypasses the schema.
+
+**Corrected during review:** an earlier draft of this section said "there is one
+writer, it parses through the union". That is true of the *application* — create
+and edit both go through `store_draw_settings`, which takes an already-parsed arm
+— but it is not true of the codebase. `TournamentEventDrawSettings.for_draw_type`
+takes a raw mapping and writes it straight through, and around thirty test seeds
+still use it.
+
+The consequence is narrower than it sounds, and worth stating exactly. It is a
+**test-seeding** hazard, not a production one: no app code calls `for_draw_type`.
+But the old `CASE` constraint refused a configured draw type carrying no settings,
+and nothing refuses it now, so `for_draw_type(DrawType.rr_then_ko)` writes `{}`
+and fails at the next *read* rather than at the write. A seed that used to blow up
+loudly and locally now blows up somewhere else.
+
+`for_draw_type`'s docstring now says this out loud rather than advertising itself
+as the create path's door, which is what it claimed while no app code called it at
+all. The safer seeding door is `tests/_helpers.event_draw_settings`, which routes
+the same pair through the parse.
 
 Reading a settings value now costs a parse rather than a column read. The parse is
 the point. It is what keeps the untyped blob from leaking inward.

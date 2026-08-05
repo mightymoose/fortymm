@@ -579,7 +579,8 @@ async def update_event(
     changes = updates.model_dump(exclude_unset=True)
     # Neither half of the draw configuration is a column on the event — the draw type is
     # the ``draw_type_key`` slug on the settings row the event points at, and the
-    # qualifier count is that row's ``qualifiers_per_pool`` — so both are routed OUT of
+    # qualifier count is a key inside that row's ``settings`` JSON object — so both are
+    # routed OUT of
     # the generic setattr loop rather than through it. This is not decoration:
     # SQLAlchemy's declarative instances accept any attribute, so
     # ``setattr(event, "draw_type", ...)`` would bind a plain Python attribute the

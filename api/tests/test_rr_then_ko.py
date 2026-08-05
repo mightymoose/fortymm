@@ -329,9 +329,11 @@ async def test_a_qualifier_count_on_another_draw_type_is_422(
     "The top 2 from each pool advance" is meaningless for a round-robin (there is no
     cut to size) and for a single-elim (there are no pools to cut from). Accepting the
     number and dropping it would run an event the director did not ask for and show
-    them nothing; the settings table's CHECK would refuse the row anyway, which is a
-    500, not an answer. Both other draw types are asked, because a union that had lost
-    one arm's ``extra="forbid"`` would look identical on a one-slug test.
+    them nothing. This 422 is now the ONLY thing standing there: the settings table's
+    ``CASE`` ``CHECK`` was dropped with the column it named, so a blob carrying a
+    qualifier count for a round-robin is a row Postgres accepts. Both other draw types
+    are asked, because a union that had lost one arm's ``extra="forbid"`` would look
+    identical on a one-slug test.
     """
     client, _ = authed_client
     tournament_id = await _tournament(client)
@@ -542,9 +544,11 @@ async def test_the_qualifier_count_is_editable_while_no_draw_exists(
 async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
-    """The two columns are one fact, written together: a draw type moved back to
-    round-robin leaves NULL behind, not the K the event used to take. Writing the slug
-    alone would leave a pairing the settings table's CHECK refuses outright."""
+    """The draw type and its settings are one fact, written together: a draw type moved
+    back to round-robin leaves an empty settings object behind, not the K the event used
+    to take. Nothing in the database refuses the slug-only write any more — the ``CASE``
+    ``CHECK`` is gone — so ``store_draw_settings`` writing the pair together is all
+    that prevents it, which is exactly why this test exists."""
     client, _ = authed_client
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
@@ -602,9 +606,11 @@ async def test_a_draw_type_with_no_knockout_stage_reads_back_no_qualifier_count(
     The other side of the pairing, and it has to be asserted or the read is one-sided:
     a field hard-wired to the requested K, or defaulted to some convention, would pass
     the rr-then-ko test above and quietly tell a director that their round-robin
-    advances two per pool — a configuration the settings table's ``CHECK`` says cannot
-    exist. Both of the count-less draw types are asked, because a read keyed off a
-    single slug would look right on a one-slug test.
+    advances two per pool — a configuration the write union says cannot exist. (It used
+    to be the settings table's ``CASE`` ``CHECK`` saying so too; that constraint went
+    with the column, so the union is the only one saying it now.) Both of the count-less
+    draw types are asked, because a read keyed off a single slug would look right on a
+    one-slug test.
 
     ``in`` before the value, so "the field vanished from the response" reds as itself
     rather than as ``KeyError`` — the client distinguishes *absent* (an older server)

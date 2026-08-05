@@ -103,11 +103,13 @@ class TournamentEventDrawSettings(Base):
     # setting per draw type. Adding a draw type's settings is now an arm in
     # ``app.schemas.tournament.DrawSettingsWriteArm`` and no migration at all.
     #
-    # A ``dict`` is what SQLAlchemy hands back, and it goes no further than
-    # ``app.tournament_draw_settings``: that module parses it into the union arm at
-    # the boundary, so nothing inward of it holds an untyped blob (api/CLAUDE.md,
-    # "parse, don't validate"). Writers go through ``configure`` below, never
-    # through this attribute.
+    # A ``dict`` is what SQLAlchemy hands back. ``app.tournament_draw_settings`` is the
+    # boundary that parses it — it hands the blob to
+    # ``app.schemas.tournament.draw_settings_from_storage``, which is where the union
+    # actually validates, since the model cannot import the schemas. What matters is the
+    # property that holds either way: no CALLER of that module ever receives an untyped
+    # blob (api/CLAUDE.md, "parse, don't validate"). App writers go through
+    # ``configure`` below, never through this attribute.
     #
     # The server default is for the raw-SQL writer (tests, psql) — every writer in
     # the app supplies the object — and it is ``{}`` rather than ``NULL`` for the
@@ -144,9 +146,17 @@ class TournamentEventDrawSettings(Base):
     ) -> "TournamentEventDrawSettings":
         """Build the settings row for ``draw_type``, carrying ``settings``.
 
-        The create path's door onto :meth:`configure` below, which is the ONE place a
-        :class:`DrawType` member becomes the persisted slug and the settings object
-        beside it.
+        **Test seeding only, and it does NOT parse.** No app code calls this: the create
+        path builds its row through ``app.tournament_draw_settings.draw_settings_row``
+        and the edit path through ``store_draw_settings``, both of which take an already
+        parsed :data:`~app.schemas.tournament.DrawSettingsWriteArm`. This method takes a
+        raw mapping and writes it straight through, so it is the one door onto
+        ``settings`` that the union does not stand behind. That matters more than it
+        used to: the ``CASE`` ``CHECK`` that once refused a configured draw type with no
+        settings is gone, so ``for_draw_type(DrawType.rr_then_ko)`` now writes ``{}``
+        happily and fails at *read* instead, when the arm cannot be parsed. Seed through
+        ``tests/_helpers.event_draw_settings``, which routes the same pair through the
+        parse, unless the point of the test is to write a blob the union would refuse.
 
         It takes the draw type and a plain mapping rather than the parsed union arm
         (``app.schemas.tournament.DrawSettingsWrite``), and that is a **layering**
@@ -167,8 +177,10 @@ class TournamentEventDrawSettings(Base):
     def configure(self, draw_type: DrawType, *, settings: Mapping[str, Any]) -> None:
         """Write this row's whole draw configuration — the ONE place the pair is set.
 
-        Both writers go through here: :meth:`for_draw_type` at create, and
-        ``app.tournament_events.update_event`` at edit. The two columns are written
+        Every writer goes through here: ``app.tournament_draw_settings``'s
+        :func:`~app.tournament_draw_settings.store_draw_settings` on both the create and
+        the edit path, and :meth:`for_draw_type` when a test seeds a row. The two
+        columns are written
         **together**, because they are one fact: setting the draw type without
         replacing the settings object beside it is how a round-robin row ends up
         carrying an ``rr-then-ko``'s qualifier count — and it is the edit path (draw

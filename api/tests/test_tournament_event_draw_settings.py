@@ -485,7 +485,17 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
             )
             assert stored.scalar_one() is not None, value
 
-    for value in (*refused, "NULL"):
+    # Each refusal names the constraint that must produce it, not merely "something
+    # refused this". SQLAlchemy embeds the failing statement in the error, and that
+    # statement always contains the word "settings" — it is the column being inserted —
+    # so a substring check for "settings" passes for ANY IntegrityError this INSERT can
+    # raise and discriminates nothing at all.
+    #
+    # The two refusals are genuinely different constraints and are asked separately: a
+    # JSON value that is not an object is the CHECK's job, and a SQL NULL is
+    # ``nullable=False``'s. Asserting one name over both cases would have to be loose
+    # enough to accept either, which is how the non-discriminating version got written.
+    for value in refused:
         with pytest.raises(IntegrityError) as refusal:
             async with db_session.begin_nested():
                 await db_session.execute(
@@ -496,10 +506,27 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
                     ),
                     {"key": RR_THEN_KO},
                 )
-        assert "settings" in str(refusal.value), (
-            f"settings={value} was refused by something other than the settings "
-            f"column: {refusal.value}"
+        assert "ck_tournament_event_draw_settings_settings_object" in str(
+            refusal.value
+        ), (
+            f"settings={value} is a JSON value that is not an object, so the object "
+            f"CHECK must be what refuses it: {refusal.value}"
         )
+
+    with pytest.raises(IntegrityError) as null_refusal:
+        async with db_session.begin_nested():
+            await db_session.execute(
+                sa.text(
+                    "INSERT INTO tournament_event_draw_settings"
+                    " (draw_type_key, settings)"
+                    " VALUES (:key, NULL)"
+                ),
+                {"key": RR_THEN_KO},
+            )
+    assert "not-null" in str(null_refusal.value).lower(), (
+        "a SQL NULL must be refused by the column's NOT NULL, not by the object CHECK "
+        f"— jsonb_typeof(NULL) is NULL, which a CHECK passes: {null_refusal.value}"
+    )
 
     await db_session.rollback()
 
