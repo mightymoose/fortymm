@@ -4,7 +4,7 @@ metadata:
   # Revision-scoped name: Jobs are immutable, so each release gets its own.
   name: migrate-{{ .Release.Revision }}
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
   annotations:
     # post-* so the in-chart postgres already exists (a pre-install hook would
     # run before any non-hook resource is created, with no DB to migrate
@@ -33,7 +33,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "migrate") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "migrate") | nindent 8 }}
     spec:
       restartPolicy: Never
       initContainers:
@@ -49,7 +49,7 @@ spec:
               done
       containers:
         - name: migrate
-          image: {{ include "fortymm-uat.apiImage" . }}
+          image: {{ include "fortymm.apiImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           resources:
             requests:
@@ -59,7 +59,7 @@ spec:
               cpu: 1000m
               memory: 512Mi
           envFrom:
-            {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+            {{- include "fortymm.appEnvFrom" . | nindent 12 }}
           command:
             - sh
             - -c

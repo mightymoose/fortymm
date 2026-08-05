@@ -1,4 +1,4 @@
-# Values for the fortymm-uat chart. Most knobs mirror the prod-like QA
+# Values for the fortymm chart. Most knobs mirror the prod-like QA
 # compose stack (docker-compose.qa.yml).
 
 # The api and web images are the ones CI publishes to GHCR from
@@ -21,7 +21,7 @@
 # docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
 #
 # The tag is only the fallback for rendering the chart without a deploy
-# (`helm template deploy/uat`), so it names the moving `:main` tag the same
+# (`helm template deploy/fortymm`), so it names the moving `:main` tag the same
 # workflow publishes — something that actually exists and is pullable, rather
 # than a label no registry would answer for. That fallback is why CI reads the
 # packaged chart back and refuses to push unless both digests are in it: an

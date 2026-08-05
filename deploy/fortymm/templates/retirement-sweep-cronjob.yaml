@@ -14,7 +14,7 @@ kind: CronJob
 metadata:
   name: retirement-sweep
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.retirement.schedule | quote }}
   concurrencyPolicy: Forbid
@@ -28,12 +28,12 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "fortymm-uat.selector" (dict "component" "retirement-sweep") | nindent 12 }}
+            {{- include "fortymm.selector" (dict "component" "retirement-sweep") | nindent 12 }}
         spec:
           restartPolicy: Never
           containers:
             - name: retirement-sweep
-              image: {{ include "fortymm-uat.apiImage" . }}
+              image: {{ include "fortymm.apiImage" . }}
               imagePullPolicy: {{ .Values.pullPolicy }}
               command: ["python", "-m", "app.retirement_sweep"]
               resources:
@@ -44,7 +44,7 @@ spec:
                   cpu: 1000m
                   memory: 512Mi
               envFrom:
-                {{- include "fortymm-uat.appEnvFrom" . | nindent 16 }}
+                {{- include "fortymm.appEnvFrom" . | nindent 16 }}
               volumeMounts:
                 - name: apns-key
                   mountPath: {{ .Values.apnsKeyPath }}

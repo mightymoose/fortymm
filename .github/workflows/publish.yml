@@ -62,7 +62,7 @@ env:
   API_IMAGE: ghcr.io/mightymoose/fortymm-api
   WEB_IMAGE: ghcr.io/mightymoose/fortymm-web-client
   # `helm push` appends the chart name, so the two charts land at
-  # `${CHART_REPO}/fortymm-uat` and `${CHART_REPO}/observability`. Named once
+  # `${CHART_REPO}/fortymm` and `${CHART_REPO}/observability`. Named once
   # here because the step summaries advertise a pull command a human copies and
   # runs -- if the summary and the push target can drift apart, the copyable
   # line is the one that gets it wrong.
@@ -233,7 +233,7 @@ jobs:
           provenance: false
 
   chart:
-    name: fortymm-uat chart
+    name: fortymm chart
     # The digests come from the image jobs' own push steps, as job outputs --
     # NOT from a GHCR API lookup. A lookup can answer about a different push;
     # the step output cannot. Skipping that round trip is a stated goal of
@@ -273,7 +273,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # An EMPTY digest is not malformed to the chart -- `fortymm-uat.imageRef`
+          # An EMPTY digest is not malformed to the chart -- `fortymm.imageRef`
           # treats it as the documented render-only fallback and renders
           # `repository:main`, the moving tag. So without this guard a run with a
           # broken input publishes a chart that packages, pulls and renders
@@ -290,13 +290,13 @@ jobs:
 
           # `helm package` has no `--set`, so the digests are written into the
           # runner's checkout of values.yaml before packaging. This is the one
-          # documented difference between the published chart and `deploy/uat/`
+          # documented difference between the published chart and `deploy/fortymm/`
           # in git; nothing is committed here. `yq` is preinstalled on
           # GitHub-hosted ubuntu runners.
-          yq -i '.images.api.digest = strenv(API_DIGEST) | .images.web.digest = strenv(WEB_DIGEST)' deploy/uat/values.yaml
+          yq -i '.images.api.digest = strenv(API_DIGEST) | .images.web.digest = strenv(WEB_DIGEST)' deploy/fortymm/values.yaml
 
           mkdir -p dist/charts
-          helm package deploy/uat \
+          helm package deploy/fortymm \
             --version "$CHART_VERSION" \
             --app-version "$APP_VERSION" \
             -d dist/charts
@@ -329,7 +329,7 @@ jobs:
             echo "Published \`${CHART_VERSION}\` to \`${CHART_REPO}\`."
             echo ""
             echo "    helm upgrade --install fortymm-uat \\"
-            echo "      oci://${CHART_REPO}/fortymm-uat --version ${CHART_VERSION}"
+            echo "      oci://${CHART_REPO}/fortymm --version ${CHART_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   observability:

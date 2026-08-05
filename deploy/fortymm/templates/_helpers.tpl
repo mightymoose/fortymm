@@ -1,13 +1,13 @@
 {{/* Common labels applied to every object. */}}
-{{- define "fortymm-uat.labels" -}}
-app.kubernetes.io/name: fortymm-uat
+{{- define "fortymm.labels" -}}
+app.kubernetes.io/name: fortymm
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/* Per-component selector labels. Pass a dict {root, component}. */}}
-{{- define "fortymm-uat.selector" -}}
-app.kubernetes.io/name: fortymm-uat
+{{- define "fortymm.selector" -}}
+app.kubernetes.io/name: fortymm
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
@@ -25,13 +25,13 @@ web-client replicas resolved one mutable tag to two different images and half
 of all page loads 404'd their JS chunk.
 
 With no digest it falls back to `repository:tag` so the chart stays renderable
-on its own (`helm template deploy/uat`) — but a digest that is set and
+on its own (`helm template deploy/fortymm`) — but a digest that is set and
 malformed is NOT tolerated: it would silently produce a reference that either
 fails to pull or, worse, resolves to something other than what the deployer
 meant. Values are input from outside the chart, so parse them here at the
 boundary and fail the render loudly instead.
 */}}
-{{- define "fortymm-uat.imageRef" -}}
+{{- define "fortymm.imageRef" -}}
 {{- if .digest -}}
 {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .digest) -}}
 {{- fail (printf "images digest for %s must be a full manifest digest of the form sha256:<64 hex chars>, got %q" .repository .digest) -}}
@@ -47,20 +47,20 @@ Fully-qualified api image reference. Shared by the api Deployment, the worker
 Deployment, the migrate hook Job and the retirement-sweep CronJob — they must
 resolve through this one helper so they cannot end up on different artifacts.
 */}}
-{{- define "fortymm-uat.apiImage" -}}
-{{- include "fortymm-uat.imageRef" .Values.images.api -}}
+{{- define "fortymm.apiImage" -}}
+{{- include "fortymm.imageRef" .Values.images.api -}}
 {{- end -}}
 
 {{/* Fully-qualified web image reference. */}}
-{{- define "fortymm-uat.webImage" -}}
-{{- include "fortymm-uat.imageRef" .Values.images.web -}}
+{{- define "fortymm.webImage" -}}
+{{- include "fortymm.imageRef" .Values.images.web -}}
 {{- end -}}
 
 {{/*
 Shared env for api / worker / migrate: the non-secret ConfigMap plus the
 .env-backed Secret. The APNs key is mounted as a file, not an env var.
 */}}
-{{- define "fortymm-uat.appEnvFrom" -}}
+{{- define "fortymm.appEnvFrom" -}}
 - configMapRef:
     name: api-config
 - secretRef:
@@ -74,7 +74,7 @@ container with the node's MagicDNS name at startup. Defined here so the
 ConfigMap can render it and the Deployment can checksum it (to roll the pod
 when the serve config changes).
 */}}
-{{- define "fortymm-uat.tailscaleServe" -}}
+{{- define "fortymm.tailscaleServe" -}}
 {
   "TCP": {
     "443": { "HTTPS": true }
@@ -95,7 +95,7 @@ The `api` and `web-client` upstreams resolve to the same-named k8s Services.
 Defined here so the ConfigMap can render it and the Deployment can checksum it
 (to roll the pod when the routing changes).
 */}}
-{{- define "fortymm-uat.nginxConf" -}}
+{{- define "fortymm.nginxConf" -}}
 upstream api_upstream {
     server api:8000;
 }

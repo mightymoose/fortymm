@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: api
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicas }}
   strategy:
@@ -13,11 +13,11 @@ spec:
       maxSurge: {{ .Values.api.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "api") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "api") | nindent 8 }}
     spec:
       # Bounded pod shutdown. Paired with uvicorn's
       # --timeout-graceful-shutdown below: uvicorn gets 5s to drain, so the pod
@@ -25,7 +25,7 @@ spec:
       terminationGracePeriodSeconds: 20
       containers:
         - name: api
-          image: {{ include "fortymm-uat.apiImage" . }}
+          image: {{ include "fortymm.apiImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           # Migrations + seeds run in the migrate Job, not here.
           #
@@ -54,7 +54,7 @@ spec:
               cpu: 1000m
               memory: 512Mi
           envFrom:
-            {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+            {{- include "fortymm.appEnvFrom" . | nindent 12 }}
           env:
             # Server-side geocoding key for venue addresses — see
             # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
@@ -121,10 +121,10 @@ kind: Service
 metadata:
   name: api
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "api") | nindent 4 }}
   ports:
     - port: 8000
       targetPort: 8000

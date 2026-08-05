@@ -3,7 +3,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: postgres-data
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: {{ .Values.postgres.storageClass }}
@@ -16,7 +16,7 @@ kind: Deployment
 metadata:
   name: postgres
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: 1
   # Single PVC (RWO) can't be shared by an old + new pod during a rollout.
@@ -24,11 +24,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "postgres") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "postgres") | nindent 8 }}
     spec:
       containers:
         - name: postgres
@@ -72,10 +72,10 @@ kind: Service
 metadata:
   name: postgres
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "postgres") | nindent 4 }}
   ports:
     - port: 5432
       targetPort: 5432

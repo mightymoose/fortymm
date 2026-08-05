@@ -3,29 +3,29 @@ kind: ConfigMap
 metadata:
   name: nginx-conf
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 data:
   default.conf: |
-    {{- include "fortymm-uat.nginxConf" . | nindent 4 }}
+    {{- include "fortymm.nginxConf" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nginx
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "nginx") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "nginx") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "nginx") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "nginx") | nindent 8 }}
       annotations:
         # Roll the pod when the routing config changes.
-        checksum/config: {{ include "fortymm-uat.nginxConf" . | sha256sum }}
+        checksum/config: {{ include "fortymm.nginxConf" . | sha256sum }}
     spec:
       containers:
         - name: nginx
@@ -54,11 +54,11 @@ kind: Service
 metadata:
   name: nginx
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   type: NodePort
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "nginx") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "nginx") | nindent 4 }}
   ports:
     - port: 80
       targetPort: 80
