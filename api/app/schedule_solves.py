@@ -270,7 +270,7 @@ def _solve_num_workers() -> int:
     oversubscribes and gets CFS-throttled (#1115). Defaulting to 1 keeps
     solves deterministic and never oversubscribed; deployments with a larger
     CPU limit raise this via env to match (the chart keeps the two in step —
-    see deploy/uat/templates/worker.yaml). Note ``num_search_workers > 1``
+    see deploy/fortymm/templates/worker.yaml). Note ``num_search_workers > 1``
     makes CP-SAT non-deterministic — the ``random_seed = 0`` in
     app.scheduling no longer pins the result once more than one worker is
     searching. Read lazily (like the rest of this module's env config) so

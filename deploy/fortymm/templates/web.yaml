@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: web-client
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.web.replicas }}
   strategy:
@@ -13,15 +13,15 @@ spec:
       maxSurge: {{ .Values.web.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "web") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "web") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "web") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "web") | nindent 8 }}
     spec:
       containers:
         - name: web-client
-          image: {{ include "fortymm-uat.webImage" . }}
+          image: {{ include "fortymm.webImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           resources:
             requests:
@@ -44,10 +44,10 @@ kind: Service
 metadata:
   name: web-client
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "web") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "web") | nindent 4 }}
   ports:
     - port: 80
       targetPort: 80

@@ -3,16 +3,16 @@ kind: Deployment
 metadata:
   name: redis
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "redis") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "redis") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "redis") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "redis") | nindent 8 }}
     spec:
       containers:
         - name: redis
@@ -52,10 +52,10 @@ kind: Service
 metadata:
   name: redis
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "redis") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "redis") | nindent 4 }}
   ports:
     - port: 6379
       targetPort: 6379

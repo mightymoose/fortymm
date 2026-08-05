@@ -1,21 +1,25 @@
 apiVersion: v2
 name: observability
 description: |
-  Observability stack for FortyMM UAT on Kubernetes: kube-prometheus-stack
+  Observability stack for FortyMM on Kubernetes: kube-prometheus-stack
   (Prometheus + Grafana + Alertmanager), loki-stack (Loki + Promtail), and
   Tempo, deployed into the `monitoring` namespace. Grafana ships Loki + Tempo
   datasources; Promtail redacts email addresses before they reach Loki. Each of
   Grafana / Prometheus / Loki is fronted by a per-service `tailscale serve`
   proxy (see templates/tailscale-proxies.yaml) so they're reachable privately
-  on the tailnet — mirrors deploy/uat's tailscale.yaml pattern, no operator.
+  on the tailnet — mirrors deploy/fortymm's tailscale.yaml pattern, no operator.
 
-  Kept as a sibling chart (not a subchart of deploy/uat) so the cluster-scoped
+  Kept as a sibling chart (not a subchart of deploy/fortymm) so the cluster-scoped
   CRDs + Prometheus operator have their own release lifecycle and so the stack
   can live in its own `monitoring` namespace. scripts/redeploy-uat.sh installs
   both releases.
 type: application
 version: 0.1.0
-appVersion: "uat"
+# The version of the APPLICATION this chart deploys — not an environment. CI
+# stamps the deploying commit here with `helm package --app-version`
+# (.github/workflows/publish.yml); the literal below is what a chart rendered
+# straight from a checkout shows.
+appVersion: "0.0.0-dev"
 
 dependencies:
   - name: kube-prometheus-stack

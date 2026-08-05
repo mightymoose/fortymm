@@ -1,6 +1,6 @@
 # QA stack — built artifacts, no dev server, isolated volumes.
 #
-# A prod-like stack (same shape as the UAT Helm chart under deploy/uat/)
+# A prod-like stack (same shape as the UAT Helm chart under deploy/fortymm/)
 # that runs alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
 # networks, containers, and volumes namespaced. Only `nginx` (8085 — UAT
 # holds 8084) and `mailpit` (8087, the captured-email web UI) publish host

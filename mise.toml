@@ -6,7 +6,7 @@ helm = "latest"
 k3d = "latest"
 
 [tasks.redeploy-uat]
-description = "Helm-deploy this commit's published GHCR images (pinned by digest) to the fortymm-uat k3d cluster; smoke-check https://uat.fortymm.com"
+description = "Install this commit's published Helm chart (pinned by digest, images baked in) onto the fortymm-uat k3d cluster; smoke-check https://uat.fortymm.com"
 run = "./scripts/redeploy-uat.sh"
 
 [tasks.qa-down]

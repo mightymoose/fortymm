@@ -3,10 +3,19 @@ kind: PersistentVolumeClaim
 metadata:
   name: postgres-data
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: {{ .Values.postgres.storageClass }}
+  {{- /*
+    Omit the key entirely when no class is named, rather than rendering it
+    empty. The two are NOT the same to Kubernetes: an absent storageClassName
+    means "use the cluster's default class", while an explicit "" means "bind
+    only to a PV that has no class at all" -- which on a cluster with dynamic
+    provisioning never binds, and the PVC sits Pending forever.
+  */}}
+  {{- with .Values.postgres.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.postgres.storageSize }}
@@ -16,7 +25,7 @@ kind: Deployment
 metadata:
   name: postgres
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: 1
   # Single PVC (RWO) can't be shared by an old + new pod during a rollout.
@@ -24,11 +33,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "postgres") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "postgres") | nindent 8 }}
     spec:
       containers:
         - name: postgres
@@ -72,10 +81,10 @@ kind: Service
 metadata:
   name: postgres
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "fortymm-uat.selector" (dict "component" "postgres") | nindent 4 }}
+    {{- include "fortymm.selector" (dict "component" "postgres") | nindent 4 }}
   ports:
     - port: 5432
       targetPort: 5432

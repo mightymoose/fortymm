@@ -1,0 +1,16 @@
+apiVersion: v2
+name: fortymm
+description: |
+  The FortyMM stack on Kubernetes. Runs the full topology
+  (postgres, redis, api, worker, web-client, routing nginx). Migrations and
+  seeds run as a Helm post-install/post-upgrade hook Job. The routing nginx is
+  published on a NodePort. The chart names no environment. Hostnames, secret
+  names and image digests are all values. UAT is one environment that runs it,
+  on a single-node k3d cluster fronted by host Caddy.
+type: application
+version: 0.1.0
+# The version of the APPLICATION this chart deploys — not an environment, and
+# not the chart's own `version` above. CI stamps the deploying commit here with
+# `helm package --app-version` (.github/workflows/publish.yml), so the literal
+# in the repo only ever shows up in a chart rendered straight from a checkout.
+appVersion: "0.0.0-dev"

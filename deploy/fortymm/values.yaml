@@ -1,4 +1,4 @@
-# Values for the fortymm-uat chart. Most knobs mirror the prod-like QA
+# Values for the fortymm chart. Most knobs mirror the prod-like QA
 # compose stack (docker-compose.qa.yml).
 
 # The api and web images are the ones CI publishes to GHCR from
@@ -21,7 +21,7 @@
 # docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
 #
 # The tag is only the fallback for rendering the chart without a deploy
-# (`helm template deploy/uat`), so it names the moving `:main` tag the same
+# (`helm template deploy/fortymm`), so it names the moving `:main` tag the same
 # workflow publishes — something that actually exists and is pullable, rather
 # than a label no registry would answer for. That fallback is why CI reads the
 # packaged chart back and refuses to push unless both digests are in it: an
@@ -81,56 +81,63 @@ config:
   # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
   # See docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md.
   #
-  # Operator fills these two from the Auth0 tenant (empty = MCP auth
-  # unconfigured; the api still boots but every MCP request 401s):
-  AUTH0_DOMAIN: "dev-ohl5xjusly2vsah6.us.auth0.com"        # e.g. fortymm.us.auth0.com — the JWT issuer
-  AUTH0_AUDIENCE: "https://uat.fortymm.com/api/mcp/"      # Auth0 API identifier for the MCP Resource Server (token `aud`)
-  # Deployment-derived public URLs (the MCP server is public at
-  # uat.fortymm.com/api/mcp behind nginx that strips /api — metadata must
-  # reflect the public origin, not the internal mount):
-  MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
-  MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
+  # All four name a specific deployment, so the chart ships them EMPTY and each
+  # environment supplies its own (deploy/environments/<env>.yaml). Empty = MCP
+  # auth unconfigured: the api still boots, and every MCP request 401s.
+  #
+  # The Auth0 tenant that issues the JWTs, e.g. fortymm.us.auth0.com:
+  AUTH0_DOMAIN: ""
+  # Auth0 API identifier for the MCP Resource Server (the token `aud`). It is
+  # whatever the Auth0 API is named, NOT a URL the deployment serves — in
+  # particular it keeps a TRAILING SLASH that MCP_PUBLIC_RESOURCE_URL must not
+  # have. The two looking almost-but-not-quite equal is correct.
+  AUTH0_AUDIENCE: ""
+  # Deployment-derived PUBLIC URLs. The MCP server is served at
+  # <public-origin>/api/mcp behind an nginx that strips /api, so the metadata
+  # must reflect the public origin, not the internal mount. There is no sensible
+  # default for a hostname the chart cannot know.
+  MCP_PUBLIC_BASE_URL: ""
+  MCP_PUBLIC_RESOURCE_URL: ""
   # --- Venue geocoding ---
-  # UAT is on the FAKE geocoder ON PURPOSE, because it has no Google Geocoding
-  # key yet (issue #1205). This is a decision, not an oversight: the provider
-  # used to be inferred from key presence, which failed silently open — UAT was
-  # meant to geocode for real, the key was never added, and it spent that time
-  # storing hash-derived coordinates as though they were real (a Chicago
-  # address resolved to Antarctica). Saying `fake` out loud makes the state
-  # visible and makes UAT's existing coordinates honest: they are what a fake
-  # geocoder produces in an environment that says it uses one. See
+  # Which provider resolves a venue address, as a closed enum: `google` or
+  # `fake`. `fake` is the default because a chart cannot assume a Google
+  # Geocoding key exists, and it produces deterministic hash-derived
+  # coordinates. To geocode for real, set `google`, put
+  # GOOGLE_GEOCODING_API_KEY in the env Secret, and drop `optional: true` from
+  # its secretKeyRef in templates/api.yaml.
+  #
+  # The provider is named out loud rather than inferred from key presence,
+  # which used to fail silently open. See
   # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
   #
-  # WHEN UAT GETS A REAL KEY (#1205): flip this to `google`, put the key in
-  # .env, drop `optional: true` from the GOOGLE_GEOCODING_API_KEY secretKeyRef
-  # in templates/api.yaml, and re-geocode the rows written while this said
-  # `fake`.
-  #
-  # This value is only authoritative because .env carries no `GEOCODER` line —
-  # redeploy-uat.sh syncs .env into the fortymm-uat-env Secret, and appEnvFrom
-  # applies that Secret *after* the api-config ConfigMap, so anything set there
-  # silently outranks this. That is why .env.example deliberately does not define
-  # it and says so. If a `GEOCODER=` line ever reappears in an operator's .env,
-  # this line stops meaning anything — with no error.
+  # Note the precedence: appEnvFrom applies the env Secret AFTER this ConfigMap,
+  # so a GEOCODER key in that Secret silently outranks this value.
   GEOCODER: fake
 
 postgres:
   user: postgres
   password: postgres
   db: fortymm
-  # k3d's default StorageClass.
-  storageClass: local-path
+  # Empty means "use the cluster's default StorageClass", which is the only
+  # portable answer -- a class name that exists on one cluster is a PVC stuck
+  # Pending on another. UAT names k3d's `local-path` in its environment file.
+  storageClass: ""
   storageSize: 5Gi
 
-# Pre-created out-of-band by scripts/redeploy-uat.sh from .env and secrets/.
+# Names of two Secrets the chart does NOT create — the deployer pre-creates them
+# out of band (for UAT, scripts/redeploy-uat.sh builds them from .env and
+# secrets/). Each environment names its own pair in
+# deploy/environments/<env>.yaml; these defaults are only what the chart renders
+# with on its own.
+#
 # The api Deployment pulls GOOGLE_GEOCODING_API_KEY from `env` (below) as an
-# optional key. It is only needed when config.GEOCODER is `google`; UAT is
-# deliberately on `fake` today (see the comment on that value), so the key is
-# absent and `optional: true` is what lets the pod boot without it. No real key
-# is ever committed here; the operator provides it out of band in .env.
+# optional key. It is only needed when config.GEOCODER is `google`; the default
+# is `fake` (see the comment on that value), so the key is absent and
+# `optional: true` is what lets the pod boot without it. No real key is ever
+# committed here; the operator provides it out of band in .env.
 secrets:
-  env: fortymm-uat-env
-  apns: fortymm-uat-apns
+  env: fortymm-env
+  apns: fortymm-apns
 
 # Container path APNS_AUTH_KEY_PATH points at in .env.
 apnsKeyPath: /run/secrets/apns_auth_key.p8
@@ -143,11 +150,13 @@ worker:
   # "m" millicores) because it doubles as SOLVE_NUM_WORKERS — CP-SAT's
   # search-worker portfolio must equal the container's CPU limit or it
   # auto-sizes off the *node's* core count and gets CFS-throttled (#1115).
-  # 16 cores / 8Gi is a UAT stress setting sized for large-model solves
-  # (hundreds of fixtures x many tables), not necessarily the prod default —
-  # right-size per environment by overriding these values.
-  cpu: "16"
-  memory: 8Gi
+  # Limits sized to schedule on a modest single node. The solver uses whatever
+  # it is given, so raise these per environment for large-model solves
+  # (hundreds of fixtures x many tables) — UAT sets 16 cores / 8Gi in its
+  # environment file. Defaulting to that here would leave the worker pod
+  # unschedulable on any cluster smaller than the one it was tuned for.
+  cpu: "2"
+  memory: 2Gi
   requests:
     cpu: "2"
     memory: 512Mi
@@ -160,17 +169,33 @@ retirement:
   enabled: true
   schedule: "0 * * * *"
 
-# Routing nginx exposed on this NodePort; k3d maps host 8084 -> here and
-# host Caddy reverse-proxies 127.0.0.1:8084 to it.
-nginxNodePort: 30084
+# Fixed NodePort for the routing nginx Service. Empty means "let Kubernetes
+# allocate one from the node port range", which is the only portable answer — a
+# hard-coded port that another Service already holds fails the install outright
+# with `provided port is already allocated`.
+#
+# Set it when something outside the cluster maps a fixed host port to it. UAT
+# does: deploy/environments/uat.yaml names 30084 and scripts/redeploy-uat.sh
+# maps host 8084 to it. Those two must agree — see the comment on both.
+nginxNodePort: ""
 
 # Tailscale proxy: puts the stack on the tailnet as a private MagicDNS node
 # (https://<hostname>.<tailnet>.ts.net) fronting the routing nginx. Additive —
 # leaves the public Caddy/NodePort path untouched.
+#
+# OFF by default, because it cannot work without out-of-band setup the chart
+# cannot ship: a TS_AUTHKEY in the env Secret, plus MagicDNS and HTTPS certs
+# enabled in a tailnet. Enabled with none of that, the pod CrashLoops. Each
+# environment that wants it turns it on beside its hostname
+# (deploy/environments/<env>.yaml).
 tailscale:
-  enabled: true
+  enabled: false
   image: tailscale/tailscale:stable
-  hostname: fortymm-uat
+  # One tailnet node per deployment, so the name has to say WHICH deployment —
+  # each environment sets its own in deploy/environments/<env>.yaml. Two
+  # environments left on this default would collide and Tailscale would rename
+  # the second `fortymm-1`.
+  hostname: fortymm
   # TS_AUTHKEY is read from the .env-backed secret (secrets.env), into which
   # redeploy-uat.sh already loads every .env line — so a TS_AUTHKEY=... line in
   # .env is all that's needed.

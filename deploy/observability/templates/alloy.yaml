@@ -4,7 +4,7 @@
 Grafana Alloy running a faro.receiver: ingests browser telemetry from the
 @grafana/faro-web-sdk in the SPA and fans it out — logs -> Loki, traces ->
 Tempo. The browser reaches it same-origin at /faro/collect via the routing
-nginx (deploy/uat), so both public (uat.fortymm.com) and tailnet users are
+nginx (deploy/fortymm), so both public (uat.fortymm.com) and tailnet users are
 captured. Abuse controls live on the receiver itself: CORS origin allowlist,
 request rate limiting, and a max payload size (a browser endpoint is inherently
 public — these cap the blast radius rather than authenticate callers).
