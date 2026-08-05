@@ -40,6 +40,10 @@ interface PlayableEvent {
   readonly fixtures: ReadonlyArray<{
     readonly id: string
     readonly pool_id: string | null
+    /** Which round of the draw the fixture belongs to — what `playSwissRound` scopes
+     * itself by. A swiss draw is cut whole, so every round's rows exist from the start
+     * and "the fixtures that are playable" is never the same set as "this round's". */
+    readonly round: number
     readonly entry_a_id: string | null
     readonly entry_b_id: string | null
     readonly match_id: string | null
@@ -140,6 +144,95 @@ export async function playEvent(
     `event ${eventId} still had playable fixtures after ${MAX_PASSES} passes ` +
       `(${played} matches decided) — is the draw advancing?`,
   )
+}
+
+/** Who wins one fixture, given the two guests seated in it (side `a` first).
+ *
+ * A parameter rather than a rule, because in swiss **the winners decide the standings and
+ * the standings decide the next pairing** — so a spec proving that a round is paired from
+ * the standings has to be able to choose winners whose order is *not* the draw order. With
+ * `playEvent`'s "the earlier-registered entrant wins" the two orders coincide exactly
+ * (round 1 seeds the top half against the bottom half, so the first half of the draw order
+ * wins every fixture), and a pairing that ignored the standings altogether would produce
+ * the same fixtures as one that honours them. The assertion would pass against the bug. */
+export type PickWinner = (a: Guest, b: Guest) => Guest
+
+/** The winner rule `playEvent` bakes in, as a picker `playSwissRound` can be handed: **the
+ * earlier-registered entrant wins**, `entrants` being the field in registration order.
+ *
+ * Boring on purpose, and the right default for a round whose outcomes are scaffolding
+ * rather than subject — every result is then a function of the seeded field alone, and no
+ * pairing is left to a coin flip. It is the wrong rule for a round whose outcomes ARE the
+ * subject: see `PickWinner`. */
+export function earlierRegisteredWins(entrants: ReadonlyArray<Guest>): PickWinner {
+  const rank = new Map(entrants.map((guest, index) => [guest.username, index]))
+  const rankOf = (guest: Guest): number => {
+    const index = rank.get(guest.username)
+    if (index === undefined) {
+      throw new Error(`${guest.username} is not one of the entrants this spec minted`)
+    }
+    return index
+  }
+  return (a, b) => (rankOf(a) < rankOf(b) ? a : b)
+}
+
+/**
+ * Play **one round** of a swiss draw out over the API, `pickWinner` deciding each fixture,
+ * and return how many matches were decided.
+ *
+ * One round, not the whole draw, because a swiss round's completion is the event under
+ * test: finishing the last match of round `r` is what pairs round `r + 1` from the
+ * standings and materializes it, in the same transaction. `playEvent` would sail straight
+ * through that moment and hand back a finished tournament, with nothing left to look at.
+ *
+ * A single pass suffices and the loop `playEvent` needs is deliberately absent: a round's
+ * fixtures all materialize together (at go-live for round 1, at the previous round's last
+ * completion for every other), so they are all playable before this is called. A fixture
+ * of this round that has **not** materialized is therefore a named error rather than a
+ * skip — a silent one would leave the round undecided, the next round unpaired, and the
+ * failure somewhere else entirely.
+ */
+export async function playSwissRound(
+  director: Guest,
+  tournamentId: string,
+  eventId: string,
+  entrants: ReadonlyArray<Guest>,
+  round: number,
+  pickWinner: PickWinner,
+): Promise<number> {
+  const byUsername = new Map(entrants.map((guest) => [guest.username, guest]))
+  const event = await readPlayableEvent(director, tournamentId, eventId)
+  const seats = new Map(event.entrants.map((entrant) => [entrant.id, entrant.username]))
+  const fixtures = event.fixtures.filter((fixture) => fixture.round === round)
+  if (fixtures.length === 0) {
+    throw new Error(`event ${eventId} has no round-${round} fixtures — was the draw cut?`)
+  }
+
+  let played = 0
+  for (const fixture of fixtures) {
+    if (fixture.match_status === 'completed') continue
+    if (fixture.match_id === null) {
+      throw new Error(
+        `round-${round} fixture ${fixture.id} has not materialized into a match — is ` +
+          `the tournament live, and is round ${round - 1} decided?`,
+      )
+    }
+    const [a, b] = [fixture.entry_a_id, fixture.entry_b_id].map((entryId) =>
+      guestFor(byUsername, seats, entryId, fixture.id),
+    )
+    const winner = pickWinner(a, b)
+    // Side 1 IS `entry_a` and side 2 IS `entry_b` — the fixed materialization convention
+    // (#788) — so the winner's seat decides which column of the board wins.
+    const winnerIsA = winner.username === a.username
+    await decide(
+      winnerIsA ? a : b,
+      winnerIsA ? b : a,
+      fixture.match_id,
+      board(winnerIsA ? 1 : 2, gamesToWin(event.match_settings.length_games)),
+    )
+    played += 1
+  }
+  return played
 }
 
 /** The wins a best-of-`lengthGames` needs — the same `(n + 1) // 2` the server's
