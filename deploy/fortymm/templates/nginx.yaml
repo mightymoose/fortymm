@@ -62,4 +62,13 @@ spec:
   ports:
     - port: 80
       targetPort: 80
-      nodePort: {{ .Values.nginxNodePort }}
+      {{- /*
+        Omit the key entirely when no port is named, so Kubernetes allocates one
+        from the node port range. Naming a fixed port is only right when
+        something outside the cluster maps a host port to it (UAT: 30084, see
+        deploy/environments/uat.yaml), and it fails the install on any cluster
+        where that port is already allocated.
+      */}}
+      {{- with .Values.nginxNodePort }}
+      nodePort: {{ . }}
+      {{- end }}

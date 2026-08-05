@@ -113,18 +113,24 @@ alloy:
 # --------------------------------------------------------------------------
 # Per-service tailscale serve proxies (option C — no Tailscale operator). One
 # tailnet node per service => one MagicDNS hostname each, auto-HTTPS, tailnet
-# only. TS_AUTHKEY is read from a Secret synced from .env by redeploy-uat.sh.
+# only. TS_AUTHKEY is read from a Secret named below, which the deployer creates
+# out of band (for UAT, redeploy-uat.sh syncs it from .env).
+#
+# OFF by default, and with no services, for the same reason the stack chart
+# defaults its proxy off: this needs an auth key and a tailnet with MagicDNS and
+# HTTPS certs, none of which a chart can ship, and a pod without them
+# CrashLoops. A tailnet hostname also names ONE deployment — two environments
+# sharing `grafana` would collide and Tailscale would register the second as
+# `grafana-1`. So each environment turns this on and lists its own hostnames in
+# deploy/environments/<env>-observability.yaml.
 # --------------------------------------------------------------------------
 tailscaleProxies:
-  enabled: true
+  enabled: false
   image: tailscale/tailscale:stable
   pullPolicy: IfNotPresent
   authKeySecret: tailscale-authkey
   authKeySecretKey: TS_AUTHKEY
-  services:
-    - hostname: grafana
-      backend: "http://kube-prometheus-stack-grafana:80"
-    - hostname: prometheus
-      backend: "http://kube-prometheus-stack-prometheus:9090"
-    - hostname: loki
-      backend: "http://loki:3100"
+  # Each entry is `hostname` (the MagicDNS node name) + `backend` (the in-cluster
+  # URL it serves). Helm REPLACES a list rather than merging it, so an
+  # environment file names every proxy it wants.
+  services: []

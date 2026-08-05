@@ -43,6 +43,11 @@ NAMESPACE="fortymm-uat"
 # The release names the environment, because the chart no longer does.
 RELEASE="fortymm-uat"
 HOST_PORT=8084
+# The k3d loadbalancer maps HOST_PORT to this NodePort, so it must equal
+# `nginxNodePort` in $STACK_VALUES (deploy/environments/uat.yaml). The chart
+# itself names no port — it defaults the value empty and lets Kubernetes
+# allocate — so nothing but these two lines keeps host :8084 pointed at the
+# routing nginx. Change one and you must change the other.
 NODE_PORT=30084
 APNS_KEY="secrets/AuthKey_68VYRLMWWR.p8"
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
@@ -64,8 +69,8 @@ PUBLISH_RUNS_URL="https://github.com/${GHCR_OWNER}/fortymm/actions/workflows/pub
 STACK_VALUES="deploy/environments/uat.yaml"
 OBS_VALUES="deploy/environments/uat-observability.yaml"
 
-# How long to wait for the deploying commit's CHART to appear in GHCR before
-# giving up. The chart job runs after the two image jobs, whose arm64 leg is
+# How long to wait for the deploying commit's STACK chart to appear in GHCR
+# before giving up. Its job runs after the two image jobs, whose arm64 leg is
 # QEMU-emulated on an amd64 runner, so ~25 min is normal and the jobs themselves
 # allow 90; 40 minutes covers a normal run plus queue time without hanging a
 # terminal all day. Deploying straight after a merge is the case this exists
@@ -73,6 +78,12 @@ OBS_VALUES="deploy/environments/uat-observability.yaml"
 # waiting. (The variable keeps its name from when this waited on the two image
 # digests: it still waits for a digest, now the chart's.)
 DIGEST_WAIT_TIMEOUT_S="${DIGEST_WAIT_TIMEOUT_S:-2400}"
+# The observability chart gets its own, much shorter budget. It `needs: [tag]`
+# only, so it publishes minutes into a run rather than behind the images: by the
+# time the stack chart resolves, this one has existed for twenty-odd minutes.
+# Waiting 40 more minutes for it could only ever mean its job FAILED, which time
+# does not fix. One minute absorbs a registry blip and nothing else.
+OBS_DIGEST_WAIT_TIMEOUT_S="${OBS_DIGEST_WAIT_TIMEOUT_S:-60}"
 DIGEST_POLL_INTERVAL_S="${DIGEST_POLL_INTERVAL_S:-30}"
 
 # Observability stack (kube-prometheus-stack + loki-stack + tempo) in its own
@@ -83,8 +94,9 @@ OBS_CHART="observability"
 DEPLOY_OBSERVABILITY="${DEPLOY_OBSERVABILITY:-true}"
 
 # Pulled chart packages land here — one tarball per chart, thrown away on exit.
-# The pull is what resolves a version to a digest; the copy on disk is only read
-# for the tailscale preflight below.
+# The pull is what resolves a version to a digest, and `helm pull` insists on
+# writing the package somewhere; nothing reads the tarballs. The deploy installs
+# from the registry by digest, not from these files.
 CHART_DIR="$(mktemp -d)"
 trap 'rm -rf "$CHART_DIR"' EXIT
 
@@ -98,8 +110,14 @@ done
 # Checked here rather than where helm reads them, which is on the far side of a
 # wait that can last 40 minutes. Without these files the charts would render
 # their neutral defaults: no UAT hostnames, and Secret names that do not exist
-# in this cluster.
-for f in "$STACK_VALUES" "$OBS_VALUES"; do
+# in this cluster. Only the files this run will actually read are required — a
+# DEPLOY_OBSERVABILITY=false run never opens $OBS_VALUES, so a missing one is
+# not its problem.
+required_values=("$STACK_VALUES")
+if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
+  required_values+=("$OBS_VALUES")
+fi
+for f in "${required_values[@]}"; do
   [ -f "$f" ] || { echo "ERROR: environment values file '$f' not found." >&2; exit 1; }
 done
 
@@ -210,12 +228,16 @@ ghcr_visibility_help() {
 # and print the digest helm reports for what it pulled. Prints ONLY the digest
 # on stdout — every progress and error line goes to stderr, because callers
 # capture this in `$(…)`. The pulled tarball is left in $CHART_DIR.
+#
+# $1 = chart name, $2 = how many seconds to keep waiting. The budget is a
+# parameter because the two charts publish at very different points in a run
+# (see OBS_DIGEST_WAIT_TIMEOUT_S), so one number cannot be right for both.
 resolve_chart_digest() {
   # `ref` cannot read `name` in the same `local` (shellcheck SC2318), so both
   # come from "$1".
-  local name="$1" ref="${CHART_REPO}/${1}" out lower digest rc started deadline now attempt=0
+  local name="$1" ref="${CHART_REPO}/${1}" budget="$2" out lower digest rc started deadline now attempt=0
   started="$(date +%s)"
-  deadline=$(( started + DIGEST_WAIT_TIMEOUT_S ))
+  deadline=$(( started + budget ))
   while :; do
     # helm prints `Pulled:` and `Digest:` on stdout and its errors on stderr, so
     # both streams are captured together and classified below.
@@ -250,7 +272,7 @@ resolve_chart_digest() {
 
     now="$(date +%s)"
     if [ "$now" -ge "$deadline" ]; then
-      echo "ERROR: no chart published at ${ref}:${CHART_VERSION} after ${DIGEST_WAIT_TIMEOUT_S}s." >&2
+      echo "ERROR: no chart published at ${ref}:${CHART_VERSION} after ${budget}s." >&2
       echo "       Commit $(git rev-parse HEAD) has no chart. Either publish is still" >&2
       echo "       running or it failed for this commit, or HEAD is not a commit that exists on" >&2
       echo "       origin/main (only pushed main commits are ever published)." >&2
@@ -265,11 +287,20 @@ resolve_chart_digest() {
 
     attempt=$((attempt + 1))
     if [ "$attempt" -eq 1 ]; then
-      echo "    ${ref}:${CHART_VERSION} not published yet — waiting up to ${DIGEST_WAIT_TIMEOUT_S}s." >&2
-      echo "    (the stack chart is published after the ~25 min multi-arch image build:" >&2
+      echo "    ${ref}:${CHART_VERSION} not published yet — waiting up to ${budget}s." >&2
+      # The two charts are missing for different reasons, so they get different
+      # diagnoses. The stack chart job `needs` both image jobs; the
+      # observability job `needs: [tag]` alone and never waits on an image, so
+      # telling its operator to sit out an image build would be wrong.
+      if [ "$name" = "$STACK_CHART" ]; then
+        echo "    (the stack chart is published after the ~25 min multi-arch image build:" >&2
+      else
+        echo "    (this chart does NOT wait on the image build, so it should already exist —" >&2
+        echo "     a missing one most likely means its job failed:" >&2
+      fi
       echo "     $PUBLISH_RUNS_URL)" >&2
     elif [ $((attempt % 4)) -eq 0 ]; then
-      echo "    still waiting for ${name} ${CHART_VERSION} ($(( now - started ))s elapsed of ${DIGEST_WAIT_TIMEOUT_S}s)" >&2
+      echo "    still waiting for ${name} ${CHART_VERSION} ($(( now - started ))s elapsed of ${budget}s)" >&2
     fi
     sleep "$DIGEST_POLL_INTERVAL_S"
   done
@@ -277,9 +308,20 @@ resolve_chart_digest() {
 
 echo
 echo "==> Resolving the published $STACK_CHART chart at $CHART_VERSION"
-STACK_CHART_DIGEST="$(resolve_chart_digest "$STACK_CHART")" || exit 1
-STACK_CHART_TGZ="$CHART_DIR/${STACK_CHART}-${CHART_VERSION}.tgz"
+STACK_CHART_DIGEST="$(resolve_chart_digest "$STACK_CHART" "$DIGEST_WAIT_TIMEOUT_S")" || exit 1
 echo "    ${CHART_REPO}/${STACK_CHART}@${STACK_CHART_DIGEST}"
+
+# Both charts resolve HERE, before anything is deployed. Resolving the second
+# one after the stack was already upgraded, rolled out and polled would let a
+# missing observability chart end the run with UAT half-deployed — the expensive
+# half done, and no monitoring. Everything that can refuse to start the deploy
+# does so before the deploy starts.
+if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
+  echo
+  echo "==> Resolving the published $OBS_CHART chart at $CHART_VERSION"
+  OBS_CHART_DIGEST="$(resolve_chart_digest "$OBS_CHART" "$OBS_DIGEST_WAIT_TIMEOUT_S")" || exit 1
+  echo "    ${CHART_REPO}/${OBS_CHART}@${OBS_CHART_DIGEST}"
+fi
 
 # --- secrets ----------------------------------------------------------------
 # Created from the gitignored source-of-truth files, never committed and never
@@ -291,12 +333,9 @@ echo "==> Syncing secrets from .env and $APNS_KEY"
 
 # The tailscale proxy reads TS_AUTHKEY from the .env-backed secret. When it's
 # enabled, fail fast with a clear message rather than a CrashLooping pod. The
-# effective value is the published chart's default overridden by UAT's
-# environment file — the same two sources, in the same order, that the deploy
-# below merges — so both are read here and the LAST tailscale.enabled wins.
-# Reading only one of them would answer about a deploy nobody is doing.
-ts_enabled=$({ helm show values "$STACK_CHART_TGZ"; cat "$STACK_VALUES"; } \
-  | awk '/^tailscale:/{f=1;next} f&&/^[^[:space:]]/{f=0} f&&/^[[:space:]]+enabled:/{v=$2} END{print v}')
+# chart defaults tailscale.enabled to FALSE, so this file is the only thing that
+# can turn it on for UAT and the only thing worth reading here.
+ts_enabled=$(awk '/^tailscale:/{f=1;next} f&&/^[^[:space:]]/{f=0} f&&/^[[:space:]]+enabled:/{v=$2} END{print v}' "$STACK_VALUES")
 if [ "$ts_enabled" = "true" ]; then
   grep -qE '^TS_AUTHKEY=.' .env || {
     echo "ERROR: TS_AUTHKEY missing/empty in .env (tailscale.enabled=true)." >&2
@@ -307,7 +346,11 @@ if [ "$ts_enabled" = "true" ]; then
 fi
 
 # The observability stack needs a Grafana admin password and (for its tailscale
-# proxies) the same TS_AUTHKEY. Fail fast here rather than mid-deploy.
+# proxies) the same TS_AUTHKEY. Fail fast here rather than mid-deploy. The key is
+# required unconditionally rather than read out of $OBS_VALUES the way
+# tailscale.enabled is above: that chart's proxies are a LIST of hostnames, which
+# no line-wise scan reads honestly, and UAT turns them on. Turn them off in
+# $OBS_VALUES and this check becomes stricter than the deploy needs.
 require_env() {
   grep -qE "^$1=." .env || {
     echo "ERROR: $1 missing/empty in .env ($2)." >&2
@@ -386,15 +429,9 @@ if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
     --from-literal=TS_AUTHKEY="$(read_env TS_AUTHKEY)" \
     --dry-run=client -o yaml | kubectl apply -f -
 
-  # Same commit, same version, same digest-pinned form as the stack chart. This
-  # one publishes without waiting on the image builds, so by the time the stack
-  # chart resolved above it already exists; the wait is kept only so a run with
-  # DEPLOY_OBSERVABILITY=true and no observability chart says why.
-  echo
-  echo "==> Resolving the published $OBS_CHART chart at $CHART_VERSION"
-  OBS_CHART_DIGEST="$(resolve_chart_digest "$OBS_CHART")" || exit 1
-  echo "    ${CHART_REPO}/${OBS_CHART}@${OBS_CHART_DIGEST}"
-
+  # Same commit, same version, same digest-pinned form as the stack chart. Its
+  # digest was resolved before the stack deploy, so a missing chart stops the run
+  # before it changes anything.
   echo
   echo "==> helm upgrade --install $OBS_RELEASE"
   helm upgrade --install "$OBS_RELEASE" "${CHART_REPO}/${OBS_CHART}@${OBS_CHART_DIGEST}" \
