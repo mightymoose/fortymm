@@ -119,6 +119,15 @@ set; charts have no equivalent need.
   with `packages: write` is linked to the publishing repository and inherits
   its visibility, and `mightymoose/fortymm` is public. Anonymous `helm pull`
   works, and no chart needs `imagePullSecrets`.
+- **Publishing lands before anything consumes it.** `publish.yml` runs on push
+  to `main` only, so the first chart package cannot exist until the PR that adds
+  the job has merged — there is no way to prove the job works from a PR. If the
+  same merge also switched `redeploy-uat.sh` to pulling from the registry, a bug
+  in the new job would leave UAT undeployable with the local-directory path
+  already deleted, and the images ADR removed the `--local` escape hatch that
+  would otherwise have been the way back. So the chart job ships and is
+  confirmed publishing first; the script switch and the rename follow in a
+  separate change.
 - **Secrets remain out of band.** The `fortymm-uat-env` and `-apns` Secrets are
   created from the operator's `.env`, and no published artifact can carry them.
   A checkout-free deploy still means the deployer supplies their own secrets.

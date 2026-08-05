@@ -21,7 +21,17 @@ baked into three places only:
 
 1. the chart name, and therefore the published package name,
 2. `app.kubernetes.io/name: fortymm-uat`, a literal in the labels and selector,
-3. the directory, and the UAT-shaped defaults in `values.yaml`.
+3. the directory, and the UAT-shaped defaults in `values.yaml`,
+4. `appVersion: "uat"` — in **both** `Chart.yaml` files, including
+   observability's.
+
+The fourth is the odd one, because `appVersion` is supposed to name the version
+of the application the chart deploys, and `"uat"` is not a version of anything.
+It was harmless while the chart was a local directory. Published, it appears in
+`helm show chart` output as the answer to "what does this deploy?", so CI stamps
+the commit with `helm package --app-version` alongside `--version`. Both charts
+get this; it is the one environment-neutrality fix the observability chart also
+needs.
 
 So this is a rename plus a values split, not a re-architecture, and it is worth
 recording that the structure was already right — a future reader should not go
