@@ -59,22 +59,22 @@ spec:
             # Server-side geocoding key for venue addresses — see
             # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
             # Sourced from the .env-backed Secret (secrets.env), the same place
-            # every other sensitive var comes from; only UAT/prod set it.
+            # every other sensitive var comes from. Only an environment that
+            # geocodes for real sets it.
+            #
             # optional:true does NOT mean "fall back to the fake geocoder". It
             # used to: the provider was inferred from key presence, so a missing
-            # key silently selected FakeGeocoder — which is exactly how UAT spent
-            # weeks writing hash-derived coordinates as though they were real.
-            # That inference is gone. `GEOCODER` now names the provider outright,
-            # it defaults to `google`, and a `google` with no key RAISES at
-            # Settings construction — the pod fails its probe rather than
-            # degrading.
+            # key silently selected FakeGeocoder and stored hash-derived
+            # coordinates as though they were real. That inference is gone.
+            # `GEOCODER` names the provider outright, the application defaults
+            # it to `google`, and a `google` with no key RAISES at Settings
+            # construction — the pod fails its probe rather than degrading.
             #
-            # So this ref is only safe to leave optional because
-            # `config.GEOCODER` is pinned to `fake` in values.yaml (see the
-            # comment on that value). Remove that pin and the missing key stops
-            # being harmless and starts being a boot failure. When UAT gets a
-            # real key (#1205), the key lands in .env, `GEOCODER` flips to
-            # `google`, and `optional: true` should come off with it.
+            # So this ref is only safe to leave optional because the chart pins
+            # `config.GEOCODER` to `fake` (see the comment on that value).
+            # Remove that pin and a missing key stops being harmless and starts
+            # being a boot failure: an environment that flips `GEOCODER` to
+            # `google` must supply the key AND take `optional: true` off here.
             #
             # Declared explicitly (not just via the bulk envFrom Secret) so the
             # wiring is visible and greppable in the rendered Deployment.

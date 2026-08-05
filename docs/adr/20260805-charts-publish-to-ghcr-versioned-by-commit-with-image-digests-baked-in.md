@@ -117,7 +117,7 @@ set; charts have no equivalent need.
 
   This originally said the script would get *substantially smaller*. It did
   not, and the correction is worth keeping so nobody goes looking for the
-  missing lines: 252 code lines became 235. The hand-rolled GHCR token mint and
+  missing lines: 252 code lines became 245. The hand-rolled GHCR token mint and
   manifest walk disappeared, but the wait-for-CI logic did not — it moved onto
   the chart — and the reasoning it now has to explain is no less subtle. The
   win is that the deploy stopped reimplementing a registry client, not that

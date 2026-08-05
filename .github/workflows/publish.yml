@@ -257,10 +257,10 @@ jobs:
           # Derived once, by the `tag` job. The `sha` prefix in it is
           # load-bearing -- see the comment there.
           CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
-          # Chart.yaml says `appVersion: "uat"`, which is not a version of
-          # anything. Stamp the commit instead -- at package time, so no commit
-          # has to bump a chart file and the version cannot drift from the
-          # commit it was built from.
+          # Chart.yaml carries a placeholder appVersion, because a checkout
+          # has no commit to name until CI stamps one. Stamped at package
+          # time, so no commit has to bump a chart file and the version
+          # cannot drift from the commit it was built from.
           APP_VERSION: ${{ needs.tag.outputs.short-sha }}
           API_DIGEST: ${{ needs.api.outputs.digest }}
           WEB_DIGEST: ${{ needs.web-client.outputs.digest }}
@@ -359,9 +359,9 @@ jobs:
           # Derived once, by the `tag` job. The `sha` prefix in it is
           # load-bearing -- see the comment there.
           CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
-          # Chart.yaml says `appVersion: "uat"`, which is not a version of
-          # anything. Stamp the commit at package time instead, so no commit has
-          # to bump a chart file.
+          # Chart.yaml carries a placeholder appVersion; the real one is
+          # stamped here at package time, so no commit has to bump a chart
+          # file.
           APP_VERSION: ${{ needs.tag.outputs.short-sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

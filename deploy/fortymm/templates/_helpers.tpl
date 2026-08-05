@@ -198,7 +198,7 @@ server {
     # RFC 9728 protected-resource metadata for the MCP OAuth Resource Server.
     # The server advertises this URL at the PUBLIC ORIGIN ROOT via the 401
     # `WWW-Authenticate: Bearer resource_metadata="…"` challenge on /mcp/, e.g.
-    # https://uat.fortymm.com/.well-known/oauth-protected-resource/api/mcp/ — the
+    # https://<public-origin>/.well-known/oauth-protected-resource/api/mcp/ — the
     # RFC 9728 path-insertion form. The `/api` there is MID-path (part of the
     # resource identifier), NOT a strippable prefix, so the /api/ rewrite above
     # can't reach it. Internally FastMCP serves the metadata UNDER its mount

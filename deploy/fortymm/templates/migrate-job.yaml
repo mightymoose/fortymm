@@ -11,7 +11,7 @@ metadata:
     # against). The Job waits for postgres, then migrates + seeds.
     #
     # api readiness is deliberately NOT gated on this Job (re: issue #763, "gate
-    # api readiness behind migrations"): redeploy-uat.sh runs
+    # api readiness behind migrations"): a deploy runs
     # `helm upgrade --install --wait`, and --wait blocks on the api Deployment
     # going Ready BEFORE it fires post-install hooks. Gating readiness on
     # migrations would deadlock — api never goes Ready, so --wait never runs this
@@ -20,7 +20,8 @@ metadata:
     # api readiness is /v1/readyz (503 on an unreachable DB, since PR #777), but
     # it only does SELECT 1 — connectivity, not migration completion. So on a
     # fresh install the api can briefly serve against a reachable-but-unmigrated
-    # schema during this Job's window. Knowingly accepted for single-node UAT.
+    # schema during this Job's window. Knowingly accepted on a single-node
+    # cluster, where there is no second node to serve the old schema anyway.
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
     # Keep the last Job around so its logs are inspectable; only delete the
