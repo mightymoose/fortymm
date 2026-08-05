@@ -70,8 +70,8 @@ export type PlayStage = 'pools' | 'all'
 export type PickWinner = (a: Guest, b: Guest) => Guest
 
 /** **The earlier-registered entrant wins**, `entrants` being the field in registration
- * order — `playEvent`'s default rule, and the picker `playSwissRound` is handed for a round
- * whose outcomes are scaffolding rather than subject.
+ * order — `playEvent`'s default rule, and the picker a caller wraps in `inStraightGames` to
+ * hand `playSwissRound` a round whose outcomes are scaffolding rather than subject.
  *
  * Stated here and nowhere else, so the two helpers cannot drift apart on what "the boring
  * rule" is. It is the wrong rule for a round whose outcomes ARE the subject: see
@@ -148,7 +148,7 @@ export async function playEvent(
           (stage === 'all' || fixture.pool_id !== null),
       )
     if (playable.length === 0) return played
-    played += await playFixtures(event, playable, entrants, pickWinner)
+    played += await playFixtures(event, playable, entrants, inStraightGames(pickWinner))
   }
 
   throw new Error(
@@ -157,8 +157,32 @@ export async function playEvent(
   )
 }
 
+/** How one fixture ends: who won, and **how many games the loser took**.
+ *
+ * The margin is here because who won is not the whole of a result: game difference is a
+ * link of the standings chain, and a suite that always plays straight games can never make
+ * it disagree with anything. Proving that Buchholz outranks game difference needs two
+ * entrants level on wins whose margins and strengths of schedule point opposite ways, and
+ * the margin is half of that. */
+export interface FixtureResult {
+  readonly winner: Guest
+  readonly loserGames: number
+}
+
+/** How a fixture is decided, given the two guests seated in it (side `a` first). */
+export type PickResult = (a: Guest, b: Guest) => FixtureResult
+
+/** Play a winner rule out in **straight games** — the loser takes none.
+ *
+ * The adapter that keeps "who wins" and "by how much" separable: a round whose margins are
+ * scaffolding says so in one word at the call site, and only the round whose margins are
+ * the subject writes them down. */
+export function inStraightGames(pick: PickWinner): PickResult {
+  return (a, b) => ({ winner: pick(a, b), loserGames: 0 })
+}
+
 /**
- * Play **one round** of a swiss draw out over the API, `pickWinner` deciding each fixture,
+ * Play **one round** of a swiss draw out over the API, `decideFixture` deciding each one,
  * and return how many matches were decided.
  *
  * One round, not the whole draw, because a swiss round's completion is the event under
@@ -180,7 +204,7 @@ export async function playSwissRound(
   eventId: string,
   entrants: ReadonlyArray<Guest>,
   round: number,
-  pickWinner: PickWinner,
+  decideFixture: PickResult,
 ): Promise<number> {
   const event = await readPlayableEvent(director, tournamentId, eventId)
   const fixtures = event.fixtures.filter((fixture) => fixture.round === round)
@@ -196,7 +220,7 @@ export async function playSwissRound(
         `is the tournament live, and is round ${round - 1} decided?`,
     )
   }
-  return playFixtures(event, undecided.filter(isMaterialized), entrants, pickWinner)
+  return playFixtures(event, undecided.filter(isMaterialized), entrants, decideFixture)
 }
 
 /** A fixture the draw has turned into a real match — the only kind either helper can play,
@@ -219,6 +243,11 @@ const isMaterialized = (
  * a change to how a match is decided over the API lands in one helper and silently leaves
  * the other playing a different game.
  *
+ * It takes a `PickResult` rather than a `PickWinner` because the **margin** is part of a
+ * result: game difference is a link of the swiss standings chain, and a helper that only
+ * ever played straight games could not make it disagree with anything. A caller that does
+ * not care says so with `inStraightGames`, which is what `playEvent` hands down.
+ *
  * The callers keep only what genuinely differs: which fixtures are theirs to play, and what
  * an unplayable one means to them — `playEvent` re-reads and passes again, `playSwissRound`
  * refuses by name.
@@ -227,7 +256,7 @@ async function playFixtures(
   event: PlayableEvent,
   fixtures: ReadonlyArray<MaterializedFixture>,
   entrants: ReadonlyArray<Guest>,
-  pickWinner: PickWinner,
+  decideFixture: PickResult,
 ): Promise<number> {
   const byUsername = new Map(entrants.map((guest) => [guest.username, guest]))
   const seats = new Map(event.entrants.map((entrant) => [entrant.id, entrant.username]))
@@ -237,14 +266,15 @@ async function playFixtures(
     const [a, b] = [fixture.entry_a_id, fixture.entry_b_id].map((entryId) =>
       guestFor(byUsername, seats, entryId, fixture.id),
     )
+    const { winner, loserGames } = decideFixture(a, b)
     // Side 1 IS `entry_a` and side 2 IS `entry_b` — the fixed materialization convention
     // (#788) — so the winner's seat decides which column of the board wins.
-    const winnerIsA = pickWinner(a, b).username === a.username
+    const winnerIsA = winner.username === a.username
     await decide(
       winnerIsA ? a : b,
       winnerIsA ? b : a,
       fixture.match_id,
-      board(winnerIsA ? 1 : 2, wins),
+      board(winnerIsA ? 1 : 2, wins, loserGames),
     )
   }
   return fixtures.length
@@ -258,13 +288,32 @@ function gamesToWin(lengthGames: number): number {
   return Math.floor(lengthGames / 2) + 1
 }
 
-/** A straight-games board: `wins` games at 11–5 to `winnerSide`, numbered from 1. */
-function board(winnerSide: 1 | 2, wins: number): ResultGame[] {
-  return Array.from({ length: wins }, (_, index) => ({
+/** A board of `wins` games at 11–5 to `winnerSide`, plus `loserGames` at 11–5 the other
+ * way, numbered from 1.
+ *
+ * **The loser's games come first**, and that is the server's rule rather than a taste: a
+ * board is refused for extending "past the deciding game", so the winner's `wins`-th win
+ * has to be the last game on it. Trailing the loser's games would be a match that carried
+ * on after it was over.
+ *
+ * `loserGames` defaults to 0 — a straight-games win — so the callers that do not care
+ * about the margin say nothing about it. */
+function board(winnerSide: 1 | 2, wins: number, loserGames = 0): ResultGame[] {
+  if (loserGames >= wins) {
+    throw new Error(
+      `a best-of needing ${wins} wins cannot be lost ${wins}-${loserGames}: the loser ` +
+        'would have won it',
+    )
+  }
+  const game = (toWinner: boolean, index: number): ResultGame => ({
     game_number: index + 1,
-    side_1_points: winnerSide === 1 ? 11 : 5,
-    side_2_points: winnerSide === 2 ? 11 : 5,
-  }))
+    side_1_points: (winnerSide === 1) === toWinner ? 11 : 5,
+    side_2_points: (winnerSide === 2) === toWinner ? 11 : 5,
+  })
+  return [
+    ...Array.from({ length: loserGames }, (_, index) => game(false, index)),
+    ...Array.from({ length: wins }, (_, index) => game(true, loserGames + index)),
+  ]
 }
 
 /** Resolve a fixture's entry ref to the guest sitting in it.
