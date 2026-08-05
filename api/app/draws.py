@@ -1199,6 +1199,61 @@ def reads_fixture_games(draw_type: DrawType) -> bool:
             return True
 
 
+def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
+    """How many of a field's entrants this draw type's fixtures may legitimately fail
+    to seat — the **bye allowance**, and the one thing "these fixtures cover this
+    field" cannot be asked without.
+
+    A draw's currency (:class:`~app.tournament_draws.DrawCurrency`) is "the fixtures
+    seat exactly the active entrants", and for three of the four draw types that is
+    literally true. Not because they have no byes — an odd round-robin pool byes
+    somebody every round — but because their byed entrants are **still seated
+    somewhere**: a round-robin bye sits out one round of a schedule that seats them in
+    every other, and a single-elim bye is seated directly onto its round-2 side at cut
+    time (:func:`_knockout_seats`). So zero of their entrants are unseated, and an
+    unseated entrant is exactly what it looks like — somebody who entered after the cut.
+
+    **Swiss is the exception, and it is arithmetic rather than a special case.** Its cut
+    emits ``⌊n/2⌋`` fixtures a round, so an odd field leaves exactly one entrant with no
+    fixture at all — a bye is the absence of a row (ADR-0786), never a row with a
+    ``NULL`` side. That entrant is covered by the draw; the draw simply has no row that
+    says so. Hence ``field_size % 2``: one for an odd field, none for an even one.
+
+    It is an **allowance**, i.e. an upper bound, not a required count. Once a later
+    round is paired (the next slice) the round-1 bye is seated in it, and a draw that
+    seats its whole field must stay current.
+
+    What the allowance **cannot** do is tell a byed entrant from a single latecomer who
+    leaves the field odd: a swiss draw cut for eight and joined by a ninth holds exactly
+    the rows a draw cut for nine holds. The ambiguity is irreducible, not a shortcut. A
+    bye is an absence, so the parity of the field the draw was cut for is recorded
+    nowhere, and no arithmetic recovers it — ``⌊8/2⌋`` and ``⌊9/2⌋`` are the same number
+    of fixtures.
+
+    It is also the one shape where being wrong is survivable, and only for swiss. The
+    latecomer is treated as that round's bye, which is a state the format puts somebody
+    in every odd round anyway — where the same slip on a round-robin would seat a player
+    in no match for the whole tournament. Everything else still reds: two latecomers,
+    a latecomer that leaves the field **even** (``7 → 8``: two unseated against an
+    allowance of none), and any withdrawal of a **seated** entry, which fails the subset
+    half of the comparison rather than this count.
+
+    An exhaustive ``match`` with no catch-all, exactly like :func:`reads_fixture_games`:
+    a new :class:`DrawType` has to state its own answer, and until it does this fails to
+    type-check. A default of ``0`` would be the ``stale`` this function exists to stop;
+    a default of ``1`` would quietly stop catching the latecomer.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return 0
+        case DrawType.single_elim:
+            return 0
+        case DrawType.rr_then_ko:
+            return 0
+        case DrawType.swiss:
+            return field_size % 2
+
+
 def _snake(
     ordered_entrants: Sequence[OrderedEntrant], pool_ids: Sequence[PoolId]
 ) -> list[tuple[PoolId, tuple[EntryId, ...]]]:
