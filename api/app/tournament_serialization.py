@@ -59,6 +59,7 @@ from app.schemas.tournament import (
     TournamentFixtureRead,
     TournamentRead,
 )
+from app.tournament_draw_settings import draw_settings_of
 from app.tournament_eligibility import (
     Eligible,
     RatingIneligible,
@@ -446,6 +447,11 @@ def serialize_event(
     # body can see. It is loaded once, in a batch, by ``fixtures_by_event``, which
     # also owns the pool → round → position ordering, so the serializer never sorts
     # and no two call sites can order a bracket differently.
+    #
+    # The draw configuration is parsed ONCE, here, off the settings row that rides along
+    # with the event (``lazy="joined"``): both wire fields below come off this one arm,
+    # so the type and the count cannot be read from two different places and disagree.
+    draw_settings = draw_settings_of(e.draw_settings)
     return TournamentEventRead.model_validate(
         {
             "id": e.id,
@@ -457,16 +463,16 @@ def serialize_event(
             # configuration is a row, not a column"), which is joined onto every query
             # that loads an event (``lazy="joined"``), so the list endpoint's
             # per-event serialization still issues no query of its own.
-            "draw_type": e.draw_settings.draw_type,
-            # The other half of the same fact, off the same already-joined row: the
-            # slug through the ``draw_type`` property (which owns the slug→enum parse,
-            # so this serializer never spells one), and **K** through the column beside
-            # it. Read as a pair because they are stored as a pair — taking the type
-            # from the settings row and the count from anywhere else is how the two
-            # start disagreeing. ``None`` for the two draw types that have no knockout
-            # stage to qualify for, which the table's ``CHECK`` guarantees rather than
-            # this line assuming.
-            "qualifiers_per_pool": e.draw_settings.qualifiers_per_pool,
+            "draw_type": draw_settings.draw_type,
+            # The other half of the same fact, off the same parsed arm: **K**, which
+            # only the ``rr-then-ko`` arm carries as a field. ``None`` for the two draw
+            # types that have no knockout stage to qualify for — a property on those
+            # arms, so this reads the same question of every arm without an
+            # ``isinstance`` ladder, and the answer comes from the union rather than
+            # from this line assuming it. **Flat beside ``draw_type`` on the wire**,
+            # exactly as before: the settings object is a storage shape, not a wire one
+            # (ADR "a draw type's settings are one NOT NULL JSON object").
+            "qualifiers_per_pool": draw_settings.qualifiers_per_pool,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
             # The event's venue timezone anchors its wall-clock ``Slot`` windows to

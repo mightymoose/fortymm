@@ -45,6 +45,12 @@ from typing import NewType, Protocol
 
 from app.models.tournament import DrawType, EventFormat
 from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
+from app.schemas.tournament import (
+    DrawSettingsWriteArm,
+    RoundRobinDrawSettingsWrite,
+    RrThenKoDrawSettingsWrite,
+    SingleElimDrawSettingsWrite,
+)
 
 # Distinct id types, so the checker rejects handing a fixture id to something that
 # wants an entry id. They are plain ``uuid.UUID`` at runtime.
@@ -1016,51 +1022,37 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     return tuple(f.fixture_id for f in ready)
 
 
-def strategy_for(
-    draw_type: DrawType, *, qualifiers_per_pool: int | None
-) -> DrawStrategy:
-    """The strategy that cuts and advances this draw type, configured as the event's
-    draw-settings row configures it.
+def strategy_for(settings: DrawSettingsWriteArm) -> DrawStrategy:
+    """The strategy that cuts and advances this draw configuration.
 
-    **Total** — every :class:`DrawType` returns a strategy, and there is no refusal arm
-    left to reach. That is the whole point of holding only what runs in the enum (ADR
-    "a draw type is a seeded row, and the enum holds only what runs"): a slug with no
-    strategy is not a value this function can be handed, because Pydantic refuses it at
-    the request boundary.
+    **Total** — every arm returns a strategy, and there is no refusal arm left to reach.
+    That is the point of holding only what runs in the enum (ADR "a draw type is a
+    seeded row, and the enum holds only what runs"): a slug with no strategy is not a
+    value this function can be handed, because Pydantic refuses it at the request
+    boundary.
 
-    Still an exhaustive ``match`` with **no catch-all**, and now with nowhere to park a
-    new member lazily: adding one to :class:`DrawType` fails to type-check here until
-    its strategy exists.
+    Still an exhaustive ``match`` with **no catch-all**, and nowhere to park a new
+    member lazily: adding a :class:`DrawType` and its union arm fails to type-check here
+    until its strategy exists.
 
-    ``qualifiers_per_pool`` is the settings row's **K** column, passed straight through:
-    ``rr-then-ko`` is the first draw type whose strategy takes a *parameter*, and the
-    parameter lives on the event, not in this module. It is keyword-only and has **no
-    default**, so every call site has to answer "where does K come from" rather than
-    silently taking a strategy configured by omission — and the two draw types that take
-    no configuration say ``None`` out loud. Production callers do not spell the pair
-    themselves; :func:`app.tournament_draws.strategy_for_event` reads both facts off the
-    one row that holds them.
-
-    A ``None`` on the ``rr-then-ko`` arm is a **programmer** error, not a director's,
-    and raises :class:`ValueError` — the same status
-    :meth:`RrThenKoStrategy.__post_init__` gives ``K < 1``. Nothing a director can type
-    reaches it: the request boundary refuses an ``rr-then-ko`` payload with no qualifier
-    count (422) and the settings table's ``CHECK`` refuses such a row outright, so the
-    only way here is a caller that dropped the column on the floor — which is exactly
-    the silent-wrong-answer this refuses to give.
+    It takes the **parsed settings arm**, not a draw type plus a loose ``K`` (ADR "a
+    draw type's settings are one NOT NULL JSON object"). The pair was never really two
+    values: ``rr-then-ko`` is the one draw type whose strategy is configured, and the
+    arm is what carries the configuration each draw type actually has. So the old
+    ``qualifiers_per_pool=None`` refusal is **gone**, not moved: a
+    :class:`RrThenKoDrawSettingsWrite` without its count is not a value that can be
+    constructed, which is a stronger guarantee than a ``ValueError`` at the point of
+    dispatch. Production callers do not build the arm themselves;
+    :func:`app.tournament_draws.strategy_for_event` parses it off the one row that holds
+    it.
     """
-    match draw_type:
-        case DrawType.round_robin:
+    match settings:
+        case RoundRobinDrawSettingsWrite():
             return RoundRobinStrategy()
-        case DrawType.single_elim:
+        case SingleElimDrawSettingsWrite():
             return SingleElimStrategy()
-        case DrawType.rr_then_ko:
-            if qualifiers_per_pool is None:
-                raise ValueError(
-                    f"A {DrawType.rr_then_ko.value!r} draw needs a qualifiers_per_pool "
-                    "— the event's draw settings carry it, and the caller passed None."
-                )
-            return RrThenKoStrategy(qualifiers_per_pool=qualifiers_per_pool)
+        case RrThenKoDrawSettingsWrite():
+            return RrThenKoStrategy(qualifiers_per_pool=settings.qualifiers_per_pool)
 
 
 def reads_fixture_games(draw_type: DrawType) -> bool:

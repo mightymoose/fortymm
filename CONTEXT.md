@@ -390,7 +390,7 @@ rating rank, never the player's index on the current page).
 
 **Draw**:
 The complete set of **fixtures** an event's draw type prescribes for its
-entrants — a bracket, a set of pools, pools feeding a bracket, or (later)
+entrants — a bracket, a set of pools, pools feeding a bracket, or **swiss**
 rounds of pairings. A draw is
 **cut** (the deliberate, reviewable act of generating it; re-cutting replaces
 it wholesale and is refused once there is any evidence of play), and it is
@@ -414,6 +414,35 @@ the fixture). *Ready* is the state that ends the moment the match is created:
 `match_id` is no longer ready, and so is never proposed twice.
 _Avoid_: slot (a *Slot* is a window of time), tournament match (a fixture is
 the pre-play pairing; the match is the contest it becomes), tie.
+
+**Swiss**:
+A draw type that plays a fixed number of **rounds**, pairing each round by
+current **standings** rather than by a bracket. Nobody is eliminated, and every
+entrant plays every round. The round count is a required setting the director
+chooses, not a number derived from the field. All rounds are **cut** up front
+with their sides unknown, and `advance()` pairs each round once the previous one
+is fully decided (ADR 20260805). A **rematch** is avoided where possible and
+allowed as a last resort, because refusing to pair would strand a live event.
+_Avoid_: monrad, ladder, league (a swiss event ends, a league runs on).
+
+**Bye**:
+The entrant left over when a **round** has an odd number of players. It is the
+*absence of a fixture row*, never a row with a NULL side, so the byed entrant is
+derived as the one with no fixture that round. In **swiss** it goes to the
+lowest-ranked entrant who has not yet had one, and it scores as a **win worth
+zero games** — the win because nobody should be punished for a scheduling
+artifact, the zero games so it stays neutral on every tiebreak below the win.
+_Avoid_: walkover (that is an opponent who failed to appear), forfeit, default.
+
+**Buchholz**:
+The sum of an entrant's opponents' win counts — a **swiss** tiebreak measuring
+how strong a field that entrant had to beat. It ranks above game difference,
+because who you played carries more information than your margin when the format
+deliberately pairs you against your own score. A **bye** contributes nothing,
+having produced no opponent. It moves as the event runs: an opponent winning a
+later match raises your Buchholz without you playing.
+_Avoid_: strength of schedule (fine in prose, but the computed term is Buchholz),
+sonneborn-berger (a different measure we do not compute).
 
 **Venue**:
 Where a tournament is played: a postal address, plus the coordinates it resolves

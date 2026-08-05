@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import combinations
 
 import pytest
+from pydantic import ValidationError
 
 from app.draws import (
     AdvancePlan,
@@ -42,8 +43,30 @@ from app.draws import (
     strategy_for,
 )
 from app.models.tournament import DrawType
+from app.schemas.tournament import (
+    DrawSettingsWriteArm,
+    RoundRobinDrawSettingsWrite,
+    RrThenKoDrawSettingsWrite,
+    SingleElimDrawSettingsWrite,
+    draw_settings_from_storage,
+)
 
 REGISTRATION_OPENED = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+
+
+def _settings(draw_type: DrawType) -> DrawSettingsWriteArm:
+    """The union arm ``draw_type`` names, with whatever configuration that arm
+    **requires** filled in — the shape ``strategy_for`` takes since the settings column
+    became one JSON object (ADR "a draw type's settings are one NOT NULL JSON object").
+
+    Built through the same parse the storage boundary uses, so a draw type whose arm
+    needs a setting this helper does not supply reds here with a ``ValidationError``
+    rather than resolving to a strategy configured by omission.
+    """
+    return draw_settings_from_storage(
+        draw_type,
+        {"qualifiers_per_pool": 2} if draw_type is DrawType.rr_then_ko else {},
+    )
 
 
 def _entry_id(n: int) -> EntryId:
@@ -227,14 +250,14 @@ class TestOrderEntrants:
 class TestStrategyRegistry:
     def test_round_robin_resolves_to_the_round_robin_strategy(self) -> None:
         assert isinstance(
-            strategy_for(DrawType.round_robin, qualifiers_per_pool=None),
+            strategy_for(RoundRobinDrawSettingsWrite()),
             RoundRobinStrategy,
         )
 
     def test_single_elim_resolves_to_the_single_elim_strategy(self) -> None:
         # The second implemented arm (ADR-0785).
         assert isinstance(
-            strategy_for(DrawType.single_elim, qualifiers_per_pool=None),
+            strategy_for(SingleElimDrawSettingsWrite()),
             SingleElimStrategy,
         )
 
@@ -243,17 +266,20 @@ class TestStrategyRegistry:
         the qualifier count is not a detail of the dispatch, it is what the strategy
         cuts with, so it is asserted to have arrived rather than merely to have been
         accepted."""
-        strategy = strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=3)
+        strategy = strategy_for(RrThenKoDrawSettingsWrite(qualifiers_per_pool=3))
 
         assert strategy == RrThenKoStrategy(qualifiers_per_pool=3)
 
-    def test_rr_then_ko_without_a_qualifier_count_refuses_loudly(self) -> None:
-        """A wiring bug, not a director's mistake: the request boundary and the settings
-        table's CHECK both refuse an ``rr-then-ko`` configuration with no count, so the
-        only way here is a caller that dropped the column. Silently defaulting it would
-        cut a bracket for a K nobody chose."""
-        with pytest.raises(ValueError, match="qualifiers_per_pool"):
-            strategy_for(DrawType.rr_then_ko, qualifiers_per_pool=None)
+    def test_an_rr_then_ko_arm_cannot_be_built_without_a_qualifier_count(self) -> None:
+        """The old "``strategy_for`` refuses ``qualifiers_per_pool=None``" test, moved
+        one layer out and made stronger.
+
+        ``strategy_for`` now takes the **arm**, so a configuration with no count is not
+        a value it can be handed at all: the count is a required field, and the refusal
+        happens where the arm would be built (ADR "a draw type's settings are one NOT
+        NULL JSON object"). A K nobody chose is unrepresentable rather than caught."""
+        with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+            RrThenKoDrawSettingsWrite()  # type: ignore[call-arg]  # the point of the test
 
     def test_every_draw_type_resolves_to_a_strategy_and_none_refuses(self) -> None:
         """``strategy_for`` is **total** — the enum holds only draw types that run (ADR
@@ -266,11 +292,11 @@ class TestStrategyRegistry:
         no input any more, because Pydantic rejects an un-backed slug at the request
         boundary instead.
 
-        Every member is handed a qualifier count, because handing one to a draw type
-        that takes none must be *harmless* — a configuration-free strategy ignores it —
-        while the one that needs it must not be left guessing."""
+        Every member goes through :func:`_settings`, which is also the assertion that
+        each one HAS an arm: a member with none reds here on the parse, before the
+        dispatch is even reached."""
         for draw_type in DrawType:
-            assert strategy_for(draw_type, qualifiers_per_pool=2) is not None
+            assert strategy_for(_settings(draw_type)) is not None
 
     def test_the_games_gate_names_every_draw_type_and_only_the_one_that_reads_them(
         self,
@@ -307,7 +333,7 @@ class TestStrategyRegistry:
         for draw_type in DrawType:
             if reads_fixture_games(draw_type):
                 continue
-            strategy = strategy_for(draw_type, qualifiers_per_pool=None)
+            strategy = strategy_for(_settings(draw_type))
             cut = _persisted(strategy.plan_initial(_config(2), _ordered(8)))
             with_games = _played(
                 cut,
