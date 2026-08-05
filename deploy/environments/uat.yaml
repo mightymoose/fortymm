@@ -1,0 +1,93 @@
+# UAT's values for the `fortymm` stack chart (deploy/fortymm).
+#
+#   helm upgrade --install fortymm-uat <chart> -f deploy/environments/uat.yaml
+#
+# The chart names no environment: hostnames, Secret names and the tailnet node
+# name are all values, and the chart's own defaults are neutral placeholders.
+# Everything that makes a deploy *UAT* lives in this file. See
+# docs/adr/20260805-the-stack-chart-is-environment-neutral-and-named-fortymm.md.
+#
+# This file is deliberately OUTSIDE deploy/fortymm/, so `helm package` cannot
+# put one environment's hostnames inside the published artifact. The cost is
+# accepted and documented in that ADR: a UAT deploy needs this repo checked out.
+#
+# Not here, on purpose:
+#   - secret VALUES. The two Secrets named below are created out of band by
+#     scripts/redeploy-uat.sh from the gitignored .env and secrets/*.p8.
+#   - image digests. CI bakes those into the packaged chart at publish time.
+
+config:
+  # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
+  # The Auth0 tenant that issues the JWTs.
+  AUTH0_DOMAIN: "dev-ohl5xjusly2vsah6.us.auth0.com"
+  # The Auth0 API identifier (token `aud`). Its TRAILING SLASH is load-bearing
+  # and is why this is not simply MCP_PUBLIC_RESOURCE_URL — the two must stay
+  # different. See docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md.
+  AUTH0_AUDIENCE: "https://uat.fortymm.com/api/mcp/"
+  # UAT's public origin, as the browser and the MCP connector see it: DDNS ->
+  # router -> host Caddy -> :8084. nginx strips /api internally, so the
+  # advertised metadata has to name the public path, not the internal mount.
+  MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
+  MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
+  # --- Venue geocoding ---
+  # UAT is on the FAKE geocoder ON PURPOSE, because it has no Google Geocoding
+  # key yet (issue #1205). This is a decision, not an oversight: the provider
+  # used to be inferred from key presence, which failed silently open — UAT was
+  # meant to geocode for real, the key was never added, and it spent that time
+  # storing hash-derived coordinates as though they were real (a Chicago
+  # address resolved to Antarctica). Saying `fake` out loud makes UAT's existing
+  # coordinates honest: they are what a fake geocoder produces in an
+  # environment that says it uses one. It matches the chart's default, and it is
+  # stated here because the ADR records it as UAT's explicit setting. See
+  # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
+  #
+  # WHEN UAT GETS A REAL KEY (#1205): flip this to `google`, put the key in
+  # .env, drop `optional: true` from the GOOGLE_GEOCODING_API_KEY secretKeyRef
+  # in deploy/fortymm/templates/api.yaml, and re-geocode the rows written while
+  # this said `fake`.
+  #
+  # This line is only authoritative because .env carries no `GEOCODER` line —
+  # redeploy-uat.sh syncs .env into the .env-backed Secret (secrets.env), and
+  # appEnvFrom applies it *after* the api-config ConfigMap, so anything set
+  # there silently outranks this. That is why .env.example deliberately does not
+  # define it and says so. If a `GEOCODER=` line ever reappears in an operator's
+  # .env, this line stops meaning anything — with no error.
+  GEOCODER: fake
+
+# Pre-created out of band by scripts/redeploy-uat.sh (from .env and
+# secrets/*.p8). The chart only ever references them by name.
+secrets:
+  env: fortymm-uat-env
+  apns: fortymm-uat-apns
+
+tailscale:
+  # UAT is on the tailnet, so it runs the proxy. The chart defaults this OFF:
+  # the proxy needs a TS_AUTHKEY in the env Secret and a tailnet with MagicDNS
+  # and HTTPS certs, and it CrashLoops without them. redeploy-uat.sh reads this
+  # key from this file and refuses to deploy when TS_AUTHKEY is missing.
+  enabled: true
+  # MagicDNS node name — UAT answers at https://fortymm-uat.<tailnet>.ts.net.
+  # Changing it makes Tailscale register a NEW node rather than rename the old
+  # one, so leave it alone unless you mean to.
+  hostname: fortymm-uat
+
+postgres:
+  # k3d's built-in dynamic provisioner. The chart defaults to empty (the
+  # cluster's default class) because naming a class that does not exist on the
+  # target cluster leaves the PVC Pending forever.
+  storageClass: local-path
+
+# The routing nginx NodePort. This number and NODE_PORT in
+# scripts/redeploy-uat.sh must stay equal: that script creates the k3d cluster
+# with `--port 8084:30084@loadbalancer`, and host Caddy reverse-proxies
+# 127.0.0.1:8084. Drop this key and Kubernetes allocates some other port, the
+# k3d map points at nothing, and UAT goes dark with no error anywhere.
+# The chart leaves it empty, because a fixed NodePort is not portable.
+nginxNodePort: 30084
+
+worker:
+  # A UAT stress setting for large-model solves (hundreds of fixtures x many
+  # tables). The chart's neutral default is far smaller, so that a first
+  # install on a modest cluster schedules instead of sitting Pending.
+  cpu: "16"
+  memory: 8Gi

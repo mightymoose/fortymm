@@ -1,0 +1,203 @@
+# Values for the fortymm chart. Most knobs mirror the prod-like QA
+# compose stack (docker-compose.qa.yml).
+
+# The api and web images are the ones CI publishes to GHCR from
+# api/Dockerfile.dev and web-client/Dockerfile.uat on every push to `main`
+# (.github/workflows/publish.yml). UAT deploys what CI built; it no
+# longer builds its own. The package names are NOT the repo's internal
+# `fortymm/{api,web}` — they are what the workflow pushes.
+#
+# `digest` is empty in the repo and filled in by CI when the chart is
+# PACKAGED (.github/workflows/publish.yml), from the digests the image jobs
+# report for that commit. So in a chart pulled from
+# ghcr.io/mightymoose/fortymm/charts these two fields are already populated,
+# and the chart version alone names a complete, coherent stack — you do not
+# pass image digests to install it. Only a chart rendered straight from a
+# checkout sees them empty. Naming the manifest digest rather than the
+# tag makes "every replica runs the same code" structural instead of
+# conventional: a tag can be moved or resolved differently by two nodes, a
+# digest cannot. The blank-white-page incident in deploy/CLAUDE.md is what
+# that costs when it isn't true. See
+# docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
+#
+# The tag is only the fallback for rendering the chart without a deploy
+# (`helm template deploy/fortymm`), so it names the moving `:main` tag the same
+# workflow publishes — something that actually exists and is pullable, rather
+# than a label no registry would answer for. That fallback is why CI reads the
+# packaged chart back and refuses to push unless both digests are in it: an
+# empty digest is not malformed here, it just quietly renders a moving tag.
+images:
+  api:
+    repository: ghcr.io/mightymoose/fortymm-api
+    tag: main
+    digest: ""
+  web:
+    repository: ghcr.io/mightymoose/fortymm-web-client
+    tag: main
+    digest: ""
+  postgres: postgres:16-alpine
+  redis: redis:7-alpine
+  nginx: nginx:1.27-alpine
+
+# IfNotPresent stays correct now that images come from a registry, for a
+# different reason than before: it used to mean "never pull, the image was
+# `k3d image import`-ed and exists nowhere else", and it now means "a digest
+# already on the node is by definition the exact bytes requested, so re-pulling
+# it can only cost time". `Always` would buy nothing against a content-addressed
+# reference while making every pod start — including postgres/redis/nginx, which
+# share this value — depend on registry reachability.
+pullPolicy: IfNotPresent
+
+# Stateless request-serving tiers scale horizontally with a zero-downtime
+# RollingUpdate. maxUnavailable: 0 keeps full capacity during a rollout (new
+# pods must go Ready before old ones are torn down); maxSurge adds headroom.
+# On a single-node cluster replicas buy no real availability (one failure
+# domain) — 2 replicas + maxSurge 1 is the minimum that still rolls without
+# dropping capacity, at far less memory pressure than a larger pod count.
+api:
+  replicas: 2
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+web:
+  replicas: 2
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Non-secret runtime config (mirrors the `environment:` blocks in compose).
+config:
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+  REDIS_URL: redis://redis:6379/0
+  SESSION_COOKIE_SECURE: "true"
+  # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
+  FORWARDED_ALLOW_IPS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
+  # Wall-clock cap (seconds) on the CP-SAT tournament solve — see
+  # api/app/schedule_solves.py (issue #1103). The worker's `execute_solve`
+  # reads it for the solve itself, and `request_solve` (which runs in the api
+  # process for nearly every trigger) reads it to size the RQ job_timeout, so
+  # both consume it via this shared ConfigMap.
+  SOLVER_TIME_CAP_S: "10"
+  # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
+  # See docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md.
+  #
+  # All four name a specific deployment, so the chart ships them EMPTY and each
+  # environment supplies its own (deploy/environments/<env>.yaml). Empty = MCP
+  # auth unconfigured: the api still boots, and every MCP request 401s.
+  #
+  # The Auth0 tenant that issues the JWTs, e.g. fortymm.us.auth0.com:
+  AUTH0_DOMAIN: ""
+  # Auth0 API identifier for the MCP Resource Server (the token `aud`). It is
+  # whatever the Auth0 API is named, NOT a URL the deployment serves — in
+  # particular it keeps a TRAILING SLASH that MCP_PUBLIC_RESOURCE_URL must not
+  # have. The two looking almost-but-not-quite equal is correct.
+  AUTH0_AUDIENCE: ""
+  # Deployment-derived PUBLIC URLs. The MCP server is served at
+  # <public-origin>/api/mcp behind an nginx that strips /api, so the metadata
+  # must reflect the public origin, not the internal mount. There is no sensible
+  # default for a hostname the chart cannot know.
+  MCP_PUBLIC_BASE_URL: ""
+  MCP_PUBLIC_RESOURCE_URL: ""
+  # --- Venue geocoding ---
+  # Which provider resolves a venue address, as a closed enum: `google` or
+  # `fake`. `fake` is the default because a chart cannot assume a Google
+  # Geocoding key exists, and it produces deterministic hash-derived
+  # coordinates. To geocode for real, set `google`, put
+  # GOOGLE_GEOCODING_API_KEY in the env Secret, and drop `optional: true` from
+  # its secretKeyRef in templates/api.yaml.
+  #
+  # The provider is named out loud rather than inferred from key presence,
+  # which used to fail silently open. See
+  # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
+  #
+  # Note the precedence: appEnvFrom applies the env Secret AFTER this ConfigMap,
+  # so a GEOCODER key in that Secret silently outranks this value.
+  GEOCODER: fake
+
+postgres:
+  user: postgres
+  password: postgres
+  db: fortymm
+  # Empty means "use the cluster's default StorageClass", which is the only
+  # portable answer -- a class name that exists on one cluster is a PVC stuck
+  # Pending on another. UAT names k3d's `local-path` in its environment file.
+  storageClass: ""
+  storageSize: 5Gi
+
+# Names of two Secrets the chart does NOT create — the deployer pre-creates them
+# out of band (for UAT, scripts/redeploy-uat.sh builds them from .env and
+# secrets/). Each environment names its own pair in
+# deploy/environments/<env>.yaml; these defaults are only what the chart renders
+# with on its own.
+#
+# The api Deployment pulls GOOGLE_GEOCODING_API_KEY from `env` (below) as an
+# optional key. It is only needed when config.GEOCODER is `google`; the default
+# is `fake` (see the comment on that value), so the key is absent and
+# `optional: true` is what lets the pod boot without it. No real key is ever
+# committed here; the operator provides it out of band in .env.
+secrets:
+  env: fortymm-env
+  apns: fortymm-apns
+
+# Container path APNS_AUTH_KEY_PATH points at in .env.
+apnsKeyPath: /run/secrets/apns_auth_key.p8
+# Key inside the APNs secret (filename used by --from-file).
+apnsKeyFile: apns_auth_key.p8
+
+worker:
+  queues: preview solver email ratings notifications
+  # CPU/memory for the CP-SAT solve worker. `cpu` is a bare core count (not
+  # "m" millicores) because it doubles as SOLVE_NUM_WORKERS — CP-SAT's
+  # search-worker portfolio must equal the container's CPU limit or it
+  # auto-sizes off the *node's* core count and gets CFS-throttled (#1115).
+  # Limits sized to schedule on a modest single node. The solver uses whatever
+  # it is given, so raise these per environment for large-model solves
+  # (hundreds of fixtures x many tables) — UAT sets 16 cores / 8Gi in its
+  # environment file. Defaulting to that here would leave the worker pod
+  # unschedulable on any cluster smaller than the one it was tuned for.
+  cpu: "2"
+  memory: 2Gi
+  requests:
+    cpu: "2"
+    memory: 512Mi
+
+# Periodic retirement sweep CronJob (task #9 / ADR 0007 O8). Runs
+# `python -m app.retirement_sweep` on this schedule to auto-accept lapsed
+# standing results and send due deadline-nearing reminders. Hourly by default —
+# must stay at least daily for the reminder's 24h-before guarantee to hold.
+retirement:
+  enabled: true
+  schedule: "0 * * * *"
+
+# Fixed NodePort for the routing nginx Service. Empty means "let Kubernetes
+# allocate one from the node port range", which is the only portable answer — a
+# hard-coded port that another Service already holds fails the install outright
+# with `provided port is already allocated`.
+#
+# Set it when something outside the cluster maps a fixed host port to it. UAT
+# does: deploy/environments/uat.yaml names 30084 and scripts/redeploy-uat.sh
+# maps host 8084 to it. Those two must agree — see the comment on both.
+nginxNodePort: ""
+
+# Tailscale proxy: puts the stack on the tailnet as a private MagicDNS node
+# (https://<hostname>.<tailnet>.ts.net) fronting the routing nginx. Additive —
+# leaves the public Caddy/NodePort path untouched.
+#
+# OFF by default, because it cannot work without out-of-band setup the chart
+# cannot ship: a TS_AUTHKEY in the env Secret, plus MagicDNS and HTTPS certs
+# enabled in a tailnet. Enabled with none of that, the pod CrashLoops. Each
+# environment that wants it turns it on beside its hostname
+# (deploy/environments/<env>.yaml).
+tailscale:
+  enabled: false
+  image: tailscale/tailscale:stable
+  # One tailnet node per deployment, so the name has to say WHICH deployment —
+  # each environment sets its own in deploy/environments/<env>.yaml. Two
+  # environments left on this default would collide and Tailscale would rename
+  # the second `fortymm-1`.
+  hostname: fortymm
+  # TS_AUTHKEY is read from the .env-backed secret (secrets.env), into which
+  # redeploy-uat.sh already loads every .env line — so a TS_AUTHKEY=... line in
+  # .env is all that's needed.
+  # Where the proxy persists its tailnet identity (survives pod restarts).
+  stateSecret: tailscale-state

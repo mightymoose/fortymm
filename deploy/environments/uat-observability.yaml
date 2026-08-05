@@ -1,0 +1,41 @@
+# UAT's values for the `observability` chart (deploy/observability).
+#
+#   helm upgrade --install observability <chart> \
+#     -f deploy/environments/uat-observability.yaml
+#
+# Two things in this chart name one deployment: the public browser origin
+# allowed to post Faro telemetry cross-origin, and the tailnet node names of the
+# per-service proxies. Everything else (namespace, subchart versions, datasource
+# URLs) is the same wherever it runs. See
+# docs/adr/20260805-the-stack-chart-is-environment-neutral-and-named-fortymm.md.
+#
+# Kept outside deploy/observability/ for the same reason as uat.yaml: `helm
+# package` must not ship one environment's hostname inside the artifact.
+
+alloy:
+  # UAT's public origin. The SPA posts SAME-origin through the routing nginx at
+  # /faro/collect, which CORS does not apply to at all — this entry only covers a
+  # cross-origin client. Do not add the tailnet domain here (repo convention:
+  # tailnet names stay out of git, see ${TS_CERT_DOMAIN}).
+  corsAllowedOrigins:
+    - https://uat.fortymm.com
+
+# Tailnet-only access to Grafana, Prometheus and Loki. The chart defaults this
+# off with an empty service list: the proxies need a TS_AUTHKEY Secret (synced
+# from .env by redeploy-uat.sh) and a tailnet with MagicDNS and HTTPS certs.
+#
+# These bare names are UAT's tailnet node names — https://grafana.<tailnet>.ts.net
+# and so on. Every resource the chart renders is named after the hostname
+# (Deployment ts-grafana, state Secret tailscale-state-grafana), so renaming one
+# registers a NEW tailnet node and abandons the old identity. Leave them alone
+# unless you mean to. A second environment running this chart must pick
+# different names, or Tailscale renames its node `grafana-1`.
+tailscaleProxies:
+  enabled: true
+  services:
+    - hostname: grafana
+      backend: "http://kube-prometheus-stack-grafana:80"
+    - hostname: prometheus
+      backend: "http://kube-prometheus-stack-prometheus:9090"
+    - hostname: loki
+      backend: "http://loki:3100"

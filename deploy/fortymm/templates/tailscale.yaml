@@ -14,14 +14,14 @@ kind: ServiceAccount
 metadata:
   name: tailscale
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tailscale
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 rules:
   # Create the state secret on first run...
   - apiGroups: [""]
@@ -39,7 +39,7 @@ kind: RoleBinding
 metadata:
   name: tailscale
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: tailscale
@@ -53,22 +53,22 @@ kind: ConfigMap
 metadata:
   name: tailscale-serve
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 data:
   serve.json: |
-    {{- include "fortymm-uat.tailscaleServe" . | nindent 4 }}
+    {{- include "fortymm.tailscaleServe" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tailscale
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "fortymm-uat.selector" (dict "component" "tailscale") | nindent 6 }}
+      {{- include "fortymm.selector" (dict "component" "tailscale") | nindent 6 }}
   # The state lives in a Secret (RWO-free), but only one node identity may be
   # active at a time, so don't run two pods side-by-side during a rollout.
   strategy:
@@ -76,10 +76,10 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "fortymm-uat.selector" (dict "component" "tailscale") | nindent 8 }}
+        {{- include "fortymm.selector" (dict "component" "tailscale") | nindent 8 }}
       annotations:
         # Roll the pod when the serve config changes.
-        checksum/serve: {{ include "fortymm-uat.tailscaleServe" . | sha256sum }}
+        checksum/serve: {{ include "fortymm.tailscaleServe" . | sha256sum }}
     spec:
       serviceAccountName: tailscale
       containers:

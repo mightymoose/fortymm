@@ -16,7 +16,7 @@ from app.matches import _match_details_ip_key
 from app.tournaments import _preview_ip_rate_limit_key
 
 # Intentionally duplicated from the deploy manifests (docker-compose.dev/qa.yml,
-# deploy/uat/values.yaml) — YAML can't import a Python constant. Narrowing this
+# deploy/fortymm/values.yaml) — YAML can't import a Python constant. Narrowing this
 # must fail CI. See docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
 TRUST = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
 

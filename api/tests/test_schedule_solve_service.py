@@ -472,7 +472,7 @@ def _slide_pin_later(
 class TestSolveNumWorkers:
     """``SOLVE_NUM_WORKERS`` (#1115): must stay operator-configurable via env,
     not baked in at import time, or the chart's per-environment CPU-limit
-    alignment (deploy/uat/templates/worker.yaml) has nothing to actually set."""
+    alignment (deploy/fortymm/templates/worker.yaml) has nothing to actually set."""
 
     def test_defaults_to_one_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SOLVE_NUM_WORKERS", raising=False)

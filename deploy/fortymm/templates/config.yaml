@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: api-config
   labels:
-    {{- include "fortymm-uat.labels" . | nindent 4 }}
+    {{- include "fortymm.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
   {{ $k }}: {{ $v | quote }}
