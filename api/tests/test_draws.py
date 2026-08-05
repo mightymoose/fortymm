@@ -2556,7 +2556,12 @@ class TestSwissAdvance:
         """A voided match will never produce a result, so requiring one would leave the
         event one score short forever, with no move a director could make. The round
         counts as decided without it — the same exception the pool-finished test
-        makes."""
+        makes.
+
+        Seed 4 is ahead of seed 3 in the second pairing because the standings put them
+        there: 4 lost to the field's only winner (Buchholz 1) and 3's single fixture was
+        voided, so 3 has faced nobody (Buchholz 0). Both are on no wins and a game
+        difference the chain never reaches."""
         cut = self._cut(rounds=3, entrants=4)
         played = _played(cut, {frozenset({2, 4}): (2, 3, 0)})
         voided = [
@@ -2570,7 +2575,7 @@ class TestSwissAdvance:
 
         plan = self._advance(voided, _ordered(4))
 
-        assert _seed_pairs(_apply(voided, plan), 2) == [(1, 2, 1), (2, 3, 4)]
+        assert _seed_pairs(_apply(voided, plan), 2) == [(1, 2, 1), (2, 4, 3)]
 
     def test_the_field_is_the_entrants_so_round_ones_bye_is_paired_next(self) -> None:
         """**The field comes from the entrants, never from the seated set.** Seed 5 has
@@ -2629,9 +2634,14 @@ class TestSwissAdvance:
         Seven entrants, three rounds, driven through two rounds of real results. By
         round 3 the two byed entrants are seed 7 (round 1) and seed 5 (round 2), and
         their bye wins move both of them up the table: 7 into the two-win group above
-        every one-win player, and 5 above seeds 1 and 3. Score the byes as nothing and
+        every one-win player, and 5 above seed 4. Score the byes as nothing and
         the walk sees a different order and emits three different pairings —
         2v4, 7v1, 6v5 — including one the rematch rule then has to work around.
+
+        The one-win group is ordered by **Buchholz**, so it reads 1, 6, 5, 4: seed 1
+        played the eventual leader and seed 4 played the winless seed 3, which outweighs
+        seed 4's better game difference (+2 against −2). The table is therefore
+        2, 7, 1, 6, 5, 4, 3 and the walk pairs 2v7, 1v6, 5v4 with seed 3 byed.
         """
         cut = _persisted(
             SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(7))
@@ -2658,8 +2668,8 @@ class TestSwissAdvance:
         assert _seed_pairs(round_two, 2) == [(1, 1, 2), (2, 6, 7), (3, 3, 4)]
         assert _seed_pairs(_apply(round_two, plan), 3) == [
             (1, 2, 7),
-            (2, 4, 6),
-            (3, 5, 1),
+            (2, 1, 6),
+            (3, 5, 4),
         ]
         assert _seated(_apply(round_two, plan), 3) == {1, 2, 4, 5, 6, 7}, (
             "seed 3 takes round 3's bye, being the lowest-ranked entrant without one"
@@ -2811,16 +2821,23 @@ class TestSwissAdvance:
         a played draw cannot be un-cut — no move a director could make.
 
         The pairings are asserted exactly, in both rounds, so this cannot pass by
-        pairing *something*. Round 2's table is the seven survivors' (5, 2, 7, 4, 3, 6,
-        1 — seed 8's win over seed 4 is not theirs to count), seed 1 takes the bye, and
-        round 3 is paired off round 2's table in turn.
+        pairing *something*. Round 2's table is the seven survivors' (5, 2, 7, 3, 6, 1,
+        4), seed 4 takes the bye, and round 3 is paired off round 2's table in turn.
+
+        Seed 4 is last on it, and that is the shrink showing up in the standings rather
+        than a quirk: seed 8's departure takes seed 4's only result with it (an outcome
+        naming an entry outside the field is left out), so seed 4 has no wins and, on
+        the step above game difference, **no opposition at all** — Buchholz 0, below the
+        three entrants who lost to somebody who is still here. The one-win group is
+        ordered by game difference, the chain's next link, since all three beat a
+        winless opponent.
         """
         played = _played(self._cut(rounds=4, entrants=8), _ROUND_ONE_UPSETS)
 
         round_two = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(7)))
 
-        assert _paired_rows(round_two, 2) == [(1, 5, 2), (2, 7, 4), (3, 3, 6)]
-        assert _seated(round_two, 2) == {2, 3, 4, 5, 6, 7}, "seed 1 sits round 2 out"
+        assert _paired_rows(round_two, 2) == [(1, 5, 2), (2, 7, 6), (3, 3, 1)]
+        assert _seated(round_two, 2) == {1, 2, 3, 5, 6, 7}, "seed 4 sits round 2 out"
         assert len([f for f in round_two if f.round == 2]) == 4, (
             "the cut's fourth row is still there — it is unpairable, not deleted"
         )
@@ -2829,19 +2846,19 @@ class TestSwissAdvance:
             round_two,
             {
                 frozenset({5, 2}): (5, 3, 0),
-                frozenset({7, 4}): (7, 3, 0),
-                frozenset({3, 6}): (3, 3, 0),
+                frozenset({7, 6}): (7, 3, 0),
+                frozenset({3, 1}): (3, 3, 0),
             },
         )
         round_three = _apply(
             decided, SwissStrategy(rounds=4).advance(decided, _ordered(7))
         )
 
-        assert _paired_rows(round_three, 3) == [(1, 5, 7), (2, 3, 2), (3, 1, 4)], (
+        assert _paired_rows(round_three, 3) == [(1, 5, 7), (2, 3, 2), (3, 4, 6)], (
             "round 3 is paired off round 2's table — the round that was neither "
             "wholly unpaired nor decided, and stalled the walk forever"
         )
-        assert _seated(round_three, 3) == {1, 2, 3, 4, 5, 7}, "seed 6 sits round 3 out"
+        assert _seated(round_three, 3) == {2, 3, 4, 5, 6, 7}, "seed 1 sits round 3 out"
 
     def test_a_shrunk_round_is_not_paired_a_second_time(self) -> None:
         """The idempotence the fix must not cost. A round paired down to a shrunk field
@@ -2855,7 +2872,7 @@ class TestSwissAdvance:
         second = SwissStrategy(rounds=4).advance(applied, _ordered(7))
 
         assert second.side_fills == ()
-        assert _paired_rows(applied, 2) == [(1, 5, 2), (2, 7, 4), (3, 3, 6)]
+        assert _paired_rows(applied, 2) == [(1, 5, 2), (2, 7, 6), (3, 3, 1)]
 
     def test_a_shrunk_field_runs_out_of_byeless_entrants(self) -> None:
         """**The byeless fallback is reachable through the real cut**, and the docstring

@@ -907,6 +907,12 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     table below is where that shows: **one match, one loss**, not the two bye wins a
     departed player was collecting.
 
+    Round 2 repeats round 1's 1v3, and that is the standings speaking rather than a
+    slip. Seed 4's departure takes seed 2's only result with it, so seed 2 has no wins
+    and **no opposition** — Buchholz 0, below seed 3, who at least lost to the leader.
+    The table reads 1, 3, 2, seed 2 takes the bye, and the two left have already met:
+    the documented last resort, which pairs them again rather than stranding the round.
+
     **The withdrawal is written as the statement that causes it in production.** The
     ordinary withdrawal endpoint is window-gated and answers 409 on a live event, so
     nothing here could reach the pairing code through it. ``app.account_merge`` can and
@@ -977,8 +983,8 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
         paired = [f for f in round_two if f.entry_a_id is not None]
         assert len(round_two) == 2, "the cut's second row is still there"
         assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
-            {entry_ids[0], entry_ids[1]}
-        ], "three survivors make one pairing, and seed 3 sits round 2 out"
+            {entry_ids[0], entry_ids[2]}
+        ], "three survivors make one pairing, and seed 2 sits round 2 out"
 
         await play(2, winner_index=0)
 
@@ -986,7 +992,7 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
         round_three = [f for f in await _fixtures(db_session, event_id) if f.round == 3]
         paired = [f for f in round_three if f.entry_a_id is not None]
         assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
-            {entry_ids[0], entry_ids[2]}
+            {entry_ids[0], entry_ids[1]}
         ], (
             "round 3 is paired off round 2's table — the round whose unpairable row "
             "stalled the walk for good, leaving the event unplayable from here"
@@ -1351,7 +1357,7 @@ def test_a_withdrawn_but_seated_entrant_is_not_given_a_bye_they_never_took() -> 
     )
     assert _entry(4) in field.entrants, "somebody who played is still in the table"
 
-    rows = {row.entry_id: row for row in SwissResults().tabulate(field).rows}
+    rows = {row.row.entry_id: row.row for row in SwissResults().tabulate(field).rows}
 
     departed = rows[_entry(4)]
     assert (departed.played, departed.wins, departed.losses) == (1, 0, 1)

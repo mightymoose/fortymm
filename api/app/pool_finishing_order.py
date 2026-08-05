@@ -1,5 +1,6 @@
-"""How a **pool finished** — the one definition of the tiebreak chain that orders a
-round-robin pool's entrants, shared by the draw layer and the results layer.
+"""How a **field finished** — the one definition of the tiebreak chains that order a
+round-robin pool's entrants and a swiss event's, shared by the draw layer and the
+results layer.
 
 Two layers need this answer and they must never disagree about it. ``app.results``
 reads it out as a pool's **standings** table, the thing a director is looking at on
@@ -23,38 +24,41 @@ the :class:`MatchOutcome`\\ s of its **currently-completed** matches, so nothing
 a snapshot — a corrected or voided match re-derives the order the instant it leaves
 ``completed``.
 
-The chain, in order:
+There are **two** chains, one per format, and they live side by side on purpose: they
+share every step but one, and a reader has to be able to see both at once to keep them
+in step (ADR "swiss standings add Buchholz, and head-to-head is guarded on having met").
 
-1. **wins** — most match wins first, and a **bye counts as one of them**;
-2. **head-to-head**, *only when exactly two entries are tied* on wins — the one that
-   beat the other ranks above it. A three-or-more-way tie can cycle (A beat B beat C
-   beat A), so it is **not** broken head-to-head; it falls straight through to the game
-   tiebreakers rather than a recursive mini-league;
+:func:`finishing_order` — a **round-robin pool**:
+
+1. **wins** — most match wins first;
+2. **head-to-head**, *only when exactly two entries are tied* on wins **and they have
+   actually met** — the one that beat the other ranks above it. A three-or-more-way tie
+   can cycle (A beat B beat C beat A), so it is **not** broken head-to-head; it falls
+   straight through to the game tiebreakers rather than a recursive mini-league;
 3. **game difference** — games won minus games lost;
 4. **games won**;
 5. the **entry id** — a total, deterministic fallback, so a pool in which two entries
    are genuinely level on every count still orders the same way on every read.
 
-**A bye is a win worth zero games** (ADR "swiss standings add Buchholz, and
-head-to-head is guarded on having met"). The win, because a player must not be punished
-for a scheduling artifact they did not cause. Zero games, because steps 3 and 4 are the
-ones a nominal 3-0 would corrupt: it would hand the byed entrant a game difference
-nobody earned, which can lift them above somebody who went out and beat a real
-opponent. So a bye moves step 1 and is neutral on everything below it, and it is
-slightly *under*-credited — the deliberate direction to err on a result nobody played.
+:func:`swiss_finishing_order` — a **swiss field**: the same chain with **Buchholz**
+between steps 2 and 3, and byes scored into step 1.
 
-Byes reach here as a **flat sequence of entry ids, one per bye taken**, because they are
-derived rather than stored: a bye is the absence of a fixture row (CONTEXT.md, "Bye"),
-so the byed entrant is the one with no fixture that round. :func:`app.draws.swiss_byes`
-is where that derivation lives, once, for both callers. Round-robin passes none — its
-byed entrant sits out one round of a schedule that seats them in every other, which is
-not a result and is not scored as one.
+The two share their machinery rather than agreeing by coincidence: one grouping by
+wins, one guarded head-to-head step, one tail of scalar comparators ending in the entry
+id. The swiss chain is that tail with one value in front of it.
+
+**The head-to-head step is guarded on the pair having met**, in *both* chains, and that
+is a property of the step rather than a swiss carve-out. A round-robin pool cannot reach
+the guard once it is played out — everyone meets everyone — so it costs that format
+nothing, while a swiss pair tied on wins may never have been drawn against each other
+and there is simply no result to read. (A part-played pool reaches it too, which is why
+the guard predates swiss.)
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -121,9 +125,10 @@ class MatchOutcome:
 class EntryTally:
     """A mutable per-entry accumulator — what one entry has done in its pool so far.
 
-    Built and mutated inside :func:`finishing_order`; callers only ever see the
-    finished list. Every entrant seated in the pool gets one, including a player who
-    has not played yet (a row of zeros), so the order is a *live, partial* one.
+    Built and mutated inside :func:`_tallies`, which both orders start from; callers
+    only ever see the finished list. Every entrant seated in the field gets one,
+    including a player who has not played yet (a row of zeros), so the order is a
+    *live, partial* one.
     """
 
     entry_id: EntryId
@@ -138,10 +143,31 @@ class EntryTally:
         return self.games_won - self.games_lost
 
 
+@dataclass(frozen=True, slots=True)
+class SwissTally:
+    """One entry's swiss line: the tally every format keeps, plus the **Buchholz**
+    figure only swiss ranks on.
+
+    Composed rather than a subclass of :class:`EntryTally`, so there is exactly one
+    definition of "wins" and one of "game difference" — the divergence this module
+    exists to prevent — and so a pool's row cannot acquire a Buchholz of ``0`` that
+    really means "never computed".
+
+    ``buchholz`` rides on the row rather than staying inside the sort, because a
+    director has to be able to *see* the number that ordered the table: it is the one
+    link in the swiss chain that cannot be recomputed from the counts beside it."""
+
+    tally: EntryTally
+    buchholz: int
+
+
 # The tiebreak chain, after wins (which groups) and the two-way head-to-head (which
 # refines a pair): each entry maps to a value where HIGHER is better, tried in order.
 # A new comparator is **appended** here, not surgically inserted between the existing
 # ones — the chain is data, so extending it touches nothing already in it (ADR-0788).
+# Swiss ranks on the same two, in the same order, with Buchholz in front of them
+# (:func:`_swiss_scalar_key`) — so the two formats share this tail rather than agreeing
+# about it.
 _TIEBREAKERS: tuple[Callable[[EntryTally], int], ...] = (
     lambda tally: tally.game_difference,
     lambda tally: tally.games_won,
@@ -151,28 +177,79 @@ _TIEBREAKERS: tuple[Callable[[EntryTally], int], ...] = (
 def finishing_order(
     entrants: Iterable[EntryId],
     outcomes: Sequence[MatchOutcome],
-    byes: Iterable[EntryId] = (),
 ) -> list[EntryTally]:
-    """The pool's finishing order: its ``entrants`` tallied from ``outcomes`` and
-    ``byes``, then ordered by the chain in this module's docstring.
+    """The pool's finishing order: its ``entrants`` tallied from ``outcomes``, then
+    ordered by the round-robin chain in this module's docstring.
 
     ``entrants`` is the full seated field — not just the entries that have played — so
     the returned list always covers the whole pool. First place is index ``0``.
 
-    ``byes`` names one entry id **per bye taken**, so an entrant who has sat out twice
-    appears twice. Empty for every format but swiss, and empty for an even swiss field.
-    Both it and ``outcomes`` may only name entries that are in ``entrants``: the tallies
-    are keyed by entrant, so a stranger is a ``KeyError`` rather than a row appearing
-    from nowhere.
+    ``outcomes`` may only name entries that are in ``entrants``: the tallies are keyed
+    by entrant, so a stranger is a ``KeyError`` rather than a row appearing from
+    nowhere.
+
+    It takes **no byes**, and that is a fact about the format rather than an omission: a
+    round-robin's byed entrant sits out one round of a schedule that seats them in every
+    other, so there is no result to credit. Only swiss scores one — see
+    :func:`swiss_finishing_order`.
+    """
+    return _order(list(_tallies(entrants, outcomes).values()), outcomes, _scalar_key)
+
+
+def swiss_finishing_order(
+    entrants: Iterable[EntryId],
+    outcomes: Sequence[MatchOutcome],
+    byes: Iterable[EntryId] = (),
+) -> list[SwissTally]:
+    """A swiss field's finishing order: its ``entrants`` tallied from ``outcomes`` and
+    ``byes``, ordered by the swiss chain — wins, guarded head-to-head, **Buchholz**,
+    game difference, games won, entry id — with each row's Buchholz figure attached.
+
+    Its ``entrants`` and ``outcomes`` mean exactly what they mean in
+    :func:`finishing_order`, and first place is index ``0`` there too. The two
+    differences are the ones the format forces:
+
+    **Buchholz sits above game difference** (ADR "swiss standings add Buchholz, and
+    head-to-head is guarded on having met"). Swiss deliberately pairs you against
+    players on your own score, so two entrants level on wins may have faced completely
+    different halves of the field; game difference would rank them by margin against
+    unequal opposition. Buchholz measures who you had to beat, which in a format that
+    pairs by score is the stronger signal. A round-robin has no such thing to measure —
+    everybody plays everybody, so every entrant's opposition is identical — which is why
+    this link exists on one chain and not the other.
+
+    **Byes are scored**, as a win worth zero games. They arrive as a flat sequence of
+    entry ids, **one per bye taken**, so an entrant who has sat out twice appears twice,
+    and they may only name entries that are in ``entrants``. They are derived rather
+    than stored — a bye is the absence of a fixture row (CONTEXT.md, "Bye"), so the byed
+    entrant is the one with no fixture that round — by :func:`app.draws.swiss_byes`,
+    once, for both callers. Empty for an even field.
 
     ``byes`` **defaults to empty**, which is safe here for a reason that does not
     travel: this is one free function, so an omission is a caller declining to pass a
-    value at one call site — visible in the diff, and "no byes" is the truth for every
-    format but swiss. Contrast :meth:`app.draws.DrawStrategy.advance`, where the field
-    is a **required** parameter precisely because that is a ``Protocol`` with four
+    value at one call site — visible in the diff, and "no byes" is the truth of an even
+    field. Contrast :meth:`app.draws.DrawStrategy.advance`, where the field is a
+    **required** parameter precisely because that is a ``Protocol`` with four
     implementations: there, a default would let an implementation omit the parameter
     from its own signature and still type-check.
     """
+    tallies = _tallies(entrants, outcomes, byes)
+    buchholz = _buchholz(tallies, outcomes)
+    return [
+        SwissTally(tally=tally, buchholz=buchholz[tally.entry_id])
+        for tally in _order(
+            list(tallies.values()), outcomes, _swiss_scalar_key(buchholz)
+        )
+    ]
+
+
+def _tallies(
+    entrants: Iterable[EntryId],
+    outcomes: Sequence[MatchOutcome],
+    byes: Iterable[EntryId] = (),
+) -> dict[EntryId, EntryTally]:
+    """Every entrant's accumulator, folded from the results they have — the one place a
+    row's counts are built, so the two chains cannot disagree about what a win is."""
     tallies: dict[EntryId, EntryTally] = {
         entry_id: EntryTally(entry_id=entry_id) for entry_id in entrants
     }
@@ -182,14 +259,48 @@ def finishing_order(
         )
     for entry_id in byes:
         _record_bye(tallies[entry_id])
-    return _order(list(tallies.values()), outcomes)
+    return tallies
+
+
+def _buchholz(
+    tallies: Mapping[EntryId, EntryTally], outcomes: Sequence[MatchOutcome]
+) -> dict[EntryId, int]:
+    """Each entrant's **Buchholz**: the sum of their opponents' win counts.
+
+    The wins summed are ``tallies[...].wins`` — **the same wins column the standings
+    display, bye wins included** (ADR "swiss standings add Buchholz", amended).
+    Stripping a bye win out would put two definitions of "wins" in one module, and would
+    break the arithmetic a director does to check the figure by adding up their
+    opponents' win columns. The cost is that whoever played the byed entrant is credited
+    very slightly high, which is bounded at one win per opponent and lands arbitrarily
+    rather than systematically.
+
+    A **bye adds no term to its own holder's sum**: it produced no opponent, so there is
+    nothing to add. That falls out of summing over ``outcomes``, which a bye is not in,
+    rather than needing a case.
+
+    A **rematch counts twice** — swiss allows one as a last resort, and iterating the
+    outcomes credits that opponent's wins once per meeting. That is the standard reading
+    (Buchholz is a sum over games played, not over distinct opponents), and the ADR does
+    not settle it either way.
+
+    It is computed after the tallies are complete, never incrementally: an opponent's
+    later win changes an entrant's Buchholz without that entrant playing, which is
+    inherent to the measure.
+    """
+    totals = {entry_id: 0 for entry_id in tallies}
+    for outcome in outcomes:
+        totals[outcome.entry_a_id] += tallies[outcome.entry_b_id].wins
+        totals[outcome.entry_b_id] += tallies[outcome.entry_a_id].wins
+    return totals
 
 
 def _record_outcome(a: EntryTally, b: EntryTally, outcome: MatchOutcome) -> None:
     """Fold one decided fixture into both sides' tallies.
 
-    Private, like every other step of the order: :func:`finishing_order` is the module's
-    verb and the accumulator is its internals. Nothing outside builds a tally, so a
+    Private, like every other step of the order: :func:`finishing_order` and
+    :func:`swiss_finishing_order` are the module's verbs and the accumulator is their
+    internals. Nothing outside builds a tally, so a
     public one would advertise a protocol no caller wants — and invite a second, partial
     tallying path beside the one definition this module exists to be.
     (:func:`entry_id_order` is the exception, and is public because the *results* layer
@@ -233,33 +344,49 @@ def entry_id_order(entry_id: EntryId) -> int:
 
 
 def _order(
-    tallies: list[EntryTally], outcomes: Sequence[MatchOutcome]
+    tallies: list[EntryTally],
+    outcomes: Sequence[MatchOutcome],
+    scalar_key: Callable[[EntryTally], tuple[int, ...]],
 ) -> list[EntryTally]:
-    """Group by wins (descending), then break each tie."""
+    """Group by wins (descending), then break each tie.
+
+    ``scalar_key`` is the *only* thing that differs between the two formats' chains —
+    :func:`_scalar_key` for a pool, :func:`_swiss_scalar_key`'s closure for a swiss
+    field — so the first two links, wins and the guarded head-to-head, are shared
+    structurally rather than written twice and kept in step by hand.
+    """
     by_wins: dict[int, list[EntryTally]] = defaultdict(list)
     for tally in tallies:
         by_wins[tally.wins].append(tally)
     ordered: list[EntryTally] = []
     for wins in sorted(by_wins, reverse=True):
-        ordered.extend(_break_tie(by_wins[wins], outcomes))
+        ordered.extend(_break_tie(by_wins[wins], outcomes, scalar_key))
     return ordered
 
 
 def _break_tie(
-    group: list[EntryTally], outcomes: Sequence[MatchOutcome]
+    group: list[EntryTally],
+    outcomes: Sequence[MatchOutcome],
+    scalar_key: Callable[[EntryTally], tuple[int, ...]],
 ) -> list[EntryTally]:
     """Order a group of entries level on wins.
 
     A **two-way** tie is broken head-to-head when the pair has actually met — the
     winner of that match ranks above the loser. A larger tie (which can cycle) and a
-    two-way tie whose pair has not met yet (mid-pool) fall through to the game
-    tiebreakers.
+    two-way tie whose pair has not met fall through to ``scalar_key``.
+
+    "When the pair has actually met" is the guard, and it belongs to the step rather
+    than to either format. A part-played round-robin pool reaches it, and a swiss field
+    reaches it at the end of a completed event too: swiss pairs by score and never
+    claims to have drawn every pair together, so two entrants can finish level on wins
+    having never played each other. Without the guard the step would have to read a
+    result that does not exist.
     """
     if len(group) == 2:
         decided = _head_to_head(group[0], group[1], outcomes)
         if decided is not None:
             return decided
-    return sorted(group, key=_scalar_key)
+    return sorted(group, key=scalar_key)
 
 
 def _head_to_head(
@@ -283,3 +410,21 @@ def _scalar_key(tally: EntryTally) -> tuple[int, ...]:
         *(-tiebreaker(tally) for tiebreaker in _TIEBREAKERS),
         entry_id_order(tally.entry_id),
     )
+
+
+def _swiss_scalar_key(
+    buchholz: Mapping[EntryId, int],
+) -> Callable[[EntryTally], tuple[int, ...]]:
+    """:func:`_scalar_key` with **Buchholz in front of it** — the swiss chain's scalar
+    half, built over a field's already-computed figures.
+
+    Prepending is what puts Buchholz *above* game difference: the key is compared
+    left-to-right, so a Buchholz that separates the pair settles them before the game
+    counts are ever read. The rest of the tuple is the pool's own key, not a copy of it,
+    so the tail of the two chains is one definition.
+    """
+
+    def key(tally: EntryTally) -> tuple[int, ...]:
+        return (-buchholz[tally.entry_id], *_scalar_key(tally))
+
+    return key
