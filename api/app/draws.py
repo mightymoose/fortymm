@@ -14,13 +14,19 @@ Each :class:`~app.models.tournament.DrawType` is a strategy behind
 ``plan_initial(config, ordered_entrants)``
     Cuts the draw — the fixtures as they stand the moment they are first written.
 
-``advance(fixtures)``
+``advance(fixtures, ordered_entrants)``
     Reads the persisted fixtures *as they currently stand* and returns the
     side-fills that the decided fixtures now imply, plus the fixtures that have
     become **ready** (both sides known, no match yet). It is re-run after *every*
     result and at go-live rather than fired by carefully-chosen events, which only
     works because it is **idempotent**: apply its plan, feed the resulting state
     back in, and the second plan is empty (:attr:`AdvancePlan.is_empty`).
+
+    It takes the **field** as well as the fixtures because the fixtures are not always
+    a complete description of it. A swiss bye is the absence of a fixture row, so a
+    byed entrant sits in no row at all, and pairing the next round from the seated set
+    alone would drop them from the event permanently. Three of the four strategies
+    ignore the argument — their fixtures do seat their whole field — and say so.
 
 Two things the schema deliberately does not store, and this module therefore owns:
 
@@ -38,7 +44,7 @@ from __future__ import annotations
 import enum
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
@@ -453,9 +459,22 @@ class DrawStrategy(Protocol):
         """
         ...
 
-    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
-        """What the current state of these fixtures implies. Idempotent: run against a
-        state its own last plan was applied to, it returns an empty plan."""
+    def advance(
+        self,
+        fixtures: Sequence[FixtureState],
+        ordered_entrants: Sequence[OrderedEntrant],
+    ) -> AdvancePlan:
+        """What the current state of these fixtures implies, for this field. Idempotent:
+        run against a state its own last plan was applied to, it returns an empty plan.
+
+        ``ordered_entrants`` is the event's **active** field in draw order — the same
+        value :meth:`plan_initial` was cut from, not a set recovered from the fixtures.
+        Only :class:`SwissStrategy` reads it (see the module docstring); the other three
+        take it and ignore it, so that the seam has one shape rather than a special
+        case. A caller may hand those three an **empty** sequence rather than paying for
+        a load they discard — :func:`reads_entrants` is where each draw type says which
+        it is.
+        """
         ...
 
 
@@ -608,11 +627,19 @@ class RoundRobinStrategy:
             for fixture in _circle_method(pool_id, members)
         ]
 
-    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
+    def advance(
+        self,
+        fixtures: Sequence[FixtureState],
+        ordered_entrants: Sequence[OrderedEntrant],
+    ) -> AdvancePlan:
         """Round-robin fixtures are fully determined at the cut, so there is never a
         side to fill: every pairing was known the moment the draw existed. All this can
         report is which fixtures are ready to become matches — which, on a freshly cut
-        draw, is all of them, and on an already-materialized one is none of them."""
+        draw, is all of them, and on an already-materialized one is none of them.
+
+        ``ordered_entrants`` is ignored: an odd pool's bye is a round this pool's own
+        fixtures seat its holder in every *other* round of, so the seated set already is
+        the field and nothing here needs to be told it a second time."""
         return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
 
 
@@ -656,9 +683,17 @@ class SingleElimStrategy:
         seed_entry = {entrant.position: entrant.entry_id for entrant in entrants}
         return _knockout_fixtures(size, seed_entry)
 
-    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
+    def advance(
+        self,
+        fixtures: Sequence[FixtureState],
+        ordered_entrants: Sequence[OrderedEntrant],
+    ) -> AdvancePlan:
         """Seat every decided fixture's winner into its successor slot, plus report the
         fixtures now ready to materialize.
+
+        ``ordered_entrants`` is ignored: a bracket's byed seeds are seated onto their
+        round-2 sides at cut time, so every entrant is already in a row and the
+        successor arithmetic needs nothing the fixtures do not carry.
 
         Idempotent: it seats only sides that are still empty, so re-running it over a
         state its own last plan was applied to fills nothing. The final round has no
@@ -791,13 +826,21 @@ class RrThenKoStrategy:
         fixtures.extend(_knockout_fixtures(qualifier_count, {}))
         return fixtures
 
-    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
+    def advance(
+        self,
+        fixtures: Sequence[FixtureState],
+        ordered_entrants: Sequence[OrderedEntrant],
+    ) -> AdvancePlan:
         """Seat the qualifiers of every **finished** pool into their predetermined
         bracket slots, then seat the knockout's own decided winners forward.
 
         Idempotent, twice over: a qualifier is seated only into a still-empty side,
         and the knockout half is :meth:`SingleElimStrategy.advance`, which already is.
         Run it against a state its own last plan was applied to and it plans nothing.
+
+        ``ordered_entrants`` is ignored for both halves, for the two reasons the halves
+        give themselves: the pools seat their whole field, and the bracket is seeded
+        from *results*, never from the field directly.
         """
         knockout = [fixture for fixture in fixtures if fixture.pool_id is None]
         return AdvancePlan(
@@ -808,7 +851,7 @@ class RrThenKoStrategy:
                 # the un-pooled fixtures alone. Passing the pool fixtures too would let
                 # a pool's ``(round, position)`` collide with the bracket's and seat a
                 # pool winner into a knockout slot.
-                *SingleElimStrategy().advance(knockout).side_fills,
+                *SingleElimStrategy().advance(knockout, ordered_entrants).side_fills,
             ),
             ready_fixture_ids=ready_fixtures(fixtures),
         )
@@ -918,10 +961,12 @@ class SwissStrategy:
     no fixture — a bye is the absence of a row (ADR-0786), never a row with a ``NULL``
     side, which here would be indistinguishable from a later round awaiting its pairing.
 
-    **This strategy does not pair anything past round 1 yet.** :meth:`advance` fills no
-    sides; it reports readiness exactly as :class:`RoundRobinStrategy`'s does. Pairing
-    round ``r + 1`` from the standings once round ``r`` is decided is its own slice, and
-    stubbing it would mean writing pairings nobody computed.
+    **Every later round is paired by :meth:`advance`**, once the round before it is
+    fully decided: the field is ordered by the current standings, walked, and each
+    still-unpaired entrant given the nearest following entrant they have not already met
+    (:func:`swiss_pairings`). The pairings are written into that round's
+    already-existing rows in rank order, so a fixture's ``position`` *is* its pairing
+    rank.
 
     Fixtures are **un-pooled** (``pool_id=None``): swiss ranks the whole field in one
     table, which is why the schedule preview refuses it exactly as it refuses a bracket.
@@ -989,19 +1034,289 @@ class SwissStrategy:
         )
         return fixtures
 
-    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
-        """Report which fixtures are ready to become matches, and fill nothing.
+    def advance(
+        self,
+        fixtures: Sequence[FixtureState],
+        ordered_entrants: Sequence[OrderedEntrant],
+    ) -> AdvancePlan:
+        """Pair the next round, if the round before it is decided, and report which
+        fixtures are ready to become matches.
 
-        Round 1 was paired at the cut, so on a freshly cut draw this is round 1's
-        fixtures and nothing else: the later rounds are ``is_pending`` (both sides
-        unknown) and :func:`ready_fixtures` already leaves those out.
+        On a freshly cut draw there is nothing to pair — round 1 is seeded and undecided
+        — so this is round 1's fixtures and nothing else: the later rounds are
+        ``is_pending`` (both sides unknown) and :func:`ready_fixtures` leaves those out.
+        Once every round-1 fixture carries a result, the same call pairs round 2 into
+        the rows the cut already wrote (:func:`_swiss_pairing_fills`).
 
-        Pairing round ``r + 1`` from round ``r``'s standings is the next slice's work,
-        deliberately absent rather than stubbed — a stub here would either write
-        pairings nothing computed or quietly report a round ready that has no players in
-        it.
+        **The field comes from** ``ordered_entrants``, **never from the seated set.** A
+        bye is the absence of a row, so the round-1 bye holder appears in no fixture at
+        all; pairing from the fixtures would drop them out of the event from round 2 on.
+        The same is true of a latecomer, for whom the draw is *not* stale
+        (:func:`unseated_entrant_allowance`) precisely because a later round will seat
+        them.
+
+        Idempotent, and by a stronger mechanism than "do not overwrite": a round is
+        pairable only while **every** one of its fixtures is still unpaired, so a fill
+        this plans can only ever land on a ``NULL`` side. Run it again over the state
+        its own fills were applied to and that round no longer qualifies — which is also
+        what stops a *corrected* earlier result from re-pairing a round that is already
+        being played. (The just-paired round is then genuinely ``ready``, so the second
+        plan names it; the third, once those rows carry matches, is empty.)
+
+        ``ready_fixture_ids`` is computed over the state as handed in, exactly as every
+        other strategy computes it — the caller applies the fills and recomputes
+        readiness itself (:func:`app.tournament_materialization.materialize_event`), so
+        a round paired here still materializes in the same transaction.
         """
-        return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
+        return AdvancePlan(
+            side_fills=tuple(_swiss_pairing_fills(fixtures, ordered_entrants)),
+            ready_fixture_ids=ready_fixtures(fixtures),
+        )
+
+
+def swiss_pairings(
+    order: Sequence[EntryId], met: Collection[frozenset[EntryId]]
+) -> list[tuple[EntryId, EntryId]]:
+    """Pair a swiss round: walk the standings ``order`` and give each still-unpaired
+    entrant the **nearest following entrant they have not already met** (ADR "swiss
+    pre-cuts every round and pairs each one on advance").
+
+    Returns the pairings in **rank order** — pairing 1 contains the highest-ranked
+    entrant — which is what a fixture's ``position`` is assigned from, and each pairing
+    ``(higher, lower)`` in that same order.
+
+    **A rematch is the last resort and never a refusal.** When an entrant has met
+    everybody left below them, they are paired with the nearest one they *have* met: the
+    ``next(...)`` below falls back to index ``0``, the nearest following entrant, full
+    stop. Refusing to pair would strand a live tournament mid-event with no move a
+    director could make, which is far worse than a repeated fixture. (The cut already
+    refuses ``R > n − 1``, so a rematch-free swiss *exists* for every draw that was
+    written; this greedy walk does not always find one, and knowingly does not try — a
+    maximum matching over "has not met" would pair strangers further apart in the
+    standings, which is a worse swiss than one repeat.)
+
+    An **odd** ``order`` leaves its last entrant unpaired rather than raising: the
+    caller removes the bye before calling, and this stays a total function so a miscount
+    can only cost a fixture, not a 500 in the middle of an event.
+
+    Pure, and takes only what the rule needs — an order and a set of pairs — so the rule
+    is testable without a fixture, a draw or a database, which is how the last-resort
+    branch is pinned directly rather than through a contrived tournament.
+    """
+    remaining = list(order)
+    pairs: list[tuple[EntryId, EntryId]] = []
+    while len(remaining) >= 2:
+        first = remaining.pop(0)
+        index = next(
+            (
+                index
+                for index, other in enumerate(remaining)
+                if frozenset({first, other}) not in met
+            ),
+            # The last resort: nobody below is fresh, so take the nearest all the same.
+            0,
+        )
+        pairs.append((first, remaining.pop(index)))
+    return pairs
+
+
+def _swiss_pairing_fills(
+    fixtures: Sequence[FixtureState], ordered_entrants: Sequence[OrderedEntrant]
+) -> list[SideFill]:
+    """The side-fills that pair the next swiss round, or nothing when no round is
+    pairable yet.
+
+    The four steps are the ADR's own sentence: find the round to pair, order the field
+    by the current standings, take the bye out of an odd field, and walk the rest.
+    """
+    round_fixtures = _swiss_round_to_pair(fixtures)
+    if round_fixtures is None:
+        return []
+    field = [entrant.entry_id for entrant in ordered_entrants]
+    order = _swiss_standings_order(field, fixtures)
+    bye = _swiss_bye(order, fixtures)
+    pairs = swiss_pairings(
+        [entry_id for entry_id in order if entry_id != bye], _swiss_met(fixtures)
+    )
+    fills: list[SideFill] = []
+    # ``position`` is the pairing's rank (ADR), so the round's rows are filled in
+    # position order with the pairings in standings order. ``strict=False`` because the
+    # two can legitimately differ in length: a field that grew by one after the cut has
+    # a pairing more than there are rows for, and its lowest-ranked pairing simply is
+    # not written — the same outcome the entrant would have had as that round's bye. A
+    # field that grew by *more* than one is a stale draw, which go-live refuses
+    # (:func:`unseated_entrant_allowance`) before this is ever reached.
+    for (higher, lower), fixture in zip(
+        pairs, sorted(round_fixtures, key=lambda f: f.position), strict=False
+    ):
+        fills.append(
+            SideFill(fixture_id=fixture.fixture_id, side=Side.a, entry_id=higher)
+        )
+        fills.append(
+            SideFill(fixture_id=fixture.fixture_id, side=Side.b, entry_id=lower)
+        )
+    return fills
+
+
+def _swiss_round_to_pair(
+    fixtures: Sequence[FixtureState],
+) -> list[FixtureState] | None:
+    """The fixtures of the round this advance may pair — the **earliest wholly unpaired
+    round, and only if every round before it is decided** — or ``None``.
+
+    Walking from round 1 is what enforces "a round is paired once the round before it is
+    fully decided": the first round that is not decided ends the walk, and it is paired
+    only if it is the one that has not been paired yet.
+
+    **Wholly unpaired**, not "has an empty side", on purpose. A half-paired round is a
+    state neither the cut (which writes both sides or neither) nor this function (whose
+    fills are applied in one transaction) can produce, and pairing "around" the seated
+    half would need a rule for who the already-seated player's opponent is — inventing
+    one risks seating an entrant in two fixtures of the same round. So a half-paired
+    round stalls the walk instead, visibly, rather than being papered over.
+
+    It is also what makes the whole advance idempotent: once a round's rows are filled
+    it is no longer wholly unpaired, so no later run re-pairs it — which is the same
+    mechanism that keeps a correction to an earlier result from re-pairing a round that
+    is already being played.
+    """
+    by_round: dict[int, list[FixtureState]] = defaultdict(list)
+    for fixture in fixtures:
+        by_round[fixture.round].append(fixture)
+    for round_number in sorted(by_round):
+        round_fixtures = by_round[round_number]
+        if all(
+            fixture.entry_a_id is None and fixture.entry_b_id is None
+            for fixture in round_fixtures
+        ):
+            return round_fixtures
+        if not _swiss_round_is_decided(round_fixtures):
+            return None
+    return None
+
+
+def _swiss_round_is_decided(round_fixtures: Sequence[FixtureState]) -> bool:
+    """Whether every fixture in one round has produced all the result it ever will.
+
+    The **live-outcome** view (:attr:`FixtureState.games`), not the written-back
+    ``winner_entry_id``, for the reason :func:`_finished_pool_order` reads the same
+    field: a result under correction leaves its match un-``completed`` while the winner
+    id stays put, and the standings the next round is paired from are projected from the
+    games. So a correction un-decides its round rather than letting the next one be
+    paired off a table nobody can see.
+
+    A **voided** fixture never will produce a result (the match is terminal, and
+    ``ready_fixtures`` will not re-materialize a fixture that has a ``match_id``), so it
+    is excluded rather than counted-but-missing. Counting it would stall the event
+    permanently one score short, with no move a director could make.
+    """
+    return all(
+        fixture.entry_a_id is not None
+        and fixture.entry_b_id is not None
+        and (fixture.match_voided or fixture.games is not None)
+        for fixture in round_fixtures
+    )
+
+
+def _swiss_standings_order(
+    field: Sequence[EntryId], fixtures: Sequence[FixtureState]
+) -> list[EntryId]:
+    """The field ordered by the current standings — the order the next round is paired
+    down.
+
+    :func:`~app.pool_finishing_order.finishing_order` is the *shared* definition of that
+    table, the same call the standings on screen are projected through, so the order a
+    director reads and the order the pairing walks cannot disagree. (Swiss gets its own
+    chain — Buchholz above game difference — in its own slice; until then this is the
+    one that exists, and it is one call to change.)
+
+    An outcome naming an entry that is not in the field is left out: a withdrawal
+    between the cut and this advance would otherwise be a ``KeyError`` deep inside the
+    tally. Filtering the *outcomes* rather than widening the tallied set is deliberate —
+    a stranger in the tallies would turn a two-way tie into a three-way one and silently
+    cost the pair its head-to-head.
+    """
+    in_field = set(field)
+    outcomes: list[MatchOutcome] = []
+    for fixture in fixtures:
+        entry_a_id, entry_b_id, games = (
+            fixture.entry_a_id,
+            fixture.entry_b_id,
+            fixture.games,
+        )
+        if entry_a_id is None or entry_b_id is None or games is None:
+            continue
+        if fixture.match_voided:
+            continue
+        if entry_a_id not in in_field or entry_b_id not in in_field:
+            continue
+        outcomes.append(
+            MatchOutcome(
+                entry_a_id=entry_a_id,
+                entry_b_id=entry_b_id,
+                entry_a_games=games.entry_a_games,
+                entry_b_games=games.entry_b_games,
+            )
+        )
+    return [tally.entry_id for tally in finishing_order(field, outcomes)]
+
+
+def _swiss_bye(
+    order: Sequence[EntryId], fixtures: Sequence[FixtureState]
+) -> EntryId | None:
+    """Who sits out this round: the **lowest-ranked entrant who has not had a bye yet**,
+    or ``None`` when the field is even.
+
+    A bye is the absence of a fixture row, so who has already had one is *derived* —
+    an entrant seated in no fixture of a round that was paired (:func:`_swiss_seated`).
+    Nothing is stored, and nothing needs to be: the rows are the record.
+
+    The fallback for a field in which everybody has had one (the lowest-ranked overall)
+    is written for completeness rather than because it runs. The cut refuses ``R > n −
+    1``, so there are always fewer rounds than entrants and the byeless set cannot
+    empty.
+
+    Bye **scoring** — a win worth zero games — is not here. It is a standings question,
+    and it lands with the standings (ADR "swiss standings add Buchholz").
+    """
+    if len(order) % 2 == 0:
+        return None
+    byes: dict[EntryId, int] = dict.fromkeys(order, 0)
+    for seated in _swiss_seated(fixtures).values():
+        for entry_id in order:
+            if entry_id not in seated:
+                byes[entry_id] += 1
+    for entry_id in reversed(order):
+        if byes[entry_id] == 0:
+            return entry_id
+    return order[-1]
+
+
+def _swiss_seated(fixtures: Sequence[FixtureState]) -> dict[int, set[EntryId]]:
+    """Who is seated in each **paired** round — a round with no seated fixture at all is
+    absent from the map, so an unpaired round does not read as a round everybody was
+    byed in."""
+    seated: dict[int, set[EntryId]] = defaultdict(set)
+    for fixture in fixtures:
+        if fixture.entry_a_id is None or fixture.entry_b_id is None:
+            continue
+        seated[fixture.round].update({fixture.entry_a_id, fixture.entry_b_id})
+    return seated
+
+
+def _swiss_met(fixtures: Sequence[FixtureState]) -> set[frozenset[EntryId]]:
+    """Every pair this draw has already put in a fixture together.
+
+    Read off the *pairings*, not the results: a voided match and a result still being
+    corrected are both pairings that happened, and pairing them again would be the
+    rematch the walk exists to avoid.
+    """
+    met: set[frozenset[EntryId]] = set()
+    for fixture in fixtures:
+        if fixture.entry_a_id is None or fixture.entry_b_id is None:
+            continue
+        met.add(frozenset({fixture.entry_a_id, fixture.entry_b_id}))
+    return met
 
 
 def _finished_pool_order(
@@ -1224,6 +1539,40 @@ def reads_fixture_games(draw_type: DrawType) -> bool:
             return False
         case DrawType.rr_then_ko:
             return True
+        case DrawType.swiss:
+            return True
+
+
+def reads_entrants(draw_type: DrawType) -> bool:
+    """Whether this draw type's ``advance()`` reads the **field** — i.e. whether a
+    caller advancing it has to load the event's entrants first.
+
+    :func:`reads_fixture_games`' sibling, for the same seam and the same reason. The
+    advance runs inside the score-accept transaction on every result, so a load nothing
+    reads is a round trip per submission, and the gate is what keeps three of the four
+    draw types costing exactly the fixture load they always cost.
+
+    Only ``swiss`` declares **true**. Its bye is the absence of a fixture row, so the
+    seated set is *not* the field: pairing the next round from the rows alone would drop
+    the byed entrant — and a latecomer the currency check deliberately tolerates — out
+    of the event for good. The other three seat every entrant they have in a row
+    (a round-robin bye sits out one round of a schedule that seats it in the others, a
+    byed knockout seed is seated onto its round-2 side at the cut), so for them the
+    field is already in the fixtures and the load would be discarded.
+
+    An exhaustive ``match`` with **no catch-all**, exactly like its sibling: a new
+    :class:`DrawType` has to declare its own answer, and until it does this fails to
+    type-check. The failure a default of ``False`` would cause is the silent one — a
+    strategy handed an empty field pairs nobody and the event simply stops — which is
+    why the declaration is compulsory rather than inferred.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return False
+        case DrawType.single_elim:
+            return False
+        case DrawType.rr_then_ko:
+            return False
         case DrawType.swiss:
             return True
 

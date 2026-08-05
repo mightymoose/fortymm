@@ -5,12 +5,15 @@ The strategy itself is pure and is tested from literals in ``test_draws.py``; th
 standings shape is tested the same way in ``test_results.py``. What this file tests is
 everything *between* them and a director: the request boundary that requires a round
 count for exactly one draw type, the settings row it lands on, the wire it reads back
-on, and the cut that writes every round at once.
+on, the cut that writes every round at once, and the completion seam that pairs the
+next round when the current one is done.
 
-**What is deliberately absent.** ``advance()`` does not pair rounds 2..R yet — that is
-the next slice — so there is no test here of a decided round producing pairings. The
-absence is asserted in ``test_draws.py`` rather than papered over, because a stub would
-write pairings nothing computed.
+That last one is here rather than only in ``test_draws.py`` because a pure strategy
+that pairs perfectly is **inert** unless the seam hands it the two things it needs: the
+fixtures' game counts, and the event's **entrants** (a byed entrant sits in no fixture,
+so the seated set is not the field). Both are loaded in
+``app.tournament_materialization``, neither is visible to a unit test, and getting
+either wrong stalls a live event silently rather than failing.
 """
 
 import uuid
@@ -37,11 +40,24 @@ from app.schemas.tournament import MAX_SWISS_ROUNDS
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_draws import DrawCurrency, draw_currency_by_event
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, make_user, start_session
+from tests._helpers import (
+    grant_permissions,
+    make_user,
+    opponent_session,
+    start_session,
+)
 
 # The tournament suite's own lifecycle helpers, imported rather than re-declared so a
-# change to how a tournament is started (or a status is staged) reaches this file too.
-from tests.test_tournaments import _go_live, _set_status, _withdraw
+# change to how a tournament is started (or a status is staged) reaches this file too —
+# including how a materialized fixture is called to a table and played out, so a swiss
+# match completes by exactly the route a round-robin or knockout one does.
+from tests.test_tournaments import (
+    _call_fixtures,
+    _go_live,
+    _set_status,
+    _win_fixture_match,
+    _withdraw,
+)
 
 SWISS = DrawType.swiss.value
 
@@ -676,6 +692,122 @@ async def test_a_lone_latecomer_leaving_an_odd_field_reads_as_that_rounds_bye(
 
     assert await _currency(db_session, event_id) is DrawCurrency.current
     assert (await _go_live(client, tournament_id)).status_code == 201
+
+
+# ----- the completion seam: a decided round pairs the next one -----------------------
+
+
+async def test_completing_every_round_one_match_pairs_and_materializes_round_two(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The whole slice, through the real endpoints.** Four entrants, three rounds. The
+    cut seats round 1 (1v3, 2v4) and leaves rounds 2 and 3 empty; go-live materializes
+    round 1 and nothing else. One result is not a table, so it pairs nothing. The
+    *second* result completes the round, and round 2 pairs the two winners against each
+    other and the two losers against each other — becoming matches in the same
+    transaction.
+
+    Round 1 is played as an **upset** (seed 3 beats seed 1) so that the answer is one
+    only the standings give: pairing by the draw order would meet 1v2 and 3v4, and
+    re-pairing round 1 would meet 1v3 and 2v4. Neither is what this asserts.
+
+    Pairs are compared **unordered**, and that is the honest thing rather than a
+    weakening. The two winners are level on wins, game difference and games won, so the
+    order between them — and therefore which pairing takes position 1, and which entrant
+    lands on side ``a`` — falls to the entry-id tiebreak, and an entry id here is a
+    server-minted uuid. The rank-ordered ``position`` claim is pinned in
+    ``test_draws.py``, where the ids are literals and the order is a fact.
+
+    What only this test can catch: the seam
+    (``app.tournament_materialization.materialize_event``) loading the game counts and
+    the **entrants** the strategy needs. A unit test cannot see either, and either one
+    missing leaves a live swiss event stalled after round 1 with nothing in the logs.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "swiss-two") as (client_2, user_2),
+        opponent_session(db_session, "swiss-three") as (client_3, user_3),
+        opponent_session(db_session, "swiss-four") as (client_4, user_4),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        entries = [
+            await _enter(db_session, event_id, user, seed=seed, minutes=seed)
+            for seed, user in enumerate((owner, user_2, user_3, user_4), start=1)
+        ]
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        # The ids as plain values, taken once: the ORM entries are expired by the
+        # ``expire_all`` below (and by the seam's own commits), and re-reading an
+        # attribute off an expired instance in async context is a ``MissingGreenlet``,
+        # not a lazy load.
+        entry_ids = [entry.id for entry in entries]
+        clients = dict(
+            zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
+        )
+        seed_of = {entry_id: seed for seed, entry_id in enumerate(entry_ids, start=1)}
+
+        def pairs(
+            fixtures: list[TournamentFixture], round_number: int
+        ) -> set[frozenset[int]]:
+            """Each of the round's pairings as a set of seeds, unordered."""
+            return {
+                frozenset(
+                    seed
+                    for entry_id in (f.entry_a_id, f.entry_b_id)
+                    if (seed := seed_of.get(entry_id)) is not None
+                )
+                for f in fixtures
+                if f.round == round_number
+            }
+
+        def is_unpaired(fixtures: list[TournamentFixture], round_number: int) -> bool:
+            return all(
+                f.entry_a_id is None and f.entry_b_id is None
+                for f in fixtures
+                if f.round == round_number
+            )
+
+        rows = await _fixtures(db_session, event_id)
+        round_one = [f for f in rows if f.round == 1]
+        assert pairs(rows, 1) == {frozenset({1, 3}), frozenset({2, 4})}, "the cut's own"
+        assert all(f.match_id is not None for f in round_one), "round 1 materialized"
+        assert is_unpaired(rows, 2), "round 2 is TBD until round 1 is decided"
+
+        await _call_fixtures(db_session, tournament_id, round_one)
+        # The upset: seed 3 takes the first fixture, so the winners are seeds 3 and 2.
+        await _win_fixture_match(
+            round_one[0],
+            clients_by_entry=clients,
+            winner_entry_id=entry_ids[2],
+            rated=False,
+        )
+
+        db_session.expire_all()
+        rows = await _fixtures(db_session, event_id)
+        assert is_unpaired(rows, 2), (
+            "one result is not a table — the round is paired off all of them or none"
+        )
+
+        await _win_fixture_match(
+            round_one[1],
+            clients_by_entry=clients,
+            winner_entry_id=entry_ids[1],
+            rated=False,
+        )
+
+        db_session.expire_all()
+        rows = await _fixtures(db_session, event_id)
+        assert pairs(rows, 2) == {frozenset({2, 3}), frozenset({1, 4})}, (
+            "the two winners meet and the two losers meet — which is the standings' "
+            "answer, and neither the draw order's (1v2, 3v4) nor round 1's own (1v3, "
+            "2v4)"
+        )
+        assert all(f.match_id is not None for f in rows if f.round == 2), (
+            "and the paired round materializes in the same transaction"
+        )
+        assert is_unpaired(rows, 3), "round 3 waits for round 2's table"
 
 
 async def test_a_swiss_event_has_no_schedule_preview(
