@@ -14,9 +14,15 @@
 // **It makes ONE join, not two.** A pool's standings also resolve a `poolId` to a pool
 // name; swiss has no pool to resolve, because it ranks the whole field in one table. That
 // absence is the only thing that distinguishes this module from `./standings` — the rows
-// themselves are the very `StandingRow`s a pool carries, joined by the very same
+// themselves are a pool's `StandingRow` plus the `buchholz` column, joined by the very same
 // `nameOf`, so the withdrawn-entrant label and every number cannot fork into a second
 // implementation.
+//
+// `buchholz` needs no work here at all, and that is the point of spreading rather than
+// re-listing the columns: it is the SERVER's figure — the sum of this entrant's opponents'
+// win counts — carried straight through to the cell, never re-derived from the wins column
+// beside it. Re-deriving it would be a second copy of a number that already moves on its
+// own (an opponent's later win raises it), and the two would disagree within a round.
 //
 // What it deliberately does **not** do is re-order or recompute anything: the server owns
 // the finishing order and every figure (ADR-0788 — "the order *is* the result"), so the
@@ -26,15 +32,30 @@
 // than asserted through a DOM.
 
 import { nameByEntryId, nameOf } from './entrant-names'
-import type { StandingLine } from './standings'
-import type { SwissStandingsResults, TournamentEvent } from './types'
+import type {
+  SwissStandingRow,
+  SwissStandingsResults,
+  TournamentEvent,
+} from './types'
+
+/** One swiss standings line, ready to render: the server's row — **`buchholz` included** —
+ * plus the entrant's name joined from the event. The `StandingLine` of `./standings` with
+ * the one extra column, and structurally assignable to it, so the shared table renders
+ * either. Every number is carried through unchanged: the client shows them, it does not
+ * compute them. */
+export interface SwissStandingLine extends SwissStandingRow {
+  /** The entrant's username (bare, no `@` — `web-client/CLAUDE.md`), or `WITHDRAWN_LABEL`
+   * when the row names an entry the event no longer lists — the same join, and the same
+   * word, a pool's table makes. */
+  name: string
+}
 
 /** A swiss event's standings, shaped for the reader: the whole field as one named table,
  * whether every round is decided, and the leader's *name* (joined) once it is. */
 export interface SwissStandingsView {
   /** Every entrant, in the server's finishing order — **one list, no pools**, rendered
    * untouched. */
-  rows: StandingLine[]
+  rows: SwissStandingLine[]
   /** True when **every round** is decided, the later ones included. */
   complete: boolean
   /** The leader's username once the event is complete, else `null` — the server's own
@@ -64,7 +85,9 @@ export function eventSwissStandings(
 
   return {
     rows: results.rows.map(
-      (row): StandingLine => ({ ...row, name: nameOf(row.entryId, names) }),
+      // Spread, so every column the server sent rides through — `buchholz` included, and
+      // whatever the shared row grows next. The join adds a name; it takes nothing away.
+      (row): SwissStandingLine => ({ ...row, name: nameOf(row.entryId, names) }),
     ),
     complete: results.complete,
     champion:

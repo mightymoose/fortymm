@@ -309,6 +309,40 @@ export interface StandingRow {
   gameDifference: number
 }
 
+/**
+ * One entry's line in a **swiss** table: every column a pool's row carries, plus the
+ * **Buchholz** figure that ordered it (ADR "swiss standings add Buchholz, and head-to-head
+ * is guarded on having met").
+ *
+ * It **extends** `StandingRow` rather than restating it, exactly as `SwissStandingRowRead`
+ * extends `StandingRowRead` on the wire: swiss's rows are a pool's rows plus one column,
+ * which is a fact about the format and not a second row shape. So one table renders both.
+ */
+export interface SwissStandingRow extends StandingRow {
+  /**
+   * The sum of this entrant's **opponents' win counts** — how strong a field they had to
+   * beat, and the tiebreak that sits **above game difference** in swiss (CONTEXT.md,
+   * "Buchholz"). Highest first.
+   *
+   * It is on the wire because it is the one link in the chain a client cannot re-derive
+   * from the row it ordered: every other step shows its working in the columns beside it,
+   * so a table that ranks A above B on equal wins and *worse* game difference is
+   * unreadable without this number.
+   *
+   * Two properties worth not breaking in the UI:
+   *
+   * - the wins it sums are the **wins this same table shows, bye wins included**, so a
+   *   director can check the figure by adding up the win columns of the players this one
+   *   has played. An adjusted number would silently fail that arithmetic and read as a bug;
+   * - a **bye adds no term** to its own holder's sum, having produced no opponent.
+   *
+   * It **moves as the event runs**: an opponent winning a later match raises it without
+   * this entrant playing. Like every other figure here it is the SERVER's, shown and never
+   * recomputed.
+   */
+  buchholz: number
+}
+
 /** One pool's standings: its rows in the server's finishing order (**never re-sorted on
  * the client**), and whether every one of the pool's fixtures is decided. `poolId` names
  * a `Pool` in this same event's `pools`, so the table titles itself from the pool the
@@ -429,11 +463,13 @@ export interface StandingsThenFinishesResults {
  * advance"): **one standings table over the whole field**, whether every round is decided,
  * and the leader once it is. The `swiss_standings` arm of the `EventResults` union.
  *
- * The rows are the very `StandingRow`s a round-robin pool carries — not a swiss-flavoured
- * near-copy — so the same table renders them and the two shapes cannot drift apart. The
- * one difference is that they arrive as **one list rather than grouped under a pool**, and
- * that is a fact about the format: swiss is pool-less, everybody is ranked against
- * everybody, which is what pairing by score is for.
+ * The rows are a round-robin pool's rows **plus one column** (`SwissStandingRow`), not a
+ * swiss-flavoured near-copy — so the same table renders them and the two shapes cannot
+ * drift apart. The two differences are both facts about the format: they arrive as **one
+ * list rather than grouped under a pool** (swiss is pool-less — everybody is ranked against
+ * everybody, which is what pairing by score is for), and each carries the **Buchholz**
+ * figure that ordered it, which a round-robin has no use for because its entrants all face
+ * the same opposition.
  *
  * Live and partial like every other results shape: the table fills in as matches land, and
  * the later rounds — cut up front with their sides still unknown — contribute nothing until
@@ -442,8 +478,10 @@ export interface StandingsThenFinishesResults {
 export interface SwissStandingsResults {
   kind: 'swiss_standings'
   /** The whole field in the server's finishing order, **never re-sorted here** (the order
-   * *is* the result — ADR-0788). One list, because there is no pool to group by. */
-  rows: StandingRow[]
+   * *is* the result — ADR-0788). One list, because there is no pool to group by; and each
+   * row carries its `buchholz`, because that is the step of the chain the other columns
+   * cannot show. */
+  rows: SwissStandingRow[]
   /** True when **every round** is decided, the later ones included. */
   complete: boolean
   /** The leader's **entry id** once the event is complete, else `null`. A swiss ranks its

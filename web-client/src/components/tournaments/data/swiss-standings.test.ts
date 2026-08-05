@@ -1,7 +1,7 @@
 import { WITHDRAWN_LABEL } from './draw'
 import {
   buildEntrants,
-  buildStandingRow,
+  buildSwissStandingRow,
   buildSwissStandingsEvent,
   buildSwissStandingsResults,
   swissStandingsResultsOf,
@@ -23,6 +23,7 @@ describe('eventSwissStandings', () => {
       'player.2',
       'player.3',
       'player.4',
+      'player.5',
     ])
   })
 
@@ -34,8 +35,18 @@ describe('eventSwissStandings', () => {
       buildSwissStandingsEvent({
         results: buildSwissStandingsResults({
           rows: [
-            buildStandingRow({ entryId: 'entry-3', rank: 3, gameDifference: -2 }),
-            buildStandingRow({ entryId: 'entry-1', rank: 1, gameDifference: 7 }),
+            buildSwissStandingRow({
+              entryId: 'entry-3',
+              rank: 3,
+              gameDifference: -2,
+              buchholz: 9,
+            }),
+            buildSwissStandingRow({
+              entryId: 'entry-1',
+              rank: 1,
+              gameDifference: 7,
+              buchholz: 2,
+            }),
           ],
         }),
       }),
@@ -44,6 +55,12 @@ describe('eventSwissStandings', () => {
     expect(view.rows.map((r) => r.entryId)).toEqual(['entry-3', 'entry-1'])
     expect(view.rows.map((r) => r.gameDifference)).toEqual([-2, 7])
     expect(view.rows.map((r) => r.rank)).toEqual([3, 1])
+    // **Buchholz rides through with the rest.** It is the SERVER's figure — a sum over
+    // *other* rows, which moves when an opponent wins a later match — so a selector that
+    // re-derived it from the wins column here would be a second copy that disagrees within
+    // a round. The two values are deliberately the reverse of the rank order and equal to
+    // nothing else on their rows, so a selector reading the wrong field cannot pass.
+    expect(view.rows.map((r) => r.buchholz)).toEqual([9, 2])
   })
 
   it('joins the champion to a name', () => {
@@ -73,9 +90,9 @@ describe('eventSwissStandings', () => {
     // makes, which is why this selector reuses `nameOf` rather than forking it.
     const view = viewOf(
       buildSwissStandingsEvent({
-        entrants: buildEntrants(2), // entry-3 and entry-4 are gone
+        entrants: buildEntrants(2), // entry-3, entry-4 and entry-5 are gone
         results: buildSwissStandingsResults({
-          rows: [buildStandingRow({ entryId: 'entry-4', rank: 1 })],
+          rows: [buildSwissStandingRow({ entryId: 'entry-4', rank: 1 })],
         }),
       }),
     )

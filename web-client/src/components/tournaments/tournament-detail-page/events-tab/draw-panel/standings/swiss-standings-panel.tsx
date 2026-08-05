@@ -82,7 +82,11 @@ export const SwissStandingsPanel = ({
           takes no top margin here: it is the first thing in the box, not something
           following a heading. */}
       <div className="mt-2 rounded-[10px] border border-[color:var(--border-subtle)] p-3">
+        {/* `format="swiss"` is what adds the **Buchholz** column — and it is not a flag
+            beside the rows, it is the tag that *requires* rows carrying the figure, so the
+            column and its numbers arrive together or not at all (`StandingsTableRows`). */}
         <StandingsTable
+          format="swiss"
           ariaLabel={`Standings for ${eventName}`}
           rows={standings.rows}
         />
