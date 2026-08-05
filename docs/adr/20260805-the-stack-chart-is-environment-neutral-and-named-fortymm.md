@@ -44,10 +44,37 @@ looking for the parameterisation work, because there wasn't any.
 changing the literal makes `helm upgrade` fail outright rather than roll. The
 existing release must be `helm uninstall`ed and reinstalled once.
 
-That deletes the `postgres-data` PVC, since no resource in the chart carries
-`helm.sh/resource-policy: keep`, so **UAT's database is wiped** and rebuilt by
-the migrate-and-seed hook that already runs on every install. UAT data is
-disposable by design, so the price is a reseed.
+**The failure is confirmed, not predicted.** A server-side dry run against the
+live cluster answers:
+
+```
+The Deployment "api" is invalid: spec.selector: Invalid value:
+{"matchLabels":{"app.kubernetes.io/component":"api","app.kubernetes.io/name":"fortymm"}}:
+field is immutable
+```
+
+**But `helm uninstall` is the wrong remedy, and this ADR originally called for
+it.** Uninstalling deletes the `postgres-data` PVC — no resource in the chart
+carries `helm.sh/resource-policy: keep` — so it wipes UAT's database, which the
+migrate-and-seed hook then rebuilds. That cost was accepted before anyone
+checked whether it was necessary. It is not. Only the **Deployments** carry the
+immutable field, so deleting just those and re-running the deploy is enough:
+
+```bash
+export KUBECONFIG="$(k3d kubeconfig write fortymm-uat)"
+kubectl delete deploy api web-client worker nginx postgres redis tailscale -n fortymm-uat
+mise run redeploy-uat
+```
+
+Helm recreates them on the next upgrade with the new selector. The release
+history, the `postgres-data` PVC and the `tailscale-state` Secret all survive,
+so **UAT's data is not wiped** and the tailnet identity is not at risk. UAT is
+down for the minute or two the recreate takes.
+
+The rejected alternative — rendering the selector label from `.Release.Name` so
+it stays `fortymm-uat` and no reinstall is needed at all — is worse than it
+looks. It would put the environment back into the label this ADR exists to take
+it out of, and make every future release name part of the selector contract.
 
 The tailscale state Secret is created by the tailscale container on first run
 under its own RBAC rule, not templated by Helm, so `helm uninstall` does not

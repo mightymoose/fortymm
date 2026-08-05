@@ -11,7 +11,7 @@ The recurring cadence lives in the *deployment*, not here, so the mechanism is a
 single-shot process invoked once per tick:
 
 * UAT (k8s): a Helm ``CronJob``
-  (``deploy/uat/templates/retirement-sweep-cronjob.yaml``), hourly,
+  (``deploy/fortymm/templates/retirement-sweep-cronjob.yaml``), hourly,
   ``concurrencyPolicy: Forbid`` — one run per tick regardless of how many api
   replicas are up, so no duplicate-execution race.
 * docker-compose (dev/qa/uat): a small ``retirement-sweep`` service that loops

@@ -85,7 +85,7 @@ tempo:
 # --------------------------------------------------------------------------
 # Grafana Alloy faro.receiver — ingests browser telemetry from the SPA's
 # @grafana/faro-web-sdk and forwards logs -> Loki, traces -> Tempo. Reached
-# same-origin at /faro/collect via the routing nginx (deploy/uat). The abuse
+# same-origin at /faro/collect via the routing nginx (deploy/fortymm). The abuse
 # controls below run on the receiver itself (a browser endpoint can't be
 # authenticated — these cap volume/origin/size, see README/answer).
 # --------------------------------------------------------------------------

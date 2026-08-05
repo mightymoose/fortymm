@@ -8,7 +8,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 tailscale serve config for one proxy. Pass the backend URL as the context.
 ${TS_CERT_DOMAIN} is substituted by the container with the node's MagicDNS
-name at startup. Mirrors deploy/uat's fortymm-uat.tailscaleServe helper.
+name at startup. Mirrors deploy/fortymm's fortymm.tailscaleServe helper.
 */}}
 {{- define "observability.tailscaleServe" -}}
 {

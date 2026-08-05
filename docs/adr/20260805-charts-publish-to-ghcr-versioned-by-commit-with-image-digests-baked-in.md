@@ -109,11 +109,19 @@ set; charts have no equivalent need.
   discover it was broken would be someone outside this repo. See
   `.claude/rules/verify-the-artifact-under-test.md` — UAT is the only thing that
   proves the chart we publish is the chart that works.
-- **The script gets substantially smaller.** `ghcr_manifest_digest`,
+- **The script sheds its image-digest resolution.** `ghcr_manifest_digest`,
   `resolve_published_digest` and `assert_digest` exist to resolve two image
   digests that now ride inside the chart. What remains is one chart lookup,
   resolved to a digest at deploy time so the operator names a commit while the
   cluster gets content-addressed bytes.
+
+  This originally said the script would get *substantially smaller*. It did
+  not, and the correction is worth keeping so nobody goes looking for the
+  missing lines: 252 code lines became 235. The hand-rolled GHCR token mint and
+  manifest walk disappeared, but the wait-for-CI logic did not — it moved onto
+  the chart — and the reasoning it now has to explain is no less subtle. The
+  win is that the deploy stopped reimplementing a registry client, not that
+  there is less of it.
 - **The observability deploy stops depending on two external Helm repos.**
   `helm dependency build` plus `helm repo add prometheus-community` and
   `grafana` run at deploy time today. Packaging vendors those dependencies
