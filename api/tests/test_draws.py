@@ -36,6 +36,7 @@ from app.draws import (
     Side,
     SideFill,
     SingleElimStrategy,
+    SwissStrategy,
     order_entrants,
     qualifier_seed_assignment,
     reads_fixture_games,
@@ -48,6 +49,7 @@ from app.schemas.tournament import (
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
+    SwissDrawSettingsWrite,
     draw_settings_from_storage,
 )
 
@@ -63,10 +65,11 @@ def _settings(draw_type: DrawType) -> DrawSettingsWriteArm:
     needs a setting this helper does not supply reds here with a ``ValidationError``
     rather than resolving to a strategy configured by omission.
     """
-    return draw_settings_from_storage(
-        draw_type,
-        {"qualifiers_per_pool": 2} if draw_type is DrawType.rr_then_ko else {},
-    )
+    required: dict[DrawType, dict[str, int]] = {
+        DrawType.rr_then_ko: {"qualifiers_per_pool": 2},
+        DrawType.swiss: {"rounds": 3},
+    }
+    return draw_settings_from_storage(draw_type, required.get(draw_type, {}))
 
 
 def _entry_id(n: int) -> EntryId:
@@ -261,6 +264,23 @@ class TestStrategyRegistry:
             SingleElimStrategy,
         )
 
+    def test_swiss_resolves_to_the_configured_swiss_strategy(self) -> None:
+        """The fourth arm (ADR "swiss pre-cuts every round and pairs each one on
+        advance") — configured, like rr-then-ko's: the round count is not a detail of
+        the dispatch, it is the number of rounds the cut writes, so it is asserted to
+        have arrived rather than merely to have been accepted."""
+        strategy = strategy_for(SwissDrawSettingsWrite(rounds=5))
+
+        assert strategy == SwissStrategy(rounds=5)
+
+    def test_a_swiss_arm_cannot_be_built_without_a_round_count(self) -> None:
+        """A swiss configuration with no round count is not a value ``strategy_for`` can
+        be handed: ``rounds`` is required on the arm, with no default, so the refusal is
+        at the boundary where the arm is built rather than a strategy configured by
+        omission (ADR: "``R`` is a required, explicit setting")."""
+        with pytest.raises(ValidationError, match="rounds"):
+            SwissDrawSettingsWrite()  # type: ignore[call-arg]  # the point of the test
+
     def test_rr_then_ko_resolves_to_the_configured_rr_then_ko_strategy(self) -> None:
         """The third arm (ADR 20260727) — and the first whose strategy is *configured*:
         the qualifier count is not a detail of the dispatch, it is what the strategy
@@ -317,6 +337,9 @@ class TestStrategyRegistry:
             DrawType.round_robin: False,
             DrawType.single_elim: False,
             DrawType.rr_then_ko: True,
+            # Swiss pairs each round off the standings, whose chain counts games
+            # (Buchholz, then game difference), so it declares the games it will read.
+            DrawType.swiss: True,
         }
 
     def test_a_draw_type_the_gate_clears_advances_the_same_without_its_games(
@@ -2022,3 +2045,212 @@ class TestRrThenKoAdvance:
             _rr_then_ko(2).advance(fixtures)
 
         assert "5 decided pool fixtures" in str(excinfo.value)
+
+
+class TestSwissCut:
+    """The cut pre-writes **every** round: ``R × ⌊n/2⌋`` fixtures, round 1 seeded from
+    the draw order and every later round left with both sides TBD (ADR "swiss pre-cuts
+    every round and pairs each one on advance")."""
+
+    @pytest.mark.parametrize(
+        ("entrants", "rounds", "per_round"),
+        [
+            (8, 3, 4),
+            (7, 3, 3),  # odd: one entrant sits out, so ⌊7/2⌋ = 3 pairings a round
+            (6, 5, 3),  # R = n − 1, the most rounds this field can carry
+            (2, 1, 1),
+            (9, 4, 4),
+        ],
+        ids=["n=8,R=3", "n=7,R=3", "n=6,R=5", "n=2,R=1", "n=9,R=4"],
+    )
+    def test_every_round_is_cut_with_floor_n_over_two_fixtures(
+        self, entrants: int, rounds: int, per_round: int
+    ) -> None:
+        """The count is the whole claim of the pre-cut: ``R`` rounds exist the moment
+        the draw does, each holding ⌊n/2⌋ pairings — the odd entrant's absence, not a
+        row with a NULL side, is what an odd field costs."""
+        fixtures = SwissStrategy(rounds=rounds).plan_initial(
+            DrawConfig(), _ordered(entrants)
+        )
+
+        assert len(fixtures) == rounds * per_round
+        assert Counter(f.round for f in fixtures) == {
+            round_number: per_round for round_number in range(1, rounds + 1)
+        }
+
+    def test_round_one_pairs_the_top_half_against_the_bottom_half(self) -> None:
+        """Round 1 is seeded from the draw order: with eight entrants seed 1 meets seed
+        5, 2 meets 6, and so on — the top seed drawn against the best of the bottom
+        half, which is what "seeded from the draw order" buys over pairing 1 with 2."""
+        fixtures = SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(8))
+
+        round_one = sorted(
+            (f for f in fixtures if f.round == 1), key=lambda f: f.position
+        )
+        assert [
+            (f.position, _seed_of(f.entry_a_id), _seed_of(f.entry_b_id))
+            for f in round_one
+        ] == [(1, 1, 5), (2, 2, 6), (3, 3, 7), (4, 4, 8)]
+
+    def test_an_odd_field_byes_the_lowest_ranked_entrant_by_absence(self) -> None:
+        """Seven entrants: three pairings, and seed 7 has no round-1 fixture at all.
+
+        A bye is the *absence* of a row (ADR-0786), never a row with one side NULL —
+        which here would be indistinguishable from a later round waiting to be paired.
+        The lowest-ranked entrant takes it, which is the swiss rule (CONTEXT.md, "Bye")
+        applied to a first round in which nobody has a score yet."""
+        fixtures = SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(7))
+
+        round_one = [f for f in fixtures if f.round == 1]
+        assert len(round_one) == 3
+        seated = {
+            seed
+            for f in round_one
+            for seed in (_seed_of(f.entry_a_id), _seed_of(f.entry_b_id))
+        }
+        assert seated == {1, 2, 3, 4, 5, 6}
+
+    def test_every_later_round_is_written_with_both_sides_unknown(self) -> None:
+        """Rounds 2..R exist as rows with no players: ``advance()`` fills them once the
+        round before is decided, exactly as it fills a single-elim bracket's later
+        rounds."""
+        fixtures = SwissStrategy(rounds=4).plan_initial(DrawConfig(), _ordered(8))
+
+        later = [f for f in fixtures if f.round > 1]
+        assert len(later) == 12
+        assert all(f.entry_a_id is None and f.entry_b_id is None for f in later)
+
+    def test_positions_are_contiguous_within_each_round_and_unpooled(self) -> None:
+        """``(round, position)`` is a fixture's identity — the uniqueness constraint is
+        ``(event_id, pool_id, round, position)`` — so positions run 1..⌊n/2⌋ inside each
+        round with no gaps. Every fixture is un-pooled: swiss ranks one field in one
+        table, which is why the schedule preview refuses it."""
+        fixtures = SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(9))
+
+        by_round: dict[int, list[int]] = {}
+        for f in fixtures:
+            by_round.setdefault(f.round, []).append(f.position)
+        assert by_round == {1: [1, 2, 3, 4], 2: [1, 2, 3, 4], 3: [1, 2, 3, 4]}
+        assert all(f.pool_id is None for f in fixtures)
+
+    def test_a_draw_ignores_the_events_pools(self) -> None:
+        """Swiss is pool-less whatever the event's pool list says: a director who
+        configured pools and then chose swiss gets one un-pooled field, not a draw
+        dealt across them."""
+        fixtures = SwissStrategy(rounds=2).plan_initial(_config(2), _ordered(6))
+
+        assert all(f.pool_id is None for f in fixtures)
+        assert len(fixtures) == 6
+
+    def test_more_rounds_than_distinct_opponents_is_refused(self) -> None:
+        """``R > n − 1`` is a :class:`DegenerateDraw` at the CUT: with five entrants
+        nobody has more than four distinct opponents, so a rematch-free swiss of nine
+        rounds does not exist. Refused here rather than at configure time because ``n``
+        is not known when the setting is written — and the message names both numbers,
+        because it is director-facing copy the endpoint passes straight through."""
+        with pytest.raises(DegenerateDraw) as refusal:
+            SwissStrategy(rounds=9).plan_initial(DrawConfig(), _ordered(5))
+
+        message = str(refusal.value)
+        assert "9 rounds" in message
+        assert "4 opponents" in message
+        assert "5 entrants" in message
+
+    def test_the_refusal_inflects_its_nouns_for_the_smallest_field(self) -> None:
+        """Two entrants have exactly **one** opponent each, so the sentence is the one
+        shape where both nouns are singular. Director-facing copy is passed through to
+        the director verbatim, and "the 1 opponents" reads as a bug in the product."""
+        with pytest.raises(DegenerateDraw) as refusal:
+            SwissStrategy(rounds=2).plan_initial(DrawConfig(), _ordered(2))
+
+        assert str(refusal.value) == (
+            "2 rounds is more than the 1 opponent each of 2 entrants can have — play "
+            "fewer rounds, or add entrants."
+        )
+
+    def test_exactly_n_minus_one_rounds_is_allowed(self) -> None:
+        """The boundary is inclusive on the legal side: five entrants can play four
+        rounds, which is every distinct opponent one of them has. A cut refused here
+        would refuse the fullest swiss a field can play."""
+        fixtures = SwissStrategy(rounds=4).plan_initial(DrawConfig(), _ordered(5))
+
+        assert len(fixtures) == 8  # 4 rounds × ⌊5/2⌋
+
+    def test_a_field_of_one_is_refused(self) -> None:
+        """Mirrors single-elim's floor: a swiss of one has nobody to play, and the
+        entrant-count refusal has to be said before the round-count one so the message
+        names the real problem."""
+        with pytest.raises(DegenerateDraw, match="at least 2 entrants"):
+            SwissStrategy(rounds=1).plan_initial(DrawConfig(), _ordered(1))
+
+    def test_a_round_count_below_one_is_a_programmer_error(self) -> None:
+        """``R >= 1`` is static — a Pydantic constraint at the request boundary — so a
+        strategy constructed below it is a wiring bug, not a director's mistake, and is
+        a ``ValueError`` rather than a ``DegenerateDraw``."""
+        with pytest.raises(ValueError, match="rounds must be at least 1"):
+            SwissStrategy(rounds=0)
+
+
+class TestSwissAdvance:
+    """Round 1 was paired at the cut, so all ``advance`` has to report today is
+    readiness. Pairing rounds 2..R off the standings is its own slice, and its absence
+    is asserted here rather than stubbed."""
+
+    def _cut(self, *, rounds: int = 3, entrants: int = 8) -> list[FixtureState]:
+        return _persisted(
+            SwissStrategy(rounds=rounds).plan_initial(DrawConfig(), _ordered(entrants))
+        )
+
+    def test_a_freshly_cut_draw_is_ready_in_round_one_only_and_fills_nothing(
+        self,
+    ) -> None:
+        fixtures = self._cut()
+
+        plan = SwissStrategy(rounds=3).advance(fixtures)
+
+        assert plan.side_fills == ()
+        assert set(plan.ready_fixture_ids) == {
+            f.fixture_id for f in fixtures if f.round == 1
+        }
+        assert not plan.is_empty
+
+    def test_a_materialized_round_one_leaves_an_empty_plan(self) -> None:
+        """Idempotence: apply the plan (the fixtures now carry matches) and re-running
+        it proposes nothing — the later rounds are still pending, so they are not
+        ready, and round 1 is no longer."""
+        fixtures = [
+            dataclasses.replace(f, match_id=MatchId(uuid.UUID(int=4000 + i)))
+            if f.round == 1
+            else f
+            for i, f in enumerate(self._cut())
+        ]
+
+        plan = SwissStrategy(rounds=3).advance(fixtures)
+
+        assert plan.is_empty
+
+    def test_a_decided_round_one_pairs_nothing_yet(self) -> None:
+        """**The honest limit of this slice.** Round 1 played out in full still fills no
+        side of round 2: pairing by standings is the next chore, and a stub that seated
+        somebody here would be writing pairings nothing computed.
+
+        It is asserted rather than left unsaid so that the chore landing the pairing has
+        a test to *change*, and so nothing quietly reports a round ready that has no
+        players in it."""
+        played = _played(
+            self._cut(),
+            {
+                frozenset({1, 5}): (1, 3, 0),
+                frozenset({2, 6}): (2, 3, 1),
+                frozenset({3, 7}): (7, 3, 2),
+                frozenset({4, 8}): (4, 3, 0),
+            },
+        )
+
+        plan = SwissStrategy(rounds=3).advance(played)
+
+        assert plan.side_fills == ()
+        assert plan.ready_fixture_ids == ()
+        assert all(
+            f.entry_a_id is None and f.entry_b_id is None for f in played if f.round > 1
+        )

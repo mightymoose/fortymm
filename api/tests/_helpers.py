@@ -153,28 +153,31 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
 
 
 def event_draw_settings(
-    draw_type: DrawType, *, qualifiers_per_pool: int | None = None
+    draw_type: DrawType,
+    *,
+    qualifiers_per_pool: int | None = None,
+    rounds: int | None = None,
 ) -> TournamentEventDrawSettings:
     """The draw-settings row for an event a test seeds straight through the ORM, built
-    from the ``(draw_type, qualifiers_per_pool)`` pair the tests already speak.
+    from the draw type and whichever setting that draw type carries — the qualifier
+    count for ``rr-then-ko``, the round count for ``swiss``.
 
-    The qualifier count is not a column any more — it is a key inside the row's
-    ``settings`` JSON object (ADR "a draw type's settings are one NOT NULL JSON
-    object") — so this is the one translation from the pair to the stored shape, and it
-    goes through the same parse and the same writer the request boundary uses. Which
-    means a seed that names a count for a draw type with no knockout stage reds here
-    with a ``ValidationError``, rather than writing a row the app could not have made.
+    Neither is a column any more — both are keys inside the row's ``settings`` JSON
+    object (ADR "a draw type's settings are one NOT NULL JSON object") — so this is the
+    one translation from the values the tests speak to the stored shape, and it goes
+    through the same parse and the same writer the request boundary uses. Which means a
+    seed that names a count for a draw type that has no such setting (or omits one a
+    draw type requires) reds here with a ``ValidationError``, rather than writing a row
+    the app could not have made.
 
-    ``None`` is "this draw type takes no configuration", and it stores ``{}``.
+    Both ``None`` is "this draw type takes no configuration", and it stores ``{}``.
     """
-    return draw_settings_row(
-        draw_settings_from_storage(
-            draw_type,
-            {}
-            if qualifiers_per_pool is None
-            else {"qualifiers_per_pool": qualifiers_per_pool},
-        )
-    )
+    settings: dict[str, int] = {}
+    if qualifiers_per_pool is not None:
+        settings["qualifiers_per_pool"] = qualifiers_per_pool
+    if rounds is not None:
+        settings["rounds"] = rounds
+    return draw_settings_row(draw_settings_from_storage(draw_type, settings))
 
 
 def event_pools(
