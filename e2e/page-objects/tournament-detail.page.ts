@@ -250,6 +250,49 @@ export class TournamentDetailPage {
     return this.bracket(eventId).getByTestId(`bracket-round-${round}`)
   }
 
+  // ----- swiss rounds (event card) ------------------------------------------
+
+  /** The **swiss rounds** view — a flat, numbered list of rounds, which is what a
+   * pool-less swiss draw's fixtures render as (ADR "swiss pre-cuts every round and pairs
+   * each one on advance").
+   *
+   * A *different* block from `bracket`, and the difference is the point: both draw types
+   * put their fixtures in `pool_id IS NULL`, and routing on that null alone rendered a
+   * swiss draw through single-elimination's successor arithmetic — columns named back
+   * from a Final ("Semifinals", "Quarterfinals") that a format eliminating nobody does
+   * not have. So a spec asserts this is visible AND that `bracket` is absent; either
+   * alone would pass against the view it is not about. */
+  swissRounds(eventId: string): Locator {
+    return this.drawPanel(eventId).getByTestId('draw-swiss-rounds')
+  }
+
+  /** One **paired** round's fixture list, by round number — present only once somebody
+   * is seated in the round. Its fixtures are `<li>`s in position order, so a spec reads
+   * them with `toHaveText([...])`, which pins the count, the order and the pairings in
+   * one statement. */
+  swissRound(eventId: string, round: number): Locator {
+    return this.swissRounds(eventId).getByTestId(`swiss-round-${round}`)
+  }
+
+  /** One paired round's fixture lines. */
+  swissRoundFixtures(eventId: string, round: number): Locator {
+    return this.swissRound(eventId, round).getByRole('listitem')
+  }
+
+  /** One **forthcoming** round's line — the round that is already cut, holds its
+   * `⌊n/2⌋` fixtures, and has nobody in it yet.
+   *
+   * The cut writes all `R` rounds at once, so a round past the first exists from the
+   * moment the draw is dealt with both of every fixture's sides NULL. It is announced
+   * (its match count, and what has to finish first) rather than drawn as rows of "TBD vs
+   * TBD" — so the presence of THIS and the absence of `swissRound` are what "the later
+   * rounds are present but not yet paired" means on screen. */
+  swissRoundForthcoming(eventId: string, round: number): Locator {
+    return this.swissRounds(eventId).getByTestId(
+      `swiss-round-forthcoming-${round}`,
+    )
+  }
+
   // ----- standings (event card) ---------------------------------------------
 
   /** The event's standings section — present only once the round-robin has a

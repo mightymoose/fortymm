@@ -42,6 +42,17 @@ export class EventEditorPage {
     return this.page.getByLabel('Qualifiers per pool')
   }
 
+  /** **R** — the round count a `swiss` event plays. Present for `swiss` and for nothing
+   * else, exactly as `qualifiersInput` is present only for `rr-then-ko`: a round count is
+   * a question the other three formats do not ask, and the server's draw-settings union
+   * says the same by refusing the key on their arms.
+   *
+   * Matched by a `^Rounds` regex rather than an exact label, because the row is `required`
+   * and the `Field` renders its asterisk into the accessible name. */
+  get roundsInput(): Locator {
+    return this.page.getByLabel(/^Rounds/)
+  }
+
   /** The refusal the sheet shows when a save is rejected — the surface a 422 from the
    * server lands on. A spec asserts it is HIDDEN after a successful create: a create
    * that failed leaves the sheet open with this alert in it, and "the sheet is still
@@ -67,6 +78,14 @@ export class EventEditorPage {
   async setQualifiersPerPool(count: number): Promise<void> {
     await this.qualifiersInput.fill(String(count))
     await expect(this.qualifiersInput).toHaveValue(String(count))
+  }
+
+  /** Type the round count. A blank box is a *missing answer* for this draw type (never
+   * `0`, which would be a swiss that plays nothing), so it is filled with a real number
+   * and read back — the same shape `setQualifiersPerPool` takes. */
+  async setRounds(rounds: number): Promise<void> {
+    await this.roundsInput.fill(String(rounds))
+    await expect(this.roundsInput).toHaveValue(String(rounds))
   }
 
   // ----- Table pools --------------------------------------------------------
