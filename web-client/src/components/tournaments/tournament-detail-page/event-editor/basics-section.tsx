@@ -6,6 +6,8 @@ import {
   PLAYERS_MAX,
   QUALIFIERS_PER_POOL_MAX,
   QUALIFIERS_PER_POOL_MIN,
+  SWISS_ROUNDS_MAX,
+  SWISS_ROUNDS_MIN,
 } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { FORMAT_OPTIONS, labelFor } from '../../data/options'
@@ -30,6 +32,10 @@ export interface BasicsFieldErrors {
    * since that is the only draw type the resolver asks the question of (and the only one
    * whose control is on screen). */
   qualifiersPerPool?: string
+  /** The round count's inline red — only ever present for a `swiss` event, since that is
+   * the only draw type the resolver asks the question of (and the only one whose control
+   * is on screen). */
+  rounds?: string
   maxPlayers?: string
   entryFee?: string
   /** The timezone is chosen from a picker that only ever offers real IANA zones, so
@@ -259,6 +265,60 @@ export const BasicsSection = ({
                   set({
                     qualifiersPerPool:
                       e.target.value === '' ? null : Number(e.target.value),
+                  })
+                }
+              />
+            )}
+          </Field>
+        )}
+        {/* **R**, and only for the one draw type whose round count anybody chooses (ADR
+            "swiss pre-cuts every round and pairs each one on advance"). Absent for the
+            other three, exactly as the qualifier count above is absent for theirs, and for
+            the same reason: a round-robin's rounds are dealt by the circle method and a
+            bracket's depth follows from the field, so this is not a box those formats leave
+            blank — it is a question they do not ask. The server says the same thing by
+            refusing the key outright on their arms of the draw-settings union
+            (`extra="forbid"` — a 422, not a silently dropped value).
+
+            It rides the SAME freeze as the draw type, because on the server it is the same
+            guard: `_enforce_draw_settings_frozen` compares the whole configuration, and a
+            5-round swiss cut for R=5 is exactly as contradicted by a changed R as by a
+            changed type. One freeze, one sentence, one way out (delete the draw, cut
+            again). */}
+        {event.drawType === 'swiss' && (
+          <Field
+            label="Rounds"
+            required
+            readOnly={readOnly}
+            value={numericValue(event.rounds)}
+            error={!!errors.rounds}
+            hint={
+              errors.rounds ??
+              (drawTypeFreeze.kind === 'frozen'
+                ? drawTypeFreeze.reason
+                : 'How many rounds every entrant plays. Nobody is eliminated.')
+            }
+          >
+            {(id, hintId) => (
+              <Input
+                id={id}
+                type="number"
+                min={SWISS_ROUNDS_MIN}
+                // Advisory, exactly like every other `max` on this tab: it steers the
+                // spinner and stops nothing that is typed or pasted. The bound that BINDS is
+                // `swissRoundsSchema`'s. Both are stated from the same constants so the
+                // browser control and the resolver agree about the same number.
+                max={SWISS_ROUNDS_MAX}
+                aria-invalid={!!errors.rounds}
+                aria-describedby={hintId}
+                disabled={drawTypeFreeze.kind === 'frozen'}
+                // Hold empty as empty. A blank round count is a MISSING answer to a question
+                // this draw type does ask — never `Number('')`, which is `0`, which is a
+                // swiss that plays nothing.
+                value={event.rounds ?? ''}
+                onChange={(e) =>
+                  set({
+                    rounds: e.target.value === '' ? null : Number(e.target.value),
                   })
                 }
               />

@@ -480,6 +480,11 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // 20260727). A new event that pre-filled a number here would be one whose create
     // body the API 422s the moment the director never touched the draw type.
     qualifiersPerPool: null,
+    // …and no round count either: a bracket's depth follows from the field rather than from
+    // a setting, and `null` is the only value the server's `single-elim` arm admits (the
+    // swiss ADR). A new event that pre-filled a number here would be one whose create body
+    // the API 422s the moment the director never touched the draw type.
+    rounds: null,
     maxPlayers: 32,
     entryFee: 30,
     // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):

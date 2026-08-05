@@ -6,6 +6,7 @@ type StandingsResultsRead = components['schemas']['StandingsResultsRead']
 type FinishesResultsRead = components['schemas']['FinishesResultsRead']
 type StandingsThenFinishesResultsRead =
   components['schemas']['StandingsThenFinishesResultsRead']
+type SwissStandingsResultsRead = components['schemas']['SwissStandingsResultsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type FinishRowRead = components['schemas']['FinishRowRead']
 
@@ -88,6 +89,20 @@ function wireTwoStage(
     ],
     complete: true,
     champion: 'entry-2',
+    ...overrides,
+  }
+}
+
+/** A complete `swiss_standings` results block off the wire (the swiss ADR) — **one list of
+ * rows, no pools**, because swiss ranks the whole field in one table. */
+function wireSwiss(
+  overrides: Partial<SwissStandingsResultsRead> = {},
+): SwissStandingsResultsRead {
+  return {
+    kind: 'swiss_standings',
+    rows: [wireRow(), wireRow({ entry_id: 'entry-2', rank: 2 })],
+    complete: true,
+    champion: 'entry-1',
     ...overrides,
   }
 }
@@ -201,6 +216,67 @@ describe('parseResults', () => {
         ? parsed.finishes.map((f) => f.position)
         : null,
     ).toEqual([3, 3])
+  })
+
+  it('maps a wire swiss block to the camelCase domain shape', () => {
+    // The fourth arm (the swiss ADR): ONE list of rows, no `pools` key at all, and the tag
+    // preserved so `ResultsPanel` can narrow to it. Without this arm the parse THROWS — and
+    // since the tournaments list maps every event through it, that takes the whole page
+    // down, not one panel.
+    expect(parseResults(wireSwiss())).toEqual({
+      kind: 'swiss_standings',
+      rows: [
+        {
+          entryId: 'entry-1',
+          rank: 1,
+          played: 2,
+          wins: 2,
+          losses: 0,
+          gamesWon: 4,
+          gamesLost: 1,
+          gameDifference: 3,
+        },
+        {
+          entryId: 'entry-2',
+          rank: 2,
+          played: 2,
+          wins: 2,
+          losses: 0,
+          gamesWon: 4,
+          gamesLost: 1,
+          gameDifference: 3,
+        },
+      ],
+      complete: true,
+      champion: 'entry-1',
+    })
+  })
+
+  it('keeps a LIVE swiss block incomplete, with no champion', () => {
+    // Rounds 2 and 3 are cut up front with their sides unknown, so a swiss event spends
+    // most of its life here: rows that are already ranked, and nobody crowned.
+    const parsed = parseResults(wireSwiss({ complete: false, champion: null }))
+
+    expect(parsed?.complete).toBe(false)
+    expect(parsed?.champion).toBeNull()
+  })
+
+  it('carries the server’s swiss row order through — it does not sort', () => {
+    // The order IS the result (ADR-0788), and it matters more in swiss than anywhere: the
+    // format pairs by score, so level rows are the ordinary state of the table and the
+    // tiebreak that separated them is one the client cannot see.
+    const parsed = parseResults(
+      wireSwiss({
+        rows: [
+          wireRow({ entry_id: 'entry-5', rank: 3 }),
+          wireRow({ entry_id: 'entry-1', rank: 1 }),
+        ],
+      }),
+    )
+
+    expect(
+      parsed?.kind === 'swiss_standings' ? parsed.rows.map((r) => r.entryId) : null,
+    ).toEqual(['entry-5', 'entry-1'])
   })
 
   it('carries the server’s row order through — it does not sort', () => {

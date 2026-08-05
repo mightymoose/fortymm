@@ -2,8 +2,9 @@
 // being bytes off the wire and become a typed domain value.
 //
 // An event's results are a **discriminated union tagged by shape** — `standings` (a table
-// per pool) for round-robin, `finishes` (a placement list) for single-elimination, and
-// `standings_then_finishes` (one of each, ADR 20260727) for round-robin-then-knockout —
+// per pool) for round-robin, `finishes` (a placement list) for single-elimination,
+// `standings_then_finishes` (one of each, ADR 20260727) for round-robin-then-knockout, and
+// `swiss_standings` (one table over the whole field, no pools) for swiss —
 // plus whether the whole event is decided and its champion, all derived *live* on the server
 // from the fixtures' currently-completed matches (never a snapshot). This is the runtime
 // parse that guards them, the twin of `./fixtures` for the draw. The parse switches on
@@ -147,12 +148,29 @@ const standingsThenFinishesResultsWireSchema = z.object({
   champion: z.string().nullable(),
 })
 
+/** The wire shape (`SwissStandingsResultsRead`): the swiss arm, tagged
+ * `kind: "swiss_standings"` — **one list of rows over the whole field**, whether every round
+ * is decided, and the leader once it is.
+ *
+ * The rows are parsed by `standingRowSchema`, the very parser a pool's standings use, so the
+ * swiss table cannot drift from the round-robin one and a malformed row fails at the same
+ * boundary whichever arm carried it. The only structural difference is the absence of a pool
+ * to group under — swiss ranks the whole field in one table (ADR "swiss pre-cuts every round
+ * and pairs each one on advance"). */
+const swissStandingsResultsWireSchema = z.object({
+  kind: z.literal('swiss_standings'),
+  rows: z.array(standingRowSchema),
+  complete: z.boolean(),
+  champion: z.string().nullable(),
+})
+
 /** The parsed wire union — the input to the transform below, named so the transform can
  * switch on it exhaustively. */
 type EventResultsWire = z.output<
   | typeof standingsResultsWireSchema
   | typeof finishesResultsWireSchema
   | typeof standingsThenFinishesResultsWireSchema
+  | typeof swissStandingsResultsWireSchema
 >
 
 /** Wire → domain, arm by arm. A `switch` with a `never` default rather than a chain of
@@ -183,6 +201,13 @@ function toDomain(r: EventResultsWire): EventResults {
         complete: r.complete,
         champion: r.champion,
       }
+    case 'swiss_standings':
+      return {
+        kind: 'swiss_standings',
+        rows: r.rows,
+        complete: r.complete,
+        champion: r.champion,
+      }
     default: {
       const exhaustive: never = r
       return exhaustive
@@ -205,6 +230,7 @@ export const eventResultsSchema = z
     standingsResultsWireSchema,
     finishesResultsWireSchema,
     standingsThenFinishesResultsWireSchema,
+    swissStandingsResultsWireSchema,
   ])
   .transform(toDomain)
 

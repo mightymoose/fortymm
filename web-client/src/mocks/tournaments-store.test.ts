@@ -1657,7 +1657,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     // 8 entrants across 2 pools of 4, K = 1, so 2 qualifiers meet in a one-fixture
     // bracket. The count is passed explicitly like every other: the planner has no
     // default, so "pool winners only" is a configuration, never an omission.
-    const plan = planDraw('rr-then-ko', entrants(8), pools(2), 1)
+    const plan = planDraw('rr-then-ko', entrants(8), pools(2), 1, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
     expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(1)
@@ -1666,7 +1666,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
   it('sizes the bracket from P × K — derived, never configured', () => {
     // 2 pools × 3 qualifiers = 6, padded to an 8-slot bracket: 7 slots, of which the two
     // byed seeds' round-1 rows are absent → 2 round-1 + 2 semis + 1 final.
-    const plan = planDraw('rr-then-ko', entrants(12), pools(2), 3)
+    const plan = planDraw('rr-then-ko', entrants(12), pools(2), 3, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
     expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(5)
@@ -1675,7 +1675,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
   it('refuses taking more qualifiers than the smallest pool holds', () => {
     // 9 entrants across 2 pools → 5 and 4; taking 5 from each is more than the 4 the
     // smaller pool has, and the sentence names both numbers.
-    const plan = planDraw('rr-then-ko', entrants(9), pools(2), 5)
+    const plan = planDraw('rr-then-ko', entrants(9), pools(2), 5, null)
 
     expect(plan.ok).toBe(false)
     if (plan.ok) return
@@ -1688,10 +1688,154 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
   it('allows a ONE-POOL draw once more than one player qualifies', () => {
     // "League, then a playoff" is a real format (ADR), and so is K = ⌊N/P⌋, where
     // everyone qualifies and the pool stage exists purely to seed.
-    const plan = planDraw('rr-then-ko', entrants(4), pools(1), 4)
+    const plan = planDraw('rr-then-ko', entrants(4), pools(1), 4, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
     expect(plan.fixtures.filter((f) => f.pool_id === null)).toHaveLength(3)
+  })
+})
+
+/**
+ * The **swiss** arm of the planner (ADR "swiss pre-cuts every round and pairs each one on
+ * advance"). What it has to get right is the shape the ADR chose, and it is a shape that
+ * looks broken until you know the reason: **all `R` rounds are written at the cut**, and
+ * every round past the first has both sides `null`. That is not a stub — with the field
+ * frozen at the cut and `R` an explicit setting, the number of fixtures is fully
+ * determined and only the sides are unknown, which is the one state `advance()` has always
+ * handled.
+ *
+ * The mock's job is to cut exactly what the server cuts, empty rounds included, so a
+ * director in `npm run dev` sees the same draw a director on the real API does.
+ */
+describe('planDraw, swiss', () => {
+  const entrants = (n: number) => Array.from({ length: n }, (_, i) => `entry-${i + 1}`)
+
+  it('writes every round up front — R × ⌊n/2⌋ fixtures', () => {
+    // 8 entrants, 3 rounds → 4 pairings per round, 12 fixtures. A planner that wrote only
+    // round 1 (the "we will create them as we go" reading the ADR rejects) gives 4.
+    const plan = planDraw('swiss', entrants(8), [], null, 3)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures).toHaveLength(12)
+    expect(plan.fixtures.map((f) => f.round)).toEqual([
+      1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
+    ])
+  })
+
+  it('pairs ONLY round 1, top half against bottom half, and leaves the rest TBD', () => {
+    const plan = planDraw('swiss', entrants(8), [], null, 3)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    // Draw-order index `i` meets index `i + ⌊n/2⌋`: seed 1 meets seed 5, not seed 2 (a
+    // consecutive pairing) and not seed 8 (a bracket's 1-v-N).
+    expect(
+      plan.fixtures
+        .filter((f) => f.round === 1)
+        .map((f) => [f.entry_a_id, f.entry_b_id]),
+    ).toEqual([
+      ['entry-1', 'entry-5'],
+      ['entry-2', 'entry-6'],
+      ['entry-3', 'entry-7'],
+      ['entry-4', 'entry-8'],
+    ])
+    // Every later round is genuinely unpaired — `advance()` fills it once the round before
+    // it is decided. A planner that seeded them all the same way would look identical on
+    // round 1 and be wrong everywhere else.
+    expect(
+      plan.fixtures
+        .filter((f) => f.round > 1)
+        .every((f) => f.entry_a_id === null && f.entry_b_id === null),
+    ).toBe(true)
+  })
+
+  it('cuts un-pooled fixtures, whatever pools the event carries', () => {
+    // Swiss ranks the whole field in one table, so `pool_id` is null throughout — and the
+    // event's pools are not consulted at all, exactly as on the server.
+    const plan = planDraw('swiss', entrants(8), ['p-1', 'p-2'], null, 2)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures.every((f) => f.pool_id === null)).toBe(true)
+  })
+
+  it('byes the LOWEST-ranked entrant on an odd field, by leaving them out of every round', () => {
+    // 7 entrants → 3 pairings per round, and `entry-7` sits in no fixture. A bye is the
+    // ABSENCE of a row (ADR-0786), never a row with a null side — which here would be
+    // indistinguishable from a later round awaiting its pairing.
+    const plan = planDraw('swiss', entrants(7), [], null, 2)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures).toHaveLength(6)
+    const seated = plan.fixtures
+      .filter((f) => f.round === 1)
+      .flatMap((f) => [f.entry_a_id, f.entry_b_id])
+    expect(seated).toEqual([
+      'entry-1',
+      'entry-4',
+      'entry-2',
+      'entry-5',
+      'entry-3',
+      'entry-6',
+    ])
+    expect(seated).not.toContain('entry-7')
+  })
+
+  it('refuses a field of one, in the server’s own words', () => {
+    const plan = planDraw('swiss', entrants(1), [], null, 1)
+
+    expect(plan.ok).toBe(false)
+    if (plan.ok) return
+    expect(plan.detail).toBe(
+      'A swiss draw needs at least 2 entrants — a field of one has nobody to play.',
+    )
+  })
+
+  /**
+   * `R > n - 1` is refused at the **cut**, not at configure time: `n` is not known when the
+   * setting is written, so a round count that was legal when the director typed it must not
+   * become unwritable when somebody withdraws. This is the sentence the API raises
+   * (`SwissStrategy.plan_initial`), copied verbatim — a paraphrase here would go green
+   * against words the server never says.
+   */
+  it('refuses more rounds than there are distinct opponents, naming both numbers', () => {
+    const plan = planDraw('swiss', entrants(5), [], null, 9)
+
+    expect(plan.ok).toBe(false)
+    if (plan.ok) return
+    expect(plan.detail).toBe(
+      '9 rounds is more than the 4 opponents each of 5 entrants can have — play ' +
+        'fewer rounds, or add entrants.',
+    )
+  })
+
+  // The boundary itself is legal: with `n` entrants everybody CAN meet all `n - 1` others.
+  it('accepts exactly n − 1 rounds', () => {
+    const plan = planDraw('swiss', entrants(5), [], null, 4)
+
+    if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
+    expect(plan.fixtures).toHaveLength(8)
+  })
+
+  // Singular/plural, because the message is read by a person. One round against a field of
+  // two is the only shape that reaches both nouns at once.
+  it('inflects the sentence for a single round and a single opponent', () => {
+    const plan = planDraw('swiss', entrants(2), [], null, 2)
+
+    expect(plan.ok).toBe(false)
+    if (plan.ok) return
+    expect(plan.detail).toBe(
+      '2 rounds is more than the 1 opponent each of 2 entrants can have — play ' +
+        'fewer rounds, or add entrants.',
+    )
+  })
+
+  /** NOT a refusal and NOT a default: the write boundary requires `rounds` with no default
+   * on the swiss arm, so the column is never NULL for this draw type. A stub that arrived
+   * here has been seeded into a shape the API cannot hold, and it says so rather than
+   * quietly cutting a one-round event. */
+  it('throws — never substitutes — when a swiss event has no round count', () => {
+    expect(() => planDraw('swiss', entrants(8), [], null, null)).toThrow(
+      /has no rounds/,
+    )
   })
 })
 
@@ -1712,8 +1856,9 @@ describe('the draw-type catalogue', () => {
       'round-robin',
       'single-elim',
       'rr-then-ko',
+      'swiss',
     ])
-    expect(catalogue!.map((d) => d.display_order)).toEqual([1, 2, 3])
+    expect(catalogue!.map((d) => d.display_order)).toEqual([1, 2, 3, 4])
     // The copy is what a director reads while choosing; neither field is ever empty.
     for (const drawType of catalogue!) {
       expect(drawType.name.length).toBeGreaterThan(0)
@@ -2261,6 +2406,8 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
         // The event's own count, unasserted: the planner takes `number | null` and
         // refuses the impossible pair loudly, so there is nothing here to talk past.
         event.qualifiers_per_pool,
+        // No round count: this draw type has none, and only the swiss arm reads it.
+        null,
       )
       if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
 

@@ -215,6 +215,10 @@ export const EventEditor = ({
     // (ADR 20260727): a draw type set without its count would be validated against a
     // stale K, and a count without its type against a stale arm.
     form.setValue('qualifiersPerPool', next.qualifiersPerPool, opts)
+    // …and the round count with them, for the identical reason (the swiss ADR): the
+    // resolver judges `(drawType, rounds)` as one pair too, so a draw type set without its
+    // round count would be validated against a stale R.
+    form.setValue('rounds', next.rounds, opts)
     form.setValue('maxPlayers', next.maxPlayers, opts)
     form.setValue('entryFee', next.entryFee, opts)
     form.setValue('timezone', next.timezone, opts)
@@ -256,6 +260,7 @@ export const EventEditor = ({
   const basicsErrors = {
     name: errors.name?.message,
     qualifiersPerPool: errors.qualifiersPerPool?.message,
+    rounds: errors.rounds?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
     timezone: errors.timezone?.message,

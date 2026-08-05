@@ -7,6 +7,7 @@ import {
   buildDrawnEvent,
   buildEvent,
   buildRrThenKoEvent,
+  buildSwissEvent,
 } from '../../data/seed.factory'
 import { basicsSectionPage } from './basics-section.page'
 
@@ -380,6 +381,146 @@ describe('BasicsSection', () => {
     })
   })
 
+  /**
+   * **R** — the round count (ADR "swiss pre-cuts every round and pairs each one on
+   * advance"). Its design is the qualifier count's, one draw type over: it belongs to the
+   * `(draw_type, R)` PAIR and not to the event, because the server parses the two into a
+   * union tagged by the draw type, whose `swiss` arm requires a count and whose other three
+   * arms are `extra="forbid"` and refuse the key outright.
+   *
+   * So the claim worth pinning is not "there is a number box" — it is that the box is **on
+   * screen for exactly one draw type**, and absent (not disabled, not em-dashed) for the
+   * rest. A control rendered unconditionally would invite a director to say how many rounds
+   * a knockout bracket plays, and would author a 422.
+   */
+  describe('the round count (swiss only)', () => {
+    it('renders the control for a swiss event', () => {
+      basicsSectionPage.render({ event: buildSwissEvent({ rounds: 5 }) })
+
+      expect(basicsSectionPage.getRoundsInput()).toHaveValue(5)
+    })
+
+    // The falsification for the conditional: render it unconditionally and these red.
+    it.each(['round-robin', 'single-elim', 'rr-then-ko'] as const)(
+      'does not render it at all for %s — a format whose rounds nobody chooses',
+      (drawType) => {
+        basicsSectionPage.render({
+          event: buildEvent({
+            drawType,
+            rounds: null,
+            qualifiersPerPool: drawType === 'rr-then-ko' ? 2 : null,
+          }),
+        })
+
+        expect(basicsSectionPage.queryRoundsInput()).toBeNull()
+        // …and the rest of the tab is untouched, so this is "one row is absent" rather
+        // than "the section failed to render".
+        expect(basicsSectionPage.getNameInput()).toBeInTheDocument()
+        expect(basicsSectionPage.getDrawTypeTrigger()).toBeInTheDocument()
+      },
+    )
+
+    // ⚠️ `rerenderWith`, never a second `render` — see the qualifier count's twin of this
+    // test for the measurement behind that.
+    it('appears and disappears with the draw type the director picks', () => {
+      const { rerenderWith } = basicsSectionPage.render({
+        event: buildSwissEvent({ rounds: 5 }),
+      })
+      expect(basicsSectionPage.getRoundsInput()).toBeInTheDocument()
+
+      rerenderWith({
+        event: buildSwissEvent({ drawType: 'round-robin', rounds: null }),
+      })
+
+      expect(basicsSectionPage.queryRoundsInput()).toBeNull()
+      // One tree, so the absence above is a real unmount and not a query that missed.
+      expect(screen.getAllByTestId('basics-section')).toHaveLength(1)
+    })
+
+    it('emits the typed round count', () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({ event: buildSwissEvent({ rounds: 5 }), onChange })
+
+      fireEvent.change(basicsSectionPage.getRoundsInput(), {
+        target: { value: '7' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ rounds: 7 }),
+      )
+    })
+
+    // Blank is **missing**, not zero — `Number('')` is `0`, and a swiss that plays no
+    // rounds is not what an emptied box means. The resolver turns the `null` into the
+    // required error; a `0` would sail past a "did they answer?" check and be refused
+    // later, by the server, in Pydantic's words.
+    it('emits null — never 0 — when the box is cleared', () => {
+      const onChange = vi.fn()
+      basicsSectionPage.render({ event: buildSwissEvent({ rounds: 5 }), onChange })
+
+      fireEvent.change(basicsSectionPage.getRoundsInput(), {
+        target: { value: '' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ rounds: null }),
+      )
+    })
+
+    it('prints the form’s message under the box, and marks it invalid', () => {
+      basicsSectionPage.render({
+        event: buildSwissEvent({ rounds: null }),
+        errors: { rounds: 'Say how many rounds this event plays.' },
+      })
+
+      expect(basicsSectionPage.getRoundsInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(
+        basicsSectionPage.queryFieldError('Say how many rounds this event plays.'),
+      ).toBeInTheDocument()
+    })
+
+    // The round count rides the SAME freeze as the draw type, because on the server it is
+    // the same guard: `_enforce_draw_settings_frozen` compares the whole configuration,
+    // since a draw cut as `R × ⌊n/2⌋` fixtures is exactly as contradicted by a changed R as
+    // by a changed type. A live box here would author a 409.
+    it('freezes with the draw type once the draw is cut, pointing at the reason', () => {
+      basicsSectionPage.render({
+        event: buildSwissEvent({ fixtures: buildDrawnEvent().fixtures }),
+      })
+
+      const input = basicsSectionPage.getRoundsInput()
+      expect(input).toBeDisabled()
+      const describedBy = input.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(document.getElementById(describedBy!)).toHaveTextContent(
+        /Delete the draw/i,
+      )
+    })
+
+    it('leaves it live, with its hint, when no draw is cut', () => {
+      basicsSectionPage.render({ event: buildSwissEvent() })
+
+      expect(basicsSectionPage.getRoundsInput()).toBeEnabled()
+      expect(
+        basicsSectionPage.queryFieldError(/Nobody is eliminated/i),
+      ).toBeInTheDocument()
+    })
+
+    // A reader gets the number as TEXT, never a disabled spinner (ADR-0015).
+    it('reads a viewer the stored round count, with no control at all', () => {
+      basicsSectionPage.render({
+        event: buildSwissEvent({ rounds: 5 }),
+        canEdit: false,
+      })
+
+      expect(basicsSectionPage.getRoundsValue()).toHaveTextContent('5')
+      expect(basicsSectionPage.queryRoundsInput()).toBeNull()
+    })
+  })
+
   it('shows the event name and format', () => {
     basicsSectionPage.render({
       event: buildEvent({ name: 'Open Singles', format: 'singles' }),
@@ -600,6 +741,25 @@ describe('BasicsSection', () => {
       // (`Field` requires a `value` beside `readOnly` precisely so a row cannot vanish
       // into an em-dash and be mistaken for one the organizer left blank.)
       expect(basicsSectionPage.getQualifiersValue()).toHaveTextContent('2')
+    })
+
+    // …and the same sweep over the OTHER draw type that renders an extra row. The two
+    // guards above are both blind to it: the default fixture is round-robin and the
+    // two-stage one renders the qualifier count, so neither ever mounts the swiss branch —
+    // and a live `<input type=number>` there is a `spinbutton`, which a role-only sweep
+    // does not see at all (`web-client/CLAUDE.md`). The DOM sweep over a swiss event is
+    // what actually covers it.
+    it('renders no interactive controls for a swiss event either', () => {
+      basicsSectionPage.render({
+        event: buildSwissEvent({ rounds: 5 }),
+        canEdit: false,
+      })
+
+      expect(basicsSectionPage.getFormElements()).toHaveLength(0)
+      expect(basicsSectionPage.queryRoundsInput()).toBeNull()
+      // The value is still THERE — a viewer reads the round count, they just cannot type
+      // it.
+      expect(basicsSectionPage.getRoundsValue()).toHaveTextContent('5')
     })
 
     it('renders every field as a value', () => {

@@ -651,6 +651,53 @@ export function planSingleElimFixtures(
   )
 }
 
+/**
+ * Plan a **swiss** draw the way the API plans one (`SwissStrategy.plan_initial`,
+ * `api/app/draws.py`): all `R` rounds up front, `⌊n/2⌋` fixtures each, round 1 seeded
+ * top-half-against-bottom-half from the draw order and every later round written with both
+ * sides TBD.
+ *
+ * That "later rounds with no players" shape is not a stub — it is the format (ADR "swiss
+ * pre-cuts every round and pairs each one on advance"): with the field frozen at the cut
+ * and `R` an explicit setting, the *number* of fixtures is fully determined and only the
+ * *sides* are unknown, which is the one thing `advance()` has always handled. So the mock
+ * cuts exactly what the server cuts, including the empty rounds a director will see.
+ *
+ * Fixtures are **un-pooled** (`pool_id: null`): swiss ranks the whole field in one table.
+ * An odd field byes the **lowest**-ranked entrant, who simply has no fixture — a bye is the
+ * absence of a row (ADR-0786), never a row with a null side.
+ *
+ * `entryIds` arrive in **draw order** (seed ascending, then registration order). Like the
+ * other planners it does **not** enforce the API's refusals; those are `planDraw`'s.
+ */
+export function planSwissFixtures(
+  entryIds: readonly string[],
+  rounds: number,
+): TournamentFixtureRead[] {
+  // The odd entrant out sits the round, so every round holds ⌊n/2⌋ fixtures whatever the
+  // parity.
+  const pairsPerRound = Math.floor(entryIds.length / 2)
+  const fixtures: TournamentFixtureRead[] = []
+  for (let round = 1; round <= rounds; round += 1) {
+    for (let position = 1; position <= pairsPerRound; position += 1) {
+      fixtures.push(
+        buildTournamentFixtureRead({
+          id: `fx-sw-r${round}-p${position}`,
+          pool_id: null,
+          round,
+          position,
+          // Round 1 alone is paired at the cut: draw-order index `i` meets index
+          // `i + pairsPerRound`, so the top seed meets the best of the bottom half. Every
+          // later round is genuinely TBD until `advance()` pairs it from the standings.
+          entry_a_id: round === 1 ? entryIds[position - 1] : null,
+          entry_b_id: round === 1 ? entryIds[position - 1 + pairsPerRound] : null,
+        }),
+      )
+    }
+  }
+  return fixtures
+}
+
 /** A planned draw, or the server's sentence for why this event cannot be cut as it
  * stands. ONE value for both, because they are the same decision: split in two, a
  * refusal check could answer "nothing wrong here" for a shape the planner then has
@@ -725,6 +772,11 @@ export function planDraw(
    * knockout stage. `null` for the two draw types that have no knockout stage to qualify
    * for, which is what their settings row holds and what their callers pass out loud. */
   qualifiersPerPool: number | null,
+  /** **R** — how many rounds a `swiss` draw plays. `null` for the three draw types whose
+   * round count nobody chooses, which is what their settings row holds and what their
+   * callers pass out loud. Same discipline as `qualifiersPerPool` above: no default, so
+   * every caller has to answer where R comes from. */
+  rounds: number | null,
 ): DrawPlan {
   switch (drawType) {
     case 'round-robin': {
@@ -815,6 +867,49 @@ export function planDraw(
           ),
         ],
       }
+    }
+    case 'swiss': {
+      if (rounds === null) {
+        // NOT a refusal, and NOT a default: a `swiss` event without a round count is not a
+        // state the server can be in — the write boundary requires one with no default
+        // (`SwissDrawSettingsWrite`), so the column is never NULL for this draw type. A
+        // stub reaching here has been seeded or patched into a shape the API cannot hold,
+        // and says so instead of quietly cutting a one-round event.
+        throw new Error(
+          'planDraw: a “swiss” draw has no rounds. The count is required at the write ' +
+            'boundary, so a stored event always has one — pass the event’s own value, ' +
+            'never a fallback.',
+        )
+      }
+      // Round-robin's per-pool floor, one level up and pool-less, exactly as single-elim's
+      // is. The event's POOLS are not consulted at all: swiss ranks the whole field in one
+      // table, so a swiss event with pools cuts perfectly well and one with none is not
+      // refused. The two sentences below are the SERVER's, verbatim
+      // (`SwissStrategy.plan_initial`), because for a refusal the sentence *is* the answer.
+      if (entryIds.length < 2) {
+        return {
+          ok: false,
+          detail:
+            'A swiss draw needs at least 2 entrants — a field of one has nobody to play.',
+        }
+      }
+      if (rounds > entryIds.length - 1) {
+        // `n - 1` is the number of distinct opponents an entrant can have, so past it a
+        // rematch-free swiss cannot exist. Refused at the CUT and not at configure time,
+        // because `n` is not known when the setting is written (ADR "swiss pre-cuts every
+        // round and pairs each one on advance") — which is exactly why the form's own bound
+        // (`swissRoundsSchema`) stops at 32 and says nothing about the field.
+        const roundNoun = rounds === 1 ? 'round' : 'rounds'
+        const opponentNoun = entryIds.length - 1 === 1 ? 'opponent' : 'opponents'
+        return {
+          ok: false,
+          detail:
+            `${rounds} ${roundNoun} is more than the ${entryIds.length - 1} ` +
+            `${opponentNoun} each of ${entryIds.length} entrants can have — play fewer ` +
+            'rounds, or add entrants.',
+        }
+      }
+      return { ok: true, fixtures: planSwissFixtures(entryIds, rounds) }
     }
   }
 }
@@ -1087,6 +1182,11 @@ export function buildTournamentEventRead(
     // null`, no `?`) while `Partial<…>` admits an explicit `undefined` — so the spread
     // alone would widen it to a type the wire cannot hold.
     qualifiers_per_pool: overrides.qualifiers_per_pool ?? null,
+    // **No chosen round count** (the swiss ADR): a round-robin's rounds come off the circle
+    // method, so `null` is the only value its settings arm admits. Stated AFTER the spread
+    // for the reason the qualifier count is — the field is required-and-nullable on the read
+    // shape while `Partial<…>` admits an explicit `undefined`.
+    rounds: overrides.rounds ?? null,
   } satisfies Omit<TournamentEventRead, 'entered'>
   return {
     ...event,
@@ -1147,6 +1247,20 @@ export const DRAW_TYPE_CATALOGUE: DrawTypeRead[] = [
       'Pools play all-play-all, then the top finishers from each pool meet in a ' +
       'knockout bracket.',
     display_order: 3,
+  },
+  {
+    key: 'swiss',
+    // Pinned by the ADR "swiss pre-cuts every round and pairs each one on advance" —
+    // seed data (migration `0010`'s `DRAW_TYPE_SEED`), so changing either string is a
+    // migration there and a re-copy here.
+    name: 'Swiss',
+    description:
+      'A fixed number of rounds, each pairing entrants who are on similar ' +
+      'scores. Nobody is eliminated and everybody plays every round, so a ' +
+      'large field is ranked in far fewer matches than a round robin — but a ' +
+      "round's pairings are only known once the round before it has finished, " +
+      'and a long event may repeat a pairing.',
+    display_order: 4,
   },
 ]
 
