@@ -2586,7 +2586,13 @@ class TestSwissAdvance:
     ) -> None:
         """Nobody sits out twice before everybody has sat out once (CONTEXT.md, "Bye").
         Five entrants over three played rounds bye a different entrant each time, and
-        the one taking it is always the lowest-ranked entrant still without one."""
+        the one taking it is always the lowest-ranked entrant still without one.
+
+        This chain pins the *sequence*, not the byeless preference: its bye holders bank
+        a win and float up the table, so "lowest-ranked byeless" and "lowest-ranked"
+        happen to agree every round and it would pass against an implementation that
+        never checked. ``test_the_bye_skips_an_entrant_who_has_had_one_even_when_they
+        _rank_last`` is the one that tells them apart."""
         played = _five_entrant_rounds(self._cut(rounds=4, entrants=5), 3)
 
         byes = [
@@ -2640,6 +2646,116 @@ class TestSwissAdvance:
         assert _seated(_apply(round_two, plan), 3) == {1, 2, 4, 5, 6, 7}, (
             "seed 3 takes round 3's bye, being the lowest-ranked entrant without one"
         )
+
+    def test_the_bye_skips_an_entrant_who_has_had_one_even_when_they_rank_last(
+        self,
+    ) -> None:
+        """**The byeless preference, in the only case that tests it.**
+
+        "The lowest-ranked entrant who has not yet had a bye" and "the lowest-ranked
+        entrant" are the same answer in most fields, because a bye banks a win and
+        floats its holder *up* the table, leaving somebody byeless at the bottom. A test
+        built on such a field passes against an implementation that never looks at who
+        has already sat out.
+
+        So this one sinks the bye holder instead. Seed 5 sits out round 1, then loses
+        round 2, and comes into round 3 **last**: five entrants, and the table reads
+        1, 2, 3, 4, 5 (seed 4 and seed 5 both on one win and a game difference of −3,
+        separated by the entry-id fallback).
+
+            round 1   1 beat 3, 2 beat 4          5 byed
+            round 2   1 beat 2, 3 beat 5          4 byed
+            round 3   the bye is seed 3's — the lowest-ranked of 1, 2 and 3, the
+                      entrants who have not had one
+
+        Ignore the preference and the bye goes to seed 5 for the **second** time, while
+        three players have never sat out at all. That is what this reds on.
+        """
+        round_one = _played(
+            self._cut(rounds=3, entrants=5),
+            {frozenset({1, 3}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+        )
+        round_two = _played(
+            _apply(round_one, SwissStrategy(rounds=3).advance(round_one, _ordered(5))),
+            {frozenset({1, 2}): (1, 3, 0), frozenset({3, 5}): (3, 3, 0)},
+        )
+
+        plan = SwissStrategy(rounds=3).advance(round_two, _ordered(5))
+
+        applied = _apply(round_two, plan)
+        assert _seed_pairs(applied, 2) == [(1, 1, 2), (2, 5, 3)]
+        assert _seated(applied, 3) == {1, 2, 4, 5}, (
+            "seed 3 takes round 3's bye. Seed 5 is ranked below them and would take it "
+            "again under a rule that only reads the standings — a second bye for the "
+            "one entrant who has already had one"
+        )
+        assert [
+            {1, 2, 3, 4, 5} - _seated(applied, round_number)
+            for round_number in (1, 2, 3)
+        ] == [{5}, {4}, {3}], "three rounds, three different entrants sitting out"
+
+    def test_once_everybody_has_had_a_bye_it_falls_back_to_the_lowest_ranked(
+        self,
+    ) -> None:
+        """The other half of the rule: with the byeless set empty, selection takes the
+        lowest-ranked entrant overall rather than refusing or looking forever.
+
+        The state is **one the cut refuses** — three entrants cannot be given four
+        rounds (``R > n − 1``), and byes are handed out at most one per round, so a
+        field in which everybody has had one is unreachable through
+        ``plan_initial``. It is built by hand precisely because of that: the branch
+        exists to keep the function total, and an unreachable branch that raises or
+        loops is still a live event stopped dead if anything ever reaches it.
+
+            round 1   1 beat 2    3 byed
+            round 2   1 beat 3    2 byed
+            round 3   2 beat 3    1 byed
+            round 4   everybody has sat out once, so the bye is seed 3's, last on the
+                      table — and the round is paired, as a rematch, because after
+                      three rounds these three have met everybody
+        """
+        played = _played(
+            _persisted(
+                [
+                    PlannedFixture(
+                        pool_id=None,
+                        round=1,
+                        position=1,
+                        entry_a_id=_entry_id(1),
+                        entry_b_id=_entry_id(2),
+                    ),
+                    PlannedFixture(
+                        pool_id=None,
+                        round=2,
+                        position=1,
+                        entry_a_id=_entry_id(1),
+                        entry_b_id=_entry_id(3),
+                    ),
+                    PlannedFixture(
+                        pool_id=None,
+                        round=3,
+                        position=1,
+                        entry_a_id=_entry_id(2),
+                        entry_b_id=_entry_id(3),
+                    ),
+                    PlannedFixture(pool_id=None, round=4, position=1),
+                ]
+            ),
+            {
+                frozenset({1, 2}): (1, 3, 0),
+                frozenset({1, 3}): (1, 3, 0),
+                frozenset({2, 3}): (2, 3, 0),
+            },
+        )
+
+        plan = SwissStrategy(rounds=4).advance(played, _ordered(3))
+
+        assert not plan.is_empty, (
+            "a field that has run out of byeless entrants is still paired — the "
+            "fallback is a choice, not a refusal"
+        )
+        assert _seed_pairs(_apply(played, plan), 4) == [(1, 1, 2)]
+        assert _seated(_apply(played, plan), 4) == {1, 2}, "seed 3 sits out again"
 
     def test_a_forced_rematch_is_paired_rather_than_refused(self) -> None:
         """**The last resort, reached by a draw the cut itself writes.** Five entrants,
