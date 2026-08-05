@@ -10,12 +10,15 @@ import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildEntrants,
   buildEvent,
   buildFixture,
   buildPool,
+  buildSwissDrawnEvent,
   buildTenPoolDrawnEvent,
+  buildTwoStageDrawnEvent,
   TEN_POOLS_BY_ID,
   TEN_POOLS_BY_POSITION,
 } from '../../data/seed.factory'
@@ -151,6 +154,77 @@ describe('DrawPanel', () => {
 
       expect(page.queryUnpooled()).toBeInTheDocument()
       expect(page.getLineTexts()).toEqual(['player.1 vs TBD'])
+    })
+  })
+
+  /**
+   * **Which view the un-pooled fixtures get is the DRAW TYPE's answer** (`unpooledShape`,
+   * `../../data/draw`) — the bug this suite exists to hold shut.
+   *
+   * Three draw types put fixtures in `unpooled`, and their payloads are indistinguishable
+   * there: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every fixture of
+   * a swiss draw all carry `pool_id: null`. The panel routed on that null, so swiss — a
+   * pool-less draw *type* that merely shares it — rendered through single-elimination's
+   * successor arithmetic, the one thing the ADR says swiss does not have.
+   *
+   * The type checker could never have caught it: the routing was a value check on a list's
+   * length, not an exhaustive switch. It is one now, at both ends, and these are the tests
+   * that say the switch sends each type somewhere different.
+   */
+  describe('which view the un-pooled fixtures get', () => {
+    it('gives a SWISS draw the rounds view, and not the bracket', () => {
+      page.render({ event: buildSwissDrawnEvent() })
+
+      expect(page.querySwissRounds()).toBeInTheDocument()
+      // The discriminating half: a swiss draw must not reach the bracket at all.
+      expect(page.queryUnpooled()).toBeNull()
+    })
+
+    it('shows a swiss draw’s round 1 paired and its later rounds as forthcoming', () => {
+      // Slice 2's demoable outcome, through the panel: the pairings a director reviews, and
+      // the rounds that exist but have nobody in them yet — announced, not blank, not
+      // hidden.
+      page.render({ event: buildSwissDrawnEvent() })
+
+      expect(page.swiss.getRoundHeadings()).toEqual([
+        'Round 1',
+        'Round 2',
+        'Round 3',
+      ])
+      expect(page.swiss.getRoundLines(1)).toEqual([
+        'player.1 vs player.4',
+        'player.2 vs player.5',
+        'player.3 vs player.6',
+      ])
+      expect(page.swiss.getForthcomingText(2)).toBe(
+        '3 matches, paired once round 1 is decided.',
+      )
+    })
+
+    // The regression pins. Both of these are un-pooled exactly as the swiss draw above is,
+    // and both must still be brackets — for `rr-then-ko` the null genuinely IS the stage
+    // discriminator, and that meaning is what the swiss fix must not disturb.
+    it('still gives a SINGLE-ELIM draw the bracket', () => {
+      page.render({ event: buildBracketDrawnEvent() })
+
+      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.querySwissRounds()).toBeNull()
+      expect(page.getLineTexts()).toEqual([
+        'player.1 vs player.4',
+        'player.3 vs player.2',
+        'TBD vs TBD',
+      ])
+    })
+
+    it('still gives an RR-THEN-KO knockout stage the bracket, with its pools above it', () => {
+      page.render({ event: buildTwoStageDrawnEvent() })
+
+      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.querySwissRounds()).toBeNull()
+      // The pool stage is untouched by the routing change — it never went through
+      // `unpooled` at all.
+      expect(page.getPoolLines('p-a')).toEqual(['player.1 vs player.3'])
+      expect(page.getPoolLines('p-b')).toEqual(['player.2 vs player.4'])
     })
   })
 
