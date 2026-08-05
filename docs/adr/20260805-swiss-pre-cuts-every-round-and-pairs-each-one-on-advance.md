@@ -112,10 +112,33 @@ distinct-opponent count alone. That justification was off by one for an odd fiel
 and the rule **refused a legal draw**: a 5-entrant event could not play 5 rounds,
 which is a rematch-free swiss and the fullest one that field can play.
 
+**The bound is necessary, not sufficient.** Below it a rematch-free pairing
+exists, but the greedy walk does not always find one. Five entrants over four
+rounds repeat a pairing in round 3, while `1-4` and `5-2` was available. Finding
+the rematch-free pairing in every case is a maximum-weight matching problem, and
+this draw layer is deliberately pure and deterministic, with no solver. We accept
+the occasional avoidable rematch rather than give a pure domain a solver
+dependency, and rather than refuse to pair, which would strand a live event.
+
 ## Consequences
 
-Swiss costs no change to the strategy contract, no change to `AdvancePlan`, and no
-migration beyond the settings object it shares with every other draw type.
+Swiss costs no change to `AdvancePlan` and no migration beyond the settings object
+it shares with every other draw type.
+
+**Correction, 2026-08-05.** This section first claimed swiss cost *no change to the
+strategy contract*. That turned out to be wrong, and the reason is worth keeping.
+`advance()` now takes the ordered field as well as the fixtures.
+
+The fixtures cannot name the field. A byed entrant sits in no fixture row, by
+definition. So does a latecomer who joined a draw cut for an even field, because
+`floor(8/2)` and `floor(9/2)` are the same four fixtures. Pairing from the seated
+set therefore byes the same entrant every round and never pairs the latecomer at
+all. Only the entrants know who is playing.
+
+The claim was right about `AdvancePlan`, which is the part that mattered: swiss
+still fills existing rows and creates none, so the draw is still cut exactly once
+and ADR-0786 stands. But the contract did move, and a reader trusting the original
+sentence would have been misled.
 
 The scheduler needs no change either. It already asserts both sides are known and
 its caller already drops fixtures that do not qualify, so an unpaired later round
