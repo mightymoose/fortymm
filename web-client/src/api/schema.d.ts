@@ -2280,7 +2280,7 @@ export interface components {
          * DrawType
          * @enum {string}
          */
-        DrawType: "single-elim" | "round-robin" | "rr-then-ko";
+        DrawType: "single-elim" | "round-robin" | "rr-then-ko" | "swiss";
         /**
          * DrawTypeRead
          * @description One selectable draw format, as the ``draw_types`` table holds it.
@@ -4609,6 +4609,38 @@ export interface components {
          */
         Status: "scheduled" | "live" | "final";
         /**
+         * SwissStandingsResultsRead
+         * @description The **pool-less standings** shape of an event's results — the swiss arm of the
+         *     ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
+         *     pre-cuts every round and pairs each one on advance").
+         *
+         *     One table over the whole field, because swiss has no pools: everybody is ranked
+         *     against everybody, which is what pairing by score is for. The rows are the *same*
+         *     :class:`StandingRowRead` a round-robin pool carries, so a client renders this with
+         *     the table it already has — the difference is that they arrive as one list rather
+         *     than grouped under a pool, which is a fact about the format and not a second row
+         *     shape.
+         *
+         *     ``complete`` is every round decided, including the later rounds that are cut up
+         *     front with their sides still unknown. ``champion`` is the leader of a complete
+         *     event — a swiss ranks its whole field, so unlike the round-robin arm there is no
+         *     multi-pool carve-out — and ``null`` until then. Derived live from the fixtures'
+         *     completed matches like every other results shape.
+         */
+        SwissStandingsResultsRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "swiss_standings";
+            /** Rows */
+            rows: components["schemas"]["StandingRowRead"][];
+            /** Complete */
+            complete: boolean;
+            /** Champion */
+            champion: string | null;
+        };
+        /**
          * TableConflictRead
          * @description Two or more in-progress matches recorded on the *same table* at
          *     overlapping times — physically impossible (a table holds one match), so
@@ -4804,6 +4836,8 @@ export interface components {
             draw_type: components["schemas"]["DrawType"];
             /** Qualifiers Per Pool */
             qualifiers_per_pool?: number | null;
+            /** Rounds */
+            rounds?: number | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */
@@ -4835,6 +4869,8 @@ export interface components {
             draw_type: components["schemas"]["DrawType"];
             /** Qualifiers Per Pool */
             qualifiers_per_pool: number | null;
+            /** Rounds */
+            rounds: number | null;
             /** Max Players */
             max_players: number | null;
             /** Entry Fee */
@@ -4864,7 +4900,7 @@ export interface components {
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
             /** Results */
-            results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"] | components["schemas"]["StandingsThenFinishesResultsRead"]) | null;
+            results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"] | components["schemas"]["StandingsThenFinishesResultsRead"] | components["schemas"]["SwissStandingsResultsRead"]) | null;
             /**
              * Entered
              * @description The registration count. Derived — there is no stored counter (ADR-0016).
@@ -4904,6 +4940,8 @@ export interface components {
             draw_type?: components["schemas"]["DrawType"] | null;
             /** Qualifiers Per Pool */
             qualifiers_per_pool?: number | null;
+            /** Rounds */
+            rounds?: number | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */
