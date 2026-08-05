@@ -98,8 +98,14 @@ alloy:
   # origin alone suffices — don't commit the tailnet domain (per the repo's
   # <tailnet>/${TS_CERT_DOMAIN} convention); add tailnet/extra origins here if
   # a cross-origin client ever needs them.
-  corsAllowedOrigins:
-    - https://uat.fortymm.com
+  #
+  # A public origin names one deployment, so the list is EMPTY here and each
+  # environment supplies its own in deploy/environments/<env>-observability.yaml.
+  # Empty means no cross-origin browser may post — which is the right default,
+  # since the same-origin path does not need this list at all. Keep the key even
+  # when empty: the Alloy river config renders it with `toJson`, and a missing
+  # key would emit `cors_allowed_origins = null` instead of `[]`.
+  corsAllowedOrigins: []
   # Per-client request rate cap on the receiver.
   rateLimitPerSecond: 50
   maxPayloadSize: "5MiB"

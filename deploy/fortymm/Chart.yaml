@@ -9,5 +9,8 @@ description: |
   on a single-node k3d cluster fronted by host Caddy.
 type: application
 version: 0.1.0
-# Tracks the app, not the chart — bumped implicitly by the image tag.
-appVersion: "uat"
+# The version of the APPLICATION this chart deploys — not an environment, and
+# not the chart's own `version` above. CI stamps the deploying commit here with
+# `helm package --app-version` (.github/workflows/publish.yml), so the literal
+# in the repo only ever shows up in a chart rendered straight from a checkout.
+appVersion: "0.0.0-dev"

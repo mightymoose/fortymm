@@ -6,7 +6,16 @@ metadata:
     {{- include "fortymm.labels" . | nindent 4 }}
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: {{ .Values.postgres.storageClass }}
+  {{- /*
+    Omit the key entirely when no class is named, rather than rendering it
+    empty. The two are NOT the same to Kubernetes: an absent storageClassName
+    means "use the cluster's default class", while an explicit "" means "bind
+    only to a PV that has no class at all" -- which on a cluster with dynamic
+    provisioning never binds, and the PVC sits Pending forever.
+  */}}
+  {{- with .Values.postgres.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.postgres.storageSize }}

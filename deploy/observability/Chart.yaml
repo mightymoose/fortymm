@@ -1,7 +1,7 @@
 apiVersion: v2
 name: observability
 description: |
-  Observability stack for FortyMM UAT on Kubernetes: kube-prometheus-stack
+  Observability stack for FortyMM on Kubernetes: kube-prometheus-stack
   (Prometheus + Grafana + Alertmanager), loki-stack (Loki + Promtail), and
   Tempo, deployed into the `monitoring` namespace. Grafana ships Loki + Tempo
   datasources; Promtail redacts email addresses before they reach Loki. Each of
@@ -15,7 +15,11 @@ description: |
   both releases.
 type: application
 version: 0.1.0
-appVersion: "uat"
+# The version of the APPLICATION this chart deploys — not an environment. CI
+# stamps the deploying commit here with `helm package --app-version`
+# (.github/workflows/publish.yml); the literal below is what a chart rendered
+# straight from a checkout shows.
+appVersion: "0.0.0-dev"
 
 dependencies:
   - name: kube-prometheus-stack

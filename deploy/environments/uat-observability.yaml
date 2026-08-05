@@ -1,0 +1,21 @@
+# UAT's values for the `observability` chart (deploy/observability).
+#
+#   helm upgrade --install observability <chart> \
+#     -f deploy/environments/uat-observability.yaml
+#
+# The observability chart has exactly one environment-specific value: the public
+# browser origin allowed to post Faro telemetry cross-origin. Everything else in
+# it (namespace, subchart versions, tailnet-only proxies) is the same wherever it
+# runs. See
+# docs/adr/20260805-the-stack-chart-is-environment-neutral-and-named-fortymm.md.
+#
+# Kept outside deploy/observability/ for the same reason as uat.yaml: `helm
+# package` must not ship one environment's hostname inside the artifact.
+
+alloy:
+  # UAT's public origin. The SPA posts SAME-origin through the routing nginx at
+  # /faro/collect, which CORS does not apply to at all — this entry only covers a
+  # cross-origin client. Do not add the tailnet domain here (repo convention:
+  # tailnet names stay out of git, see ${TS_CERT_DOMAIN}).
+  corsAllowedOrigins:
+    - https://uat.fortymm.com
