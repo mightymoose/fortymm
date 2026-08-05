@@ -4,7 +4,7 @@
 # to the repo root.
 #
 # This script BUILDS NOTHING. The api and web-client images come from GHCR,
-# published per commit on `main` by .github/workflows/publish-images.yml, and
+# published per commit on `main` by .github/workflows/publish.yml, and
 # are deployed pinned by manifest digest. A merge is therefore not deployable
 # until that workflow finishes (~20-30 min, dominated by the emulated arm64
 # leg). See docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
@@ -35,14 +35,14 @@ NODE_PORT=30084
 APNS_KEY="secrets/AuthKey_68VYRLMWWR.p8"
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
 
-# The two GHCR packages publish-images.yml pushes. These three files must name
+# The two GHCR packages publish.yml pushes. These three files must name
 # the same packages: the workflow's API_IMAGE/WEB_IMAGE env, deploy/uat/values.yaml's
 # images.{api,web}.repository, and here. (A mismatch is loud, not silent: the
 # digest resolved from one package does not exist in another, so the pull fails.)
 GHCR_OWNER="mightymoose"
 API_PACKAGE="fortymm-api"
 WEB_PACKAGE="fortymm-web-client"
-PUBLISH_RUNS_URL="https://github.com/${GHCR_OWNER}/fortymm/actions/workflows/publish-images.yml"
+PUBLISH_RUNS_URL="https://github.com/${GHCR_OWNER}/fortymm/actions/workflows/publish.yml"
 
 # How long to wait for the deploying commit's images to appear in GHCR before
 # giving up. The publish is multi-arch and its arm64 leg is QEMU-emulated on an
@@ -95,7 +95,7 @@ fi
 # Deliberately NOT `git rev-parse --short`. That picks its length from the
 # repository's object count (`core.abbrev=auto`) and from any `core.abbrev` the
 # operator has set — 8 characters in this clone today, 9 once it grows, 7 in a
-# shallow clone. publish-images.yml tags with `${GITHUB_SHA::12}`, and the two
+# shallow clone. publish.yml tags with `${GITHUB_SHA::12}`, and the two
 # MUST agree exactly: a length that drifts turns a commit that published
 # perfectly well into a tag-not-found. Keep this line and that one in lockstep.
 #
@@ -252,7 +252,7 @@ resolve_published_digest() {
     now="$(date +%s)"
     if [ "$now" -ge "$deadline" ]; then
       echo "ERROR: no image published for ghcr.io/${GHCR_OWNER}/${pkg}:${tag} after ${DIGEST_WAIT_TIMEOUT_S}s." >&2
-      echo "       Commit $(git rev-parse HEAD) has no images. Either publish-images is still" >&2
+      echo "       Commit $(git rev-parse HEAD) has no images. Either publish is still" >&2
       echo "       running or it failed for this commit, or HEAD is not a commit that exists on" >&2
       echo "       origin/main (only pushed main commits are ever published)." >&2
       echo "       Check $PUBLISH_RUNS_URL, then re-run this script." >&2

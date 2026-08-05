@@ -28,7 +28,7 @@ Infra has no single directory — it spans:
   `deploy/uat/templates/_helpers.tpl` (`fortymm-uat.nginxConf`, which also adds a
   `/faro/` block). When you touch `uat.conf`, update the helper copy too.
 - `.github/workflows/*.yml` — CI (api, web-client, e2e, openapi-schema, ios, …),
-  including **`publish-images.yml`**, which pushes the api/web images to GHCR on
+  including **`publish.yml`**, which pushes the api/web images to GHCR on
   every push to `main` (see `## Published images (GHCR)`).
 - `mise.toml` — toolchain pins (node, python, `helm`, `k3d`) + task runner:
   `redeploy-uat` (deploy published, digest-pinned images to k3d), `qa-down`,
@@ -40,11 +40,11 @@ Infra has no single directory — it spans:
 |-------|-----|----------|-------|
 | dev   | `docker compose -f docker-compose.dev.yml up` | :8080 | dev servers, MSW off; real API |
 | QA    | up `scripts/qa-up.sh [id]` / down `scripts/qa-down.sh [id]` | :8085 (auto) | built artifacts, MSW off, **Mailpit :8087** captures all mail; multi-stack; **reap on merge** |
-| UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; deploys **CI-published GHCR images pinned by digest** (builds nothing, so a merge isn't deployable until `publish-images` finishes); sends REAL Postmark email |
+| UAT   | `mise run redeploy-uat` | host :8084 → NodePort 30084 | **k3d/Helm — the one prod-like stack NOT on compose**; deploys **CI-published GHCR images pinned by digest** (builds nothing, so a merge isn't deployable until `publish` finishes); sends REAL Postmark email |
 
 ## Published images (GHCR)
 
-`.github/workflows/publish-images.yml` builds the two Dockerfiles UAT runs —
+`.github/workflows/publish.yml` builds the two Dockerfiles UAT runs —
 `api/Dockerfile.dev` and `web-client/Dockerfile.uat` — and pushes them to two
 GHCR packages:
 
@@ -153,13 +153,112 @@ deploy it to, its Google-console restrictions must cover **all** of them
 name, plus any later prod origin) — a restriction list that misses one origin
 breaks the map only on that origin.
 
+## Published charts (GHCR)
+
+The same `.github/workflows/publish.yml` packages both Helm charts and pushes
+them to GHCR as OCI artifacts, so a deploy needs `helm` and no checkout:
+
+- `ghcr.io/mightymoose/fortymm/charts/fortymm-uat`, the **stack chart**, packaged
+  from `deploy/uat/`
+- `ghcr.io/mightymoose/fortymm/charts/observability`, the **observability
+  chart**, packaged from `deploy/observability/`
+
+`helm push` appends the chart name to the repository path, so each path ends in
+that chart's `name:` from `Chart.yaml`. A later change renames the stack chart
+to `fortymm`. If you read this after that rename lands, the path is
+`.../charts/fortymm`.
+
+**The chart version is `0.1.0-sha<12-char sha>`, and the `sha` prefix is
+load-bearing.** Helm validates the version as SemVer, and the bare 12-char
+truncation the images use as a tag is not a version at all. `helm package
+--version b17a29fa1234` fails with `Error: invalid semantic version`. So the
+SHA has to be encoded into a SemVer string, and the obvious encoding carries
+its own trap. SemVer forbids a leading zero in a *numeric* pre-release
+identifier, so the tidier-looking
+`0.1.0-<sha>` is rejected whenever the truncation is all digits starting with
+0. `helm package --version 0.1.0-000123456789` fails with
+`Error: version segment starts with 0`. That is roughly one commit in three
+thousand, and it fails **in CI, at publish time, on a commit that is otherwise
+perfectly good**. Gluing `sha` to the front makes the identifier alphanumeric
+and therefore always legal. **Do not tidy the prefix away.**
+
+`Chart.yaml` keeps `version: 0.1.0` in the repo. CI stamps the real version and
+`appVersion` at package time, so no commit has to bump a chart file and the
+version cannot drift from the commit it was built from.
+
+**The stack chart carries its own image digests.** CI rewrites
+`images.api.digest` and `images.web.digest` into the chart's values before
+packaging, using the digests the two image jobs report from their own push
+steps. A published chart is therefore a complete description of one commit's
+stack. The chart version is the **single coordinate** an install or a rollback
+names. Chart and images cannot drift apart, because CI welded them together at
+publish time:
+
+```bash
+helm upgrade --install fortymm-uat \
+  oci://ghcr.io/mightymoose/fortymm/charts/fortymm-uat \
+  --version "0.1.0-sha$(git rev-parse HEAD | cut -c1-12)" \
+  --namespace fortymm-uat --create-namespace
+```
+
+Rollback is the same command naming an older version, and the older chart
+brings its matching image digests with it. Secrets stay out of band: the
+`fortymm-uat-env` and `-apns` Secrets come from the operator's `.env`, and no
+published artifact can carry them. `mise run redeploy-uat` still deploys the
+chart directory at `deploy/uat/` today. A later change switches the script to
+the published chart.
+
+**The published chart is not byte-identical to `deploy/uat/` in the repo.**
+CI rewrites the two digest values before packaging. `helm package` then stamps
+`version` and `appVersion` into the packaged `Chart.yaml` and reserializes it,
+so key order, comments and line wrapping all change too. Expect those
+differences when you diff the published chart against the repo. CI reads the
+digests back out of the packaged file and refuses to push unless it finds two,
+because an *empty* digest is not malformed to the chart. The chart treats it as
+the documented render fallback and renders the moving `:main` tag, which is the
+blank-white-page failure mode below.
+
+**Charts get no moving `main` tag.** Helm derives the OCI tag from the chart
+version, so exactly one tag exists per commit. A second tag would mean
+packaging twice or reaching for `oras`, and nothing would consume it: an
+outside deployer wants a pinned version, not a moving one. The images keep
+`:main` only because `values.yaml` uses it as the render fallback.
+
+**No credentials needed to pull.** A package pushed by `GITHUB_TOKEN` with
+`packages: write` is linked to the publishing repository and inherits its
+visibility, and this repo is public. That mechanism was verified for the two
+images (see the visibility subsection above), so the charts are public by the
+same route. No chart carries `imagePullSecrets`.
+
+**The observability chart resolves dependencies with `helm dependency build`,
+never `update`.** `deploy/observability/charts/` is **gitignored** and only
+`Chart.lock` is committed, so a runner starts with no subcharts on disk. CI
+therefore has to `helm repo add` both `prometheus-community` and `grafana`
+first, or the next command cannot find the repositories. `build` resolves from
+the committed `Chart.lock`, so the published chart vendors exactly the subchart
+versions this repo has run in UAT. `update` re-resolves against the upstream
+repositories and could pull newer than the lock, which would make a tagged,
+immutable chart depend on the day CI ran. The published package carries the
+expanded subcharts inside it, and that is what takes the upstream fetch off the
+**deploy** path. CI checks the packaged tarball for all three subchart
+`Chart.yaml` files and refuses to push if any is missing.
+
+**The observability chart does not wait on the image builds.** It bakes no
+fortymm digests, so it needs only the tag job. The stack chart `needs` both
+image jobs for their digests, so it inherits their **~25-minute critical
+path**.
+
+**The chart jobs cannot be proven from a pull request.** `publish.yml` runs on
+push to `main` only, so no chart package can exist until the change merges. The
+first real evidence is the run after merge.
+
 ## Topology
 
 **UAT runs on Kubernetes (Helm + k3d).** UAT is the one prod-like stack that does *not* use docker-compose. `scripts/redeploy-uat.sh` (a.k.a. `mise run redeploy-uat`) **builds nothing** — it deploys the images CI already published for the commit being deployed. It refuses any branch but `main` (or the legacy `uat-deploy` worktree), merges `origin/main` into it first so the deploy names the newest main, provisions a single-node **k3d** cluster `fortymm-uat`, resolves each package's `:<12-char sha>` tag to its **manifest-list digest** over the GHCR v2 API, syncs Secrets from the gitignored `.env` + `secrets/*.p8`, and `helm upgrade --install`s the chart at **`deploy/uat/`** with `--set images.api.digest=sha256:… --set images.web.digest=sha256:…` (`--wait --timeout 5m`). The chart reproduces the old compose topology (postgres, redis, api, worker, web-client, routing nginx); migrations + seeds run as a `post-install,post-upgrade` Helm hook **Job** (not in the api boot command). Routing nginx is a **NodePort** (30084); k3d maps host **:8084** → that NodePort, so host Caddy (still pointing at `127.0.0.1:8084`) fronts uat.fortymm.com unchanged. Needs `helm` + `k3d` (`brew install helm k3d`). Inspect with `KUBECONFIG=$(k3d kubeconfig write fortymm-uat) kubectl get pods -n fortymm-uat`.
 
 **Why a digest and not the tag.** `fortymm-uat.imageRef` in `_helpers.tpl` renders `repository@sha256:…` whenever a digest is set, and every workload that runs app code (api, worker, migrate Job, retirement CronJob, web-client) goes through it. A digest is content-addressed, so "every replica runs the same bytes" stops being a convention the deploy script has to maintain and becomes structural — two pods naming one digest *cannot* be running different content, and re-running the publish workflow for an already-published commit cannot change what UAT is serving the way overwriting a `:<sha>` tag would. Empty `digest` in `values.yaml` falls back to `repository:tag` (the moving `:main`) purely so `helm template deploy/uat` renders on its own; a real deploy always passes digests, and a set-but-malformed one fails the render rather than being tolerated. The old `$(short-sha)-$(epoch)` unique-tag scheme is gone and should not come back — it existed because a *local* rebuild could produce different content under one commit, so the pod template had to change to force a roll. Published images are immutable, so a same-commit redeploy is a correct no-op. See `docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md`.
 
-**Deploying now depends on CI.** The images for a commit exist only once `publish-images.yml` has finished for it (~25 min, dominated by the emulated arm64 leg), so a just-merged commit is not immediately deployable. The script polls GHCR every 30s for up to `DIGEST_WAIT_TIMEOUT_S` (default `2400`, i.e. 40 min) and then fails naming the commit and linking the workflow runs, rather than deploying an older commit without saying so. `DIGEST_WAIT_TIMEOUT_S=0` fails immediately instead of waiting. The anonymous digest read doubles as the public-visibility preflight (see the one-time flip under `## Published images (GHCR)`): if it resolves, the cluster can pull, which is why the chart carries no `imagePullSecrets` — and a package still private fails here with the click-path instead of dying as an `ErrImagePull` five minutes into `helm --wait`.
+**Deploying now depends on CI.** The images for a commit exist only once `publish.yml` has finished for it (~25 min, dominated by the emulated arm64 leg), so a just-merged commit is not immediately deployable. The script polls GHCR every 30s for up to `DIGEST_WAIT_TIMEOUT_S` (default `2400`, i.e. 40 min) and then fails naming the commit and linking the workflow runs, rather than deploying an older commit without saying so. `DIGEST_WAIT_TIMEOUT_S=0` fails immediately instead of waiting. The anonymous digest read doubles as the public-visibility preflight (see the one-time flip under `## Published images (GHCR)`): if it resolves, the cluster can pull, which is why the chart carries no `imagePullSecrets` — and a package still private fails here with the click-path instead of dying as an `ErrImagePull` five minutes into `helm --wait`.
 
 **UAT is also on the tailnet.** The chart runs a `tailscale/tailscale` proxy (`deploy/uat/templates/tailscale.yaml`, `tailscale.enabled` in values, on by default) that fronts the routing nginx via `tailscale serve`, so UAT is reachable privately at **`https://fortymm-uat.<tailnet>.ts.net`** with auto-HTTPS — independent of the DDNS/router/Caddy chain (which still serves `uat.fortymm.com` unchanged; Tailscale is purely additive). It reads `TS_AUTHKEY` (a reusable, non-ephemeral key from the Tailscale admin console) straight from the `.env`-backed secret, so just add a `TS_AUTHKEY=tskey-...` line to `.env`; `redeploy-uat.sh` errors early if it's missing. The proxy persists its node identity in the `tailscale-state` Secret (survives restarts; no re-auth). Requires HTTPS certs + MagicDNS enabled in the tailnet. Set `tailscale.enabled=false` to skip it.
 
@@ -175,7 +274,7 @@ Prod-like compose stacks (built artifacts, no dev server, isolated volumes; only
 ```bash
 mise run redeploy-uat                 # helm upgrade the k3d UAT stack onto this commit's published GHCR images (digest-pinned); smoke-check uat.fortymm.com
 DEPLOY_OBSERVABILITY=false mise run redeploy-uat   # skip the monitoring chart
-DIGEST_WAIT_TIMEOUT_S=0 mise run redeploy-uat      # don't wait on publish-images; fail now if this commit has no images
+DIGEST_WAIT_TIMEOUT_S=0 mise run redeploy-uat      # don't wait on publish; fail now if this commit has no images
 scripts/qa-up.sh [id]                 # bring up an isolated QA stack on a free port trio; prints QA_URL / Mailpit URL
 scripts/qa-down.sh [id]               # reap that stack: containers, volumes (named + anonymous), networks, built images
 scripts/qa-down.sh --dry-run [id]     # preview what would be removed
@@ -255,7 +354,7 @@ unprompted.**
 - **Symptom:** The script prints `ghcr.io/mightymoose/fortymm-<pkg>:<12-char
   sha> not published yet — waiting up to 2400s`, then eventually
   `ERROR: no image published for … after 2400s` and exits without deploying.
-- **Cause:** `publish-images.yml` has not produced images for the commit at
+- **Cause:** `publish.yml` has not produced images for the commit at
   HEAD (after the script's `git merge origin/main`). Either the run is still
   going (~25 min, emulated arm64), or it failed for that commit, or HEAD is not
   a commit that exists on `origin/main` — only pushed `main` commits are ever

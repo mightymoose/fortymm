@@ -1,0 +1,433 @@
+name: publish
+
+# Builds the two images UAT actually runs -- `api/Dockerfile.dev` and
+# `web-client/Dockerfile.uat` -- and pushes them to GHCR, so a deploy pulls a
+# published artifact instead of one built on the operator's laptop. See
+# docs/adr/20260802-uat-deploys-published-images-pinned-by-digest.md.
+#
+# Named `publish` rather than `publish-images` because the Helm charts publish
+# from here too: the chart job needs the image digests these jobs report, which
+# is why each image job exposes its push step's `digest` as a job output. See
+# docs/adr/20260805-charts-publish-to-ghcr-versioned-by-commit-with-image-digests-baked-in.md.
+#
+# Trigger: push to `main` only. Deliberately NOT on `pull_request` -- an image
+# built from a PR head is not deployable (`redeploy-uat.sh` refuses any ref but
+# `main`), so a PR build would burn ~25 minutes of emulated-arm64 runner to
+# produce something nothing can consume. The accepted cost is that a broken
+# build is discovered after merge rather than before it.
+#
+# Also deliberately NOT path-filtered, but for a different reason than
+# `api.yml`'s (which is about required status checks). `redeploy-uat.sh` merges
+# `origin/main` and deploys its TIP, looking the images up by that commit's SHA
+# -- so whatever commit is currently the tip must have images, no matter what it
+# touched. A path filter would skip docs-only commits, and a docs-only commit is
+# very often the tip, which would leave `main` undeployable until something else
+# landed on top of it.
+#
+# Note what this does NOT promise: that *every* commit on `main` gets images.
+# The concurrency group below supersedes a PENDING run when a newer one queues,
+# so merging three times inside one ~25min build window skips the middle commit.
+# That is tolerable only because the tip is the sole thing ever deployed, and
+# the tip is always the run that survives. Do not read this workflow as
+# guaranteeing per-commit coverage.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One publish at a time per ref. Two overlapping runs would race the moving
+# `:main` tag and could leave it pointing at the older of the two commits;
+# serializing them means `:main` always ends up on the newest.
+#
+# `cancel-in-progress: false` keeps a running publish from being killed by the
+# next merge, so a commit that has STARTED building always finishes. It does not
+# protect a run that is merely queued: GitHub cancels a pending run when a newer
+# one queues into the same group, so under rapid merges an intermediate commit
+# can end up with no images at all. Accepted deliberately -- only the tip is ever
+# deployed, and the newest queued run is the one that survives, so the tip always
+# publishes. See the header comment.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+# `packages: write` is what pushes to GHCR; the built-in GITHUB_TOKEN covers
+# it, so the push side needs no secret of its own.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/mightymoose/fortymm-api
+  WEB_IMAGE: ghcr.io/mightymoose/fortymm-web-client
+  # `helm push` appends the chart name, so the two charts land at
+  # `${CHART_REPO}/fortymm-uat` and `${CHART_REPO}/observability`. Named once
+  # here because the step summaries advertise a pull command a human copies and
+  # runs -- if the summary and the push target can drift apart, the copyable
+  # line is the one that gets it wrong.
+  CHART_REPO: ghcr.io/mightymoose/fortymm/charts
+  HELM_VERSION: v4.2.2
+  # UAT's k3d cluster runs on the operator's own machine, not on a runner, and
+  # this repo neither pins nor can check that machine's architecture -- an
+  # amd64-only image would either fail to run there or run under emulation,
+  # depending on whose machine it is. A later Hetzner box is amd64, so one
+  # manifest list per tag serves both. The arm64 leg is QEMU-emulated here and
+  # dominates the run time -- that cost is accepted deliberately.
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  tag:
+    name: Resolve the image tag
+    runs-on: ubuntu-latest
+    outputs:
+      short-sha: ${{ steps.sha.outputs.short-sha }}
+      # The chart version, derived here so it has exactly one spelling. Both
+      # chart jobs publish under it, `deploy/CLAUDE.md` documents it, and an
+      # outside puller passes it to `--version` -- so it is the one string
+      # everything downstream must agree on.
+      chart-version: ${{ steps.sha.outputs.chart-version }}
+    steps:
+      - name: Refuse to publish from a non-main ref
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::publish.yml only publishes main (got ${GITHUB_REF}); a non-main run would move the :main tag onto an unreviewed commit."
+            exit 1
+          fi
+
+      # A FIXED 12-character truncation of the full SHA -- deliberately NOT
+      # `git rev-parse --short`. That command picks its length from the
+      # repository's object count (`core.abbrev=auto`), so the same commit
+      # abbreviates to 7 in a shallow CI clone, 8 in a full clone of this repo
+      # today, and 9 once it grows -- and an operator who has set `core.abbrev`
+      # gets something else again. The deploy script looks the image up by this
+      # exact string, so a length that drifts between the two clones is a
+      # tag-not-found on a commit that was published perfectly well.
+      #
+      # Truncating $GITHUB_SHA is immune to all of that: no git config, no
+      # object count, no checkout. It is why this job clones nothing.
+      # `scripts/redeploy-uat.sh` MUST use the same 12-char truncation.
+      - name: Compute the image tag
+        id: sha
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::12}"
+          echo "short-sha=${short}" >> "$GITHUB_OUTPUT"
+
+          # The `sha` prefix is LOAD-BEARING, not decoration. Helm validates a
+          # chart version as SemVer, and SemVer forbids a leading zero in a
+          # NUMERIC pre-release identifier -- so a bare `0.1.0-${short}` is
+          # rejected outright whenever the truncated SHA happens to be all
+          # digits: `helm package --version 0.1.0-000123456789` fails with
+          # "version segment starts with 0". That is roughly one commit in
+          # three thousand, failing in CI on a commit that is otherwise
+          # perfectly good. Gluing `sha` to the front makes the identifier
+          # alphanumeric, and therefore always legal, whatever the SHA is.
+          echo "chart-version=0.1.0-sha${short}" >> "$GITHUB_OUTPUT"
+
+          echo "Publishing \`${GITHUB_SHA}\` as \`:${short}\` (and moving \`:main\`)." >> "$GITHUB_STEP_SUMMARY"
+
+  api:
+    name: fortymm-api
+    needs: tag
+    runs-on: ubuntu-latest
+    # The emulated arm64 leg is slow; ~25 min is normal, so allow headroom
+    # without letting a wedged build hold a runner all day.
+    timeout-minutes: 90
+    # The manifest-list digest of the image this job just pushed, taken from the
+    # push step itself. A downstream job bakes it into the chart, and it reads it
+    # from here rather than asking the GHCR API what CI just published --
+    # skipping that round trip is a stated goal of the charts ADR, and the step
+    # output is the only source that cannot answer about a different push.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: api
+          file: api/Dockerfile.dev
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ needs.tag.outputs.short-sha }}
+            ${{ env.API_IMAGE }}:main
+          # Distinct scope per image. A shared scope makes the two builds
+          # overwrite each other's cache manifest, so each run starts cold --
+          # which is exactly what we cannot afford with an emulated arm64 leg.
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          # No provenance attestation: it adds an `unknown/unknown` entry to the
+          # manifest list, and the deploy pins that list by digest. Keep the
+          # index to exactly the two platform manifests it claims to hold.
+          provenance: false
+
+  web-client:
+    name: fortymm-web-client
+    needs: tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Same as the api job: the pushed manifest digest, straight from the push
+    # step, for a downstream job to bake into the chart.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: web-client
+          file: web-client/Dockerfile.uat
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ needs.tag.outputs.short-sha }}
+            ${{ env.WEB_IMAGE }}:main
+          # `VITE_*` values are baked into the bundle at build time, so they are
+          # fixed here rather than by the operator's `.env`.
+          #
+          # The Faro collector is a same-origin path, not a secret, and is
+          # passed unconditionally: where nginx has no `/faro/` block (the QA
+          # shape) the beacons simply 404, which is harmless.
+          #
+          # The Maps key is a *browser* key -- readable in the shipped bundle
+          # either way. If the repository secret is unset it expands to empty,
+          # which matches the Dockerfile's own default: the build still
+          # succeeds and the map degrades to its text fallback. Nothing here
+          # fails on a missing key.
+          build-args: |
+            VITE_FARO_COLLECTOR_URL=/faro/collect
+            VITE_GOOGLE_MAPS_API_KEY=${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          cache-from: type=gha,scope=web-client
+          cache-to: type=gha,mode=max,scope=web-client
+          provenance: false
+
+  chart:
+    name: fortymm-uat chart
+    # The digests come from the image jobs' own push steps, as job outputs --
+    # NOT from a GHCR API lookup. A lookup can answer about a different push;
+    # the step output cannot. Skipping that round trip is a stated goal of
+    # docs/adr/20260805-charts-publish-to-ghcr-versioned-by-commit-with-image-digests-baked-in.md.
+    needs: [tag, api, web-client]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned rather than taking whatever the runner image ships: the chart CI
+      # publishes should be packaged by a helm version we have actually run this
+      # path against. `mise.toml` tracks `helm = "latest"`, so there is no repo
+      # pin to mirror -- this is the version the packaging was rehearsed on.
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Package and push the stack chart
+        env:
+          # Derived once, by the `tag` job. The `sha` prefix in it is
+          # load-bearing -- see the comment there.
+          CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
+          # Chart.yaml says `appVersion: "uat"`, which is not a version of
+          # anything. Stamp the commit instead -- at package time, so no commit
+          # has to bump a chart file and the version cannot drift from the
+          # commit it was built from.
+          APP_VERSION: ${{ needs.tag.outputs.short-sha }}
+          API_DIGEST: ${{ needs.api.outputs.digest }}
+          WEB_DIGEST: ${{ needs.web-client.outputs.digest }}
+          # The built-in token already carries `packages: write` (see the
+          # workflow-level permissions), so the chart push needs no secret of
+          # its own. Passed through the environment rather than interpolated
+          # into the script body.
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # An EMPTY digest is not malformed to the chart -- `fortymm-uat.imageRef`
+          # treats it as the documented render-only fallback and renders
+          # `repository:main`, the moving tag. So without this guard a run with a
+          # broken input publishes a chart that packages, pulls and renders
+          # cleanly while pinning nothing: the blank-white-page failure mode in
+          # deploy/CLAUDE.md, shipped as an artifact other people pull.
+          # `redeploy-uat.sh` asserts this today and stops resolving digests at
+          # all once the chart carries them, so the check relocates here.
+          for d in "$API_DIGEST" "$WEB_DIGEST"; do
+            if [[ ! "$d" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::image digest must be sha256:<64 hex chars>, got '${d}' -- refusing to publish a chart that would fall back to the moving :main tag."
+              exit 1
+            fi
+          done
+
+          # `helm package` has no `--set`, so the digests are written into the
+          # runner's checkout of values.yaml before packaging. This is the one
+          # documented difference between the published chart and `deploy/uat/`
+          # in git; nothing is committed here. `yq` is preinstalled on
+          # GitHub-hosted ubuntu runners.
+          yq -i '.images.api.digest = strenv(API_DIGEST) | .images.web.digest = strenv(WEB_DIGEST)' deploy/uat/values.yaml
+
+          mkdir -p dist/charts
+          helm package deploy/uat \
+            --version "$CHART_VERSION" \
+            --app-version "$APP_VERSION" \
+            -d dist/charts
+
+          chart="$(ls dist/charts/*.tgz)"
+
+          # Read the digests back OUT of the packaged artifact rather than
+          # trusting the write. This catches a `yq` that vanished from a future
+          # runner image, a renamed values key, and a wrong path -- all of which
+          # fail silently and produce a chart pinned to nothing.
+          # `yq` writes the value quoted (`digest: "sha256:…"`), so the pattern
+          # tolerates the quotes; `|| true` keeps a zero count from exiting on
+          # grep's own status before the error message below can be printed.
+          baked="$(helm show values "$chart" | grep -cE '^[[:space:]]*digest: "?sha256:[0-9a-f]{64}"?$' || true)"
+          if [ "$baked" -ne 2 ]; then
+            echo "::error::packaged chart carries ${baked} image digests, expected 2 -- the values rewrite did not take."
+            exit 1
+          fi
+
+          printf '%s' "$GHCR_TOKEN" | helm registry login "$REGISTRY" -u "$GHCR_USER" --password-stdin
+
+          # `helm push` appends the chart name, so this lands at
+          # <repo>/charts/<chart name>. Helm derives the OCI tag from the chart
+          # version, so exactly one tag exists per commit -- charts get NO moving
+          # `main` tag (a second tag would mean packaging twice or reaching for
+          # `oras`, and nothing would consume it).
+          helm push "$chart" "oci://${CHART_REPO}"
+
+          {
+            echo "Published \`${CHART_VERSION}\` to \`${CHART_REPO}\`."
+            echo ""
+            echo "    helm upgrade --install fortymm-uat \\"
+            echo "      oci://${CHART_REPO}/fortymm-uat --version ${CHART_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  observability:
+    name: observability chart
+    # `needs: [tag]` ONLY, and that is the point of it being a separate job
+    # rather than another step in `chart`. This chart bakes no fortymm image
+    # digests, so it consumes nothing the image jobs produce -- making it wait
+    # on the ~25-minute emulated-arm64 build would be pure delay for an artifact
+    # that does not depend on it. It still takes the 12-char SHA from `tag`,
+    # because every published artifact must be addressable by the same commit
+    # string (never `git rev-parse --short` -- see the `tag` job).
+    needs: [tag]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same pin as the `chart` job. It matters more here: helm decides how
+      # subchart dependencies are laid out inside the package, and the readback
+      # below asserts against that layout.
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Package and push the observability chart
+        env:
+          # Derived once, by the `tag` job. The `sha` prefix in it is
+          # load-bearing -- see the comment there.
+          CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
+          # Chart.yaml says `appVersion: "uat"`, which is not a version of
+          # anything. Stamp the commit at package time instead, so no commit has
+          # to bump a chart file.
+          APP_VERSION: ${{ needs.tag.outputs.short-sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # `deploy/observability/charts/` is GITIGNORED -- only `Chart.lock` is
+          # committed -- so a runner starts with no subcharts on disk and an
+          # empty repo cache. Both `helm repo add`s are therefore mandatory, not
+          # best-effort: without them the next command dies with "no repository
+          # definition for ...". They carry no `|| true` for that reason. A
+          # runner is always fresh, so an "already exists" failure cannot happen
+          # here, and swallowing a real failure would only relocate the error.
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+
+          # `build`, NEVER `update`. `helm dependency build` resolves from the
+          # committed `Chart.lock`, so the published chart vendors exactly the
+          # subchart versions this repo has run in UAT. `helm dependency update`
+          # re-resolves against the upstream repositories and would silently
+          # pull whatever they publish next -- turning a tagged, immutable chart
+          # into something whose contents depend on the day CI ran.
+          #
+          # `--skip-refresh` because `helm repo add` above already downloaded
+          # both indexes seconds ago (~10 MB of them). Without it `build`
+          # re-fetches both, and there is nothing a fresh index could change:
+          # `Chart.lock` pins exact versions, so resolution is identical.
+          helm dependency build deploy/observability --skip-refresh
+
+          mkdir -p dist/charts
+          helm package deploy/observability \
+            --version "$CHART_VERSION" \
+            --app-version "$APP_VERSION" \
+            -d dist/charts
+
+          chart="$(ls dist/charts/*.tgz)"
+
+          # Prove the subcharts are inside the artifact about to be pushed. The
+          # entire point of publishing this chart is that a deploy stops
+          # reaching out to prometheus-community.github.io and grafana.github.io
+          # (see the ADR's consequences), and a chart that packaged cleanly with
+          # an empty `charts/` would break exactly that, at pull time, on
+          # someone else's machine. Read the bytes rather than trusting the
+          # three steps above -- the repo's verify-the-artifact-under-test rule.
+          #
+          # `helm package` UNPACKS each vendored `.tgz` into a directory, so the
+          # anchor is `observability/charts/<name>/Chart.yaml` and NOT the
+          # `<name>-<version>.tgz` the `charts/` dir holds on disk. The single
+          # path segment also keeps loki-stack's own nested subcharts (promtail,
+          # filebeat, and five more) from inflating the count.
+          vendored="$(tar -tzf "$chart" | grep -cE '^observability/charts/(kube-prometheus-stack|loki-stack|tempo)/Chart\.yaml$' || true)"
+          if [ "$vendored" -ne 3 ]; then
+            echo "::error::packaged chart vendors ${vendored} of 3 subcharts (kube-prometheus-stack, loki-stack, tempo) -- refusing to publish a chart whose deploy would still fetch from upstream Helm repos."
+            exit 1
+          fi
+
+          printf '%s' "$GHCR_TOKEN" | helm registry login "$REGISTRY" -u "$GHCR_USER" --password-stdin
+
+          # `helm push` appends the chart name, so this lands at
+          # <repo>/charts/observability. As with the stack chart, helm derives
+          # the OCI tag from the chart version and there is NO moving `main` tag.
+          helm push "$chart" "oci://${CHART_REPO}"
+
+          {
+            echo "Published \`observability-${CHART_VERSION}\` to \`${CHART_REPO}\`."
+            echo ""
+            echo "    helm upgrade --install observability \\"
+            echo "      oci://${CHART_REPO}/observability --version ${CHART_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
