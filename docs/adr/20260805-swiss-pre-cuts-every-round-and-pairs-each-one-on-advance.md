@@ -101,6 +101,13 @@ The scheduler needs no change either. It already asserts both sides are known an
 its caller already drops fixtures that do not qualify, so an unpaired later round
 is skipped until it is filled.
 
+**The schedule preview refuses swiss**, exactly as it refuses single-elim. The
+preview covers the pool stage, and a pool-less draw type raises
+`UnsupportedDrawType` rather than returning a preview that silently covers
+nothing. Swiss is pool-less, so it takes the same path. A director previewing a
+swiss event is told the format has no preview, instead of being shown an empty
+day.
+
 **An unplayed swiss round is visible as empty fixtures.** A director looking at a
 5-round draw sees rounds 2 to 5 as rows with no players. This is the same thing a
 single-elim bracket already shows for its later rounds, so it is consistent, but
