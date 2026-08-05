@@ -39,6 +39,24 @@ const scoped = (container: Container) => ({
   getQualifiersValue() {
     return fieldPage.within(container).getFieldValue('Qualifiers per pool')
   },
+  /** **R** — the round-count box, which exists only for a `swiss` event (the swiss ADR).
+   * `get` for the case that expects it. */
+  getRoundsInput() {
+    return container.getByLabelText(/^Rounds/)
+  },
+  /** …and the `query` twin, because "this control is NOT on screen" is the claim for
+   * every other draw type: a round count is not a blank field a round-robin event has,
+   * it is a question that format does not ask. Asked by LABEL rather than by
+   * `getFormElements().length`, so it discriminates "the row is absent" from "some other
+   * row went missing too". */
+  queryRoundsInput() {
+    return container.queryByLabelText(/^Rounds/)
+  },
+  /** The round count as a **reader** sees it — the `Field` read-only branch's value under
+   * its label (ADR 0015). Use `queryRoundsInput` for the "row absent" claim. */
+  getRoundsValue() {
+    return fieldPage.within(container).getFieldValue('Rounds')
+  },
   /** The red message under a field — the `Field` row's `hint`, rendered as an error.
    * Queried by its TEXT because that is what the organizer reads; a test that asked
    * for "the hint node" would pass on a message rendered in the wrong colour under

@@ -33,11 +33,13 @@ import type { components } from '@/api/schema'
  * option simply is not on the menu. That is exactly how `rr-then-ko` was predicted to
  * need "no client change" and would instead have vanished (ADR "rr-then-ko cuts both
  * stages upfront and seeds qualifiers rematch-free", Context). Adding the slug here is
- * step one of adding a draw type to this client; the compiler will find the rest. */
+ * step one of adding a draw type to this client; the compiler will find the rest.
+ * `swiss` is the second slug to make that trip, and it made it the same way. */
 export const DRAW_TYPES = [
   'round-robin',
   'single-elim',
   'rr-then-ko',
+  'swiss',
 ] as const satisfies readonly components['schemas']['DrawType'][]
 
 /** The runtime parser for a single draw-type slug — what the event form validates
@@ -46,8 +48,9 @@ export const drawTypeSchema = z.enum(DRAW_TYPES)
 
 /** The draw types the API accepts — deliberately not a roadmap (ADR 20260726 "a draw
  * type is a seeded row"): a member exists iff the server has a strategy that can plan
- * it. `double-elim` and `swiss` were removed from the API's enum and are a 422 at the
- * boundary now; `rr-then-ko` came back in #1227 when its strategy landed.
+ * it. `double-elim` is still a 422 at the boundary; `rr-then-ko` came back in #1227
+ * when its strategy landed, and `swiss` came back the same way once `SwissStrategy`
+ * could cut a draw (ADR "swiss pre-cuts every round and pairs each one on advance").
  *
  * Inferred from `DRAW_TYPES` above rather than hand-written, and pinned to the
  * generated `components['schemas']['DrawType']` by a compile-time assertion in

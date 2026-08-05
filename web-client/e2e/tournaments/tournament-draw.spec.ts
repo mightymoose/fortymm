@@ -568,6 +568,7 @@ test.describe('Tournaments · the draw types a director is offered', () => {
     'Round robin',
     'Single elimination',
     'Round-robin then knockout',
+    'Swiss',
   ]
 
   test('offers exactly the seeded draw types, in the server’s words', async ({
@@ -581,14 +582,14 @@ test.describe('Tournaments · the draw types a director is offered', () => {
     await expect(pom.eventEditor).toBeVisible()
 
     // EXACTLY these, and in this order. `toEqual` is the assertion the claim needs, and
-    // it cuts both ways. "Double elimination" and "Swiss" were on this menu once, and
-    // each let a director author an event nothing could ever cut: they left the API's
-    // enum, so they are not seeded, so they are not here. **Round-robin then knockout
-    // went the other way** — it left with them in #1219 and came back in #1227 with a
-    // strategy behind it, and a client-side allowlist would have swallowed the served
-    // row without a word (ADR "rr-then-ko cuts both stages upfront…", Context). This is
-    // the browser end of that: the third row really crosses the wire, really survives
-    // the parse, and really reaches the listbox.
+    // it cuts both ways. "Double elimination" was on this menu once and let a director
+    // author an event nothing could ever cut: it left the API's enum, so it is not
+    // seeded, so it is not here. **Round-robin then knockout and Swiss went the other
+    // way** — both left in #1219 and each came back the moment a strategy stood behind
+    // it (#1227, then the swiss ADR), and a client-side allowlist would have swallowed
+    // the served row without a word (ADR "rr-then-ko cuts both stages upfront…",
+    // Context). This is the browser end of that: the third and fourth rows really cross
+    // the wire, really survive the parse, and really reach the listbox.
     expect(await pom.drawTypeOptions()).toEqual(SEEDED_LABELS)
 
     expect(store.unhandled).toEqual([])

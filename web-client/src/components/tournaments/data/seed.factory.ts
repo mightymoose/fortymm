@@ -25,6 +25,7 @@ import type {
   StandingRow,
   StandingsResults,
   StandingsThenFinishesResults,
+  SwissStandingsResults,
   Tournament,
   TournamentEvent,
   TournamentTable,
@@ -180,6 +181,12 @@ export function buildEvent(
     // explicit `undefined` while the field is required-and-nullable (`number | null`) —
     // the same reason `entryState` is computed below rather than spread.
     qualifiersPerPool: overrides.qualifiersPerPool ?? null,
+    // **No chosen round count** either (the swiss ADR) — a round-robin's rounds are dealt by
+    // the circle method and a bracket's depth follows from the field, so `null` is the only
+    // value those draw types' settings admit. Stated AFTER the spread for the same reason
+    // the qualifier count is: `Partial<…>` admits an explicit `undefined` while the field is
+    // required-and-nullable (`number | null`).
+    rounds: overrides.rounds ?? null,
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole
@@ -295,6 +302,34 @@ export function buildRrThenKoEvent(
         position: 1,
       }),
     ],
+    ...overrides,
+  })
+}
+
+/**
+ * A **swiss** event (ADR "swiss pre-cuts every round and pairs each one on advance"): eight
+ * entrants over **three** rounds, and **no pools at all**.
+ *
+ * `rounds: 3` rather than the smallest legal `1`, deliberately, and for the reason
+ * `buildRrThenKoEvent` gives about its qualifier count: `1` is where any dropped-setting
+ * bug lands, so a fixture built on it could not tell "the director's R was threaded
+ * through" from "something substituted the minimum". It is also a legal R for this field —
+ * the cut refuses `R > n - 1`, and 3 is comfortably under 7.
+ *
+ * `pools: []` is the format, not an omission: swiss ranks the whole field in one table, so
+ * an event carrying pools would be describing a shape the draw does not have.
+ */
+export function buildSwissEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-swiss',
+    name: 'Swiss Singles',
+    drawType: 'swiss',
+    rounds: 3,
+    maxPlayers: 32,
+    entrants: buildEntrants(8),
+    pools: [],
     ...overrides,
   })
 }
@@ -945,6 +980,96 @@ export function buildTwoStageEvent(
 ): TournamentEvent {
   return buildRrThenKoEvent({
     results: buildTwoStageResults(),
+    ...overrides,
+  })
+}
+
+/**
+ * A fixture event's own **swiss standings block**, narrowed — the `swiss_standings` twin
+ * of the three above, and throwing for the same reason.
+ */
+export function swissStandingsResultsOf(
+  event: TournamentEvent,
+): SwissStandingsResults {
+  const results = event.results
+  if (results === null || results.kind !== 'swiss_standings') {
+    throw new Error(
+      `Fixture event '${event.id}' has no swiss standings block (results: ${results?.kind ?? 'null'}). Build it with buildSwissStandingsEvent().`,
+    )
+  }
+  return results
+}
+
+/**
+ * A **swiss** event's results (the swiss ADR): **one complete table over the whole field**,
+ * four entrants deep, with `entry-1` on top and crowned.
+ *
+ * No pools, which is the whole shape: a swiss ranks everybody against everybody. The ranks
+ * are distinct and the numbers descend with them, so a panel that re-sorted — or a selector
+ * that lost the order — would show a visibly different table. The live state (rounds still
+ * to play) is `buildSwissStandingsResults({ complete: false, champion: null })`.
+ */
+export function buildSwissStandingsResults(
+  overrides: Partial<SwissStandingsResults> = {},
+): SwissStandingsResults {
+  return {
+    kind: 'swiss_standings',
+    rows: [
+      buildStandingRow({
+        entryId: 'entry-1',
+        rank: 1,
+        played: 3,
+        wins: 3,
+        losses: 0,
+        gamesWon: 9,
+        gamesLost: 2,
+        gameDifference: 7,
+      }),
+      buildStandingRow({
+        entryId: 'entry-2',
+        rank: 2,
+        played: 3,
+        wins: 2,
+        losses: 1,
+        gamesWon: 7,
+        gamesLost: 5,
+        gameDifference: 2,
+      }),
+      buildStandingRow({
+        entryId: 'entry-3',
+        rank: 3,
+        played: 3,
+        wins: 1,
+        losses: 2,
+        gamesWon: 5,
+        gamesLost: 7,
+        gameDifference: -2,
+      }),
+      buildStandingRow({
+        entryId: 'entry-4',
+        rank: 4,
+        played: 3,
+        wins: 0,
+        losses: 3,
+        gamesWon: 2,
+        gamesLost: 9,
+        gameDifference: -7,
+      }),
+    ],
+    complete: true,
+    champion: 'entry-1',
+    ...overrides,
+  }
+}
+
+/** A **swiss** event **with results**: the pool-less swiss event `buildSwissEvent` seeds,
+ * played out to a champion. Its entrants (`entry-1`…`entry-8`) include every id the table
+ * names, so every row joins to a username. */
+export function buildSwissStandingsEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildSwissEvent({
+    results: buildSwissStandingsResults(),
     ...overrides,
   })
 }

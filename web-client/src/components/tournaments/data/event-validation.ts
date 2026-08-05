@@ -22,7 +22,10 @@
 //   |               | whole cents                           | in whole cents              |
 //   | `qualifiers   | `QualifiersPerPool`: `ge=1`, `le=1000`,| required and 1 … 1,000 **for|
 //   |  _per_pool`   | required on the `rr-then-ko` union arm, | `rr-then-ko` only** — the   |
-//   |               | refused outright on the other two       | pair, not the field         |
+//   |               | refused outright on the other three     | pair, not the field         |
+//   | `rounds`      | `SwissRounds`: `ge=1`, `le=32`,       | required and 1 … 32 **for   |
+//   |               | required on the `swiss` union arm,      | `swiss` only** — again the  |
+//   |               | refused outright on the other three     | pair, not the field         |
 //   | `predicates`  | (permissive — see below)              | `predicate-validation.ts`   |
 //
 // ⚠️ **BLANK IS NOT ZERO — AND THE TWO NUMBER FIELDS DISAGREE ABOUT WHICH IS WHICH**
@@ -306,6 +309,58 @@ export const qualifiersPerPoolSchema = z
   // typed is the only thing they can change.
   .max(QUALIFIERS_PER_POOL_MAX, {
     error: `At most ${QUALIFIERS_PER_POOL_MAX.toLocaleString('en-US')} players can advance from each pool.`,
+  })
+
+/** The floor on **R** — the server's `SwissRounds = Annotated[int, Field(ge=1, …)]`,
+ * stated once there and mirrored once here. A swiss of zero rounds plays nothing, and a
+ * negative count is not a count. */
+export const SWISS_ROUNDS_MIN = 1
+
+/** The ceiling on **R** — the server's `MAX_SWISS_ROUNDS`, the same number, stated in both
+ * layers on purpose.
+ *
+ * The same kind of bound as `QUALIFIERS_PER_POOL_MAX`, and for the same reason: an
+ * `Integer` column behind an unbounded box is a **500** reported to the director as
+ * "something went wrong on our end", which is false — they typed a number. 32 is a bound
+ * with a reason: the largest field this API will hold (512) is conventionally paired out in
+ * nine rounds (`ceil(log2 n)`), so 32 is far above any event a table-tennis director will
+ * run and far below the column's 2,147,483,647.
+ *
+ * It is **not** the same kind of bound as the server's entrant-dependent one (`R <= N - 1`,
+ * because nobody has more than `N - 1` distinct opponents). That one moves with the field
+ * and is refused at the **cut** as a degenerate draw — a configuration that was legal when
+ * it was written must not become unwritable when a player withdraws — so it is deliberately
+ * NOT mirrored here. The cut's own refusal says which number to change, in the server's
+ * words (`drawRefusalNotice`, `data/draw`). */
+export const SWISS_ROUNDS_MAX = 32
+
+/**
+ * **R** — how many rounds a `swiss` event plays (ADR "swiss pre-cuts every round and pairs
+ * each one on advance").
+ *
+ * NOT `.nullable()`, exactly like `qualifiersPerPoolSchema` and for the identical reason: a
+ * blank round count on a swiss event is **missing**, not a state. The server's `swiss` arm
+ * requires the field with no default precisely because there is no defensible number to
+ * assume — `ceil(log2 n)` is the convention, and a derived default would move as entrants
+ * arrived, changing the length of a day the director has already booked a venue for. So
+ * `null` here is the *required* error and not a value to coalesce.
+ *
+ * It is applied **only when the draw type is `swiss`** — see `eventSchema`
+ * (`../tournament-detail-page/event-form`), which runs this parser from the object-level
+ * refinement rather than inlining it as a field rule. The bound belongs to the
+ * `(draw_type, R)` pair, exactly as it does on the server's tagged union, and a field rule
+ * that fired regardless would put a red under a control that is not on screen.
+ */
+export const swissRoundsSchema = z
+  .number({ error: 'Say how many rounds this event plays.' })
+  .int({ error: 'The number of rounds must be a whole number.' })
+  .min(SWISS_ROUNDS_MIN, {
+    error: `A swiss event plays at least ${SWISS_ROUNDS_MIN} round.`,
+  })
+  // The floor's sentence, turned over — one bound, two directions, one voice. Stated as a
+  // number the director can act on, not as "invalid".
+  .max(SWISS_ROUNDS_MAX, {
+    error: `A swiss event plays at most ${SWISS_ROUNDS_MAX} rounds.`,
   })
 
 /** The editor's four tabs, of which three can hold something invalid (Match settings
