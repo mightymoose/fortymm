@@ -61,6 +61,13 @@ env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/mightymoose/fortymm-api
   WEB_IMAGE: ghcr.io/mightymoose/fortymm-web-client
+  # `helm push` appends the chart name, so the two charts land at
+  # `${CHART_REPO}/fortymm-uat` and `${CHART_REPO}/observability`. Named once
+  # here because the step summaries advertise a pull command a human copies and
+  # runs -- if the summary and the push target can drift apart, the copyable
+  # line is the one that gets it wrong.
+  CHART_REPO: ghcr.io/mightymoose/fortymm/charts
+  HELM_VERSION: v4.2.2
   # UAT's k3d cluster runs on the operator's own machine, not on a runner, and
   # this repo neither pins nor can check that machine's architecture -- an
   # amd64-only image would either fail to run there or run under emulation,
@@ -75,6 +82,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       short-sha: ${{ steps.sha.outputs.short-sha }}
+      # The chart version, derived here so it has exactly one spelling. Both
+      # chart jobs publish under it, `deploy/CLAUDE.md` documents it, and an
+      # outside puller passes it to `--version` -- so it is the one string
+      # everything downstream must agree on.
+      chart-version: ${{ steps.sha.outputs.chart-version }}
     steps:
       - name: Refuse to publish from a non-main ref
         run: |
@@ -102,6 +114,18 @@ jobs:
           set -euo pipefail
           short="${GITHUB_SHA::12}"
           echo "short-sha=${short}" >> "$GITHUB_OUTPUT"
+
+          # The `sha` prefix is LOAD-BEARING, not decoration. Helm validates a
+          # chart version as SemVer, and SemVer forbids a leading zero in a
+          # NUMERIC pre-release identifier -- so a bare `0.1.0-${short}` is
+          # rejected outright whenever the truncated SHA happens to be all
+          # digits: `helm package --version 0.1.0-000123456789` fails with
+          # "version segment starts with 0". That is roughly one commit in
+          # three thousand, failing in CI on a commit that is otherwise
+          # perfectly good. Gluing `sha` to the front makes the identifier
+          # alphanumeric, and therefore always legal, whatever the SHA is.
+          echo "chart-version=0.1.0-sha${short}" >> "$GITHUB_OUTPUT"
+
           echo "Publishing \`${GITHUB_SHA}\` as \`:${short}\` (and moving \`:main\`)." >> "$GITHUB_STEP_SUMMARY"
 
   api:
@@ -226,18 +250,13 @@ jobs:
       # pin to mirror -- this is the version the packaging was rehearsed on.
       - uses: azure/setup-helm@v4
         with:
-          version: v4.2.2
+          version: ${{ env.HELM_VERSION }}
 
       - name: Package and push the stack chart
         env:
-          # `sha` glued to the front is LOAD-BEARING, not decoration. SemVer
-          # forbids a leading zero in a *numeric* pre-release identifier, so the
-          # tidier-looking `0.1.0-<sha>` is rejected outright whenever a commit's
-          # 12-char truncation happens to be all digits starting with 0 (roughly
-          # one commit in 3000) -- failing in CI, at publish time, on a commit
-          # that is otherwise perfectly good. The `sha` prefix makes the
-          # identifier alphanumeric and therefore always legal. Do not tidy.
-          CHART_VERSION: 0.1.0-sha${{ needs.tag.outputs.short-sha }}
+          # Derived once, by the `tag` job. The `sha` prefix in it is
+          # load-bearing -- see the comment there.
+          CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
           # Chart.yaml says `appVersion: "uat"`, which is not a version of
           # anything. Stamp the commit instead -- at package time, so no commit
           # has to bump a chart file and the version cannot drift from the
@@ -304,13 +323,13 @@ jobs:
           # version, so exactly one tag exists per commit -- charts get NO moving
           # `main` tag (a second tag would mean packaging twice or reaching for
           # `oras`, and nothing would consume it).
-          helm push "$chart" "oci://${REGISTRY}/mightymoose/fortymm/charts"
+          helm push "$chart" "oci://${CHART_REPO}"
 
           {
-            echo "Published \`${CHART_VERSION}\` to \`${REGISTRY}/mightymoose/fortymm/charts\`."
+            echo "Published \`${CHART_VERSION}\` to \`${CHART_REPO}\`."
             echo ""
             echo "    helm upgrade --install fortymm-uat \\"
-            echo "      oci://${REGISTRY}/mightymoose/fortymm/charts/fortymm-uat --version ${CHART_VERSION}"
+            echo "      oci://${CHART_REPO}/fortymm-uat --version ${CHART_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   observability:
@@ -333,15 +352,13 @@ jobs:
       # below asserts against that layout.
       - uses: azure/setup-helm@v4
         with:
-          version: v4.2.2
+          version: ${{ env.HELM_VERSION }}
 
       - name: Package and push the observability chart
         env:
-          # `sha` glued to the front is LOAD-BEARING -- see the identical
-          # comment on the `chart` job. SemVer forbids a leading zero in a
-          # numeric pre-release identifier, so `0.1.0-<sha>` is rejected
-          # whenever the 12-char truncation is all digits starting with 0.
-          CHART_VERSION: 0.1.0-sha${{ needs.tag.outputs.short-sha }}
+          # Derived once, by the `tag` job. The `sha` prefix in it is
+          # load-bearing -- see the comment there.
+          CHART_VERSION: ${{ needs.tag.outputs.chart-version }}
           # Chart.yaml says `appVersion: "uat"`, which is not a version of
           # anything. Stamp the commit at package time instead, so no commit has
           # to bump a chart file.
@@ -360,7 +377,6 @@ jobs:
           # here, and swallowing a real failure would only relocate the error.
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo update prometheus-community grafana
 
           # `build`, NEVER `update`. `helm dependency build` resolves from the
           # committed `Chart.lock`, so the published chart vendors exactly the
@@ -368,7 +384,12 @@ jobs:
           # re-resolves against the upstream repositories and would silently
           # pull whatever they publish next -- turning a tagged, immutable chart
           # into something whose contents depend on the day CI ran.
-          helm dependency build deploy/observability
+          #
+          # `--skip-refresh` because `helm repo add` above already downloaded
+          # both indexes seconds ago (~10 MB of them). Without it `build`
+          # re-fetches both, and there is nothing a fresh index could change:
+          # `Chart.lock` pins exact versions, so resolution is identical.
+          helm dependency build deploy/observability --skip-refresh
 
           mkdir -p dist/charts
           helm package deploy/observability \
@@ -402,11 +423,11 @@ jobs:
           # `helm push` appends the chart name, so this lands at
           # <repo>/charts/observability. As with the stack chart, helm derives
           # the OCI tag from the chart version and there is NO moving `main` tag.
-          helm push "$chart" "oci://${REGISTRY}/mightymoose/fortymm/charts"
+          helm push "$chart" "oci://${CHART_REPO}"
 
           {
-            echo "Published \`observability-${CHART_VERSION}\` to \`${REGISTRY}/mightymoose/fortymm/charts\`."
+            echo "Published \`observability-${CHART_VERSION}\` to \`${CHART_REPO}\`."
             echo ""
             echo "    helm upgrade --install observability \\"
-            echo "      oci://${REGISTRY}/mightymoose/fortymm/charts/observability --version ${CHART_VERSION}"
+            echo "      oci://${CHART_REPO}/observability --version ${CHART_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"

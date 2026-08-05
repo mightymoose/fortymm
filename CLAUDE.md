@@ -125,7 +125,7 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 | QA | up: `scripts/qa-up.sh [id]` · **down: `scripts/qa-down.sh [id]`** | :8085 | captured in **Mailpit** :8087 — never sends real mail |
 | UAT | `mise run redeploy-uat` — Helm + **k3d**, *not* compose, chart at `deploy/uat/` | :8084, `uat.fortymm.com`, and `https://fortymm-uat.<tailnet>.ts.net` | **real Postmark** — lands in real inboxes |
 
-**CI publishes both Helm charts to GHCR**, alongside the api and web images. Every push to `main` pushes `ghcr.io/mightymoose/fortymm/charts/{fortymm-uat,observability}`, versioned `0.1.0-sha<12-char sha>`, with the stack chart's image digests baked into its values. See `deploy/CLAUDE.md` for the version scheme, the pull command, and why the `sha` prefix cannot be tidied away.
+**CI publishes both Helm charts to GHCR**, alongside the api and web images, so a deploy needs `helm` and no checkout. See `deploy/CLAUDE.md` for the registry paths, the version scheme, the pull command, and why the stack chart carries its own image digests.
 
 **Always reap a QA stack once its branch merges** (`land-the-plane` Step 6). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
 

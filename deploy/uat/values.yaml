@@ -7,9 +7,13 @@
 # longer builds its own. The package names are NOT the repo's internal
 # `fortymm/{api,web}` — they are what the workflow pushes.
 #
-# `digest` is empty here and filled in at deploy time
-# (`--set images.api.digest=sha256:…` from scripts/redeploy-uat.sh), which is
-# what a real deploy always does. Naming the manifest digest rather than the
+# `digest` is empty in the repo and filled in by CI when the chart is
+# PACKAGED (.github/workflows/publish.yml), from the digests the image jobs
+# report for that commit. So in a chart pulled from
+# ghcr.io/mightymoose/fortymm/charts these two fields are already populated,
+# and the chart version alone names a complete, coherent stack — you do not
+# pass image digests to install it. Only a chart rendered straight from a
+# checkout sees them empty. Naming the manifest digest rather than the
 # tag makes "every replica runs the same code" structural instead of
 # conventional: a tag can be moved or resolved differently by two nodes, a
 # digest cannot. The blank-white-page incident in deploy/CLAUDE.md is what
@@ -19,7 +23,9 @@
 # The tag is only the fallback for rendering the chart without a deploy
 # (`helm template deploy/uat`), so it names the moving `:main` tag the same
 # workflow publishes — something that actually exists and is pullable, rather
-# than a label no registry would answer for.
+# than a label no registry would answer for. That fallback is why CI reads the
+# packaged chart back and refuses to push unless both digests are in it: an
+# empty digest is not malformed here, it just quietly renders a moving tag.
 images:
   api:
     repository: ghcr.io/mightymoose/fortymm-api
