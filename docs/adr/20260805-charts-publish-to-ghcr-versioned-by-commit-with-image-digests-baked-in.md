@@ -69,8 +69,13 @@ apart because they were welded together at publish time. This does not replace
 deploy and needs no registry at all.
 
 The cost is that the published chart is **not byte-identical to `deploy/fortymm/`
-in the repo** — CI rewrites two values before packaging. Anyone comparing the
-two should expect exactly that difference and nothing else.
+in the repo**. CI rewrites the two digest values before packaging, and
+`helm package` then stamps the version and appVersion and reserializes
+`Chart.yaml` — which reorders keys, drops comments and reflows the description.
+So a diff between the repo and a published chart is expected to be noisy, and
+"the values differ" is the wrong thing to read it for. The claim worth checking
+is narrower: the published `images.{api,web}.digest` are the digests that
+commit's images actually published.
 
 ## Publishing is one job in one workflow
 

@@ -153,6 +153,105 @@ deploy it to, its Google-console restrictions must cover **all** of them
 name, plus any later prod origin) — a restriction list that misses one origin
 breaks the map only on that origin.
 
+## Published charts (GHCR)
+
+The same `.github/workflows/publish.yml` packages both Helm charts and pushes
+them to GHCR as OCI artifacts, so a deploy needs `helm` and no checkout:
+
+- `ghcr.io/mightymoose/fortymm/charts/fortymm-uat`, the **stack chart**, packaged
+  from `deploy/uat/`
+- `ghcr.io/mightymoose/fortymm/charts/observability`, the **observability
+  chart**, packaged from `deploy/observability/`
+
+`helm push` appends the chart name to the repository path, so each path ends in
+that chart's `name:` from `Chart.yaml`. A later change renames the stack chart
+to `fortymm`. If you read this after that rename lands, the path is
+`.../charts/fortymm`.
+
+**The chart version is `0.1.0-sha<12-char sha>`, and the `sha` prefix is
+load-bearing.** Helm validates the version as SemVer, and the bare 12-char
+truncation the images use as a tag is not a version at all. `helm package
+--version b17a29fa1234` fails with `Error: invalid semantic version`. So the
+SHA has to be encoded into a SemVer string, and the obvious encoding carries
+its own trap. SemVer forbids a leading zero in a *numeric* pre-release
+identifier, so the tidier-looking
+`0.1.0-<sha>` is rejected whenever the truncation is all digits starting with
+0. `helm package --version 0.1.0-000123456789` fails with
+`Error: version segment starts with 0`. That is roughly one commit in three
+thousand, and it fails **in CI, at publish time, on a commit that is otherwise
+perfectly good**. Gluing `sha` to the front makes the identifier alphanumeric
+and therefore always legal. **Do not tidy the prefix away.**
+
+`Chart.yaml` keeps `version: 0.1.0` in the repo. CI stamps the real version and
+`appVersion` at package time, so no commit has to bump a chart file and the
+version cannot drift from the commit it was built from.
+
+**The stack chart carries its own image digests.** CI rewrites
+`images.api.digest` and `images.web.digest` into the chart's values before
+packaging, using the digests the two image jobs report from their own push
+steps. A published chart is therefore a complete description of one commit's
+stack. The chart version is the **single coordinate** an install or a rollback
+names. Chart and images cannot drift apart, because CI welded them together at
+publish time:
+
+```bash
+helm upgrade --install fortymm-uat \
+  oci://ghcr.io/mightymoose/fortymm/charts/fortymm-uat \
+  --version "0.1.0-sha$(git rev-parse HEAD | cut -c1-12)" \
+  --namespace fortymm-uat --create-namespace
+```
+
+Rollback is the same command naming an older version, and the older chart
+brings its matching image digests with it. Secrets stay out of band: the
+`fortymm-uat-env` and `-apns` Secrets come from the operator's `.env`, and no
+published artifact can carry them. `mise run redeploy-uat` still deploys the
+chart directory at `deploy/uat/` today. A later change switches the script to
+the published chart.
+
+**The published chart is not byte-identical to `deploy/uat/` in the repo.**
+CI rewrites the two digest values before packaging. `helm package` then stamps
+`version` and `appVersion` into the packaged `Chart.yaml` and reserializes it,
+so key order, comments and line wrapping all change too. Expect those
+differences when you diff the published chart against the repo. CI reads the
+digests back out of the packaged file and refuses to push unless it finds two,
+because an *empty* digest is not malformed to the chart. The chart treats it as
+the documented render fallback and renders the moving `:main` tag, which is the
+blank-white-page failure mode below.
+
+**Charts get no moving `main` tag.** Helm derives the OCI tag from the chart
+version, so exactly one tag exists per commit. A second tag would mean
+packaging twice or reaching for `oras`, and nothing would consume it: an
+outside deployer wants a pinned version, not a moving one. The images keep
+`:main` only because `values.yaml` uses it as the render fallback.
+
+**No credentials needed to pull.** A package pushed by `GITHUB_TOKEN` with
+`packages: write` is linked to the publishing repository and inherits its
+visibility, and this repo is public. That mechanism was verified for the two
+images (see the visibility subsection above), so the charts are public by the
+same route. No chart carries `imagePullSecrets`.
+
+**The observability chart resolves dependencies with `helm dependency build`,
+never `update`.** `deploy/observability/charts/` is **gitignored** and only
+`Chart.lock` is committed, so a runner starts with no subcharts on disk. CI
+therefore has to `helm repo add` both `prometheus-community` and `grafana`
+first, or the next command cannot find the repositories. `build` resolves from
+the committed `Chart.lock`, so the published chart vendors exactly the subchart
+versions this repo has run in UAT. `update` re-resolves against the upstream
+repositories and could pull newer than the lock, which would make a tagged,
+immutable chart depend on the day CI ran. The published package carries the
+expanded subcharts inside it, and that is what takes the upstream fetch off the
+**deploy** path. CI checks the packaged tarball for all three subchart
+`Chart.yaml` files and refuses to push if any is missing.
+
+**The observability chart does not wait on the image builds.** It bakes no
+fortymm digests, so it needs only the tag job. The stack chart `needs` both
+image jobs for their digests, so it inherits their **~25-minute critical
+path**.
+
+**The chart jobs cannot be proven from a pull request.** `publish.yml` runs on
+push to `main` only, so no chart package can exist until the change merges. The
+first real evidence is the run after merge.
+
 ## Topology
 
 **UAT runs on Kubernetes (Helm + k3d).** UAT is the one prod-like stack that does *not* use docker-compose. `scripts/redeploy-uat.sh` (a.k.a. `mise run redeploy-uat`) **builds nothing** — it deploys the images CI already published for the commit being deployed. It refuses any branch but `main` (or the legacy `uat-deploy` worktree), merges `origin/main` into it first so the deploy names the newest main, provisions a single-node **k3d** cluster `fortymm-uat`, resolves each package's `:<12-char sha>` tag to its **manifest-list digest** over the GHCR v2 API, syncs Secrets from the gitignored `.env` + `secrets/*.p8`, and `helm upgrade --install`s the chart at **`deploy/uat/`** with `--set images.api.digest=sha256:… --set images.web.digest=sha256:…` (`--wait --timeout 5m`). The chart reproduces the old compose topology (postgres, redis, api, worker, web-client, routing nginx); migrations + seeds run as a `post-install,post-upgrade` Helm hook **Job** (not in the api boot command). Routing nginx is a **NodePort** (30084); k3d maps host **:8084** → that NodePort, so host Caddy (still pointing at `127.0.0.1:8084`) fronts uat.fortymm.com unchanged. Needs `helm` + `k3d` (`brew install helm k3d`). Inspect with `KUBECONFIG=$(k3d kubeconfig write fortymm-uat) kubectl get pods -n fortymm-uat`.
