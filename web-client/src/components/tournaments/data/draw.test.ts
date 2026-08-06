@@ -78,11 +78,15 @@ describe('unpooledShape', () => {
   )
 
   /** A round-robin fixture with no pool is a payload the server cannot send — it names a
-   * pool the event does not list. `drawState` deliberately does not DROP it, and the
-   * bracket is the existing "show it anyway" fallback. Pinned so the arm is a decision
-   * somebody made rather than a default nobody noticed. */
-  it('keeps a round-robin’s orphaned fixtures on the same fallback they had', () => {
-    expect(unpooledShape('round-robin')).toBe('bracket')
+   * pool the event does not list. `drawState` deliberately does not DROP it, so it must
+   * have a shape; the shape it gets says only what is true of it, which is that no format
+   * view can place it.
+   *
+   * It answered `'bracket'` before, and that was the same lie the swiss routing fix exists
+   * to stop: `Bracket` names its rounds backwards from the last round present, so one stray
+   * round-robin fixture read as the "Final" of a knockout the event never had. */
+  it('gives a round-robin’s orphaned fixtures their OWN shape, not the bracket', () => {
+    expect(unpooledShape('round-robin')).toBe('orphaned')
   })
 
   /** Every draw type this client knows has an answer, and the `switch` has no catch-all —
@@ -92,7 +96,9 @@ describe('unpooledShape', () => {
    * reaches this test without anybody remembering to. */
   it('answers for every draw type in the vocabulary', () => {
     for (const drawType of DRAW_TYPES) {
-      expect(['bracket', 'swiss-rounds']).toContain(unpooledShape(drawType))
+      expect(['bracket', 'swiss-rounds', 'orphaned']).toContain(
+        unpooledShape(drawType),
+      )
     }
   })
 })

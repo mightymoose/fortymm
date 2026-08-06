@@ -136,6 +136,10 @@ describe('DrawPanel', () => {
       expect(page.getPoolLines('p-a')).toEqual(['player.1 vs TBD'])
     })
 
+    // The rule that must not break, whatever the routing does: a fixture is never dropped.
+    // This event is a ROUND-ROBIN, so the fixture reaches the un-pooled group with no format
+    // view that can place it — it is shown as itself (`'orphaned'`), which is the claim the
+    // next describe block discriminates.
     it('keeps a fixture that belongs to no pool, rather than dropping it', () => {
       const withKo = buildDrawnEvent({
         fixtures: [
@@ -152,7 +156,7 @@ describe('DrawPanel', () => {
 
       page.render({ event: withKo })
 
-      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.queryOrphaned()).toBeInTheDocument()
       expect(page.getLineTexts()).toEqual(['player.1 vs TBD'])
     })
   })
@@ -214,6 +218,43 @@ describe('DrawPanel', () => {
         'player.3 vs player.2',
         'TBD vs TBD',
       ])
+    })
+
+    /**
+     * A ROUND-ROBIN fixture naming a pool the event does not list. It cannot be dropped
+     * (that rule is pinned above), and it cannot be a bracket either: `Bracket` names its
+     * rounds backwards from the last round present, so this one fixture rendered inside a
+     * section headed **"Bracket"** with its round labelled **"Final"** — a knockout this
+     * event does not have, a final nobody played. The arm answered `'bracket'` and an
+     * exhaustive switch cannot see that a shape is a lie, so nothing was red.
+     *
+     * The assertion is three-sided on purpose: the fixture IS shown, it is NOT in the
+     * bracket, and the words on screen are the neutral ones.
+     */
+    it('shows a ROUND-ROBIN’s unplaceable fixture as itself — not as a bracket final', () => {
+      const strayPool = buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-orphan-1',
+            // A pool id the event's `pools` does not list — the only way a round-robin
+            // fixture reaches the un-pooled group at all.
+            poolId: 'p-gone',
+            round: 1,
+            position: 1,
+            entryAId: 'entry-1',
+            entryBId: 'entry-4',
+          }),
+        ],
+      })
+
+      page.render({ event: strayPool })
+
+      expect(page.getOrphaned()).toBeInTheDocument()
+      expect(page.getLineTexts()).toEqual(['player.1 vs player.4'])
+      // Not routed through knockout arithmetic: no bracket block, and the round keeps its
+      // own number instead of being read back from a final.
+      expect(page.queryUnpooled()).toBeNull()
+      expect(page.getRoundNames()).toEqual(['Round 1 fixtures in other fixtures'])
     })
 
     it('still gives an RR-THEN-KO knockout stage the bracket, with its pools above it', () => {

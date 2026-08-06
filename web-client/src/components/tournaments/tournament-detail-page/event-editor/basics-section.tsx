@@ -89,6 +89,86 @@ export interface BasicsSectionProps {
 const numericValue = (n: number | null): number | null =>
   n === null || Number.isNaN(n) ? null : n
 
+/**
+ * One **draw setting** the director types a number into — `rr-then-ko`'s qualifiers per
+ * pool (K) and swiss's round count (R) are the same row, twice.
+ *
+ * They are the same row because they are the same *kind of fact*: a number the chosen draw
+ * type asks for, that the planner deals the fixtures by, and that the server freezes the
+ * moment a draw exists. Written out twice, they were two places to get the same freeze
+ * wiring right — and this tab has already got that wiring wrong once: its draw-type select
+ * carried the freeze while describing nothing. So the mechanics live here, once:
+ *
+ * - **The freeze is the draw type's** (`drawTypeFreeze`, `data/draw`), because on the server
+ *   it is the same guard: `_enforce_draw_settings_frozen` compares the whole configuration,
+ *   since a draw cut for `P × K` (or for R rounds) is exactly as contradicted by a changed
+ *   number as by a changed type. Frozen means a **disabled box with the reason beneath it**,
+ *   and the box POINTS at that reason (`aria-describedby`) — a disabled control is not
+ *   focusable and carries no tooltip, so the description is the only channel it has left.
+ * - **The error outranks the freeze, which outranks the advisory hint.** One slot, three
+ *   things that could fill it, in the order the director needs them.
+ * - **`min`/`max` are advisory and always were.** An `<input type=number max>` steers a
+ *   spinner and stops nothing that is typed or pasted; the bound that BINDS is the
+ *   resolver's schema. Both are stated from the same constants so the browser control and
+ *   the rule cannot say different numbers (#1231 QA: an unbounded box sent `2147483648`,
+ *   which overflowed the `Integer` column and 500'd).
+ * - **Blank stays blank, and submits `null`.** Never `Number('')`, which is `0` — a bracket
+ *   nobody advances into, or a swiss that plays nothing. A blank here is a MISSING answer to
+ *   a question this draw type does ask, which is what the resolver then says in red.
+ */
+const DrawSettingField = ({
+  label,
+  value,
+  min,
+  max,
+  hint,
+  error,
+  freeze,
+  readOnly,
+  onChange,
+}: {
+  label: string
+  /** The setting's current value, or `null` for an unanswered box. */
+  value: number | null
+  /** Advisory bounds for the spinner, from the same constants the resolver binds on. */
+  min: number
+  max: number
+  /** What the number means, in the director's words — shown when there is neither an error
+   * nor a freeze to say instead. */
+  hint: string
+  /** The inline red, when the resolver (or the server) rejected this field. */
+  error?: string
+  /** Whether the event's draw type — and so this setting — is still editable. */
+  freeze: EditFreeze
+  readOnly: boolean
+  onChange: (next: number | null) => void
+}) => (
+  <Field
+    label={label}
+    required
+    readOnly={readOnly}
+    value={numericValue(value)}
+    error={!!error}
+    hint={error ?? (freeze.kind === 'frozen' ? freeze.reason : hint)}
+  >
+    {(id, hintId) => (
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        aria-invalid={!!error}
+        aria-describedby={hintId}
+        disabled={freeze.kind === 'frozen'}
+        value={value ?? ''}
+        onChange={(e) =>
+          onChange(e.target.value === '' ? null : Number(e.target.value))
+        }
+      />
+    )}
+  </Field>
+)
+
 /** The event editor's "Basics" tab: name, format, draw type, caps, and the
  * time-slot window. Each row declares its control *and* the value it holds;
  * `readOnly` is what picks between them, so a viewer's rows line up with an
@@ -222,54 +302,20 @@ export const BasicsSection = ({
             silently dropped value). A control that stayed on screen would invite a
             director to answer a question whose answer their event cannot hold.
 
-            It rides the SAME freeze as the draw type above, because on the server it is
-            the same guard: `_enforce_draw_settings_frozen` compares the whole
-            configuration, since a bracket cut for `P × K` is exactly as contradicted by
-            a changed K as by a changed type. One freeze, one sentence — and the way out
-            of it (delete the draw, then cut it again) is the same way out. */}
+            The freeze, the advisory bounds and the blank-is-null handling are
+            `DrawSettingField`'s — this row says only what is true of K. */}
         {event.drawType === 'rr-then-ko' && (
-          <Field
+          <DrawSettingField
             label="Qualifiers per pool"
-            required
+            value={event.qualifiersPerPool}
+            min={QUALIFIERS_PER_POOL_MIN}
+            max={QUALIFIERS_PER_POOL_MAX}
+            hint="How many of each pool’s finishers advance to the knockout stage."
+            error={errors.qualifiersPerPool}
+            freeze={drawTypeFreeze}
             readOnly={readOnly}
-            value={numericValue(event.qualifiersPerPool)}
-            error={!!errors.qualifiersPerPool}
-            hint={
-              errors.qualifiersPerPool ??
-              (drawTypeFreeze.kind === 'frozen'
-                ? drawTypeFreeze.reason
-                : 'How many of each pool’s finishers advance to the knockout stage.')
-            }
-          >
-            {(id, hintId) => (
-              <Input
-                id={id}
-                type="number"
-                min={QUALIFIERS_PER_POOL_MIN}
-                // Advisory, exactly like the two `max` attributes below — it steers the
-                // spinner and stops nothing that is typed or pasted. The bound that BINDS
-                // is `qualifiersPerPoolSchema`'s. Both are stated so the browser control
-                // and the resolver agree about the same number (#1231 QA: an unbounded box
-                // sent `2147483648`, which overflowed the `Integer` column and 500'd).
-                max={QUALIFIERS_PER_POOL_MAX}
-                aria-invalid={!!errors.qualifiersPerPool}
-                aria-describedby={hintId}
-                disabled={drawTypeFreeze.kind === 'frozen'}
-                // Hold empty as empty, exactly as the player limit does — but it means
-                // the opposite thing here, and the resolver says so: a blank cap is an
-                // uncapped event, a blank qualifier count is a MISSING answer to a
-                // question this draw type does ask. Never `Number('')`, which is `0`,
-                // which is a bracket nobody advances into.
-                value={event.qualifiersPerPool ?? ''}
-                onChange={(e) =>
-                  set({
-                    qualifiersPerPool:
-                      e.target.value === '' ? null : Number(e.target.value),
-                  })
-                }
-              />
-            )}
-          </Field>
+            onChange={(qualifiersPerPool) => set({ qualifiersPerPool })}
+          />
         )}
         {/* **R**, and only for the one draw type whose round count anybody chooses (ADR
             "swiss pre-cuts every round and pairs each one on advance"). Absent for the
@@ -280,50 +326,20 @@ export const BasicsSection = ({
             refusing the key outright on their arms of the draw-settings union
             (`extra="forbid"` — a 422, not a silently dropped value).
 
-            It rides the SAME freeze as the draw type, because on the server it is the same
-            guard: `_enforce_draw_settings_frozen` compares the whole configuration, and a
-            5-round swiss cut for R=5 is exactly as contradicted by a changed R as by a
-            changed type. One freeze, one sentence, one way out (delete the draw, cut
-            again). */}
+            Everything else about the row — the freeze it rides, its advisory bounds, its
+            blank-is-null handling — is `DrawSettingField`'s, shared with K above. */}
         {event.drawType === 'swiss' && (
-          <Field
+          <DrawSettingField
             label="Rounds"
-            required
+            value={event.rounds}
+            min={SWISS_ROUNDS_MIN}
+            max={SWISS_ROUNDS_MAX}
+            hint="How many rounds every entrant plays. Nobody is eliminated."
+            error={errors.rounds}
+            freeze={drawTypeFreeze}
             readOnly={readOnly}
-            value={numericValue(event.rounds)}
-            error={!!errors.rounds}
-            hint={
-              errors.rounds ??
-              (drawTypeFreeze.kind === 'frozen'
-                ? drawTypeFreeze.reason
-                : 'How many rounds every entrant plays. Nobody is eliminated.')
-            }
-          >
-            {(id, hintId) => (
-              <Input
-                id={id}
-                type="number"
-                min={SWISS_ROUNDS_MIN}
-                // Advisory, exactly like every other `max` on this tab: it steers the
-                // spinner and stops nothing that is typed or pasted. The bound that BINDS is
-                // `swissRoundsSchema`'s. Both are stated from the same constants so the
-                // browser control and the resolver agree about the same number.
-                max={SWISS_ROUNDS_MAX}
-                aria-invalid={!!errors.rounds}
-                aria-describedby={hintId}
-                disabled={drawTypeFreeze.kind === 'frozen'}
-                // Hold empty as empty. A blank round count is a MISSING answer to a question
-                // this draw type does ask — never `Number('')`, which is `0`, which is a
-                // swiss that plays nothing.
-                value={event.rounds ?? ''}
-                onChange={(e) =>
-                  set({
-                    rounds: e.target.value === '' ? null : Number(e.target.value),
-                  })
-                }
-              />
-            )}
-          </Field>
+            onChange={(rounds) => set({ rounds })}
+          />
         )}
       </div>
 

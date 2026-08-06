@@ -3448,12 +3448,12 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
     """``draw_currency_by_event`` of an empty list answers ``{}`` — and asks the
     database nothing at all to do it.
 
-    The batch loader's contract is "two statements for the whole batch, whatever the
-    number of events", and *none* is a number of events: a draft tournament with no
-    events reaches the go-live precondition, and this is the loader it reaches. The
-    short-circuit is the difference between an empty answer and an ``IN ()`` — a
-    predicate that is not merely wasteful but false for every row, and which no version
-    of this function should ever be asked to mean.
+    The batch loader's contract is "at most three statements for the whole batch,
+    whatever the number of events", and *none* is a number of events: a draft
+    tournament with no events reaches the go-live precondition, and this is the loader
+    it reaches. The short-circuit is the difference between an empty answer and an
+    ``IN ()`` — a predicate that is not merely wasteful but false for every row, and
+    which no version of this function should ever be asked to mean.
 
     The statement count is the assertion, not decoration: an implementation that dropped
     the guard would still return ``{}`` (there are no events to key the result by), and
@@ -3464,6 +3464,67 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
 
     assert currency == {}
     assert statements == [], statements
+
+
+def _draw_type_reads(statements: list[str]) -> list[str]:
+    """The statements that read the events' draw types — the third one, by the only
+    column that is unique to it."""
+    return [statement for statement in statements if "draw_type_key" in statement]
+
+
+async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """The draw-type statement is issued for the events that are **cut**, and not at all
+    when none of them is.
+
+    The draw type is read for one purpose —
+    :func:`~app.draws.unseated_entrant_allowance` — which only the ``current``/``stale``
+    arm of the answer reaches. An uncut event never takes that arm (Python evaluates the
+    lookup lazily inside the conditional), so its draw type is a row fetched and
+    discarded. Uncut is not an exotic state either: it is every event of every
+    tournament whose director has not cut a draw yet, and they all reach this loader on
+    the go-live path, under the tournament's row lock.
+
+    Two pins, and the second is why the narrowing cannot be done by asking per event:
+    nothing cut costs **no** statement, and a partially cut batch still costs exactly
+    **one** — the batching this whole function exists for.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = created["id"]
+    first, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Open Singles"
+    )
+    second, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Under 1200"
+    )
+    event_ids = [uuid.UUID(first), uuid.UUID(second)]
+
+    async with counted_statements(engine) as (session, statements):
+        before_any_cut = await draw_currency_by_event(session, event_ids)
+
+    assert before_any_cut == dict.fromkeys(event_ids, DrawCurrency.uncut)
+    assert _draw_type_reads(statements) == [], statements
+    assert len(statements) == 2, statements
+
+    await _cut_the_draw(client, tournament_id, first)
+
+    async with counted_statements(engine) as (session, statements):
+        after_one_cut = await draw_currency_by_event(session, event_ids)
+
+    assert after_one_cut == {
+        event_ids[0]: DrawCurrency.current,
+        event_ids[1]: DrawCurrency.uncut,
+    }
+    assert len(statements) == 3, statements
+    # The expanded ``IN`` renders one bind placeholder per id, so the placeholders are
+    # what the loader asked about: one, the event that is cut, and not the uncut one
+    # sitting beside it in the same batch.
+    (draw_type_read,) = _draw_type_reads(statements)
+    assert draw_type_read.count("::UUID") == 1, draw_type_read
 
 
 # ----- the league a tournament is judged on (ADR-0783) ----------------------

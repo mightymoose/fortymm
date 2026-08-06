@@ -1,63 +1,70 @@
-import { render, screen, within, type Container } from '@/test/utilities'
+import { render, screen, type Container } from '@/test/utilities'
 
+import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
 import { SwissStandingsPanel } from './swiss-standings-panel'
 import {
   buildSwissStandingsPanelProps,
   type SwissStandingsPanelScenario,
 } from './swiss-standings-panel.factory'
 
-const scoped = (container: Container) => ({
-  /** The whole swiss results block, by event id. */
-  getPanel(eventId: string) {
-    return container.getByTestId(`swiss-standings-panel-${eventId}`)
-  },
-  queryPanel(eventId: string) {
-    return container.queryByTestId(`swiss-standings-panel-${eventId}`)
-  },
+/** The accessible name a swiss table carries — the event, since there is no pool to name.
+ * The panel's own wiring, written once. */
+const tableName = (eventName: string) => `Standings for ${eventName}`
 
-  /** The panel's landmark by its accessible name — a `<section>` with `aria-labelledby` is
-   * a `region`, so this only resolves while the heading is still wired to the section. */
-  getRegion() {
-    return container.getByRole('region', { name: 'Standings' })
-  },
+const scoped = (container: Container) => {
+  // The table is the very `StandingsTable` a pool renders, so its readers are
+  // `standingsTablePage`'s — composed, not re-implemented. A second row-slice loop here
+  // would be this file describing a table it does not own.
+  const table = standingsTablePage.within(container)
 
-  /** The champion callout, by event id — shown only once every round is decided. `query…`
-   * because its absence is half of what the tests assert. */
-  queryChampion(eventId: string) {
-    return container.queryByTestId(`swiss-champion-${eventId}`)
-  },
+  return {
+    /** The whole swiss results block, by event id. */
+    getPanel(eventId: string) {
+      return container.getByTestId(`swiss-standings-panel-${eventId}`)
+    },
+    queryPanel(eventId: string) {
+      return container.queryByTestId(`swiss-standings-panel-${eventId}`)
+    },
 
-  /** Every table in the panel, by accessible name. Swiss has **one** — the claim that
-   * distinguishes it from the pooled block, so the count is part of the assertion. */
-  getTableNames() {
-    return container
-      .getAllByRole('table')
-      .map((t: HTMLElement) => t.getAttribute('aria-label') ?? '')
-  },
+    /** The panel's landmark by its accessible name — a `<section>` with `aria-labelledby`
+     * is a `region`, so this only resolves while the heading is still wired to the
+     * section. */
+    getRegion() {
+      return container.getByRole('region', { name: 'Standings' })
+    },
 
-  /** The table's player names, top to bottom (the rendered order). */
-  getRowNames(eventName: string) {
-    return within(container.getByRole('table', { name: `Standings for ${eventName}` }))
-      .getAllByRole('row')
-      .slice(1)
-      .map((row) => (within(row).getAllByRole('cell')[1].textContent ?? '').trim())
-  },
+    /** The champion callout, by event id — shown only once every round is decided. `query…`
+     * because its absence is half of what the tests assert. */
+    queryChampion(eventId: string) {
+      return container.queryByTestId(`swiss-champion-${eventId}`)
+    },
 
-  /** One numeric column of the table, read top to bottom by its **column index** — the same
-   * order the header row declares (`#`, Player, W, L, Diff, GW). */
-  getColumn(eventName: string, index: number) {
-    return within(container.getByRole('table', { name: `Standings for ${eventName}` }))
-      .getAllByRole('row')
-      .slice(1)
-      .map((row) => (within(row).getAllByRole('cell')[index].textContent ?? '').trim())
-  },
+    /** Every table in the panel, by accessible name. Swiss has **one** — the claim that
+     * distinguishes it from the pooled block, so the count is part of the assertion. */
+    getTableNames() {
+      return container
+        .getAllByRole('table')
+        .map((t: HTMLElement) => t.getAttribute('aria-label') ?? '')
+    },
 
-  /** A pool table's test hook, which must NEVER appear here: swiss has no pools, so a
-   * `pool-standings-…` node in this panel would mean a forged pool id reached the DOM. */
-  queryPoolTables() {
-    return container.queryAllByTestId(/^pool-standings-/)
-  },
-})
+    /** The table's player names, top to bottom (the rendered order). */
+    getRowNames(eventName: string) {
+      return table.getColumn(tableName(eventName), PLAYER_COLUMN)
+    },
+
+    /** One numeric column of the table, read top to bottom by its **column index** — the
+     * same order the header row declares (`#`, Player, W, L, Diff, GW). */
+    getColumn(eventName: string, index: number) {
+      return table.getColumn(tableName(eventName), index)
+    },
+
+    /** A pool table's test hook, which must NEVER appear here: swiss has no pools, so a
+     * `pool-standings-…` node in this panel would mean a forged pool id reached the DOM. */
+    queryPoolTables() {
+      return container.queryAllByTestId(/^pool-standings-/)
+    },
+  }
+}
 
 /** Test page-object for `SwissStandingsPanel`. */
 export const swissStandingsPanelPage = {

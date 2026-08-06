@@ -122,12 +122,20 @@ export interface PoolDraw {
  * two and rendered a swiss draw through single-elimination's successor arithmetic — the one
  * thing the ADR says swiss does not have (ADR "swiss pre-cuts every round and pairs each
  * one on advance": "swiss has no successor arithmetic").
+ *
+ * A third answer exists because the first two are both *claims about a format*, and one case
+ * can make neither: a round-robin fixture naming a pool the event does not list. It is shown
+ * — nothing is ever dropped — as `'orphaned'`, which says only that.
  */
 export type UnpooledShape =
   /** Rounds-as-columns, named back from the final (`Bracket`). */
   | 'bracket'
   /** A flat list of rounds, the unpaired ones announced as forthcoming (`SwissRounds`). */
   | 'swiss-rounds'
+  /** Nothing this event's format can place: a plain list of the fixtures, under a neutral
+   * heading (`RoundList`). The honest shape for a fixture the format view has no home for —
+   * shown, because a fixture is never dropped, and named nothing it is not. */
+  | 'orphaned'
 
 /**
  * Which view an event's un-pooled fixtures get — **exhaustive over `DrawType`, with no
@@ -150,9 +158,15 @@ export function unpooledShape(drawType: DrawType): UnpooledShape {
       // A round-robin draw has no un-pooled fixtures the server can send: every fixture is
       // dealt into a pool. One reaching here names a pool the event does not list, which is
       // a payload that cannot legitimately arise — and `drawState` deliberately does not
-      // DROP it (see below). `'bracket'` is that existing "show it anyway" fallback and is
-      // preserved deliberately; it is not a claim that a round-robin has a bracket.
-      return 'bracket'
+      // DROP it (see below). It is shown, as itself: `'orphaned'`, a plain list under a
+      // neutral heading.
+      //
+      // It used to answer `'bracket'`, which was the same class of lie the swiss routing
+      // fix exists to stop, aimed at round-robin instead. `Bracket` names its rounds
+      // backwards from the last round present, so a single stray fixture rendered inside a
+      // section headed "Bracket" with its round labelled "Final" — a knockout this event
+      // does not have, a final nobody played.
+      return 'orphaned'
     case 'swiss':
       // Pool-less by design, and NOT a bracket: nobody is eliminated, `position` is a
       // pairing rank rather than a topology, and rounds past the first are cut with both

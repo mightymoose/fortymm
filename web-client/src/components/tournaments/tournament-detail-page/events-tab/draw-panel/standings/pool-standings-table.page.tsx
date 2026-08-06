@@ -1,49 +1,42 @@
 import { interactiveElementsIn } from '@/test/read-only'
-import { render, screen, within, type Container } from '@/test/utilities'
+import { render, screen, type Container } from '@/test/utilities'
 
 import { PoolStandingsTable, type PoolStandingsTableProps } from './pool-standings-table'
 import { buildPoolStandingsTableProps } from './pool-standings-table.factory'
+import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
+
+/** The accessible name a pool's table carries — the wrapper's own wiring, written once. */
+const tableName = (poolName: string) => `Standings for ${poolName}`
 
 const scoped = (container: Container) => {
-  /** The pool's table, by the pool name in its accessible label — a draw shows several
-   * side by side, so every "in *this* pool" assertion narrows to it. */
-  const table = (poolName: string) =>
-    container.getByRole('table', { name: `Standings for ${poolName}` })
+  // The table body IS `StandingsTable`'s, so its readers are `standingsTablePage`'s. Composed
+  // rather than re-implemented: a row-slice-and-cell-index loop of our own would be a second
+  // description of a table this file does not own, green while the shared one changed.
+  const table = standingsTablePage.within(container)
 
   return {
-    getTable: table,
+    /** The pool's table, by the pool name in its accessible label — a draw shows several
+     * side by side, so every "in *this* pool" assertion narrows to it. */
+    getTable(poolName: string) {
+      return table.getTable(tableName(poolName))
+    },
 
     /** The pool's whole section, by pool id — the scope the inert sweep narrows to. */
     getSection(poolId: string) {
       return container.getByTestId(`pool-standings-${poolId}`)
     },
 
-    /** One column header, by its ACCESSIBLE name — which is the FULL word a screen reader
-     * hears (`Wins`), not the terse glyph on screen (`W`): the glyph span is
-     * `aria-hidden`, so it is excluded from the accessible name, and the sr-only word is
-     * what remains. `getByRole` here is the whole proof that the two channels are wired
-     * right — it would not find a header whose only text was the bare glyph. */
-    getColumnHeader(poolName: string, name: string) {
-      return within(table(poolName)).getByRole('columnheader', { name })
+    /** The section as a **landmark named by its heading**: a `<section>` with
+     * `aria-labelledby` is a `region`, so this resolves only while the `<h4>` naming the
+     * pool is still wired to the section around it. */
+    getRegion(poolName: string) {
+      return container.getByRole('region', { name: poolName })
     },
 
-    /** The player names, top to bottom — the ORDER the table renders, which must be the
-     * server's order untouched (ADR-0788). The Player cell is the second cell of each body
-     * row. */
+    /** The player names, top to bottom — the shared table's Player column, read through the
+     * pool's accessible name. The ORDER is the claim: the server's, untouched (ADR-0788). */
     getRowNames(poolName: string) {
-      return within(table(poolName))
-        .getAllByRole('row')
-        // Drop the header row — `getAllByRole('row')` includes it.
-        .slice(1)
-        .map((row) => (within(row).getAllByRole('cell')[1].textContent ?? '').trim())
-    },
-
-    /** One row's cells as text, left to right (`['1', 'player.1', '2', '0', '+3', '4']`) —
-     * for asserting the numbers, and the sign on the game difference. */
-    getRowCells(entryId: string) {
-      return within(container.getByTestId(`standing-row-${entryId}`))
-        .getAllByRole('cell')
-        .map((cell) => (cell.textContent ?? '').trim())
+      return table.getColumn(tableName(poolName), PLAYER_COLUMN)
     },
 
     /** Everything interactive in the pool section — must be empty. Standings are a read

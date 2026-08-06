@@ -29,6 +29,34 @@ describe('StandingsTable', () => {
     ])
   })
 
+  /**
+   * The same six headers again, read the OTHER way: by the **accessible name**, which is the
+   * full word a screen reader hears. It is a different claim from the glyphs above, and only
+   * this one can make it — `getHeaderGlyphs` reads `textContent`, which concatenates both
+   * spans and ignores `aria-hidden` entirely, so it stays green on a header that reads out
+   * as "W Wins".
+   *
+   * `getByRole` here is the whole proof that the two channels are wired right: it would not
+   * find a header whose only text was the bare glyph, and it would not find `Wins` if the
+   * glyph span had lost its `aria-hidden`.
+   */
+  it('says each column’s FULL WORD to a screen reader, and only that word', () => {
+    standingsTablePage.render()
+
+    for (const name of [
+      'Rank',
+      'Player',
+      'Wins',
+      'Losses',
+      'Game difference',
+      'Games won',
+    ]) {
+      expect(
+        standingsTablePage.getColumnHeader('Standings for Pool A', name),
+      ).toBeInTheDocument()
+    }
+  })
+
   it('renders the rows in the order it is handed, with the server’s figures', () => {
     standingsTablePage.render()
 

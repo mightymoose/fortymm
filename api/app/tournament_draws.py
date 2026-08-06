@@ -442,14 +442,21 @@ async def draw_currency_by_event(
     fiction, and it would be the fiction that carried an unplayable event into
     ``live``.
 
-    THREE statements for the whole batch, whatever the number of events (none at all
-    when there are none), for the same reason every other loader here is batched:
-    this runs on the go-live path with the tournament's row lock held, and a
+    AT MOST THREE statements for the whole batch, whatever the number of events (none
+    at all when there are none), for the same reason every other loader here is
+    batched: this runs on the go-live path with the tournament's row lock held, and a
     per-event set of queries would hold that lock for a time that grows with the
-    tournament. The third is the events' draw types, which the allowance above turns
-    on; it is read here rather than off ``TournamentEvent.draw_settings`` because this
-    loader is handed **ids**, not rows, and a relationship walk would be the per-event
-    query this function exists not to issue.
+    tournament. The third is the draw types, which the allowance above turns on; it is
+    read here rather than off ``TournamentEvent.draw_settings`` because this loader is
+    handed **ids**, not rows, and a relationship walk would be the per-event query this
+    function exists not to issue.
+
+    That third statement asks only about the events that are **cut**, and is not issued
+    at all when none of them is. The allowance is reached from one arm of the answer
+    below — the arm an uncut event never takes — so every draw type read for an uncut
+    event is a row fetched and thrown away. Uncut is not the rare case here: it is the
+    state of every event of every tournament that has not had its draws cut yet, and
+    those tournaments reach this loader on the same locked go-live path as the rest.
     """
     if not event_ids:
         return {}
@@ -492,26 +499,31 @@ async def draw_currency_by_event(
             entry_id for entry_id in (entry_a_id, entry_b_id) if entry_id is not None
         )
 
-    # The third statement: each event's draw type, which decides how many of its
-    # entrants its fixtures may legitimately leave unseated. Read as the FK slug and
+    # The third statement: the draw type of each CUT event, which decides how many of
+    # its entrants its fixtures may legitimately leave unseated. Read as the FK slug and
     # parsed here — ``DrawType(slug)`` is the same parse the settings row's own
     # ``draw_type`` property does, and the FK plus the seed-vs-enum migration test are
     # what make an unparseable slug unreachable.
-    draw_types = {
-        event_id: DrawType(slug)
-        for event_id, slug in (
-            await db.execute(
-                select(TournamentEvent.id, TournamentEventDrawSettings.draw_type_key)
-                .join(
-                    TournamentEventDrawSettings,
-                    TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
+    draw_types: dict[uuid.UUID, DrawType] = {}
+    if cut:
+        draw_types = {
+            event_id: DrawType(slug)
+            for event_id, slug in (
+                await db.execute(
+                    select(
+                        TournamentEvent.id, TournamentEventDrawSettings.draw_type_key
+                    )
+                    .join(
+                        TournamentEventDrawSettings,
+                        TournamentEvent.draw_settings_id
+                        == TournamentEventDrawSettings.id,
+                    )
+                    # ``in_`` over the cut ids, so this scales with the events that
+                    # reach the allowance and not with the batch or the table.
+                    .where(TournamentEvent.id.in_(cut))
                 )
-                # ``in_`` over the same ids, so this scales with the batch and not with
-                # the table.
-                .where(TournamentEvent.id.in_(active.keys()))
-            )
-        ).all()
-    }
+            ).all()
+        }
 
     return {
         event_id: (

@@ -17,6 +17,7 @@ import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
 import { PoolDraw } from './draw-panel/pool-draw'
 import { ResultsPanel } from './draw-panel/results-panel'
+import { RoundList } from './draw-panel/round-list'
 import { SwissRounds } from './draw-panel/swiss-rounds'
 
 export interface DrawPanelProps {
@@ -255,8 +256,13 @@ const DrawBody = ({
  *
  * The block keeps its `draw-unpooled` test hook in the bracket arm: it is the same block
  * the existing bracket tests address, and renaming it would churn them for nothing. The
- * swiss arm gets a hook of its own, so "this event got the rounds view and NOT the bracket"
- * is one assertion rather than an inference.
+ * other two arms get hooks of their own, so "this event got the rounds view and NOT the
+ * bracket" is one assertion rather than an inference.
+ *
+ * The third arm is the one for fixtures **no format view can place** (`'orphaned'`). It
+ * exists because "show it anyway" and "show it as a bracket" are different promises: the
+ * first is what `drawState` guarantees (a fixture is never dropped), the second is a claim
+ * about the event's shape that a round-robin cannot make.
  */
 const UnpooledDraw = ({
   shape,
@@ -294,6 +300,25 @@ const UnpooledDraw = ({
             Rounds
           </h4>
           <SwissRounds rounds={rounds} />
+        </section>
+      )
+
+    case 'orphaned':
+      // Fixtures this event's format cannot place — a round-robin fixture naming a pool the
+      // event does not list. **Never dropped** (`drawState`), and never dressed up: a plain
+      // numbered list under a neutral heading, because every other view here would say
+      // something untrue about it. The bracket said the most: it names its rounds backwards
+      // from the last one present, so one stray fixture read as a "Final".
+      return (
+        <section
+          data-testid="draw-orphaned"
+          aria-label="Other fixtures"
+          className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
+        >
+          <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
+            Other fixtures
+          </h4>
+          <RoundList rounds={rounds} groupName="other fixtures" />
         </section>
       )
 

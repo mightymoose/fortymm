@@ -93,6 +93,17 @@ const scoped = (container: Container) => ({
     return container.getByTestId('draw-swiss-rounds')
   },
 
+  /** The un-pooled group as **nothing in particular** — the plain list a fixture gets when
+   * the event's format has no view that can place it (a round-robin fixture naming a pool
+   * the event does not list). The third hook of the same routing claim: it is what says the
+   * fixture was shown *without* being called a bracket. */
+  queryOrphaned() {
+    return container.queryByTestId('draw-orphaned')
+  },
+  getOrphaned() {
+    return container.getByTestId('draw-orphaned')
+  },
+
   // Pools, rounds and fixture lines come from the child page objects; the swiss rounds'
   // own accessors (a paired round's lines, a forthcoming round's copy) from theirs.
   ...poolDrawPage.within(container),
