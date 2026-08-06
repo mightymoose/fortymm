@@ -1,5 +1,7 @@
+import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
+import { confirmIrreversibleActDialogPage } from './confirm-irreversible-act-dialog.page'
 import { LifecycleActions, type LifecycleActionsProps } from './lifecycle-actions'
 import { buildLifecycleActionsProps } from './lifecycle-actions.factory'
 
@@ -18,6 +20,25 @@ const scoped = (container: Container) => ({
     return container.queryAllByRole('button')
   },
 
+  /** Every control in the component's own root, swept by **DOM** rather than by role.
+   * The sweep an "is the button still live?" claim needs while the confirm is open:
+   * Radix marks everything behind a modal `aria-hidden`, so `queryAllByRole('button')`
+   * finds none of them and would pass vacuously. The dialog portals to the body, i.e.
+   * outside this root, so it never joins the count.
+   *
+   * ⚠️ Requires the component to have rendered something. It **throws** for a non-owner
+   * and for the terminal `archived`, where `LifecycleActions` returns `null` and there is
+   * no root to sweep. Those two cases want `queryAllButtons()`, whose `[]` is the
+   * assertion. */
+  getActionControls() {
+    return interactiveElementsIn(container.getByTestId('lifecycle-actions'))
+  },
+
+  /** The **confirm** every lifecycle edge is gated by — the button opens it and sends
+   * nothing; the transition is fired by the dialog's own button. Always addressed at
+   * `screen`, whatever the scope: the dialog portals to the document body. */
+  confirm: confirmIrreversibleActDialogPage.within(screen),
+
   /** The inline **refusal** — the 409 (a stale view, or go-live's precondition), and
    * every other failure, in the place the click happened. Found by role (`alert`),
    * which is the contract: it is the app talking back, and a screen reader must hear it
@@ -27,6 +48,13 @@ const scoped = (container: Container) => ({
   },
   findNotice() {
     return container.findByRole('alert')
+  },
+  /** The same notice, found by **testid** rather than by role — the accessor a test needs
+   * while the confirm is open. Radix marks everything behind a modal `aria-hidden`, so
+   * `queryByRole('alert')` finds nothing there and would report a standing refusal as
+   * gone. This one reads the DOM, where it actually still is. */
+  queryNoticeElement() {
+    return container.queryByTestId('lifecycle-notice')
   },
   /** The notice as one normalised string — title *and* the sentence beneath it, since
    * the whole point of the 409 copy is that the second half **names the events** the
@@ -50,6 +78,9 @@ const scoped = (container: Container) => ({
  * the transitions endpoint itself — `mockTournamentTransitionEndpoint`
  * (`@/mocks/endpoints/tournaments/tournaments.endpoint`). Rendering alone fetches
  * nothing.
+ *
+ * A test driving any of the three edges must go through `confirm`: clicking the lifecycle
+ * button alone opens the dialog and sends nothing, which is the whole point of it.
  */
 export const lifecycleActionsPage = {
   render(overrides: Partial<LifecycleActionsProps> = {}) {

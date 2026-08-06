@@ -19,6 +19,47 @@ export function buildDeleteDrawConsequence(
   return { variant: 'delete-draw', eventName: "Men's Singles", ...overrides }
 }
 
+/** The **publish** consequence — a draft tournament opening to the public. Named after a
+ * *tournament*, not an event: a lifecycle act moves the whole thing. */
+export function buildPublishTournamentConsequence(
+  overrides: Partial<
+    Extract<IrreversibleActConsequence, { variant: 'publish-tournament' }>
+  > = {},
+): IrreversibleActConsequence {
+  return {
+    variant: 'publish-tournament',
+    tournamentName: 'Bay Area Open 2026',
+    ...overrides,
+  }
+}
+
+/** The **start** consequence — registration closing and every ready fixture becoming a
+ * real match (#788). */
+export function buildStartTournamentConsequence(
+  overrides: Partial<
+    Extract<IrreversibleActConsequence, { variant: 'start-tournament' }>
+  > = {},
+): IrreversibleActConsequence {
+  return {
+    variant: 'start-tournament',
+    tournamentName: 'Bay Area Open 2026',
+    ...overrides,
+  }
+}
+
+/** The **end** consequence — the move into `archived`, which has no edge out of it. */
+export function buildEndTournamentConsequence(
+  overrides: Partial<
+    Extract<IrreversibleActConsequence, { variant: 'end-tournament' }>
+  > = {},
+): IrreversibleActConsequence {
+  return {
+    variant: 'end-tournament',
+    tournamentName: 'Bay Area Open 2026',
+    ...overrides,
+  }
+}
+
 /** Props for `ConfirmIrreversibleActDialog` — an open **re-cut** confirm on
  * `Men's Singles`. A test that wants the delete act passes a `consequence` of its own. */
 export function buildConfirmIrreversibleActDialogProps(

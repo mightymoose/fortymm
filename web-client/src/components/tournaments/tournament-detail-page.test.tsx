@@ -266,6 +266,9 @@ describe('TournamentDetailPage', () => {
     })
 
     await userEvent.click(tournamentDetailPagePage.getLifecycleButton(/Publish/))
+    // Publishing is one-way, so it is priced first: the header's click opens the confirm
+    // and the confirm's own button is what posts.
+    await userEvent.click(tournamentDetailPagePage.lifecycleConfirm.getConfirmButton())
 
     await waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0].url).toContain('/v1/tournaments/t-1/transitions')
@@ -302,6 +305,7 @@ describe('TournamentDetailPage', () => {
     await userEvent.click(
       tournamentDetailPagePage.getLifecycleButton(/Start tournament/),
     )
+    await userEvent.click(tournamentDetailPagePage.lifecycleConfirm.getConfirmButton())
 
     const notice = await tournamentDetailPagePage.findLifecycleNoticeText()
     expect(notice).toContain("Couldn't start the tournament")
