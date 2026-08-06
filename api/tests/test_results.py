@@ -15,11 +15,13 @@ from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
 from app.results import (
     BracketFixture,
+    FieldInput,
     MatchOutcome,
     PoolInput,
     RoundRobinResults,
     RrThenKoResults,
     SingleElimResults,
+    SwissResults,
     results_for,
 )
 
@@ -88,6 +90,87 @@ def test_results_for_returns_the_single_elim_strategy() -> None:
 def test_results_for_returns_the_rr_then_ko_strategy() -> None:
     """The third arm (ADR 20260727) — a two-stage event reads out as both blocks."""
     assert isinstance(results_for(DrawType.rr_then_ko), RrThenKoResults)
+
+
+def test_results_for_returns_the_swiss_strategy() -> None:
+    """The fourth arm (ADR "swiss pre-cuts every round and pairs each one on
+    advance") — a pool-less event reads out as one table over the whole field."""
+    assert isinstance(results_for(DrawType.swiss), SwissResults)
+
+
+def test_a_swiss_field_stands_in_one_table_ordered_by_the_shared_chain() -> None:
+    """Four entrants over two rounds, no pools: A wins both, B wins one, C wins one, D
+    wins none. The table is one list, ordered by the same chain a pool is ordered by —
+    wins first, then (B before C) the head-to-head they played.
+
+    Buchholz is deliberately NOT part of this ordering yet (ADR "swiss standings add
+    Buchholz"): this slice reads out through the chain that exists rather than a
+    swiss-shaped approximation of the one that does not.
+    """
+    field = FieldInput(
+        entrants=(A, B, C, D),
+        fixture_count=4,
+        outcomes=(
+            _outcome(A, C, 3, 0),
+            _outcome(B, D, 3, 1),
+            _outcome(A, B, 3, 2),
+            _outcome(C, D, 3, 1),
+        ),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    assert [(row.entry_id, row.wins, row.losses) for row in standings.rows] == [
+        (A, 2, 0),
+        (B, 1, 1),
+        (C, 1, 1),
+        (D, 0, 2),
+    ]
+    assert [row.rank for row in standings.rows] == [1, 2, 3, 4]
+
+
+def test_a_swiss_event_is_complete_and_crowned_when_every_round_is_decided() -> None:
+    """A swiss ranks the whole field, so its complete table's top row is the champion —
+    no single-pool carve-out, because there are no pools to have more than one of."""
+    field = FieldInput(
+        entrants=(A, B),
+        fixture_count=1,
+        outcomes=(_outcome(A, B, 3, 1),),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    assert standings.complete
+    assert standings.champion == A
+
+
+def test_a_swiss_event_with_rounds_left_is_live_and_uncrowned() -> None:
+    """The later rounds are cut up front with their sides unknown, so they *count*
+    toward completeness: a draw one round in is a live table, not a finished one, and
+    an entrant who has not played yet is on it with a row of zeros."""
+    field = FieldInput(
+        entrants=(A, B, C, D),
+        fixture_count=4,  # two rounds of two, only the first round played
+        outcomes=(_outcome(A, B, 3, 0), _outcome(C, D, 3, 2)),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    assert not standings.complete
+    assert standings.champion is None
+    assert {row.entry_id for row in standings.rows} == {A, B, C, D}
+
+
+def test_an_uncut_swiss_event_is_not_complete() -> None:
+    """``0 == 0`` must not read as finished: an event with no fixture that can still
+    yield a result has not been played, it has not been cut."""
+    standings = SwissResults().tabulate(
+        FieldInput(entrants=(), fixture_count=0, outcomes=())
+    )
+
+    assert not standings.complete
+    assert standings.champion is None
+    assert standings.rows == ()
 
 
 def test_every_draw_type_reads_out_and_none_refuses() -> None:

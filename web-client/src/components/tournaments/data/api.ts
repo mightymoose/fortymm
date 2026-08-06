@@ -140,11 +140,15 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     format: e.format,
     drawType: e.draw_type,
     // Carried across UNCHANGED, `null` included (ADR 20260727): `null` is not missing
-    // data, it is what the two count-less draw types store, and it is what the read
+    // data, it is what the three count-less draw types store, and it is what the read
     // shape's `NOT NULL`-less column really holds. Coalescing it to a number here would
     // invent a qualifier count for a format that has no knockout stage — and, on the way
     // back out, author a body the server 422s.
     qualifiersPerPool: e.qualifiers_per_pool,
+    // **R**, carried across the same way and for the same reason (the swiss ADR): `null`
+    // is what the three round-count-less draw types store, not missing data, and inventing
+    // a `ceil(log2 n)` here would author a body the server 422s on the way back out.
+    rounds: e.rounds,
     maxPlayers: e.max_players,
     entryFee: e.entry_fee,
     timezone: e.timezone,
@@ -438,35 +442,49 @@ function poolEntriesToApi(
 }
 
 /**
- * The **draw configuration** as the write schemas take it: the draw type, and the
- * qualifier count *only* for the one draw type that has one (ADR 20260727).
+ * The **draw configuration** as the write schemas take it: the draw type, plus the ONE
+ * setting the chosen type actually has — a qualifier count for `rr-then-ko`
+ * (ADR 20260727), a round count for `swiss` (the swiss ADR), and nothing at all for the
+ * other two.
  *
- * The pair is flat on the wire and a **discriminated union tagged by `draw_type`** in
- * the server's interior. Two of its three arms — `round-robin` and `single-elim` — are
- * `extra="forbid"` and declare no `qualifiers_per_pool` field at all, so the key is a
- * **422 at the request boundary** on either of them. Not a value silently dropped: the
- * settings table's `CHECK` says `NULL` for every draw type but `rr-then-ko`, and a
- * director naming a qualifier count for a format with no knockout stage has
- * misunderstood something the server would rather say out loud.
+ * The fields are flat on the wire and a **discriminated union tagged by `draw_type`** in
+ * the server's interior. Every arm is `extra="forbid"` and declares only its own setting,
+ * so a key that belongs to another arm is a **422 at the request boundary**: a
+ * `qualifiers_per_pool` on a swiss body is refused exactly as a `rounds` on an
+ * `rr-then-ko` one is. Not a value silently dropped — a director naming a qualifier count
+ * for a pool-less format has misunderstood something the server would rather say out loud.
  *
- * So this omits the key rather than sending `null`, and it is the ONE place that
- * decision is made — shared by create and update, exactly as `toAddressInput` is,
- * because the alternative is two write surfaces putting different bytes on the wire for
- * one intent. (Absent and explicit `null` do mean the same thing to the server's
- * `_draw_settings_write`, which omits a `None` before validating; but only one of the
- * two survives `extra="forbid"`, so only one of them is safe to send.)
+ * So this sends **exactly one arm's worth of keys** and omits the rest rather than sending
+ * `null`, and it is the ONE place that decision is made — shared by create and update,
+ * exactly as `toAddressInput` is, because the alternative is two write surfaces putting
+ * different bytes on the wire for one intent. (Absent and explicit `null` do mean the same
+ * thing to the server's `_draw_settings_write`, which omits a `None` before validating; but
+ * only one of the two survives `extra="forbid"`, so only one of them is safe to send.)
  *
- * For `rr-then-ko` the count is **required** — the union arm has no default — so it is
- * sent as-is, `null` included. A `null` there is a 422 the form is meant to have caught
- * first (`qualifiersPerPoolSchema`, `data/event-validation`); sending it is honest, and
- * far better than inventing a `1` the director never chose.
+ * Each arm's own setting is **required** — the union arms carry no defaults — so it is sent
+ * as-is, `null` included. A `null` there is a 422 the form is meant to have caught first
+ * (`qualifiersPerPoolSchema` / `swissRoundsSchema`, `data/event-validation`); sending it is
+ * honest, and far better than inventing a number the director never chose.
+ *
+ * A `switch` with a `never` default rather than a chain of ternaries: a fifth draw type is a
+ * **compile error here** until somebody says which settings it puts on the wire.
  */
 function drawSettingsToApi(
-  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool'>,
+  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
 ) {
-  return ev.drawType === 'rr-then-ko'
-    ? { draw_type: ev.drawType, qualifiers_per_pool: ev.qualifiersPerPool }
-    : { draw_type: ev.drawType }
+  switch (ev.drawType) {
+    case 'rr-then-ko':
+      return { draw_type: ev.drawType, qualifiers_per_pool: ev.qualifiersPerPool }
+    case 'swiss':
+      return { draw_type: ev.drawType, rounds: ev.rounds }
+    case 'round-robin':
+    case 'single-elim':
+      return { draw_type: ev.drawType }
+    default: {
+      const exhaustive: never = ev.drawType
+      return { draw_type: exhaustive }
+    }
+  }
 }
 
 /** The event fields shared by the create and update bodies — everything except the

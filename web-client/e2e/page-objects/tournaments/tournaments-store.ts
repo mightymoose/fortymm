@@ -1031,6 +1031,13 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
     // reporting the substitution. `null` is the honest value for a count-less draw type,
     // and only the arm that never reads it can see it.
     event.qualifiers_per_pool,
+    // **The event's own R** (ADR "swiss pre-cuts every round and pairs each one on
+    // advance") — the round count the director configured and the PATCH stored, passed
+    // through unchanged and on exactly the same terms as the qualifier count above: it is
+    // what sizes a swiss draw (`R × ⌊n/2⌋` fixtures, all written at the cut), so a
+    // substitution here would deal a swiss of the wrong length with nothing reporting it.
+    // `null` is the honest value for the three draw types that choose no round count.
+    event.rounds,
   )
 }
 

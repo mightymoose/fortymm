@@ -6,6 +6,7 @@ import { render, screen, type Container } from '@/test/utilities'
 import { DrawPanel, type DrawPanelProps } from './draw-panel'
 import { buildDrawPanelProps } from './draw-panel.factory'
 import { poolDrawPage } from './draw-panel/pool-draw.page'
+import { swissRoundsPage } from './draw-panel/swiss-rounds.page'
 
 const scoped = (container: Container) => ({
   /** The whole panel for one event — the scope a read-only guard sweeps, and the one an
@@ -86,14 +87,38 @@ const scoped = (container: Container) => ({
     return interactiveElementsIn(container.getByTestId(`draw-panel-${eventId}`))
   },
 
-  /** The un-pooled group — fixtures belonging to no pool. Empty today (round-robin is
-   * the only draw type with a generator), but never *dropped*. */
+  /** The un-pooled group **as a bracket** — a single-elim draw, or the knockout stage of an
+   * `rr-then-ko` one. `query…` because "this draw did NOT get the bracket" is half of the
+   * routing claim. */
   queryUnpooled() {
     return container.queryByTestId('draw-unpooled')
   },
 
-  // Pools, rounds and fixture lines come from the child page objects.
+  /** The un-pooled group **as swiss rounds**. The other half of the same claim: a swiss draw
+   * is un-pooled exactly as a bracket is, so the two hooks are what tell "routed on the draw
+   * type" from "routed on the null pool id" (`unpooledShape`, `../../data/draw`). */
+  querySwissRounds() {
+    return container.queryByTestId('draw-swiss-rounds')
+  },
+  getSwissRounds() {
+    return container.getByTestId('draw-swiss-rounds')
+  },
+
+  /** The un-pooled group as **nothing in particular** — the plain list a fixture gets when
+   * the event's format has no view that can place it (a round-robin fixture naming a pool
+   * the event does not list). The third hook of the same routing claim: it is what says the
+   * fixture was shown *without* being called a bracket. */
+  queryOrphaned() {
+    return container.queryByTestId('draw-orphaned')
+  },
+  getOrphaned() {
+    return container.getByTestId('draw-orphaned')
+  },
+
+  // Pools, rounds and fixture lines come from the child page objects; the swiss rounds'
+  // own accessors (a paired round's lines, a forthcoming round's copy) from theirs.
   ...poolDrawPage.within(container),
+  swiss: swissRoundsPage.within(container),
 })
 
 /** The component under `StrictMode`, because its refusal is held by a hook that keeps the

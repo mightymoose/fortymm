@@ -816,6 +816,10 @@ const event: TournamentEvent = {
   // write bodies below must OMIT the key entirely rather than send this `null`, because
   // that arm of the server's draw-settings union is `extra="forbid"`.
   qualifiersPerPool: null,
+  // …and its rounds come off the circle method rather than a setting, so it carries NO
+  // round count either (the swiss ADR). Same rule as the qualifier count above: the write
+  // bodies must OMIT the key, not send this `null`.
+  rounds: null,
   maxPlayers: 48,
   entryFee: 30,
   timezone: 'America/Chicago',
@@ -943,6 +947,9 @@ describe('eventToCreateBody', () => {
       // `event` — and the assertion below is therefore also the proof that the omission
       // and the `null` mean the same thing.
       qualifiers_per_pool: null,
+      // …and the round count the same way, for the same reason: omitted on the way out for
+      // a round-robin event, an explicit `null` on the way back.
+      rounds: null,
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
@@ -1132,6 +1139,81 @@ describe('eventToUpdateBody', () => {
       })
 
       expect(apiToEvent(stored).qualifiersPerPool).toBe(2)
+    })
+  })
+
+  // The same claim for the same reason, one draw type over (ADR "swiss pre-cuts every round
+  // and pairs each one on advance"): the round count the director configured has to reach
+  // the API, because it is what sizes the whole draw (`R × ⌊n/2⌋` fixtures, cut up front).
+  // A dropped R is a swiss of the wrong length — silent, well-formed and wrong.
+  describe('the swiss round count on the wire', () => {
+    const swiss: TournamentEvent = { ...event, drawType: 'swiss', rounds: 5 }
+    const twoStage: TournamentEvent = {
+      ...event,
+      drawType: 'rr-then-ko',
+      qualifiersPerPool: 2,
+    }
+
+    it('SENDS the round count for swiss, on both verbs', () => {
+      expect(eventToCreateBody(asEditedEvent(swiss)).rounds).toBe(5)
+      expect(eventToUpdateBody(asEditedEvent(swiss)).rounds).toBe(5)
+    })
+
+    it('sends the DIRECTOR’s count, never a default', () => {
+      // `1` is the smallest legal R and the shape a dropped setting lands on, so a fixture
+      // of 1 could not tell "threaded through" from "fell back". Seven is neither.
+      const body = eventToUpdateBody(asEditedEvent({ ...swiss, rounds: 7 }))
+      expect(body.rounds).toBe(7)
+    })
+
+    // The three round-count-less arms of the server's draw-settings union are
+    // `extra="forbid"` and declare no `rounds` field at all, so the key is a **422** there —
+    // not a `null` politely ignored. Omission is the only correct spelling, and `toBeNull()`
+    // would pass against the payload that gets refused.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'OMITS the key entirely for %s — where sending it is a 422, not a no-op',
+      (drawType) => {
+        const create = eventToCreateBody(asEditedEvent({ ...event, drawType }))
+        const update = eventToUpdateBody(asEditedEvent({ ...event, drawType }))
+
+        expect('rounds' in create).toBe(false)
+        expect('rounds' in update).toBe(false)
+      },
+    )
+
+    // The two settings are on OPPOSITE arms, so each body carries exactly one of them. A
+    // swiss body with a `qualifiers_per_pool` is a 422 naming the field, and vice versa —
+    // which a mapper that merely added a key rather than choosing an arm would author.
+    it('sends only its own arm’s setting, never both', () => {
+      const swissBody = eventToUpdateBody(asEditedEvent(swiss))
+      expect('qualifiers_per_pool' in swissBody).toBe(false)
+
+      const twoStageBody = eventToUpdateBody(asEditedEvent(twoStage))
+      expect('rounds' in twoStageBody).toBe(false)
+    })
+
+    it('reads the stored round count back off the wire', () => {
+      const read = apiToEvent(
+        buildTournamentEventRead({ draw_type: 'swiss', rounds: 4 }),
+      )
+
+      expect(read.rounds).toBe(4)
+    })
+
+    it('reads a round-count-less draw type back as null, never as a number', () => {
+      const read = apiToEvent(buildTournamentEventRead({ draw_type: 'round-robin' }))
+
+      expect(read.rounds).toBeNull()
+    })
+
+    it('round-trips a swiss event: configure 5, send 5, read 5 back', () => {
+      const sent = eventToUpdateBody(asEditedEvent(swiss))
+      const stored = buildTournamentEventRead({
+        draw_type: 'swiss',
+        rounds: sent.rounds,
+      })
+
+      expect(apiToEvent(stored).rounds).toBe(5)
     })
   })
 

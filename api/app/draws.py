@@ -50,6 +50,7 @@ from app.schemas.tournament import (
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
+    SwissDrawSettingsWrite,
 )
 
 # Distinct id types, so the checker rejects handing a fixture id to something that
@@ -369,9 +370,9 @@ class FixtureState:
     #: **structurally**, down to the game-difference and games-won tiebreakers, rather
     #: than by two implementations happening to concur.
     #:
-    #: Only ``rr-then-ko`` reads it; round-robin and single-elim ignore it, and
-    #: :func:`reads_fixture_games` is where that is said once so a caller knows whether
-    #: it has to load the counts at all.
+    #: Only ``rr-then-ko`` and ``swiss`` declare that they read it; round-robin
+    #: and single-elim do not, and :func:`reads_fixture_games` is where that is
+    #: said once so a caller knows whether it has to load the counts at all.
     games: FixtureGames | None = None
     #: Whether this fixture's match is **voided** — terminal, and contributing nothing
     #: (ADR-0013). A voided pairing genuinely produced no result and never will: the
@@ -871,6 +872,138 @@ class RrThenKoStrategy:
         return fills
 
 
+def _max_rematch_free_rounds(size: int) -> int:
+    """How many rounds a field of ``size`` can play with nobody meeting twice.
+
+    **The answer depends on the parity, and an earlier version of this rule did not.**
+    An even field of ``n`` plays ``n - 1`` rounds: everybody plays every round, so the
+    ceiling really is the number of distinct opponents one entrant has. An odd field
+    plays ``n``, because each round byes exactly one entrant — over ``n`` rounds every
+    entrant plays ``n - 1`` matches and sits out once, meeting all ``n - 1`` opponents
+    with no rematch. Refusing an odd field's ``n``-th round refused a legal swiss.
+
+    ``n - 1 + (n % 2)`` is the same statement in one expression, and is the round-robin
+    circle method's round count: pair the odd field with a ghost bye and it is an even
+    field of ``n + 1``, whose ``n`` rounds each sit one real entrant out.
+    """
+    return size - 1 + size % 2
+
+
+@dataclass(frozen=True, slots=True)
+class SwissStrategy:
+    """Swiss: a fixed number of rounds, nobody eliminated, each round paired by the
+    standings the round before it produced (ADR "swiss pre-cuts every round and pairs
+    each one on advance").
+
+    **Every round is cut up front**, all ``R`` of them: ``R × ⌊n/2⌋`` fixtures. Round 1
+    carries both sides, seeded from the draw order; every later round is written with
+    both sides ``None``. That is not a workaround for :class:`AdvancePlan` being unable
+    to create a fixture — it is what makes swiss expressible without changing the
+    contract at all. The *number* of fixtures follows from the field size at the cut and
+    ``R``, an explicit setting; only the *sides* are unknown, and a ``None`` side means
+    exactly "TBD, ``advance()`` will fill it" — the state single-elim's later rounds
+    have always been in.
+
+    **The field is not frozen at the cut**, and an earlier version of this docstring
+    said it was. Cutting has no status gate, so a draw is cut while the tournament is
+    still ``published`` and registration is still open; the field can move between the
+    cut and go-live. That is what makes the draw **stale** and what
+    :func:`unseated_entrant_allowance` exists to reason about. It does not weaken the
+    argument above: the fixture count follows from the field the cut actually saw, and a
+    field that moves under it is caught at go-live rather than silently tolerated.
+
+    **Round 1 is top half against bottom half**: with ``m = 2⌊n/2⌋`` playing entrants,
+    draw-order position ``i`` meets position ``i + m/2``, so the top seed meets the best
+    of the bottom half. An odd field byes the **lowest**-ranked entrant, who simply has
+    no fixture — a bye is the absence of a row (ADR-0786), never a row with a ``NULL``
+    side, which here would be indistinguishable from a later round awaiting its pairing.
+
+    **This strategy does not pair anything past round 1 yet.** :meth:`advance` fills no
+    sides; it reports readiness exactly as :class:`RoundRobinStrategy`'s does. Pairing
+    round ``r + 1`` from the standings once round ``r`` is decided is its own slice, and
+    stubbing it would mean writing pairings nobody computed.
+
+    Fixtures are **un-pooled** (``pool_id=None``): swiss ranks the whole field in one
+    table, which is why the schedule preview refuses it exactly as it refuses a bracket.
+    """
+
+    #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at
+    #: the request boundary — so a smaller value is a *programmer* error and is refused
+    #: in the constructor; the refusal that depends on the entrant count
+    #: (``R <= n - 1 + n % 2``, see :func:`_max_rematch_free_rounds`, which moves as the
+    #: field does) is a :class:`DegenerateDraw` at the cut.
+    rounds: int
+
+    def __post_init__(self) -> None:
+        if self.rounds < 1:
+            raise ValueError(f"rounds must be at least 1, got {self.rounds}.")
+
+    def plan_initial(
+        self, config: DrawConfig, ordered_entrants: Sequence[OrderedEntrant]
+    ) -> list[PlannedFixture]:
+        entrants = list(ordered_entrants)
+        size = len(entrants)
+        if size < 2:
+            raise DegenerateDraw(
+                "A Swiss draw needs at least 2 entrants — a smaller field has nobody "
+                "to play."
+            )
+        if self.rounds > _max_rematch_free_rounds(size):
+            # The ceiling is the number of rounds the field can play without a rematch,
+            # and it is NOT simply the ``n - 1`` distinct opponents an entrant has: an
+            # odd field byes one entrant per round, so over ``n`` rounds everybody plays
+            # ``n - 1`` matches and sits out once. Refused at the CUT and not at
+            # configure time, because ``n`` is not known when the setting is written —
+            # the same split every entrant-count-dependent refusal in this module uses.
+            maximum = _max_rematch_free_rounds(size)
+            round_noun = "round" if self.rounds == 1 else "rounds"
+            maximum_noun = "round" if maximum == 1 else "rounds"
+            raise DegenerateDraw(
+                f"{self.rounds} {round_noun} is more than the {maximum} "
+                f"{maximum_noun} a field of {size} entrants can play without a "
+                "rematch — play fewer rounds, or add entrants."
+            )
+        # The odd entrant out sits the round; ``m`` is the field that actually plays, so
+        # every round holds ⌊n/2⌋ fixtures whatever the parity.
+        pairs_per_round = size // 2
+        fixtures = [
+            PlannedFixture(
+                pool_id=None,
+                round=1,
+                position=position,
+                # Top half against bottom half, in draw order. ``entrants`` is
+                # 1-based by ``position`` but indexed 0-based here, so the pairing is
+                # index ``i`` against index ``i + pairs_per_round``.
+                entry_a_id=entrants[position - 1].entry_id,
+                entry_b_id=entrants[position - 1 + pairs_per_round].entry_id,
+            )
+            for position in range(1, pairs_per_round + 1)
+        ]
+        # Every later round, whole, with both sides TBD. ``position`` becomes the
+        # pairing's rank in the standings when the round is paired; until then it is
+        # only the row's identity within its round.
+        fixtures.extend(
+            PlannedFixture(pool_id=None, round=round_number, position=position)
+            for round_number in range(2, self.rounds + 1)
+            for position in range(1, pairs_per_round + 1)
+        )
+        return fixtures
+
+    def advance(self, fixtures: Sequence[FixtureState]) -> AdvancePlan:
+        """Report which fixtures are ready to become matches, and fill nothing.
+
+        Round 1 was paired at the cut, so on a freshly cut draw this is round 1's
+        fixtures and nothing else: the later rounds are ``is_pending`` (both sides
+        unknown) and :func:`ready_fixtures` already leaves those out.
+
+        Pairing round ``r + 1`` from round ``r``'s standings is the next slice's work,
+        deliberately absent rather than stubbed — a stub here would either write
+        pairings nothing computed or quietly report a round ready that has no players in
+        it.
+        """
+        return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
+
+
 def _finished_pool_order(
     pool_fixtures: Sequence[FixtureState],
 ) -> list[EntryTally] | None:
@@ -987,8 +1120,10 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
 
     The sort key asks three questions, in this order:
 
-    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim, or
-       an rr-then-ko draw's KO stage) LAST, behind the pools that feed them.
+    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim,
+       swiss, or an rr-then-ko draw's KO stage) LAST, behind the pools that feed them —
+       except under swiss, whose draw is un-pooled end to end, so there are no pools for
+       it to sort behind and this key partitions nothing.
     2. "Where in the event's order is its pool?" — ``pool_position``, with a ``None``
        (an unresolved pool order; see the field) sorting after every pool that has one.
     3. "Which pool?" — the id as text, the tie-break that keeps the order **total** when
@@ -1053,6 +1188,8 @@ def strategy_for(settings: DrawSettingsWriteArm) -> DrawStrategy:
             return SingleElimStrategy()
         case RrThenKoDrawSettingsWrite():
             return RrThenKoStrategy(qualifiers_per_pool=settings.qualifiers_per_pool)
+        case SwissDrawSettingsWrite():
+            return SwissStrategy(rounds=settings.rounds)
 
 
 def reads_fixture_games(draw_type: DrawType) -> bool:
@@ -1065,6 +1202,14 @@ def reads_fixture_games(draw_type: DrawType) -> bool:
     loaded); round-robin and single-elim never touch the field, and for them the load is
     a SQL statement and a few hundred score rows discarded, on the completion seam,
     inside the score-accept transaction, once per result.
+
+    ``swiss`` declares **true** for the same reason ``rr-then-ko`` does, and declares it
+    now rather than when its pairing lands: it pairs each round off the standings, whose
+    chain runs through Buchholz and game difference — both of which are counts of games
+    — so a swiss draw advanced without them would pair the field in an order that
+    disagrees with the table on screen. The cut needs no games; being handed them costs
+    nothing, and being *without* them at the moment the pairing arrives would be the
+    silent failure :class:`MissingFixtureGames` exists to prevent.
 
     An exhaustive ``match`` with **no catch-all**, exactly like :func:`strategy_for`: a
     new :class:`DrawType` member has to *declare* whether it needs the games, and until
@@ -1079,6 +1224,63 @@ def reads_fixture_games(draw_type: DrawType) -> bool:
             return False
         case DrawType.rr_then_ko:
             return True
+        case DrawType.swiss:
+            return True
+
+
+def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
+    """How many of a field's entrants this draw type's fixtures may legitimately fail
+    to seat — the **bye allowance**, and the one thing "these fixtures cover this
+    field" cannot be asked without.
+
+    A draw's currency (:class:`~app.tournament_draws.DrawCurrency`) is "the fixtures
+    seat exactly the active entrants", and for three of the four draw types that is
+    literally true. Not because they have no byes — an odd round-robin pool byes
+    somebody every round — but because their byed entrants are **still seated
+    somewhere**: a round-robin bye sits out one round of a schedule that seats them in
+    every other, and a single-elim bye is seated directly onto its round-2 side at cut
+    time (:func:`_knockout_seats`). So zero of their entrants are unseated, and an
+    unseated entrant is exactly what it looks like — somebody who entered after the cut.
+
+    **Swiss is the exception, and it is arithmetic rather than a special case.** Its cut
+    emits ``⌊n/2⌋`` fixtures a round, so an odd field leaves exactly one entrant with no
+    fixture at all — a bye is the absence of a row (ADR-0786), never a row with a
+    ``NULL`` side. That entrant is covered by the draw; the draw simply has no row that
+    says so. Hence ``field_size % 2``: one for an odd field, none for an even one.
+
+    It is an **allowance**, i.e. an upper bound, not a required count. Once a later
+    round is paired (the next slice) the round-1 bye is seated in it, and a draw that
+    seats its whole field must stay current.
+
+    What the allowance **cannot** do is tell a byed entrant from a single latecomer who
+    leaves the field odd: a swiss draw cut for eight and joined by a ninth holds exactly
+    the rows a draw cut for nine holds. The ambiguity is irreducible, not a shortcut. A
+    bye is an absence, so the parity of the field the draw was cut for is recorded
+    nowhere, and no arithmetic recovers it — ``⌊8/2⌋`` and ``⌊9/2⌋`` are the same number
+    of fixtures.
+
+    It is also the one shape where being wrong is survivable, and only for swiss. The
+    latecomer is treated as that round's bye, which is a state the format puts somebody
+    in every odd round anyway — where the same slip on a round-robin would seat a player
+    in no match for the whole tournament. Everything else still reds: two latecomers,
+    a latecomer that leaves the field **even** (``7 → 8``: two unseated against an
+    allowance of none), and any withdrawal of a **seated** entry, which fails the subset
+    half of the comparison rather than this count.
+
+    An exhaustive ``match`` with no catch-all, exactly like :func:`reads_fixture_games`:
+    a new :class:`DrawType` has to state its own answer, and until it does this fails to
+    type-check. A default of ``0`` would be the ``stale`` this function exists to stop;
+    a default of ``1`` would quietly stop catching the latecomer.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return 0
+        case DrawType.single_elim:
+            return 0
+        case DrawType.rr_then_ko:
+            return 0
+        case DrawType.swiss:
+            return field_size % 2
 
 
 def _snake(

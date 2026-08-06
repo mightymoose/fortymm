@@ -105,7 +105,13 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * **It is `null` for every draw type but `rr-then-ko`** (ADR 20260727), which is why the
  * seed below states the bare literal and says no more: no knockout stage to qualify for,
  * so no qualifier count — `null` is the only value those draw types' settings row admits,
- * and it is not "unset". */
+ * and it is not "unset".
+ *
+ * `rounds` is stored on exactly the same terms (the swiss ADR): it is what sizes a swiss
+ * draw at the cut (`R × ⌊n/2⌋` fixtures, all of them written up front), it is `null` for
+ * every draw type but `swiss`, and `null` is not "unset" there either — a round-robin's
+ * rounds come off the circle method and a bracket's depth follows from the field, so
+ * neither is a number anybody chooses. */
 type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
@@ -566,6 +572,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
@@ -613,6 +620,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 48,
           entry_fee: 30,
           timezone: 'America/Los_Angeles',
@@ -637,6 +645,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 16,
           entry_fee: 60,
           timezone: 'America/Los_Angeles',
@@ -672,6 +681,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 24,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
@@ -736,6 +746,7 @@ function seed(): StoredTournament[] {
           format: 'doubles',
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 32,
           entry_fee: 25,
           timezone: 'America/Los_Angeles',
@@ -795,6 +806,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 16,
           entry_fee: 20,
           timezone: 'America/New_York',
@@ -857,6 +869,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 32,
           entry_fee: 40,
           timezone: 'America/Los_Angeles',
@@ -954,6 +967,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
+          rounds: null,
           max_players: 8,
           entry_fee: 0,
           timezone: 'America/Los_Angeles',
@@ -1023,6 +1037,7 @@ function seed(): StoredTournament[] {
           // every other event in this seed it is NOT null: a knockout stage to qualify
           // for is exactly what this draw type has.
           qualifiers_per_pool: 2,
+          rounds: null,
           max_players: 8,
           entry_fee: 35,
           timezone: 'America/Los_Angeles',
@@ -1112,6 +1127,7 @@ function seed(): StoredTournament[] {
           // maximum, where everyone but the pool's last qualifies and the pool stage
           // exists purely to seed (ADR 20260727).
           qualifiers_per_pool: 2,
+          rounds: null,
           max_players: 6,
           entry_fee: 25,
           timezone: 'America/Los_Angeles',
@@ -2215,6 +2231,11 @@ export function createEvent(
     // (`planEventDraw` below), so a fallback here would deal a bracket for a K the
     // director never chose.
     qualifiers_per_pool: body.qualifiers_per_pool ?? null,
+    // **R**, stored beside the draw type it belongs to (the swiss ADR), on exactly the same
+    // terms as the qualifier count above: absent means the draw type has no round count to
+    // choose, which is `null`, never `undefined` and never an invented number — the day
+    // this event's draw is cut, this is how many rounds get written.
+    rounds: body.rounds ?? null,
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
@@ -2302,6 +2323,13 @@ export function updateEvent(
       patch.draw_type === undefined || patch.draw_type === null
         ? event.qualifiers_per_pool
         : (patch.qualifiers_per_pool ?? null),
+    // …and **R** moves with the very same unit, for the very same reason (the swiss ADR).
+    // Reading it with `??` would strand a swiss event's round count on a round-robin it was
+    // just re-typed as — the contradiction the union exists to make unrepresentable.
+    rounds:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.rounds
+        : (patch.rounds ?? null),
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.
@@ -2501,6 +2529,10 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     // SILENT one: an event configured at K=2 would be cut into a `P × 1` bracket — a
     // perfectly well-formed draw of the wrong size, with nothing anywhere reporting it.
     event.qualifiers_per_pool,
+    // **The event's own R** (the swiss ADR) — the stored number, passed through unchanged,
+    // for exactly the reasons the qualifier count above is. Only the `swiss` arm reads it,
+    // and a swiss event always has one, so that arm never meets the null.
+    event.rounds,
   )
 }
 

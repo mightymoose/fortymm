@@ -492,6 +492,15 @@ export interface EventDrawConfig {
   readonly draw_type: string
   /** **K**. `null` for every draw type that has no knockout stage to qualify for. */
   readonly qualifiers_per_pool: number | null
+  /** **R** — how many rounds a `swiss` event plays. `null` for every other draw type,
+   * which does not ask the question (a round-robin's rounds fall out of the circle
+   * method, a bracket's depth out of the field).
+   *
+   * Read back for the reason `qualifiers_per_pool` is: it is **required with no default**
+   * on the swiss arm of the server's draw-settings union, so it is the field a create
+   * body is refused for omitting — and a 201 alone would also come back from a server
+   * that accepted the body and dropped R on the floor. */
+  readonly rounds: number | null
   /** The server's own count of active entries. Read here rather than counted off the
    * roster on screen, which **truncates** at eight chips and a `+N more` line: a spec
    * counting list items there would be counting the truncation, and at nine entrants
@@ -529,6 +538,47 @@ export async function findEventByName(
     )
   }
   return event
+}
+
+/** One row of the served **draw-type catalogue** (`DrawTypeRead` on the wire): the slug
+ * an event stores, and the director-facing copy for it.
+ *
+ * The copy is **seed data** — a `draw_types` row a migration inserts — and the tournament
+ * detail carries the whole catalogue so a picker renders what it was sent rather than a
+ * list of its own (ADR 20260726). So this is the one seam that can say the copy exists at
+ * all: the client's own parser keeps only `key`/`name`/`display_order`, so `description`
+ * reaches no surface a browser assertion could read. */
+export interface DrawTypeRow {
+  readonly key: string
+  readonly name: string
+  readonly description: string
+}
+
+/**
+ * Read the **served draw-type catalogue** off a tournament's detail payload.
+ *
+ * Throws when the payload carries none. `draw_type_catalogue` is nullable on the wire —
+ * the LIST route withholds it, since it is page data for the one page that picks a draw
+ * type — and a caller asking for it has a detail read in hand, so a `null` here means the
+ * shape changed rather than "this tournament offers no formats".
+ */
+export async function getDrawTypeCatalogue(
+  viewer: Guest,
+  tournamentId: string,
+): Promise<ReadonlyArray<DrawTypeRow>> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  const detail = (await res.json()) as {
+    draw_type_catalogue: ReadonlyArray<DrawTypeRow> | null
+  }
+  if (detail.draw_type_catalogue === null) {
+    throw new Error(
+      `tournament ${tournamentId} came back with NO draw-type catalogue — the detail read carries one`,
+    )
+  }
+  return detail.draw_type_catalogue
 }
 
 /**

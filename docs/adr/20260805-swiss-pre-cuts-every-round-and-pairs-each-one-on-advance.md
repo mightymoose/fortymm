@@ -28,13 +28,25 @@ supported state.
 
 **The field is frozen once the tournament is live.** Withdrawing an active entry
 is refused outside the registration window
-(`_enforce_withdrawal_registration_open`). So the entrant count `n` cannot move
-after the cut.
+(`_enforce_withdrawal_registration_open`).
 
-Those two together remove the reason to change the strategy contract. With `n`
-frozen and the round count `R` known, every swiss round holds exactly
-`floor(n / 2)` fixtures. The fixture set is fully determined at the cut. Only the
-*sides* are unknown, which is the one thing this model already handles.
+**Correction, 2026-08-06.** This section originally drew a second conclusion from
+that: "so the entrant count `n` cannot move after the cut". **That is wrong.**
+Cutting a draw has no status gate, so a draw is cut while the tournament is still
+`published` and registration is still open. The field can move between the cut and
+go-live — which is exactly why this arc needed a chore to stop an odd swiss field
+reading as stale, and why an existing test is named
+`test_a_swap_between_the_cut_and_go_live_is_stale`.
+
+The decision below is unaffected, and it is worth being precise about why. The
+fixture count follows from the field the cut *actually saw*, not from a promise
+that the field will not move. A field that moves under a cut draw makes the draw
+**stale**, which go-live already refuses. So the count is determined at the cut,
+and the model holds — it just holds for a narrower reason than first written.
+
+With the field the cut saw and the round count `R` known, every swiss round holds
+exactly `floor(n / 2)` fixtures. Only the *sides* are unknown, which is the one
+thing this model already handles.
 
 ## Decision
 
@@ -87,10 +99,18 @@ length of a day that is already booked. The schedule preview also has to answer
 "how long is this day" before anyone has registered, and an explicit `R` is what
 lets it answer honestly.
 
-`R > n - 1` is refused at the cut as `DegenerateDraw`. With `n` entrants a player
-has at most `n - 1` distinct opponents, so beyond that a rematch-free swiss cannot
-exist. This is refused at the cut rather than at configure time, because `n` is
-not known when the setting is written.
+`R > n - 1 + n % 2` is refused at the cut as `DegenerateDraw`. The ceiling is the
+number of rounds the field can play with nobody meeting twice, and that number
+depends on the parity of `n`. An even field plays `n - 1` rounds: everybody plays
+every round, so the ceiling is the count of distinct opponents. An odd field plays
+`n`, because each round byes exactly one entrant, so over `n` rounds every entrant
+plays `n - 1` matches and sits out once. This is refused at the cut rather than at
+configure time, because `n` is not known when the setting is written.
+
+This rule first shipped as `R > n - 1` for every field, justified by the
+distinct-opponent count alone. That justification was off by one for an odd field,
+and the rule **refused a legal draw**: a 5-entrant event could not play 5 rounds,
+which is a rematch-free swiss and the fullest one that field can play.
 
 ## Consequences
 

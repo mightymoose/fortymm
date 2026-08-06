@@ -8,6 +8,7 @@ import {
   nameSchema,
   poolNameSchema,
   qualifiersPerPoolSchema,
+  swissRoundsSchema,
   type EventSection,
 } from '../data/event-validation'
 import { browserTimezone, poolsInOrder } from '../data/helpers'
@@ -144,12 +145,17 @@ export const eventSchema = z.object({
   // `data/draw-types.test.ts`.
   drawType: drawTypeSchema,
   // **K**, held as `number | null` and judged BELOW, with the draw type beside it — the
-  // shape rule only (ADR 20260727). `null` is the honest value for the two draw types
+  // shape rule only (ADR 20260727). `null` is the honest value for the three draw types
   // that have no knockout stage, and it is the *blank box* for the one that does; which
   // of those two things it is depends on `drawType`, which a field-level rule cannot
   // see. See `qualifiersPerPoolSchema` (`data/event-validation`) for why the pair, and
   // not the field, carries the bound.
   qualifiersPerPool: z.number().nullable(),
+  // **R**, held the same way and judged in the same place, beside the draw type that
+  // decides whether it is asked at all (the swiss ADR). `null` is the honest value for the
+  // three draw types whose round count nobody chooses, and it is the *blank box* for the
+  // one whose director does.
+  rounds: z.number().nullable(),
   maxPlayers: maxPlayersSchema,
   entryFee: entryFeeSchema,
   // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`
@@ -211,6 +217,27 @@ export const eventSchema = z.object({
       message: result.error.issues[0].message,
     })
   })
+  // **R** is judged as half of the same pair, for the same reason and by the same shape
+  // (ADR "swiss pre-cuts every round and pairs each one on advance"): the server parses
+  // `(draw_type, rounds)` into a union tagged by the draw type, one arm of which requires a
+  // round count and three of which forbid the key outright.
+  //
+  // Only the `swiss` arm is asked at all: for the other three, `rounds` is `null`, there is
+  // no control on screen (the Basics tab renders it only for swiss), and the write body
+  // omits the key entirely (`drawSettingsToApi`, `data/api`) — so a rule that fired there
+  // would refuse a save for a reason the director cannot see, let alone fix. The issue is
+  // raised **at the field's own path**, so React-Hook-Form reports it as `errors.rounds`
+  // and the red lands under the box.
+  .superRefine((values, ctx) => {
+    if (values.drawType !== 'swiss') return
+    const result = swissRoundsSchema.safeParse(values.rounds)
+    if (result.success) return
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rounds'],
+      message: result.error.issues[0].message,
+    })
+  })
 
 // The schema mirrors the domain types (`Predicate`, `PoolEntry`) so the nested-array
 // sub-forms are validated by this one resolver; the section code that rebuilds a
@@ -225,6 +252,10 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   // …and a bracket has no pools to qualify out of, so no qualifier count (ADR 20260727).
   // `null` is the only value the server's `single-elim` arm admits.
   qualifiersPerPool: null,
+  // …and a bracket's depth follows from the field rather than from a setting, so no round
+  // count either (the swiss ADR). `null` is the only value the server's `single-elim` arm
+  // admits.
+  rounds: null,
   // A new event starts **uncapped**, not at an invented number: `null` is a valid,
   // saveable answer (ADR-0935), so an organizer who never touches the box gets an
   // event with no cap — rather than a form that silently refuses to submit.
@@ -255,6 +286,9 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     // The count the SERVER sent back, straight onto the control — this projection is the
     // near half of the round trip the read shape's `qualifiers_per_pool` exists for.
     qualifiersPerPool: event.qualifiersPerPool,
+    // …and the round count the same way, the near half of the round trip the read shape's
+    // `rounds` exists for.
+    rounds: event.rounds,
     maxPlayers: event.maxPlayers,
     entryFee: event.entryFee,
     timezone: event.timezone,
@@ -298,11 +332,13 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
-  // `qualifiersPerPool` lives on Basics beside the draw type that decides whether it is
-  // asked at all, so a refused two-stage save opens the tab holding the empty box.
+  // `qualifiersPerPool` and `rounds` both live on Basics beside the draw type that decides
+  // whether either is asked at all, so a refused two-stage or swiss save opens the tab
+  // holding the empty box.
   if (
     errors.name ||
     errors.qualifiersPerPool ||
+    errors.rounds ||
     errors.maxPlayers ||
     errors.entryFee ||
     errors.timezone

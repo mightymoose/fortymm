@@ -29,6 +29,7 @@ from app.results import (
     BracketFinishes,
     BracketFixture,
     EventResults,
+    FieldInput,
     FinishRow,
     MatchOutcome,
     PoolInput,
@@ -36,7 +37,10 @@ from app.results import (
     RoundRobinResults,
     RrThenKoResults,
     SingleElimResults,
+    StandingRow,
     StandingsThenFinishes,
+    SwissResults,
+    SwissStandings,
     results_for,
 )
 from app.schemas.tournament import (
@@ -53,6 +57,7 @@ from app.schemas.tournament import (
     StandingRowRead,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
+    SwissStandingsResultsRead,
     TournamentDetailRead,
     TournamentEntrantRead,
     TournamentEventRead,
@@ -212,6 +217,7 @@ def _entry_state(
 def event_results(
     e: TournamentEvent,
     *,
+    entrants: Sequence[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> EventResultsRead | None:
@@ -219,7 +225,15 @@ def event_results(
     when there are none to compute — a **discriminated union tagged by shape**
     (ADR-0785): ``kind: "standings"`` for a round-robin (ADR-0788), ``kind: "finishes"``
     for a single-elimination bracket, ``kind: "standings_then_finishes"`` for a
-    round-robin-then-knockout event, which carries one block per stage (ADR 20260727).
+    round-robin-then-knockout event, which carries one block per stage (ADR 20260727),
+    and ``kind: "swiss_standings"`` for a swiss event's one pool-less table.
+
+    ``entrants`` is the event's **active** field, and only the pool-less swiss shape
+    reads it: a pool's membership is defined by its own fixtures, but a swiss entrant
+    with a **bye** has no fixture that round at all (a bye is the absence of a row,
+    ADR-0786), so a field derived from fixtures alone would drop them from the table
+    they belong at the top of. The pooled shapes are deliberately left fixture-derived,
+    unchanged.
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -262,6 +276,12 @@ def event_results(
                         [f for f in fixtures if f.pool_id is None], game_counts
                     ),
                 )
+            )
+        case SwissResults():
+            # One table over the whole field: swiss is pool-less, so there is no
+            # grouping to do and every fixture in the event feeds the same input.
+            return _serialize_swiss_standings(
+                strategy.tabulate(_field_input(entrants, fixtures, game_counts))
             )
         case _:
             assert_never(strategy)
@@ -311,6 +331,51 @@ def _pool_inputs(
     return pool_inputs
 
 
+def _field_input(
+    entrants: Sequence[TournamentEntrantRead],
+    fixtures: list[TournamentFixtureRead],
+    game_counts: dict[uuid.UUID, tuple[int, int]],
+) -> FieldInput:
+    """The whole field as one standings input — the swiss projection of
+    :func:`_pool_inputs`, with nothing to group by.
+
+    The field is the event's **active entrants**, not the entries its fixtures seat.
+    That difference is the whole reason this takes an argument :func:`_pool_inputs` does
+    not: a swiss entrant with a **bye** has no fixture that round (a bye is the absence
+    of a row, ADR-0786), and every later round is cut with both sides unknown, so a
+    seven-player draw derived from fixtures alone would stand a six-player table.
+
+    The entries seated in fixtures are **unioned in** rather than assumed to be a
+    subset. A player who withdraws after the draw is cut leaves the active list while
+    their played fixtures stay, and :func:`~app.pool_finishing_order.finishing_order`
+    indexes its tallies by entrant — so dropping them would be a ``KeyError`` on the
+    first outcome that names them, on the detail page of any event that had a
+    withdrawal.
+
+    A round nobody has been paired into yet is still **counted**: it can very much still
+    yield a result. Only a **voided** pairing is left out of the count, exactly as it is
+    for a pool — it never will produce one, and counting it would hold the event one
+    outcome short of complete forever."""
+    field = {EntryId(entrant.id) for entrant in entrants} | {
+        EntryId(entry_id)
+        for f in fixtures
+        for entry_id in (f.entry_a_id, f.entry_b_id)
+        if entry_id is not None
+    }
+    outcomes = [
+        outcome
+        for outcome in (_fixture_outcome(f, game_counts) for f in fixtures)
+        if outcome is not None
+    ]
+    return FieldInput(
+        entrants=tuple(field),
+        fixture_count=sum(
+            1 for f in fixtures if f.match_status is not MatchStatus.voided
+        ),
+        outcomes=tuple(outcomes),
+    )
+
+
 def _bracket_fixtures(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
@@ -358,21 +423,27 @@ def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRe
     return [
         PoolStandingsRead(
             pool_id=pool.pool_id,
-            rows=[
-                StandingRowRead(
-                    entry_id=row.entry_id,
-                    rank=row.rank,
-                    played=row.played,
-                    wins=row.wins,
-                    losses=row.losses,
-                    games_won=row.games_won,
-                    games_lost=row.games_lost,
-                )
-                for row in pool.rows
-            ],
+            rows=_standing_rows_read(pool.rows),
             complete=pool.complete,
         )
         for pool in pools
+    ]
+
+
+def _standing_rows_read(rows: Sequence[StandingRow]) -> list[StandingRowRead]:
+    """One standings table's rows, shared by every shape that carries a table — a pool's
+    and a swiss field's — so a row means the same thing on either."""
+    return [
+        StandingRowRead(
+            entry_id=row.entry_id,
+            rank=row.rank,
+            played=row.played,
+            wins=row.wins,
+            losses=row.losses,
+            games_won=row.games_won,
+            games_lost=row.games_lost,
+        )
+        for row in rows
     ]
 
 
@@ -400,6 +471,17 @@ def _serialize_standings(results: EventResults) -> StandingsResultsRead:
 def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
     return FinishesResultsRead(
         finishes=_finish_rows_read(results.finishes),
+        complete=results.complete,
+        champion=results.champion,
+    )
+
+
+def _serialize_swiss_standings(results: SwissStandings) -> SwissStandingsResultsRead:
+    """The swiss table, whose rows are serialized by the same helper a pool's are — so
+    "a swiss event's standings rows cross the wire exactly as a round-robin pool's do"
+    is true structurally rather than by two serializers agreeing."""
+    return SwissStandingsResultsRead(
+        rows=_standing_rows_read(results.rows),
         complete=results.complete,
         champion=results.champion,
     )
@@ -473,6 +555,10 @@ def serialize_event(
             # exactly as before: the settings object is a storage shape, not a wire one
             # (ADR "a draw type's settings are one NOT NULL JSON object").
             "qualifiers_per_pool": draw_settings.qualifiers_per_pool,
+            # And **R**, the swiss round count, off the same parsed arm and by the same
+            # rule: a property on the arms that have no round count, so this line asks
+            # every arm one question rather than deciding which draw types have one.
+            "rounds": draw_settings.rounds,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
             # The event's venue timezone anchors its wall-clock ``Slot`` windows to
@@ -506,7 +592,12 @@ def serialize_event(
             "results": (
                 None
                 if game_counts is None
-                else event_results(e, fixtures=fixtures, game_counts=game_counts)
+                else event_results(
+                    e,
+                    entrants=entrants,
+                    fixtures=fixtures,
+                    game_counts=game_counts,
+                )
             ),
         }
     )

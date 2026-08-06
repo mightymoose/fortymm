@@ -10,12 +10,16 @@ import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildEntrants,
   buildEvent,
   buildFixture,
   buildPool,
+  buildSwissDrawnEvent,
+  buildSwissEvent,
   buildTenPoolDrawnEvent,
+  buildTwoStageDrawnEvent,
   TEN_POOLS_BY_ID,
   TEN_POOLS_BY_POSITION,
 } from '../../data/seed.factory'
@@ -163,6 +167,10 @@ describe('DrawPanel', () => {
       expect(page.getPoolLines('p-a')).toEqual(['player.1 vs TBD'])
     })
 
+    // The rule that must not break, whatever the routing does: a fixture is never dropped.
+    // This event is a ROUND-ROBIN, so the fixture reaches the un-pooled group with no format
+    // view that can place it — it is shown as itself (`'orphaned'`), which is the claim the
+    // next describe block discriminates.
     it('keeps a fixture that belongs to no pool, rather than dropping it', () => {
       const withKo = buildDrawnEvent({
         fixtures: [
@@ -179,8 +187,116 @@ describe('DrawPanel', () => {
 
       page.render({ event: withKo })
 
-      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.queryOrphaned()).toBeInTheDocument()
       expect(page.getLineTexts()).toEqual(['player.1 vs TBD'])
+    })
+  })
+
+  /**
+   * **Which view the un-pooled fixtures get is the DRAW TYPE's answer** (`unpooledShape`,
+   * `../../data/draw`) — the bug this suite exists to hold shut.
+   *
+   * Three draw types put fixtures in `unpooled`, and their payloads are indistinguishable
+   * there: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every fixture of
+   * a swiss draw all carry `pool_id: null`. The panel routed on that null, so swiss — a
+   * pool-less draw *type* that merely shares it — rendered through single-elimination's
+   * successor arithmetic, the one thing the ADR says swiss does not have.
+   *
+   * The type checker could never have caught it: the routing was a value check on a list's
+   * length, not an exhaustive switch. It is one now, at both ends, and these are the tests
+   * that say the switch sends each type somewhere different.
+   */
+  describe('which view the un-pooled fixtures get', () => {
+    it('gives a SWISS draw the rounds view, and not the bracket', () => {
+      page.render({ event: buildSwissDrawnEvent() })
+
+      expect(page.querySwissRounds()).toBeInTheDocument()
+      // The discriminating half: a swiss draw must not reach the bracket at all.
+      expect(page.queryUnpooled()).toBeNull()
+    })
+
+    it('shows a swiss draw’s round 1 paired and its later rounds as forthcoming', () => {
+      // Slice 2's demoable outcome, through the panel: the pairings a director reviews, and
+      // the rounds that exist but have nobody in them yet — announced, not blank, not
+      // hidden.
+      page.render({ event: buildSwissDrawnEvent() })
+
+      expect(page.swiss.getRoundHeadings()).toEqual([
+        'Round 1',
+        'Round 2',
+        'Round 3',
+      ])
+      expect(page.swiss.getRoundLines(1)).toEqual([
+        'player.1 vs player.4',
+        'player.2 vs player.5',
+        'player.3 vs player.6',
+      ])
+      expect(page.swiss.getForthcomingText(2)).toBe(
+        '3 matches, paired once round 1 is decided.',
+      )
+    })
+
+    // The regression pins. Both of these are un-pooled exactly as the swiss draw above is,
+    // and both must still be brackets — for `rr-then-ko` the null genuinely IS the stage
+    // discriminator, and that meaning is what the swiss fix must not disturb.
+    it('still gives a SINGLE-ELIM draw the bracket', () => {
+      page.render({ event: buildBracketDrawnEvent() })
+
+      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.querySwissRounds()).toBeNull()
+      expect(page.getLineTexts()).toEqual([
+        'player.1 vs player.4',
+        'player.3 vs player.2',
+        'TBD vs TBD',
+      ])
+    })
+
+    /**
+     * A ROUND-ROBIN fixture naming a pool the event does not list. It cannot be dropped
+     * (that rule is pinned above), and it cannot be a bracket either: `Bracket` names its
+     * rounds backwards from the last round present, so this one fixture rendered inside a
+     * section headed **"Bracket"** with its round labelled **"Final"** — a knockout this
+     * event does not have, a final nobody played. The arm answered `'bracket'` and an
+     * exhaustive switch cannot see that a shape is a lie, so nothing was red.
+     *
+     * The assertion is three-sided on purpose: the fixture IS shown, it is NOT in the
+     * bracket, and the words on screen are the neutral ones.
+     */
+    it('shows a ROUND-ROBIN’s unplaceable fixture as itself — not as a bracket final', () => {
+      const strayPool = buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-orphan-1',
+            // A pool id the event's `pools` does not list — the only way a round-robin
+            // fixture reaches the un-pooled group at all.
+            poolId: 'p-gone',
+            round: 1,
+            position: 1,
+            entryAId: 'entry-1',
+            entryBId: 'entry-4',
+          }),
+        ],
+      })
+
+      page.render({ event: strayPool })
+
+      expect(page.getOrphaned()).toBeInTheDocument()
+      expect(page.getLineTexts()).toEqual(['player.1 vs player.4'])
+      // Not routed through knockout arithmetic: no bracket block, and the round keeps its
+      // own number instead of being read back from a final.
+      expect(page.queryUnpooled()).toBeNull()
+      expect(page.getRoundNames()).toEqual(['Round 1 fixtures in other fixtures'])
+    })
+
+    it('still gives an RR-THEN-KO knockout stage the bracket, with its pools above it', () => {
+      page.render({ event: buildTwoStageDrawnEvent() })
+
+      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.querySwissRounds()).toBeNull()
+      // The pool stage is untouched by the routing change — it never went through
+      // `unpooled` at all.
+      expect(page.getPoolLines('p-a')).toEqual(['player.1 vs player.3'])
+      expect(page.getPoolLines('p-b')).toEqual(['player.2 vs player.4'])
     })
   })
 
@@ -452,6 +568,27 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
     expect(page.queryNotice()).toBeNull()
     // The affordance is untouched — the refusal went, the button it was about did not.
     expect(page.queryGenerateButton('Championship Singles')).toBeInTheDocument()
+  })
+
+  // The same rule, for the draw type swiss brought with it (#1284). A swiss cut refuses a
+  // round count below one, and R is a number the director goes and fixes — so R has to be
+  // in the fingerprint or the refusal outlives the fix. This is #1123 for the new type:
+  // it would pass against a fingerprint that omits `rounds` ONLY if the notice never
+  // expired at all, which the sibling tests already rule out.
+  it('withdraws a swiss refusal when the round count changes — with no second click', async () => {
+    const ROUNDS_FLOOR = 'rounds must be at least 1, got 0.'
+    refuseCut(422, ROUNDS_FLOOR)
+    const { rerender } = page.render({
+      event: buildSwissEvent({ name: 'Swiss Open', rounds: 0 }),
+    })
+    await userEvent.click(await page.findGenerateButton('Swiss Open'))
+    expect(await page.findNoticeText()).toContain('rounds must be at least 1')
+
+    // The director sets a legal round count; the page refetches and re-renders.
+    rerender({ event: buildSwissEvent({ name: 'Swiss Open', rounds: 5 }) })
+
+    expect(page.queryNotice()).toBeNull()
+    expect(page.queryGenerateButton('Swiss Open')).toBeInTheDocument()
   })
 
   // #1049 Repro B: "0 entrants across 2 pool(s)…" above a panel whose event now has an

@@ -5,10 +5,13 @@ import {
   drawState,
   drawTypeFreeze,
   poolSetFreeze,
+  unpooledShape,
   type DrawState,
   type FixtureSide,
 } from './draw'
+import { DRAW_TYPES } from './draw-types'
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildDrawTypes,
   buildEntrant,
@@ -16,6 +19,10 @@ import {
   buildEvent,
   buildFixture,
   buildPool,
+  buildSwissDrawnEvent,
+  buildSwissOddDrawnEvent,
+  buildSwissOddMidEvent,
+  buildTwoStageDrawnEvent,
 } from './seed.factory'
 
 /** The drawn arm, or a failed assertion — so the tests below can read `.pools`
@@ -47,6 +54,57 @@ function label(side: FixtureSide): string {
   }
 }
 
+/**
+ * **Which view an event's un-pooled fixtures get** — a fact about the DRAW TYPE, and the
+ * one this module exists to keep away from `poolId === null`.
+ *
+ * Three draw types put fixtures in `unpooled`, and nothing about the fixtures themselves
+ * tells them apart: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every
+ * fixture of a swiss draw all carry a null pool id. Routing on that null rendered a swiss
+ * draw as a knockout bracket, through the successor arithmetic the ADR says swiss does not
+ * have — silently, because a value check is not something a type checker can read.
+ */
+describe('unpooledShape', () => {
+  it('sends swiss to the ROUNDS view — never the bracket', () => {
+    expect(unpooledShape('swiss')).toBe('swiss-rounds')
+  })
+
+  // The regression pin, at the decision rather than at the DOM. `pool_id IS NULL` keeps
+  // meaning "the knockout stage" for `rr-then-ko`, and a single-elim draw is a bracket
+  // whole — neither may move because swiss now shares the null.
+  it.each(['single-elim', 'rr-then-ko'] as const)(
+    'keeps %s on the bracket',
+    (drawType) => {
+      expect(unpooledShape(drawType)).toBe('bracket')
+    },
+  )
+
+  /** A round-robin fixture with no pool is a payload the server cannot send — it names a
+   * pool the event does not list. `drawState` deliberately does not DROP it, so it must
+   * have a shape; the shape it gets says only what is true of it, which is that no format
+   * view can place it.
+   *
+   * It answered `'bracket'` before, and that was the same lie the swiss routing fix exists
+   * to stop: `Bracket` names its rounds backwards from the last round present, so one stray
+   * round-robin fixture read as the "Final" of a knockout the event never had. */
+  it('gives a round-robin’s orphaned fixtures their OWN shape, not the bracket', () => {
+    expect(unpooledShape('round-robin')).toBe('orphaned')
+  })
+
+  /** Every draw type this client knows has an answer, and the `switch` has no catch-all —
+   * so a fifth member of the vocabulary is a compile error in `./draw` until somebody says
+   * how its draw reads. This asserts the runtime half: nothing falls through to
+   * `undefined`. Driven off `DRAW_TYPES` rather than a re-typed list, so adding a slug
+   * reaches this test without anybody remembering to. */
+  it('answers for every draw type in the vocabulary', () => {
+    for (const drawType of DRAW_TYPES) {
+      expect(['bracket', 'swiss-rounds', 'orphaned']).toContain(
+        unpooledShape(drawType),
+      )
+    }
+  })
+})
+
 describe('drawState', () => {
   it('reads an event with no fixtures as the designed UNDRAWN state', () => {
     expect(drawState(buildEvent({ fixtures: [] }))).toEqual({ kind: 'undrawn' })
@@ -57,6 +115,92 @@ describe('drawState', () => {
 
     expect(state.pools.map((p) => p.name)).toEqual(['Pool A', 'Pool B'])
     expect(state.unpooled).toEqual([])
+  })
+
+  /** The shape rides the read model, so the panel reads a tag rather than inferring a
+   * format from a null pool id. Asserted on all three un-pooled draw types, because the
+   * payloads they produce are indistinguishable at the fixture level. */
+  it('carries the un-pooled SHAPE, read off the event’s draw type', () => {
+    expect(drawn(drawState(buildSwissDrawnEvent())).unpooledShape).toBe(
+      'swiss-rounds',
+    )
+    expect(drawn(drawState(buildBracketDrawnEvent())).unpooledShape).toBe('bracket')
+    expect(drawn(drawState(buildTwoStageDrawnEvent())).unpooledShape).toBe('bracket')
+  })
+
+  /** A swiss draw's rounds all arrive un-pooled — every one of them, from the cut — so the
+   * pool list is empty and nothing is dropped. */
+  it('reads a swiss draw as un-pooled rounds, with every cut round present', () => {
+    const state = drawn(drawState(buildSwissDrawnEvent()))
+
+    expect(state.pools).toEqual([])
+    expect(state.unpooled.map((r) => r.round)).toEqual([1, 2, 3])
+    expect(state.unpooled.map((r) => r.fixtures.length)).toEqual([3, 3, 3])
+  })
+
+  /**
+   * The **bye**, derived: a bye is the absence of a fixture, so the entrant sitting a round
+   * out is the one that round's fixtures never name. Nothing on the wire says who it is,
+   * and nothing here invents a fixture for them.
+   */
+  describe('swissByes', () => {
+    /** Round 1 of a seven-entrant cut seats six; `entry-7` is in no fixture, so they are
+     * the bye — named, in draw order, as an entrant rather than as a bare id. */
+    it('names the entrant an odd field leaves out of a paired round', () => {
+      const state = drawn(drawState(buildSwissOddDrawnEvent()))
+
+      expect(state.swissByes.get(1)?.map((e) => e.username)).toEqual(['player.7'])
+    })
+
+    /** Asked of each round's OWN fixtures. `advance()` byes whoever the standings leave
+     * over, which is a different entrant every round. */
+    it('follows the round — a later paired round byes somebody else', () => {
+      const state = drawn(drawState(buildSwissOddMidEvent()))
+
+      expect(state.swissByes.get(1)?.map((e) => e.username)).toEqual(['player.7'])
+      expect(state.swissByes.get(2)?.map((e) => e.username)).toEqual(['player.1'])
+    })
+
+    /** A round cut with both sides null names nobody, so *every* entrant is "in no fixture"
+     * of it. It has no bye — it has no pairings yet. */
+    it('byes nobody in a round that is not paired yet', () => {
+      const state = drawn(drawState(buildSwissOddDrawnEvent()))
+
+      expect(state.swissByes.has(2)).toBe(false)
+      expect(state.swissByes.has(3)).toBe(false)
+    })
+
+    /** An even field seats everybody. Eight entrants over a six-seat round — a *stale*
+     * draw, two entries taken since the cut — so there really are entrants in no fixture,
+     * and it is the parity that decides there is no bye rather than an empty subtraction. */
+    it('byes nobody when the field is even, unseated entrants and all', () => {
+      const state = drawn(
+        drawState(buildSwissDrawnEvent({ entrants: buildEntrants(8) })),
+      )
+
+      expect(state.swissByes.size).toBe(0)
+    })
+
+    /**
+     * Never for a bracket, whatever the parity. Its rounds are the same un-pooled shape,
+     * but an entrant in none of them has been **eliminated** — calling that a bye would be
+     * the routing lie again, one layer down.
+     *
+     * The five-entrant bracket is the case that can fail: `buildBracketDrawnEvent` seats
+     * four entrants in its two semifinals, so with an ODD field of five `entry-5` is in no
+     * fixture of a **paired** round — the exact input the swiss subtraction answers, on a
+     * draw type that must not answer it. The four-entrant default cannot tell the gate from
+     * its absence (everybody it lists is seated), so it is here as the ordinary case only.
+     */
+    it('is empty for every draw type but swiss', () => {
+      expect(drawn(drawState(buildBracketDrawnEvent())).swissByes.size).toBe(0)
+      expect(
+        drawn(
+          drawState(buildBracketDrawnEvent({ entrants: buildEntrants(5) })),
+        ).swissByes.size,
+      ).toBe(0)
+      expect(drawn(drawState(buildTwoStageDrawnEvent())).swissByes.size).toBe(0)
+    })
   })
 
   it('lists each pool’s entrants — the members its own fixtures name, by NAME', () => {

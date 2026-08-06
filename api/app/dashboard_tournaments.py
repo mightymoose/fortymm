@@ -64,6 +64,7 @@ from app.schemas.tournament import (
     MatchSettings,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
+    SwissStandingsResultsRead,
     TournamentEntrantRead,
     TournamentFixtureRead,
     TournamentTable,
@@ -290,6 +291,7 @@ def _build_event(
 
     results = event_results(
         event,
+        entrants=entrants,
         fixtures=all_fixtures,
         game_counts=game_counts,
     )
@@ -317,6 +319,18 @@ def _build_event(
                     break
             if my_standing is not None:
                 break
+    elif isinstance(results, SwissStandingsResultsRead):
+        # The third shape that carries the caller's row — swiss, which is POOL-LESS
+        # (ADR "swiss pre-cuts every round and pairs each one on advance"): one table
+        # over the whole field, so there is no pool to filter by and the field size is
+        # that table's own length. Without this arm a swiss player's panel would show
+        # no rank at all while the table holding their row rode along on the same
+        # payload, and ``stage_complete`` below could never be true for them.
+        for row in results.rows:
+            if row.entry_id == my_entry_id:
+                my_standing = row
+                field_size = len(results.rows)
+                break
     # What ``stage_label`` is judged on, and it is NOT always the pool's completeness.
     # For a round-robin the two coincide — the pool finishing IS the event finishing,
     # and "Group complete" is the right thing to say. For a two-stage event they come
@@ -325,9 +339,16 @@ def _build_event(
     # over an event still being played. The two-stage shape's own ``complete`` is both
     # stages decided (ADR 20260727) — the only honest answer this minimal label can
     # give.
+    # Swiss joins the two-stage shape on the left of this: it has no pool whose
+    # completeness could stand in, and its own ``complete`` is every round decided —
+    # which is exactly what "is this event over" means for a format that eliminates
+    # nobody. Reading ``pool_complete`` for it would leave the label stuck on "In play"
+    # through the final round and past it.
     stage_complete = (
         results.complete
-        if isinstance(results, StandingsThenFinishesResultsRead)
+        if isinstance(
+            results, StandingsThenFinishesResultsRead | SwissStandingsResultsRead
+        )
         else pool_complete
     )
 
@@ -619,6 +640,11 @@ def _round_label(
                 if pool_id is not None
                 else f"Round {round_number}"
             )
+        case DrawType.swiss:
+            # A swiss round IS the vocabulary — "round 3" is what a director and a
+            # player both call it — and it needs none of the bracket's caveats, because
+            # the number is not a distance from a final.
+            return f"Round {round_number}"
         case _:
             assert_never(draw_type)
 
@@ -635,6 +661,10 @@ def _stage_label(draw_type: DrawType, *, complete: bool) -> str:
             # its knockout stage is still being played. Naming *which* stage is live
             # needs more plumbing than this ticket buys (ADR 20260727), so the label
             # says only whether the event has finished.
+            return "Complete" if complete else "In play"
+        case DrawType.swiss:
+            # Not the round-robin wording: a swiss event has no group to complete, and
+            # "Group complete" over a pool-less field would name a stage it never had.
             return "Complete" if complete else "In play"
         case _:
             assert_never(draw_type)
