@@ -60,7 +60,6 @@ export interface SwissStanding {
   readonly username: string
   readonly rank: number
   readonly wins: number
-  readonly losses: number
   readonly gamesWon: number
 }
 
@@ -86,7 +85,6 @@ interface SwissResultsPayload {
     readonly entry_id: string
     readonly rank: number
     readonly wins: number
-    readonly losses: number
     readonly games_won: number
   }>
 }
@@ -211,7 +209,6 @@ export async function readSwissStandings(
       username,
       rank: row.rank,
       wins: row.wins,
-      losses: row.losses,
       gamesWon: row.games_won,
     }
   })

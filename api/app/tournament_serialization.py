@@ -379,13 +379,12 @@ def _field_input(
             1 for f in fixtures if f.match_status is not MatchStatus.voided
         ),
         outcomes=tuple(outcomes),
-        byes=swiss_byes(field, _seated_pairings(fixtures, game_counts)),
+        byes=swiss_byes(field, _seated_pairings(fixtures)),
     )
 
 
 def _seated_pairings(
     fixtures: list[TournamentFixtureRead],
-    game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> list[SeatedPairing]:
     """The read rows that seat **both** sides, in the shape
     :func:`~app.draws.swiss_byes` reads them.
@@ -398,16 +397,31 @@ def _seated_pairings(
     ``fixture_count``: it will never produce a result, so it must not hold its round —
     and the bye scored against that round — open forever.
 
-    ``decided`` is read through :func:`_fixture_outcome`, the same projection the
-    standings themselves are built from, so a result under correction un-decides its
-    round here exactly as it un-scores its match there."""
+    ``decided`` is the match's **terminal status** — completed, or voided — read live
+    off the row, which is the same live fact :func:`_fixture_outcome` gates the
+    standings on. So a result under correction un-decides its round here exactly as it
+    un-scores its match there.
+
+    It asks the status directly rather than building the outcome and testing it for
+    ``None``, which is what this did and what cost a discarded ``MatchOutcome`` per
+    completed fixture on every detail render. The other two things that projection
+    checks are already true of every row that reaches here: the comprehension filters
+    both entries, and ``match_status`` is read off an outer join onto the fixture's own
+    ``match_id`` (:func:`~app.tournament_queries.fixtures_by_event`), so a status of
+    any kind means there is a match behind it.
+
+    The draw layer spells the same question over its own row shape
+    (:attr:`app.draws.FixtureState.is_decided`, a live score or a void). The row shapes
+    genuinely differ, so the two are not one predicate — that the two agree, including
+    on a status neither of them names, is pinned by a test in ``tests/test_swiss.py``.
+    """
     return [
         SeatedPairing(
             round=f.round,
             entry_a_id=EntryId(f.entry_a_id),
             entry_b_id=EntryId(f.entry_b_id),
             decided=f.match_status is MatchStatus.voided
-            or _fixture_outcome(f, game_counts) is not None,
+            or f.match_status is MatchStatus.completed,
         )
         for f in fixtures
         if f.entry_a_id is not None and f.entry_b_id is not None

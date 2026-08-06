@@ -25,10 +25,14 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.draws import _swiss_seated_pairings
 from app.models import (
     DrawType,
+    Match,
+    MatchStatus,
+    Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
@@ -36,11 +40,14 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.schemas.tournament import MAX_SWISS_ROUNDS
+from app.schemas.tournament import MAX_SWISS_ROUNDS, TournamentFixtureRead
 from app.tournament_draw_settings import draw_settings_of
-from app.tournament_draws import DrawCurrency, draw_currency_by_event
+from app.tournament_draws import DrawCurrency, draw_currency_by_event, fixture_state
+from app.tournament_materialization import materialize_event
+from app.tournament_serialization import _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
+    counted_statements,
     grant_permissions,
     make_user,
     opponent_session,
@@ -875,6 +882,185 @@ async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
             entry_ids[1],
             entry_ids[2],
         }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
+
+
+async def test_advancing_a_swiss_event_costs_three_statements(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """``materialize_event`` runs on the **completion seam** — every result submission
+    re-runs it, inside the score-accept transaction, under the match row lock — so what
+    the swiss advance costs there is not a micro-optimization.
+
+    Swiss is the draw type that loads the most: the fixtures, the fixtures' **game
+    counts** (it pairs down the standings) and the event's **entrants** (a bye is the
+    absence of a row, so the seated set is not the field). Three, and **three is the
+    whole of it** — one statement each, all of them batched over the event. Nothing in
+    the resulting fixtures shows the difference between that and a load moved inside the
+    round loop, or a field projected per fixture: both pair the identical round, and
+    both turn one round trip into one per round or one per pairing on a seam that runs
+    on every score. The round-robin twin of this pin
+    (``tests/test_tournaments.py``) is the other half of the same claim — that the three
+    draw types which read neither counts nor field still pay for neither.
+
+    Each of the three is asserted **by name** as well as by the count, so a load that
+    moved to a different table (or folded into the fixture statement) reds too rather
+    than quietly keeping the total at three.
+
+    Run against a round that is **partially** decided — one of round 1's two matches
+    completed, the other still on — which is exactly what the seam sees on the first of
+    a round's results. Nothing is pairable and nothing is newly ready, so the whole call
+    *is* the three loads. The completed match is load-bearing rather than scene-setting:
+    ``game_counts_by_match`` returns without a statement when no match has completed
+    (``if not counts``), so without it the game-count third of this pin would be
+    vacuous.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 4)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    # One of round 1's two matches completed, the other untouched: the round is not
+    # decided, so no round is pairable and no fixture is newly ready.
+    played, _still_on = [
+        f for f in await _fixtures(db_session, event_id) if f.round == 1
+    ]
+    assert played.match_id is not None
+    match = await db_session.get(Match, played.match_id)
+    assert match is not None
+    match.status = MatchStatus.completed
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        tournament = (
+            await session.execute(
+                select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+            )
+        ).scalar_one()
+        event_row = (
+            await session.execute(
+                select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event_id))
+            )
+        ).scalar_one()
+        # Only the seam's own statements are counted, not the two loads that stand in
+        # for the caller already holding these rows.
+        statements.clear()
+        await materialize_event(session, tournament, event_row)
+
+    assert len(statements) == 3, statements
+    assert [s for s in statements if "tournament_fixtures" in s], (
+        "the fixtures, with their matches' statuses riding along on the same join"
+    )
+    assert [s for s in statements if "match_game_scores" in s], (
+        "the game counts, batched over the event — swiss pairs down the standings"
+    )
+    assert [s for s in statements if "tournament_entries" in s], (
+        "and the field, which the fixtures cannot yield: a byed entrant is in no row"
+    )
+
+
+# ----- the two layers' spellings of "a pairing is decided" ---------------------------
+
+
+#: What "decided" means, as a function of the linked match's **live status** — ``None``
+#: being a fixture that has not materialized into a match at all.
+#:
+#: Written out as a literal mapping rather than derived from either layer, so the test
+#: below pins the answer itself. Asserting only that the two layers agree would pass
+#: vacuously the day both of them start returning ``False`` for everything.
+_DECIDED_BY_MATCH_STATUS: dict[MatchStatus | None, bool] = {
+    None: False,
+    MatchStatus.pending: False,
+    MatchStatus.in_progress: False,
+    MatchStatus.completed: True,
+    MatchStatus.voided: True,
+}
+
+
+def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
+    """**One rule, two row shapes, and nothing but this test holding them together.**
+
+    ``app.draws`` reads a pairing's decidedness off a
+    :class:`~app.draws.FixtureState` (a live score, or a void that means there will
+    never be one); ``app.tournament_serialization`` reads it off a
+    ``TournamentFixtureRead`` (the match's terminal status). Both fill the same
+    :attr:`~app.draws.SeatedPairing.decided`, which is what gates a **bye** being
+    scored — so the two disagreeing means a bye credited in the director's standings
+    but not in the pairing of the next round, or the reverse.
+
+    They are deliberately **not** one shared predicate: the two hold genuinely
+    different rows, one an ORM projection and one a wire model, and forcing a common
+    shape on them would be a worse coupling than this. What is shared is the *answer*,
+    and this is where that is asserted — over the whole status domain, so a third
+    condition (a forfeit status, say) added on one side alone reds here rather than in
+    a live event.
+
+    Both inputs are built from **one** status literal per case, through the same gates
+    the two production loaders apply — game counts are keyed only for a completed match
+    (``app.tournament_queries.game_counts_by_match``), a match id is in the voided set
+    only for a voided one — so the case cannot be set up as agreeing.
+    """
+    assert set(_DECIDED_BY_MATCH_STATUS) == {None, *MatchStatus}, (
+        "every match status is named, so a new one has to be answered here rather "
+        "than falling through to whatever the two layers happen to do with it"
+    )
+    entry_a_id, entry_b_id = uuid.uuid4(), uuid.uuid4()
+
+    for match_status, decided in _DECIDED_BY_MATCH_STATUS.items():
+        match_id = uuid.uuid4() if match_status is not None else None
+        # The read layer's row, exactly as ``fixtures_by_event`` composes it: the status
+        # comes off an outer join on this same ``match_id``.
+        (from_the_read,) = _seated_pairings(
+            [
+                TournamentFixtureRead(
+                    id=uuid.uuid4(),
+                    pool_id=None,
+                    round=1,
+                    position=1,
+                    entry_a_id=entry_a_id,
+                    entry_b_id=entry_b_id,
+                    winner_entry_id=None,
+                    match_id=match_id,
+                    match_status=match_status,
+                    table_id=None,
+                    scheduled_start=None,
+                    pinned_at=None,
+                    call_notified_count=0,
+                    completed_at=None,
+                )
+            ]
+        )
+        # The draw layer's row, through the same bridge the completion seam projects
+        # with — and through the same two gates that seam loads its inputs behind.
+        (from_the_row,) = _swiss_seated_pairings(
+            [
+                fixture_state(
+                    TournamentFixture(
+                        id=uuid.uuid4(),
+                        event_id=uuid.uuid4(),
+                        pool_id=None,
+                        round=1,
+                        position=1,
+                        entry_a_id=entry_a_id,
+                        entry_b_id=entry_b_id,
+                        match_id=match_id,
+                    ),
+                    {match_id: (3, 1)}
+                    if match_id is not None and match_status is MatchStatus.completed
+                    else {},
+                    frozenset({match_id})
+                    if match_id is not None and match_status is MatchStatus.voided
+                    else frozenset(),
+                    None,
+                )
+            ]
+        )
+
+        assert (from_the_read.decided, from_the_row.decided) == (decided, decided), (
+            f"the read layer and the draw layer must both call a {match_status} "
+            f"pairing {'decided' if decided else 'undecided'}"
+        )
 
 
 async def test_a_swiss_event_has_no_schedule_preview(

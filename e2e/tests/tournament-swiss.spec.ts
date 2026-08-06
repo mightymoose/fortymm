@@ -841,14 +841,24 @@ test.describe('Tournament — swiss draw', () => {
         'somebody who has never sat out plays',
     ).not.toBe(byedInRoundOne)
 
-    // The same two facts on the page: round 2's lines name the entrant who sat round 1
-    // out, and do not name the one sitting round 2 out.
+    // The same facts on the page: round 2's lines name the entrant who sat round 1 out, do
+    // not name the one sitting round 2 out, and the round says who that is.
+    //
+    // The bye line is asserted on every round the bye moves to, not only on the first,
+    // because round 2 is where the derivation is doing something: round 1's bye is the
+    // entrant no fixture was ever written for, while this one has to come out of a pairing
+    // the server dealt at advance. A rotation that moved the bye and a page that kept
+    // naming round 1's would both pass on the negative alone.
     await expect(detail.swissRoundFixtures(eventId, 2)).toHaveCount(perRound)
     await expect(detail.swissRound(eventId, 2)).toContainText(byedInRoundOne)
     await expect(
       detail.swissRound(eventId, 2),
       `${byedInRoundTwo} is round 2's bye, so no round-2 fixture names them`,
     ).not.toContainText(byedInRoundTwo)
+    await expect(
+      detail.swissRoundBye(eventId, 2),
+      `${byedInRoundTwo} sits round 2 out, so the round should name them as its bye`,
+    ).toContainText(byedInRoundTwo)
 
     // ----- play round 2, and watch the SECOND bye score ---------------------
     // Read the byed entrant's tally before the round is decided, so what is asserted
@@ -904,6 +914,10 @@ test.describe('Tournament — swiss draw', () => {
       detail.swissRound(eventId, ROUNDS),
       `${byedInRoundThree} is round 3's bye, so no round-3 fixture names them`,
     ).not.toContainText(byedInRoundThree)
+    await expect(
+      detail.swissRoundBye(eventId, ROUNDS),
+      `${byedInRoundThree} sits round 3 out, so the round should name them as its bye`,
+    ).toContainText(byedInRoundThree)
 
     await Promise.all(entrants.map((entrant) => entrant.ctx.dispose()))
   })

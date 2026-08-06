@@ -164,6 +164,14 @@ def finishing_order(
     Both it and ``outcomes`` may only name entries that are in ``entrants``: the tallies
     are keyed by entrant, so a stranger is a ``KeyError`` rather than a row appearing
     from nowhere.
+
+    ``byes`` **defaults to empty**, which is safe here for a reason that does not
+    travel: this is one free function, so an omission is a caller declining to pass a
+    value at one call site — visible in the diff, and "no byes" is the truth for every
+    format but swiss. Contrast :meth:`app.draws.DrawStrategy.advance`, where the field
+    is a **required** parameter precisely because that is a ``Protocol`` with four
+    implementations: there, a default would let an implementation omit the parameter
+    from its own signature and still type-check.
     """
     tallies: dict[EntryId, EntryTally] = {
         entry_id: EntryTally(entry_id=entry_id) for entry_id in entrants

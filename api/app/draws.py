@@ -50,12 +50,7 @@ from datetime import datetime
 from typing import NewType, Protocol
 
 from app.models.tournament import DrawType, EventFormat
-from app.pool_finishing_order import (
-    EntryTally,
-    MatchOutcome,
-    entry_id_order,
-    finishing_order,
-)
+from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     RoundRobinDrawSettingsWrite,
@@ -408,6 +403,29 @@ class FixtureState:
         """Some side is still unknown."""
         return self.entry_a_id is None or self.entry_b_id is None
 
+    @property
+    def is_decided(self) -> bool:
+        """This fixture has produced all the result it ever will — a live score, or a
+        **void** that means there will never be one.
+
+        The two facts, in one place, because two readers ask this same question of this
+        same type within one advance: :func:`_swiss_round_is_decided` (may the next
+        round be paired?) and :attr:`SeatedPairing.decided` (may this round's bye be
+        scored?). Spelled twice they could gain a third condition — a forfeit status —
+        one at a time, and a bye scored in the standings but not in the pairing is the
+        result.
+
+        The **live-outcome** view (:attr:`games`), not the written-back
+        ``winner_entry_id``: a result under correction leaves its match un-``completed``
+        while the winner id stays put, so a correction genuinely un-decides its fixture.
+
+        Says nothing about the sides being known — an unpaired fixture is not decided in
+        any useful sense, but it is not this property's question either. A caller that
+        needs both asks for both (``not f.is_pending and f.is_decided``); the callers
+        that already hold a seated fixture do not re-ask.
+        """
+        return self.match_voided or self.games is not None
+
 
 @dataclass(frozen=True, slots=True)
 class SeatedPairing:
@@ -435,8 +453,9 @@ class SeatedPairing:
     #: match, or a **voided** one, which never will. It is here because a bye is scored
     #: with its round (:func:`swiss_byes`), and a round is only over when every pairing
     #: in it is: a fixture still being played leaves the round open, and a voided one
-    #: does not, exactly as :func:`_swiss_round_is_decided` reads the same two facts for
-    #: the pairing.
+    #: does not. The draw layer fills it straight from
+    #: :attr:`FixtureState.is_decided` — the one place those two facts are spelled —
+    #: which is the same property :func:`_swiss_round_is_decided` asks.
     #:
     #: **No default**, deliberately. Either default is a lie a caller can tell by
     #: omission, and both fail quietly: ``False`` credits nobody for a bye they took,
@@ -515,6 +534,15 @@ class DrawStrategy(Protocol):
         case. A caller may hand those three an **empty** sequence rather than paying for
         a load they discard — :func:`reads_entrants` is where each draw type says which
         it is.
+
+        **Required, with no default**, and that is a fact about this being a
+        :class:`Protocol` with four implementations rather than a rule about optional
+        parameters. A default here would let one implementation quietly leave the
+        parameter off its signature and still satisfy the checker, and the one that did
+        would be the one that needed it. The mirror case is
+        :func:`~app.pool_finishing_order.finishing_order`, a single free function whose
+        ``byes`` **is** defaulted: nothing implements it, so an omission there is a
+        caller's choice at one call site rather than a hole in a seam.
         """
         ...
 
@@ -1192,10 +1220,16 @@ def swiss_byes(
     round does. It costs the pairing nothing, because a round is paired only after the
     round before it is decided.
 
-    One definition, two readers (see :class:`SeatedPairing`): the draw layer picks the
+    One definition, two layers (see :class:`SeatedPairing`): the draw layer picks the
     next bye by preferring an entrant with none of these, and the results layer scores
-    each one as a win worth zero games. Ordered by round then by entry id so the value
-    is reproducible, though only its *multiset* is ever read.
+    each one as a win worth zero games.
+
+    Grouped by **round, in round order** — the one ordering that is read, since a round
+    is what a bye is scored with. Within a round the ids arrive in whatever order the
+    caller's ``field`` iterates, and that is deliberate: every consumer takes the
+    *multiset* and nothing else (``Counter(...)`` for the selection rule,
+    ``for entry_id in byes`` for the scoring), so sorting the field here would be an
+    ``O(n log n)`` pass per call buying a total order nobody asks for.
     """
     seated: dict[int, set[EntryId]] = defaultdict(set)
     undecided: set[int] = set()
@@ -1203,12 +1237,15 @@ def swiss_byes(
         seated[pairing.round].update({pairing.entry_a_id, pairing.entry_b_id})
         if not pairing.decided:
             undecided.add(pairing.round)
-    ordered_field = sorted(field, key=entry_id_order)
+    # Materialized, because ``field`` is an ``Iterable`` and the comprehension below
+    # walks it once **per decided round**: a generator would yield the first round's
+    # byes and then silently nothing.
+    entrants = list(field)
     return tuple(
         entry_id
         for round_number in sorted(seated)
         if round_number not in undecided
-        for entry_id in ordered_field
+        for entry_id in entrants
         if entry_id not in seated[round_number]
     )
 
@@ -1226,11 +1263,15 @@ def _swiss_pairing_fills(
     if round_fixtures is None:
         return []
     field = [entrant.entry_id for entrant in ordered_entrants]
-    # Projected once and handed to all three readers, so "who has played whom" and "who
-    # has sat out" are two questions asked of one set of pairings.
+    # Projected once and handed to both readers, so "who has played whom" and "who has
+    # sat out" are two questions asked of one set of pairings.
     pairings = _swiss_seated_pairings(fixtures)
-    order = _swiss_standings_order(field, fixtures, pairings)
-    bye = _swiss_bye(order, pairings)
+    # Derived once, here, and handed to both the scoring and the selection below. Two
+    # calls would be two chances to disagree — and the shape of that disagreement is an
+    # entrant sitting out twice while the table says they never did.
+    byes = swiss_byes(field, pairings)
+    order = _swiss_standings_order(field, fixtures, byes)
+    bye = _swiss_bye(order, byes)
     pairs = swiss_pairings(
         [entry_id for entry_id in order if entry_id != bye], _swiss_met(pairings)
     )
@@ -1294,30 +1335,26 @@ def _swiss_round_to_pair(
 def _swiss_round_is_decided(round_fixtures: Sequence[FixtureState]) -> bool:
     """Whether every fixture in one round has produced all the result it ever will.
 
-    The **live-outcome** view (:attr:`FixtureState.games`), not the written-back
-    ``winner_entry_id``, for the reason :func:`_finished_pool_order` reads the same
-    field: a result under correction leaves its match un-``completed`` while the winner
-    id stays put, and the standings the next round is paired from are projected from the
-    games. So a correction un-decides its round rather than letting the next one be
-    paired off a table nobody can see.
+    Per fixture that is :attr:`FixtureState.is_decided` — the shared spelling, which is
+    also what :attr:`SeatedPairing.decided` carries, so "this round is over" is one
+    answer whether it is being asked in order to pair the next round or in order to
+    score a bye. Read that property for why it is the **live-outcome** view
+    (:attr:`FixtureState.games`) and why a **voided** fixture counts as decided.
 
-    A **voided** fixture never will produce a result (the match is terminal, and
-    ``ready_fixtures`` will not re-materialize a fixture that has a ``match_id``), so it
-    is excluded rather than counted-but-missing. Counting it would stall the event
-    permanently one score short, with no move a director could make.
+    The extra half — both sides known — stays here rather than on the property. It is a
+    question about a *round* being playable at all, not about one fixture's result, and
+    a round with an unpaired fixture in it has not been played whatever its other rows
+    say.
     """
     return all(
-        fixture.entry_a_id is not None
-        and fixture.entry_b_id is not None
-        and (fixture.match_voided or fixture.games is not None)
-        for fixture in round_fixtures
+        not fixture.is_pending and fixture.is_decided for fixture in round_fixtures
     )
 
 
 def _swiss_standings_order(
     field: Sequence[EntryId],
     fixtures: Sequence[FixtureState],
-    pairings: Sequence[SeatedPairing],
+    byes: Sequence[EntryId],
 ) -> list[EntryId]:
     """The field ordered by the current standings — the order the next round is paired
     down.
@@ -1327,6 +1364,10 @@ def _swiss_standings_order(
     Buchholz"). Leaving them out would rank a byed entrant below everybody who played
     while the director's table ranked them above — the two layers disagreeing about the
     standings, which is precisely what one shared chain exists to prevent.
+
+    ``byes`` arrives already derived (:func:`swiss_byes`, called once by
+    :func:`_swiss_pairing_fills`) rather than being derived here, so that this and
+    :func:`_swiss_bye` read one value instead of two derivations of it.
 
     :func:`~app.pool_finishing_order.finishing_order` is the *shared* definition of that
     table, the same call the standings on screen are projected through, so the order a
@@ -1362,22 +1403,25 @@ def _swiss_standings_order(
                 entry_b_games=games.entry_b_games,
             )
         )
-    return [
-        tally.entry_id
-        for tally in finishing_order(field, outcomes, swiss_byes(field, pairings))
-    ]
+    return [tally.entry_id for tally in finishing_order(field, outcomes, byes)]
 
 
-def _swiss_bye(
-    order: Sequence[EntryId], pairings: Sequence[SeatedPairing]
-) -> EntryId | None:
+def _swiss_bye(order: Sequence[EntryId], byes: Sequence[EntryId]) -> EntryId | None:
     """Who sits out this round: the **lowest-ranked entrant who has not had a bye yet**,
     or ``None`` when the field is even.
 
-    Selection and scoring read the *same* derivation (:func:`swiss_byes`), so the
-    entrant this passes over for having had one is exactly the entrant the standings
-    credited with a win for it. Two derivations could disagree, and the shape of that
+    Selection and scoring read the same **value**, not two derivations of it:
+    :func:`_swiss_pairing_fills` calls :func:`swiss_byes` once and hands the one tuple
+    to this and to :func:`_swiss_standings_order`. So the entrant this passes over for
+    having had one is exactly the entrant the standings credited with a win for it, by
+    construction — where two calls would agree only as long as nobody changed what
+    :func:`swiss_byes` returns for one caller's argument shape. The shape of that
     disagreement is somebody sitting out twice while the table says they never did.
+
+    (Within *this* layer, that is. The results layer derives its own byes from its own
+    row shape, because the two hold different rows — see :class:`SeatedPairing` — and
+    that the two spellings of "decided" underneath them still agree is pinned by a
+    test, not by a shared call.)
 
     The fallback for a field in which everybody has had one (the lowest-ranked overall)
     is written for completeness rather than because it runs. The cut refuses ``R > n −
@@ -1386,9 +1430,9 @@ def _swiss_bye(
     """
     if len(order) % 2 == 0:
         return None
-    byes = Counter(swiss_byes(order, pairings))
+    taken = Counter(byes)
     for entry_id in reversed(order):
-        if not byes[entry_id]:
+        if not taken[entry_id]:
             return entry_id
     return order[-1]
 
@@ -1410,16 +1454,17 @@ def _swiss_seated_pairings(
     derivations read. A fixture with an empty side is a round waiting to be paired, not
     a pairing.
 
-    ``decided`` reads the same two facts :func:`_swiss_round_is_decided` reads — a live
-    score, or a void that means there will never be one — so "this round is over" is one
-    answer here, whether it is being asked in order to pair the next round or in order
-    to score a bye."""
+    ``decided`` is :attr:`FixtureState.is_decided` itself — a live score, or a void that
+    means there will never be one — which is the same property
+    :func:`_swiss_round_is_decided` asks, so "this round is over" is one answer here,
+    whether it is being asked in order to pair the next round or in order to score a
+    bye."""
     return [
         SeatedPairing(
             round=fixture.round,
             entry_a_id=fixture.entry_a_id,
             entry_b_id=fixture.entry_b_id,
-            decided=fixture.match_voided or fixture.games is not None,
+            decided=fixture.is_decided,
         )
         for fixture in fixtures
         if fixture.entry_a_id is not None and fixture.entry_b_id is not None
