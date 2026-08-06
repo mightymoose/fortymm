@@ -7,10 +7,15 @@ import { useTransitionTournament } from '../data/api'
 import {
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
+  type LifecycleEdge,
   type LifecycleRefusal,
   type LifecycleTone,
 } from '../data/lifecycle'
 import type { Tournament } from '../data/types'
+import {
+  ConfirmIrreversibleActDialog,
+  type IrreversibleActConsequence,
+} from './confirm-irreversible-act-dialog'
 
 export interface LifecycleActionsProps {
   tournament: Tournament
@@ -38,6 +43,35 @@ const TONE: Record<
 }
 
 /**
+ * The edge, as the consequence its confirm will price — the one join between the
+ * lifecycle table (`../data/lifecycle`, which knows nothing about this dialog) and the
+ * dialog's sum type.
+ *
+ * A `switch` over `edge.confirm` rather than a spread of `{ variant: edge.confirm, … }`:
+ * the spread only typechecks while all three variants carry an identical payload, and
+ * would break confusingly the day one of them names something the others do not. This
+ * stays total with no unreachable arm, because `confirm` has exactly these three values.
+ */
+const consequenceFor = (
+  edge: LifecycleEdge,
+  tournamentName: string,
+): IrreversibleActConsequence => {
+  switch (edge.confirm) {
+    case 'publish-tournament':
+      return { variant: 'publish-tournament', tournamentName }
+    case 'start-tournament':
+      return { variant: 'start-tournament', tournamentName }
+    case 'end-tournament':
+      return { variant: 'end-tournament', tournamentName }
+    default: {
+      // A fourth edge without a priced consequence is a TYPE error here.
+      const exhaustive: never = edge.confirm
+      return exhaustive
+    }
+  }
+}
+
+/**
  * The detail header's lifecycle affordance — and the **only** way a tournament's
  * status changes in this UI (ADR-0017). It posts the edge the tournament's status
  * offers to `POST /v1/tournaments/{id}/transitions`:
@@ -53,6 +87,25 @@ const TONE: Record<
  * It renders **nothing** — not a disabled button — for a non-owner (`canEdit`),
  * because every transition is owner-only server-side (403); and at most ONE
  * button, the one legal from the status the tournament is actually in.
+ *
+ * ## Every edge is priced before it is posted
+ *
+ * The button does not move the tournament. It opens `ConfirmIrreversibleActDialog` on the
+ * consequence *this* edge spends, and the transition is what the confirm's own button
+ * fires. Go back, Escape and the overlay all send nothing and leave the tournament exactly
+ * where it stands. That is the whole lifecycle, not a subset of it: the path is
+ * forward-only, so there is no un-publish, no un-start and no un-end (ADR "a confirm
+ * prices an irreversible act, a freeze explains an illegal one").
+ *
+ * **Start tournament** is the one that would most tempt an exemption and least deserves
+ * it. Since #788 it does not merely relabel the tournament — it closes registration and
+ * mints a match for every ready fixture, which spends the *players'* attention rather than
+ * the tournament's visibility.
+ *
+ * The `isPending` lock stays alongside the confirm rather than being replaced by it. A
+ * confirm is not a debounce: it asks a question once, per click, while the lock is what
+ * keeps a double-click from sending a second transition whose only possible answer is a
+ * 409 shown to somebody who did nothing wrong.
  *
  * ## A refused move is reported HERE, in the server's own words
  *
@@ -87,8 +140,14 @@ const TONE: Record<
 export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const transition = useTransitionTournament(tournament.id)
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none.
+  // click before last is worse than none. An opened (or cancelled) dialog is NOT an
+  // attempt, so it leaves the standing 409 work list alone: the director reads it *while*
+  // going to fix it.
   const [refusal, setRefusal] = useState<LifecycleRefusal | null>(null)
+  // The edge awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
+  // than as a queued closure: the dialog needs it anyway, and a stored callback would
+  // capture whatever `tournament` was when the button was clicked.
+  const [pending, setPending] = useState<IrreversibleActConsequence | null>(null)
 
   const edge = lifecycleEdgeFor(tournament)
   if (!edge) return null
@@ -96,6 +155,7 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const tone = TONE[edge.tone]
 
   const move = async () => {
+    setPending(null)
     setRefusal(null)
     try {
       await transition.mutateAsync(edge)
@@ -106,7 +166,10 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   }
 
   return (
-    <div className="flex w-[380px] max-w-full flex-col items-end gap-2.5">
+    <div
+      data-testid="lifecycle-actions"
+      className="flex w-[380px] max-w-full flex-col items-end gap-2.5"
+    >
       <Button
         variant={tone.variant}
         className={tone.className}
@@ -114,7 +177,9 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
         // second transition, whose only possible answer is the 409 "already
         // published" — an error shown to a user who did nothing wrong.
         disabled={transition.isPending}
-        onClick={move}
+        // This click moves nothing. It opens the confirm on the consequence this edge
+        // spends; the transition is fired by the confirm's own button.
+        onClick={() => setPending(consequenceFor(edge, tournament.name))}
       >
         <Icon size={16} />
         {edge.label}
@@ -131,6 +196,19 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
           <AlertTitle>{refusal.title}</AlertTitle>
           <AlertDescription>{refusal.description}</AlertDescription>
         </Alert>
+      )}
+
+      {/* The price of a one-way edge, asked before it is paid. Mounted only while an edge
+          is awaiting its answer, so the dialog cannot be on screen with nothing behind it.
+          Confirm posts the transition it named; cancel — and Escape, and the overlay —
+          drops it, and the tournament is untouched because nothing was ever sent. */}
+      {pending && (
+        <ConfirmIrreversibleActDialog
+          open
+          consequence={pending}
+          onConfirm={() => void move()}
+          onCancel={() => setPending(null)}
+        />
       )}
     </div>
   )

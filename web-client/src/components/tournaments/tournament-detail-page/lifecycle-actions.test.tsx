@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { HttpResponse } from 'msw'
+import { delay, HttpResponse } from 'msw'
 import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -46,13 +46,15 @@ function refuseTransition(status: number, detail: string) {
   )
 }
 
-/** Click **Start tournament** on a published tournament the viewer owns — the one edge
- * that carries a precondition (ADR-0786). */
+/** Click **Start tournament** on a published tournament the viewer owns, and pay for it —
+ * the one edge that carries a precondition (ADR-0786). Two clicks, because the button
+ * opens the confirm and the confirm's own button is what posts. */
 async function clickStart() {
   lifecycleActionsPage.render({
     tournament: buildTournament({ id: 't-1', status: 'published' }),
   })
   await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Start tournament/))
+  await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
 }
 
 /** No toast, ever, for a refusal this component reports inline (`web-client/CLAUDE.md`,
@@ -82,6 +84,9 @@ describe('LifecycleActions', () => {
       })
 
       await userEvent.click(lifecycleActionsPage.getLifecycleButton(label))
+      // The act is the CONFIRM's button, never the header's (see the confirm suite
+      // below). The header's click only asks the question.
+      await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
 
       // The transitions RESOURCE, not a status-carrying PATCH: `TournamentUpdate`
       // has no `status` field, so a PATCH here would be a no-op that looked fine.
@@ -307,9 +312,185 @@ describe('LifecycleActions · the other outcomes', () => {
     await userEvent.click(
       lifecycleActionsPage.getLifecycleButton(/Start tournament/),
     )
+    // The standing refusal is STILL there at this point — opening the confirm is not an
+    // attempt, and the 409's work list is what the director is reading while they decide.
+    // It is cleared by the next attempt, not by the next question. Read by testid, not by
+    // role: the open dialog aria-hides everything behind it.
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
 
     await waitFor(() =>
       expect(lifecycleActionsPage.queryNotice()).toBeNull(),
     )
+  })
+})
+
+/**
+ * **The confirm is what moves the tournament** (ADR "a confirm prices an irreversible act,
+ * a freeze explains an illegal one"). The lifecycle is forward-only — `draft → published
+ * → live → archived`, no edge back, `archived` terminal — so all three edges are one-way
+ * and all three are priced. None is exempt, and **Start** least of all: since #788 it does
+ * not merely relabel the tournament, it closes registration and mints a match for every
+ * ready fixture.
+ */
+describe('LifecycleActions · the confirm on every edge', () => {
+  /** What a successful transition answers with — a bare `TournamentRead`, as the API
+   * sends it. The stubs below are never *meant* to answer, but the body must still be one
+   * the parser accepts: a mutant that leaked a request past the confirm would otherwise
+   * reject on the payload rather than on the thing under test. */
+  const transitionRead = () => {
+    const { events, ...read } = buildTournamentDetailRead()
+    void events
+    return read
+  }
+
+  /** The panel's own controls that are still LIVE — swept by DOM rather than by role,
+   * because an open dialog puts `aria-hidden` over everything behind it and a role query
+   * then finds none of them. A header offers exactly one lifecycle button, and it goes
+   * dead while a transition is in flight, so the count is a synchronous read of "nothing
+   * was sent". */
+  const liveControls = () =>
+    lifecycleActionsPage
+      .getActionControls()
+      .filter((el) => !el.hasAttribute('disabled'))
+
+  /**
+   * The endpoint **hangs** (`delay('infinite')`) in these three, and that is what makes
+   * them evidence rather than a race. An edge wired to the dialog *and* the mutation would
+   * send a request that completes in milliseconds, and by the time an assertion ran
+   * `isPending` would be back to false and the header would look untouched. A request that
+   * never answers cannot settle away: it holds the button disabled for as long as the test
+   * cares to look, so "the button is still live" is a second witness to "nothing was sent"
+   * that does not depend on when MSW got there.
+   */
+  it.each([
+    { status: 'draft', label: /Publish/, title: 'Publish this tournament?' },
+    {
+      status: 'published',
+      label: /Start tournament/,
+      title: 'Start this tournament?',
+    },
+    { status: 'live', label: /End tournament/, title: 'End this tournament?' },
+  ] as const)(
+    'sends NOTHING on a bare click from $status — the dialog is what gates it',
+    async ({ status, label, title }) => {
+      let calls = 0
+      mockTournamentTransitionEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        const { events, ...read } = buildTournamentDetailRead()
+        void events
+        return HttpResponse.json(read, { status: 201 })
+      })
+      lifecycleActionsPage.render({
+        tournament: buildTournament({ id: 't-1', status }),
+      })
+
+      await userEvent.click(lifecycleActionsPage.getLifecycleButton(label))
+
+      // Settle on the dialog first — the count is only evidence once the click has been
+      // given somewhere to have gone. Bounded under `testTimeout`, so a failure reads
+      // "unable to find role=alertdialog" rather than an undiscriminated 5s timeout
+      // (`web-client/CLAUDE.md`).
+      await waitFor(
+        () => expect(lifecycleActionsPage.confirm.getDialog()).toBeInTheDocument(),
+        { timeout: 2000 },
+      )
+      // …and it priced THIS edge, not another one.
+      expect(lifecycleActionsPage.confirm.getDialog()).toHaveTextContent(title)
+      expect(calls).toBe(0)
+      expect(liveControls()).toHaveLength(1)
+      expectNoToast()
+    },
+  )
+
+  // Go back is a no-op: the tournament stands exactly where it was, and the button that
+  // named the edge is still on offer — the director changed their mind, they did not
+  // spend anything.
+  it('sends nothing when the director goes back', async () => {
+    let calls = 0
+    mockTournamentTransitionEndpoint(server, () => {
+      calls += 1
+      return HttpResponse.json(transitionRead(), { status: 201 })
+    })
+    lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'draft' }),
+    })
+
+    await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Publish/))
+    await userEvent.click(lifecycleActionsPage.confirm.getCancelButton())
+
+    await waitFor(() =>
+      expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull(),
+    )
+    expect(calls).toBe(0)
+    expect(
+      lifecycleActionsPage.getLifecycleButton(/Publish/),
+    ).toBeInTheDocument()
+    // A cancel is not a failure: there is nothing to explain, so there is no notice.
+    expect(lifecycleActionsPage.queryNotice()).toBeNull()
+    expectNoToast()
+  })
+
+  it('sends nothing when the dialog is dismissed with Escape', async () => {
+    let calls = 0
+    mockTournamentTransitionEndpoint(server, () => {
+      calls += 1
+      return HttpResponse.json(transitionRead(), { status: 201 })
+    })
+    lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'live' }),
+    })
+
+    await userEvent.click(lifecycleActionsPage.getLifecycleButton(/End tournament/))
+    await userEvent.keyboard('{Escape}')
+
+    await waitFor(() =>
+      expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull(),
+    )
+    expect(calls).toBe(0)
+    expect(
+      lifecycleActionsPage.getLifecycleButton(/End tournament/),
+    ).toBeInTheDocument()
+  })
+
+  // One in-flight move at a time. The confirm does NOT make this redundant — it asks a
+  // question once, per click, and two clicks would ask it twice. The lock is what stops
+  // the second one being asked at all.
+  it('locks the button while a move is in flight, so the question cannot be asked twice', async () => {
+    let calls = 0
+    mockTournamentTransitionEndpoint(server, async () => {
+      calls += 1
+      await delay('infinite')
+      return HttpResponse.json(transitionRead(), { status: 201 })
+    })
+    lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'draft' }),
+    })
+
+    const publish = lifecycleActionsPage.getLifecycleButton(/Publish/)
+    await userEvent.click(publish)
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+
+    await waitFor(() => expect(publish).toBeDisabled())
+    await userEvent.click(publish)
+    expect(calls).toBe(1)
+    // …and the second click did not even get as far as the question: a locked edge opens
+    // no dialog. Without this the assertion above would only be saying that a disabled
+    // button is disabled, since the move now needs a confirm it never got.
+    expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull()
+  })
+
+  // The confirm is the only new gate: a non-owner still gets no button to open it with,
+  // and the terminal `archived` still offers none — hidden, never disabled (ADR-0015).
+  it.each([
+    { name: 'a non-owner', tournament: { status: 'published', canEdit: false } },
+    { name: 'an archived tournament', tournament: { status: 'archived' } },
+  ] as const)('gives $name no button, and therefore no dialog', ({ tournament }) => {
+    lifecycleActionsPage.render({ tournament: buildTournament(tournament) })
+
+    expect(lifecycleActionsPage.queryAllButtons()).toHaveLength(0)
+    expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull()
   })
 })

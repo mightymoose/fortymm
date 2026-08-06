@@ -25,6 +25,20 @@ import { ResultsPanel } from './draw-panel/results-panel'
 import { RoundList } from './draw-panel/round-list'
 import { SwissRounds } from './draw-panel/swiss-rounds'
 
+/**
+ * The two acts THIS panel can price — the draw half of `IrreversibleActConsequence`.
+ *
+ * Narrowed rather than carrying the whole union, because the panel's `switch` below has
+ * to be exhaustive over exactly what it can hold: the three lifecycle edges live in the
+ * header (`../lifecycle-actions`) and there is no draw verb that could fire one. Widening
+ * this would turn the `never` default into a dead arm that has to invent an answer for an
+ * act the panel cannot perform.
+ */
+type DrawActConsequence = Extract<
+  IrreversibleActConsequence,
+  { variant: 'recut-draw' | 'delete-draw' }
+>
+
 export interface DrawPanelProps {
   tournamentId: string
   event: TournamentEvent
@@ -125,8 +139,8 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   /** The confirmed act, fired. The switch is exhaustive on `DrawActConsequence` — the
    * acts this panel OWNS — so a third destructive draw verb is a TYPE error here rather
    * than a dialog that prices one act and performs another. Deliberately not the whole
-   * `IrreversibleActConsequence`: the lifecycle edges join that union later, and a panel
-   * checked against them would red in a slice it has no part in. */
+   * `IrreversibleActConsequence`: the lifecycle edges are in that union too, and a panel
+   * checked against them would red for acts it has no part in. */
   const runConfirmed = (consequence: DrawActConsequence) => {
     setPending(null)
     switch (consequence.variant) {

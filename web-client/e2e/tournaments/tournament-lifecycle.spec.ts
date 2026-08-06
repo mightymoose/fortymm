@@ -76,13 +76,19 @@ test.describe('Tournaments · the lifecycle', () => {
     // went would fail here rather than pass on "the one I asked for is present".
     await pom.expectLifecycle('Draft', 'Publish')
 
+    // Every edge is priced before it is posted: the header's button opens the confirm and
+    // the confirm's own button is what moves the tournament. The lifecycle is
+    // forward-only, so all three get one.
     await pom.lifecycleButton('Publish').click()
+    await pom.irreversibleActConfirmButton.click()
     await pom.expectLifecycle('Published', 'Start tournament')
 
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
     await pom.expectLifecycle('Live', 'End tournament')
 
     await pom.lifecycleButton('End tournament').click()
+    await pom.irreversibleActConfirmButton.click()
     // `archived` is terminal: no edge out of it, so no button — not a disabled
     // one. This is the assertion that would fail if the header ever went back to
     // offering all three.
@@ -120,7 +126,11 @@ test.describe('Tournaments · the lifecycle', () => {
     await expect(pom.enterButton(EVENT.JOURNEY)).toHaveCount(0)
 
     // --- publish: the door opens ---------------------------------------------
+    // Priced first — the confirm's button is what publishes. The dialog is dismissed by
+    // that click, which matters here: the modal overlay would otherwise swallow the Enter
+    // click below.
     await pom.lifecycleButton('Publish').click()
+    await pom.irreversibleActConfirmButton.click()
 
     await expect(pom.enterButton(EVENT.JOURNEY)).toBeVisible()
     await expect(pom.registrationNotice(EVENT.JOURNEY)).toHaveCount(0)
@@ -146,6 +156,7 @@ test.describe('Tournaments · the lifecycle', () => {
     await expect(pom.drawPanel(EVENT.JOURNEY)).toContainText(ME.username)
 
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
 
     // THE assertion of this slice's subtlest case. I am still an entrant — the
     // field is fixed, which is what going live MEANS — so my chip stays on the
@@ -168,6 +179,7 @@ test.describe('Tournaments · the lifecycle', () => {
     // "under way" and "has ended" are two states, not one "closed": a player who
     // arrives late is owed the difference.
     await pom.lifecycleButton('End tournament').click()
+    await pom.irreversibleActConfirmButton.click()
 
     await expect(pom.registrationNotice(EVENT.JOURNEY)).toContainText(
       NOTICE.archived.reason,
@@ -201,7 +213,10 @@ test.describe('Tournaments · the lifecycle', () => {
     await pom.expectLifecycle('Draft', 'Publish')
 
     // --- click the button that names an edge which no longer exists -----------
+    // Through the confirm, because that is the only way anything is sent. A confirm
+    // prices an act; it cannot tell that this one is already spent.
     await pom.lifecycleButton('Publish').click()
+    await pom.irreversibleActConfirmButton.click()
 
     // The server refuses it: `published → published` is not an edge, it is a
     // conflict (ADR-0017 — "the only caller that sends it is a stale one").
@@ -244,6 +259,7 @@ test.describe('Tournaments · the lifecycle', () => {
     // …and the corrected view is a WORKING one, not a picture: the edge it now
     // offers is one the server accepts.
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
     await pom.expectLifecycle('Live', 'End tournament')
     expect(store.status).toBe('live')
 
@@ -477,6 +493,7 @@ test.describe('Tournaments · the lifecycle · accessibility', () => {
     })
     store.transitionElsewhere('published')
     await pom.lifecycleButton('Publish').click()
+    await pom.irreversibleActConfirmButton.click()
 
     // Prove the state is really rendered before scanning it: an axe pass over a page
     // that has not reached the state is a green that means nothing. (And unlike the
@@ -485,6 +502,30 @@ test.describe('Tournaments · the lifecycle · accessibility', () => {
 
     await expectAxeClean(page, 'tournament detail — refused transition notice')
     await expect(pom.lifecycleNotice).toBeVisible()
+  })
+
+  /**
+   * The **confirm** is a state too, and it is the one where the choice of button
+   * treatment is cashed out. No `exclude` is passed, deliberately: the three lifecycle
+   * edges wear the default confirm rather than `variant="destructive"`, which fails AA
+   * colour contrast (#1039, open) and forces a `KNOWN_DESTRUCTIVE_BUTTON_CONTRAST`
+   * exclusion everywhere it appears in this suite. If somebody paints these red, this
+   * scan goes red with them.
+   */
+  test('is axe-clean with the Start confirm on screen, and needs no contrast exclusion', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...READY_TO_START,
+      status: 'published',
+    })
+
+    await pom.lifecycleButton('Start tournament').click()
+    // Prove the dialog is really up before scanning it — an axe pass over a page that
+    // has not reached the state is a green that means nothing.
+    await expect(pom.irreversibleActConfirmButton).toBeVisible()
+
+    await expectAxeClean(page, 'tournament detail — the Start tournament confirm')
   })
 
   test('is axe-clean for a viewer, who is offered no lifecycle button at all', async ({

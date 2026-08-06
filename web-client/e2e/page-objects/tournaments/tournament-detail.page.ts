@@ -189,11 +189,15 @@ export class TournamentDetailPage {
     return this.page.getByRole('button', { name: `Delete draw for ${eventName}` })
   }
 
-  /** The consequence-stating confirm that Re-cut and Delete open, and the button that
-   * actually fires the act (ADR "a confirm prices an irreversible act, a freeze explains
-   * an illegal one"). Addressed by testid, because the label is the act's own verb —
-   * `Re-cut the draw` / `Delete the draw` — not a fixed string. **Generate opens no
-   * dialog**: the first cut is one click, by design. */
+  /** The consequence-stating confirm that every irreversible act opens, and the button
+   * that actually fires it (ADR "a confirm prices an irreversible act, a freeze explains
+   * an illegal one"). Five acts share it: the two draw verbs (Re-cut, Delete) and the
+   * three lifecycle edges (Publish, Start tournament, End tournament) — the lifecycle is
+   * forward-only, so none of its edges can be walked back either.
+   *
+   * Addressed by testid, because the label is the act's own verb — `Re-cut the draw`,
+   * `Start the tournament` — not a fixed string. **Generate draw opens no dialog**: the
+   * first cut is one click, by design. */
   get irreversibleActConfirmButton(): Locator {
     return this.page.getByTestId('confirm-irreversible-act-confirm')
   }

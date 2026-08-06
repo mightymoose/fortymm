@@ -391,7 +391,12 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await pom.enterButton(EVENT.JOURNEY).click()
     await expect(pom.withdrawButton(EVENT.JOURNEY)).toBeVisible()
 
+    // Starting is priced too — registration shuts and every ready fixture becomes a real
+    // match — so the refusal below is answered to the confirm's own button, not to the
+    // header's. What the director reads afterwards is unchanged: the server's sentence,
+    // inline, where the click was.
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
 
     // THE assertion, half one: the refusal is inline, beside the button that was clicked,
     // and it is a WORK LIST — it names the event whose draw went stale. A director with
@@ -423,6 +428,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await expect(pom.drawPanel(EVENT.JOURNEY)).toContainText(ME.username)
 
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
 
     await pom.expectLifecycle('Live', 'End tournament')
     expect(store.status).toBe('live')
@@ -443,6 +449,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     })
 
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
 
     await expect(pom.lifecycleNotice).toBeVisible()
     await expect(pom.lifecycleNotice).toContainText(SAY.cannotStart)
@@ -688,6 +695,7 @@ test.describe('Tournaments · the draw · accessibility', () => {
     await expect(pom.withdrawButton(EVENT.JOURNEY)).toBeVisible()
 
     await pom.lifecycleButton('Start tournament').click()
+    await pom.irreversibleActConfirmButton.click()
     await expect(pom.lifecycleNotice).toContainText(SAY.staleDraw)
 
     await expectAxeClean(page, 'tournament detail — the refused go-live notice')
