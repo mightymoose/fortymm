@@ -56,6 +56,7 @@ from app.models import (
     TournamentFixture,
 )
 from app.schemas.tournament import Pool
+from app.tournament_draw_settings import draw_settings_of
 from app.tournament_pools import pool_read
 
 
@@ -260,21 +261,18 @@ def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
     """The strategy that cuts and advances **this event's** draw — the one production
     door onto :func:`app.draws.strategy_for`.
 
-    ``strategy_for`` is keyword-strict about the qualifier count and has no default, so
-    somebody has to read it off the event; this is that somebody, and it is one function
-    rather than three call sites each reaching into ``event.draw_settings`` for a pair
-    of columns. Which matters because forgetting the second column does not fail — it
-    produces a differently-configured strategy — and because the two facts live on one
-    row precisely so they are read together (ADR "an event's draw configuration is a
-    row, not a column").
+    ``strategy_for`` takes the **parsed settings arm**, so somebody has to decode it off
+    the event's settings row; this is that somebody, and it is one function rather than
+    three call sites each parsing the same blob. Which matters because the draw type and
+    the settings beside it are one fact and live on one row precisely so they are read
+    together (ADR "an event's draw configuration is a row, not a column").
 
-    The settings row rides along with the event (``lazy="joined"``), so this is
-    attribute access, not a lazy load in async context.
+    The settings row rides along with the event (``lazy="joined"``), so the read is
+    attribute access, not a lazy load in async context; the parse it feeds is
+    :func:`app.tournament_draw_settings.draw_settings_of`, the single read boundary onto
+    that column.
     """
-    return strategy_for(
-        event.draw_settings.draw_type,
-        qualifiers_per_pool=event.draw_settings.qualifiers_per_pool,
-    )
+    return strategy_for(draw_settings_of(event.draw_settings))
 
 
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:

@@ -34,14 +34,18 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentFixture,
     TournamentStatus,
     User,
 )
 from app.models.tournament import DrawType, EventFormat
 from app.schedule_preview import DEFAULT_UNCAPPED_FIELD, build_preview_snapshot
-from tests._helpers import make_user, venue_tables, with_table_aliases
+from tests._helpers import (
+    event_draw_settings,
+    make_user,
+    venue_tables,
+    with_table_aliases,
+)
 
 # A venue with two tables, so a pool can be given one or both. Built per tournament,
 # never as a module constant: a catalogue is ``tournament_tables`` rows now
@@ -102,7 +106,7 @@ async def _add_event(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(
+        draw_settings=event_draw_settings(
             draw_type, qualifiers_per_pool=qualifiers_per_pool
         ),
         max_players=max_players,

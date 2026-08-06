@@ -1,17 +1,18 @@
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Integer,
     String,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -19,6 +20,18 @@ from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
     from app.models.tournament import TournamentEvent
+
+
+NO_SETTINGS: Mapping[str, Any] = MappingProxyType({})
+"""What a draw type that takes no configuration stores: the **empty object**.
+
+Not ``None`` (ADR "a draw type's settings are one NOT NULL JSON object"). An empty
+object and a ``NULL`` would read the same to every caller, so only one of them may be
+representable, and the empty object is the one every reader already expects — nothing
+has to test for absence before it reads.
+
+A ``MappingProxyType``, so the shared default cannot be mutated by whoever receives it.
+"""
 
 
 class TournamentEventDrawSettings(Base):
@@ -39,31 +52,29 @@ class TournamentEventDrawSettings(Base):
     has a seeded row — i.e. one ``app.draws.strategy_for`` can actually dispatch —
     and a seeded row cannot be deleted out from under an event that uses it.
 
-    Two columns of configuration today: the draw type, and ``qualifiers_per_pool``
-    — the **K** of "the top K from each pool advance", which only ``rr-then-ko``
-    has (#1227). The follow-on pools ticket moves ``TournamentEvent.pools`` in
-    here.
+    Two columns of configuration today: the draw type, and the ``settings`` object
+    beside it — the serialized form of the draw type's own settings arm (ADR "a draw
+    type's settings are one NOT NULL JSON object"). The follow-on pools ticket moves
+    ``TournamentEvent.pools`` in here.
     """
 
     __tablename__ = "tournament_event_draw_settings"
     __table_args__ = (
-        # ``qualifiers_per_pool`` belongs to exactly one draw type, and this is
-        # what says so at the storage layer: it is NOT NULL and at least 1 when
-        # the row names ``rr-then-ko``, and NULL for every other draw type. A
-        # round-robin row carrying a qualifier count is not a row Postgres will
-        # accept, so the pairing cannot drift no matter which writer produced it.
+        # All the database has an opinion on now: ``settings`` is a JSON **object**.
+        # A list, a number, a string or a JSON ``null`` would each parse as "settings"
+        # and mean nothing, so they are refused here rather than deep in a reader.
         #
-        # The slug is spelled out in the DDL on purpose. It is the same
-        # hand-copied seed data migration 0010 already carries (``DRAW_TYPE_SEED``)
-        # — a constraint cannot import ``DrawType``, and a lookup-driven
-        # "does this draw type take qualifiers?" column on ``draw_types`` would be
-        # a second, mutable home for a fact the code already dispatches on.
+        # It is deliberately weaker than the ``CASE`` constraint it replaces, which
+        # paired a nullable ``qualifiers_per_pool`` column with the one draw type that
+        # has one. Which settings belong to which draw type is no longer a storage
+        # fact — it is the discriminated union at the request boundary
+        # (``app.schemas.tournament.DrawSettingsWrite``), which refuses a qualifier
+        # count on a round-robin event with a 422. That is the loss the ADR accepts on
+        # purpose: the constraint grew one branch per draw type per setting, and the
+        # union already says the same thing in one place.
         CheckConstraint(
-            "CASE WHEN draw_type_key = 'rr-then-ko'"
-            " THEN qualifiers_per_pool IS NOT NULL AND qualifiers_per_pool >= 1"
-            " ELSE qualifiers_per_pool IS NULL"
-            " END",
-            name="ck_tournament_event_draw_settings_qualifiers_per_pool",
+            "jsonb_typeof(settings) = 'object'",
+            name="ck_tournament_event_draw_settings_settings_object",
         ),
     )
 
@@ -81,23 +92,31 @@ class TournamentEventDrawSettings(Base):
         ForeignKey("draw_types.key", ondelete="RESTRICT"),
         nullable=False,
     )
-    # **K** — how many of each pool's finishers advance into the knockout stage of
-    # an ``rr-then-ko`` draw (ADR "rr-then-ko cuts both stages upfront and seeds
-    # qualifiers rematch-free"). The knockout bracket's size is
-    # ``next_power_of_two(P × K)`` and is DERIVED at the cut, never stored beside
-    # this — carrying both lets them contradict.
+    # The draw type's settings, as one NOT NULL JSON object (ADR "a draw type's
+    # settings are one NOT NULL JSON object"). ``{}`` for a draw type that takes no
+    # configuration — ``round-robin`` and ``single-elim`` today —
+    # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``.
     #
-    # Nullable because it is meaningless for every other draw type: a round-robin
-    # event has no cut to size and a single-elim event has no pools to cut from,
-    # so ``NULL`` here is "this draw type takes no qualifier count", not "unknown".
-    # The ``CASE`` constraint above is what keeps NULL and the draw type in step.
+    # This is the **serialized form of a union**: which keys are in here depends
+    # entirely on the draw type beside it, which is what a wide row of nullable
+    # columns could only express with a ``CASE`` constraint that grew a branch per
+    # setting per draw type. Adding a draw type's settings is now an arm in
+    # ``app.schemas.tournament.DrawSettingsWriteArm`` and no migration at all.
     #
-    # ``K >= 1`` is the STATIC half of the ADR's legal configuration space and so
-    # is enforced here (and at the request boundary). The two bounds that move with
-    # the entrant count — ``P × K >= 2`` and ``K <= ⌊N/P⌋`` — are refused at the cut
-    # as ``DegenerateDraw``, because a row that was legal when it was written must
-    # not become unwritable when a player withdraws.
-    qualifiers_per_pool: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A ``dict`` is what SQLAlchemy hands back. ``app.tournament_draw_settings`` is the
+    # boundary that parses it — it hands the blob to
+    # ``app.schemas.tournament.draw_settings_from_storage``, which is where the union
+    # actually validates, since the model cannot import the schemas. What matters is the
+    # property that holds either way: no CALLER of that module ever receives an untyped
+    # blob (api/CLAUDE.md, "parse, don't validate"). App writers go through
+    # ``configure`` below, never through this attribute.
+    #
+    # The server default is for the raw-SQL writer (tests, psql) — every writer in
+    # the app supplies the object — and it is ``{}`` rather than ``NULL`` for the
+    # reason ``NO_SETTINGS`` gives.
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -123,48 +142,59 @@ class TournamentEventDrawSettings(Base):
 
     @classmethod
     def for_draw_type(
-        cls, draw_type: DrawType, *, qualifiers_per_pool: int | None = None
+        cls, draw_type: DrawType, *, settings: Mapping[str, Any] = NO_SETTINGS
     ) -> "TournamentEventDrawSettings":
-        """Build the settings row for ``draw_type``, configured as ``draw_type``
-        configures.
+        """Build the settings row for ``draw_type``, carrying ``settings``.
 
-        The create path's door onto :meth:`configure` below, which is the ONE place a
-        :class:`DrawType` member becomes the persisted slug and the qualifier count
-        beside it.
+        **Test seeding only, and it does NOT parse.** No app code calls this: the create
+        path builds its row through ``app.tournament_draw_settings.draw_settings_row``
+        and the edit path through ``store_draw_settings``, both of which take an already
+        parsed :data:`~app.schemas.tournament.DrawSettingsWriteArm`. This method takes a
+        raw mapping and writes it straight through, so it is the one door onto
+        ``settings`` that the union does not stand behind. That matters more than it
+        used to: the ``CASE`` ``CHECK`` that once refused a configured draw type with no
+        settings is gone, so ``for_draw_type(DrawType.rr_then_ko)`` now writes ``{}``
+        happily and fails at *read* instead, when the arm cannot be parsed. Seed through
+        ``tests/_helpers.event_draw_settings``, which routes the same pair through the
+        parse, unless the point of the test is to write a blob the union would refuse.
 
-        It takes the draw type and the count as two values rather than the request
-        boundary's parsed union arm (``app.schemas.tournament.DrawSettingsWrite``), and
-        that is a **layering** choice, not an oversight: the schemas import the models,
-        so a model naming a request schema inverts the direction the rest of the package
-        points in. The union arm is consumed one layer up, in
-        ``app.tournament_events``, which already holds both — so the pair reaching here
-        has been parsed, and "a round-robin row with a qualifier count" was refused at
-        the boundary before it could be spelled. The ``CHECK`` on this table is the
-        second, unconditional lock: a caller that assembles an illegal pair by hand gets
-        an ``IntegrityError``, not a stored contradiction.
+        It takes the draw type and a plain mapping rather than the parsed union arm
+        (``app.schemas.tournament.DrawSettingsWrite``), and that is a **layering**
+        choice, not an oversight: the schemas import the models, so a model naming a
+        schema inverts the direction the rest of the package points in. The arm is
+        serialized one layer up, by ``app.tournament_draw_settings.draw_settings_row``
+        (and ``store_draw_settings`` on the edit path), which is the module that owns
+        both directions of this column.
 
-        ``qualifiers_per_pool`` defaults to ``None`` because that is what all but one
-        draw type carry, and it keeps every construction site that names a
-        configuration-free draw type reading as it always did.
+        ``settings`` defaults to :data:`NO_SETTINGS` — the empty object — because that
+        is what every draw type but one carries, and it keeps each construction site
+        that names a configuration-free draw type reading as it always did.
         """
-        settings = cls()
-        settings.configure(draw_type, qualifiers_per_pool=qualifiers_per_pool)
-        return settings
+        row = cls()
+        row.configure(draw_type, settings=settings)
+        return row
 
-    def configure(
-        self, draw_type: DrawType, *, qualifiers_per_pool: int | None = None
-    ) -> None:
+    def configure(self, draw_type: DrawType, *, settings: Mapping[str, Any]) -> None:
         """Write this row's whole draw configuration — the ONE place the pair is set.
 
-        Both writers go through here: :meth:`for_draw_type` at create, and
-        ``app.tournament_events.update_event`` at edit. The two columns are written
-        **together**, because they are one fact: setting the draw type without clearing
-        the qualifier count beside it is how a round-robin row ends up carrying a ``K``
-        the ``CHECK`` refuses — and it is the edit path (draw type patched from
-        ``rr-then-ko`` back to ``round-robin``) where that would happen.
+        Every writer goes through here: ``app.tournament_draw_settings``'s
+        :func:`~app.tournament_draw_settings.store_draw_settings` on both the create and
+        the edit path, and :meth:`for_draw_type` when a test seeds a row. The two
+        columns are written
+        **together**, because they are one fact: setting the draw type without
+        replacing the settings object beside it is how a round-robin row ends up
+        carrying an ``rr-then-ko``'s qualifier count — and it is the edit path (draw
+        type patched from ``rr-then-ko`` back to ``round-robin``) where that would
+        happen. So ``settings`` is a **required** keyword here, unlike on
+        :meth:`for_draw_type`: at create "no configuration" is the common case, at edit
+        an omitted settings object is the bug this method exists to prevent.
+
+        Copied into a plain ``dict`` on the way in, because the value the caller passes
+        may be the shared :data:`NO_SETTINGS` proxy and the column's value belongs to
+        this row alone.
         """
         self.draw_type = draw_type
-        self.qualifiers_per_pool = qualifiers_per_pool
+        self.settings = dict(settings)
 
     @property
     def draw_type(self) -> DrawType:

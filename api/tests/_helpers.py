@@ -21,6 +21,7 @@ from app import schedule_solves, scheduling
 from app.geocoding import FakeGeocoder, GeocodeResult
 from app.main import app as fastapi_app
 from app.models import (
+    DrawType,
     League,
     Permission,
     RatingHistory,
@@ -28,6 +29,7 @@ from app.models import (
     Role,
     RolePermission,
     Tournament,
+    TournamentEventDrawSettings,
     TournamentEventPool,
     TournamentEventPoolTable,
     User,
@@ -40,7 +42,9 @@ from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
 from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
+from app.schemas.tournament import draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
+from app.tournament_draw_settings import draw_settings_row
 
 
 def hijack_solve(
@@ -146,6 +150,31 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
         VenueTable(id=uuid.uuid4(), label=label, court=court, position=position)
         for position, (label, court) in enumerate(specs)
     ]
+
+
+def event_draw_settings(
+    draw_type: DrawType, *, qualifiers_per_pool: int | None = None
+) -> TournamentEventDrawSettings:
+    """The draw-settings row for an event a test seeds straight through the ORM, built
+    from the ``(draw_type, qualifiers_per_pool)`` pair the tests already speak.
+
+    The qualifier count is not a column any more — it is a key inside the row's
+    ``settings`` JSON object (ADR "a draw type's settings are one NOT NULL JSON
+    object") — so this is the one translation from the pair to the stored shape, and it
+    goes through the same parse and the same writer the request boundary uses. Which
+    means a seed that names a count for a draw type with no knockout stage reds here
+    with a ``ValidationError``, rather than writing a row the app could not have made.
+
+    ``None`` is "this draw type takes no configuration", and it stores ``{}``.
+    """
+    return draw_settings_row(
+        draw_settings_from_storage(
+            draw_type,
+            {}
+            if qualifiers_per_pool is None
+            else {"qualifiers_per_pool": qualifiers_per_pool},
+        )
+    )
 
 
 def event_pools(
