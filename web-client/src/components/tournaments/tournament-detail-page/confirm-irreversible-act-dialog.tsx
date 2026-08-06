@@ -60,9 +60,17 @@ const Strong = ({ children }: { children: React.ReactNode }) => (
  * ambiguous the moment a tournament has more than one.
  *
  * The confirm button carries the act's own verb — `Re-cut the draw` / `Delete the draw` —
- * never a bare "OK" or "Confirm". Cancel is a no-op; Escape and the overlay read as the
- * cancel, and nothing fires. Focus is trapped by the design system's `AlertDialog`, which
- * is the right surface here because this is a **decision**, not a content surface.
+ * never a bare "OK" or "Confirm". Cancel is a no-op, and so is Escape — nothing fires.
+ *
+ * A click on the **overlay does nothing at all**: Radix's `AlertDialogContent`
+ * `preventDefault`s both `onPointerDownOutside` and `onInteractOutside`, so the dialog
+ * neither closes nor reports a cancel. That is the behaviour a destructive confirm wants —
+ * a mis-click beside "Delete this draw?" must not dismiss it — so do not "restore" an
+ * outside-click dismissal here. It is a property of `AlertDialog`, and it is the reason to
+ * use `AlertDialog` rather than `Dialog` for a decision.
+ *
+ * Focus is trapped, and Radix's own `onOpenAutoFocus` lands it on **Go back** — the safe
+ * default when the other button destroys something.
  */
 export const ConfirmIrreversibleActDialog = ({
   open,
@@ -71,7 +79,7 @@ export const ConfirmIrreversibleActDialog = ({
   onCancel,
 }: ConfirmIrreversibleActDialogProps) => {
   // Radix closes the dialog itself on the ACTION click too, and reports it through
-  // the same onOpenChange(false) as Escape/overlay — remember a confirm so its
+  // the same onOpenChange(false) as Escape — remember a confirm so its
   // close is not double-reported as a cancel (a confirm is not a cancel).
   const confirmed = useRef(false)
 
@@ -115,7 +123,7 @@ export const ConfirmIrreversibleActDialog = ({
       open={open}
       onOpenChange={(next) => {
         if (next) return
-        // Every OTHER close — Go back, overlay click, Escape — reads as the
+        // Every OTHER close — Go back, Escape — reads as the
         // cancel: a stray dismiss must never destroy a draw. The flag is
         // consumed per close, so a dialog a parent keeps mounted stays honest.
         if (!confirmed.current) onCancel()
@@ -131,7 +139,7 @@ export const ConfirmIrreversibleActDialog = ({
         </AlertDialogHeader>
         <AlertDialogFooter>
           {/* No onClick of its own: the cancel is reported once, through
-              onOpenChange, the same channel Escape and the overlay use. */}
+              onOpenChange, the same channel Escape uses. */}
           <AlertDialogCancel data-testid="confirm-irreversible-act-cancel">
             Go back
           </AlertDialogCancel>

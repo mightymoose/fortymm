@@ -59,8 +59,10 @@ export interface DrawPanelProps {
  * ## The two destructive verbs are priced, the first cut is not
  *
  * Re-cut and Delete each open `ConfirmIrreversibleActDialog` first, and the mutation fires
- * on the confirm alone — Go back, Escape and the overlay all leave the draw exactly as it
- * stands and send nothing (ADR "a confirm prices an irreversible act, a freeze explains an
+ * on the confirm alone — Go back and Escape leave the draw exactly as it stands and send
+ * nothing, and an overlay click does not even close the dialog (`AlertDialog`
+ * `preventDefault`s outside interaction, so a mis-click beside a destructive confirm is
+ * inert) (ADR "a confirm prices an irreversible act, a freeze explains an
  * illegal one"). **Generate is deliberately exempt**: the first cut is constructive and
  * re-cuttable, and a confirm there would only train the director to click through the two
  * that matter.
@@ -234,8 +236,8 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
 
       {/* The price of a destructive verb, asked before it is paid. Mounted only while an
           act is awaiting its answer, so the dialog cannot be on screen with nothing
-          behind it. Confirm runs the act it named; cancel — and Escape, and the overlay —
-          drops it, and the draw below is untouched because nothing was ever sent. */}
+          behind it. Confirm runs the act it named; cancel — and Escape — drops it, and the
+          draw below is untouched because nothing was ever sent. */}
       {pending && (
         <ConfirmIrreversibleActDialog
           open

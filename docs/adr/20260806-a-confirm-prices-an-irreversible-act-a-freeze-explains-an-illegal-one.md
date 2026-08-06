@@ -4,7 +4,16 @@ Date: 2026-08-06
 
 ## Status
 
-Accepted
+Accepted. **Delivered across three stacked slices** — this document describes the
+end state, not what any one of them shipped:
+
+| Slice | Delivers | Closes |
+| --- | --- | --- |
+| 1 | Confirms on **Re-cut draw** and **Delete draw**; the #1043 regression pin | #1225, #1045 |
+| 2 | Confirms on **Publish**, **Start**, **End** | #1089, #1094 |
+| 3 | `drawVerbFreeze` and the frozen draw verbs | #1060 |
+
+Do not read a section here as evidence its behaviour exists yet. Check the ticket.
 
 ## Context
 
