@@ -475,6 +475,27 @@ running tournament (a table breaks, a table frees up).
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 
+**Freeze**:
+A control the director owns but cannot use *right now*, because the resource has
+moved into a state that refuses the act — a **draw** under way, a cut event's
+draw type, an event's set of pool identities. A frozen control renders disabled
+with its reason stated, and the reason names the way out where one exists. It is
+keyed on the resource's state, never on who is asking: a control withheld by
+**permission** is hidden instead, and carries no reason at all (ADR-0015). The
+client's freeze restates a server guard; the server stays the enforcement.
+_Avoid_: locked, greyed out, read-only (a read-only surface is a rendering for a
+viewer, which is the permission case, not this one).
+
+**Confirm**:
+The deliberate second click a director spends on an act that cannot be undone —
+publishing, starting, ending, re-cutting a **draw**, deleting one. The dialog
+names what the click buys rather than asking "are you sure", and the act's own
+verb is on the button. Constructive, repeatable acts do not take one: the first
+**cut** of a draw is unconfirmed on purpose. Unrelated to the match-negotiation
+sense of the word, which does not exist — a result is **accepted**, never
+confirmed.
+_Avoid_: are you sure, warning, double-check.
+
 **Stage**:
 One phase of a **draw** that must finish before the next can be played. Most
 draw types have exactly one; a round-robin-then-knockout draw has two — a
